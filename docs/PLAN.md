@@ -381,6 +381,25 @@ Many CUE rips are `Album.ape`, which Symphonia cannot decode: 12 discs in the co
 - **Not done:** no file older than 3.97 or at level Insane was at hand from a real encoder;
   Insane is covered by the fixture only.
 
+## Results: the hologram (U7)
+
+Measured on an M-series MacBook, in a 1400 × 900 point box on its Retina screen (2800 × 1800
+pixels), with `cargo test -p freya frame_cost -- --ignored --nocapture`:
+
+| | CPU a frame | Graphics card a frame | At 120 frames a second |
+|---|---|---|---|
+| Everything at full resolution | 38 µs | 16 ms | 0.45 % of a core; 192 % of the graphics card, so not possible |
+| The city at a quarter of the resolution | 34 µs | 3.0 ms | |
+| Reading only the pose shown | 35 µs | 2.8 ms | |
+| The city drawn 30 times a second | 27 µs | 1.8 ms | 0.3 % of a core, 22 % of the graphics card |
+
+The city behind her was the work; she costs about 0.3 ms a frame. In Freya the drawing thread
+logs its own CPU use with `RUST_LOG=freya::gui::hologram=debug`; it runs at the display's
+120 Hz. It used to take several seconds to appear: scaling the poses on the CPU took four.
+Uploaded at their own size, the five poses take 50 ms; with Metal and the shaders, all is
+ready about 55 ms after Freya starts (240 ms when the shaders are not yet cached), on its own
+thread and before the view is shown.
+
 ## Risks and open questions
 
 1. **Slint's licence:** the royalty-free licence requires visible attribution. Accepted on 2026-10-10; fulfilled in M8 by Freya's About window, which credits Slint independent of the skin.

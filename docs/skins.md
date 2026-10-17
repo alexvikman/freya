@@ -267,7 +267,7 @@ Saved internet radio stations, kept by Freya in `stations.m3u8` next to the play
 
 | Property | Type | |
 |---|---|---|
-| `mode` | string | "spectrum", "oscilloscope" or "off" |
+| `mode` | string | "spectrum", "oscilloscope", "hologram" or "off" |
 | `bar-count` | int | `in-out`: how many bars the skin wants; set it in `init` |
 | `bars`, `peaks` | `[float]` | 0 to 1, low to high frequencies |
 | `waveform` | `[float]` | The last 10 ms, -1 to 1 |
@@ -276,7 +276,7 @@ Saved internet radio stations, kept by Freya in `stations.m3u8` next to the play
 | Callback | |
 |---|---|
 | `cycle-mode()` | Spectrum, oscilloscope, off |
-| `set-mode(mode)` | "spectrum", "oscilloscope" or "off"; other values are ignored |
+| `set-mode(mode)` | "spectrum", "oscilloscope", "hologram" or "off"; other values are ignored |
 | `bars-path(width, height, bars) -> string` | SVG path data of the spectrum bars for a `width` × `height` box (or use `NativeSpectrum`, below) |
 | `peaks-path(width, height, peaks, thickness) -> string` | The same for the peak markers |
 | `wave(width, height, waveform) -> string` | SVG path data of the waveform for a `width` × `height` box |
@@ -300,6 +300,23 @@ if Visualizer.mode == "spectrum": NativeSpectrum {
 Freya then draws the bars itself in a layer on top of the window, and the window is not redrawn for them at all: CPU drops to about what it is with visualization off. It does so on macOS (Core Animation), Windows (Windows.UI.Composition) and Linux (a Wayland subsurface, or an X11 child window). Elsewhere, in previews, or with `FREYA_NATIVE_SPECTRUM=off` set, `NativeSpectrum` draws the bars with Slint, like `bars-path` and `peaks-path` would. Properties: `bar-color`, `peak-color`, `peak-thickness` (2 px), `background-color` (the color behind the bars; X11 cannot draw see-through, so set it to the color around the spectrum) and `shown` (set it to false when the spectrum should not show, e.g. when its box is squeezed). Limits: use one per skin, nothing in the skin is drawn on top of it (keep pop-ups away from it), and colors are solid. `Visualizer.native-drawing` says which way it is drawn; `Visualizer.native-area` is how the component tells Freya where it is.
 
 Without `NativeSpectrum`, draw the spectrum with `bars-path` and `peaks-path` (two `Path` elements) rather than one `Rectangle` per bar: Slint then evaluates two bindings per frame instead of several per bar.
+
+#### `NativeHologram`: the hologram
+
+The mode "hologram" is a woman projected in translucent light over a city at night in the rain, after Blade Runner 2049. Freya draws it with the graphics card, in a layer of its own on top of the window, at the display's refresh rate (120 frames a second on a ProMotion screen); the bass drives its glitches and glow, and she moves whether or not something plays. Put a `NativeHologram` where it should be:
+
+```slint
+if Visualizer.mode == "hologram": NativeHologram {
+    width: parent.width;
+    height: parent.height;
+    border-radius: 12px;    // the layer's corners follow it
+    shown: root.shown;      // false while its view is hidden: Freya then draws nothing
+}
+```
+
+It costs little: measured in a 1400 × 900 point box on a Retina MacBook, about 0.3 % of a CPU core at 120 frames a second, and about 1.8 ms of the graphics card's time a frame (the city behind her is drawn at a quarter of the resolution and 30 times a second, she and the rain at full resolution every frame). Freya sets it up as soon as the mode is chosen, on a thread of its own, so it shows at once. So far it is drawn on macOS (Metal) only; elsewhere `Visualizer.hologram-drawing` is false and the box shows its background, so say so in it. The same limits as for `NativeSpectrum` apply: one per skin, and nothing of the skin is drawn on top of it.
+
+Her poses are pictures in `assets/hologram/` (JPEG or PNG, built into Freya), shown in the order of their names: the same woman on a pure black background, which is see-through in the hologram, all of the same shape.
 
 ### `App`
 

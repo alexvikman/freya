@@ -1,5 +1,9 @@
 // The hologram, drawn by the graphics card (see freya/src/gui/hologram.rs): a woman projected in
 // translucent light over a city at night in the rain, after Blade Runner 2049.
+//
+// Two passes a frame: `city_fragment` draws the city at a quarter of the resolution, as it is
+// blurred by fog anyway and costs most; `hologram_fragment` draws the full picture from it,
+// with the rain and the hologram sharp.
 #include <metal_stdlib>
 using namespace metal;
 
@@ -109,9 +113,15 @@ float rain(float2 p, float t) {
     return r;
 }
 
-float3 city(float2 p, float aspect, float t, float pulse) {
-    // The sky: dark teal overhead, a magenta and amber haze low down.
-    float3 fog = mix(float3(0.45, 0.12, 0.32), float3(0.55, 0.28, 0.12), smoothstep(0.2, 0.62, p.y));
+// The fog's colour at height `y`: a magenta and amber haze low down.
+float3 fog_at(float y) {
+    return mix(float3(0.45, 0.12, 0.32), float3(0.55, 0.28, 0.12), smoothstep(0.2, 0.62, y));
+}
+
+// The city without the rain, which is drawn sharp over it.
+float3 city(float2 p, float t, float pulse) {
+    // The sky: dark teal overhead, into the haze.
+    float3 fog = fog_at(p.y);
     float3 c = mix(float3(0.01, 0.04, 0.06), fog * 0.55, smoothstep(0.0, HORIZON, p.y));
     c += lights(p, t, 1.0) * 0.35;
     c = buildings(p, c, fog * 0.6);
@@ -123,7 +133,6 @@ float3 city(float2 p, float aspect, float t, float pulse) {
     float3 street = float3(0.012, 0.014, 0.024) + fog * 0.18 * exp(-below * 6.0)
         + lights(mirrored, t, 0.6) * 0.42 * exp(-below * 2.2);
     c = mix(c, street, smoothstep(HORIZON - 0.03, HORIZON + 0.05, p.y));
-    c += rain(p, t) * mix(float3(0.6, 0.75, 0.9), fog, 0.3);
     // The fog breathes a little with the bass.
     c += fog * 0.05 * (1.0 + pulse);
     return c;
@@ -160,22 +169,35 @@ float4 light_of(texture2d<float> pose, float2 uv, float fringe) {
     return float4(projected(lifted), alpha);
 }
 
+// The first pass: the city, into a texture a quarter of the drawable's size.
+fragment float4 city_fragment(Varyings in [[stage_in]], constant Uniforms &u [[buffer(0)]]) {
+    float aspect = u.size.x / u.size.y;
+    return float4(city(float2(in.uv.x * aspect, in.uv.y), u.time, u.pulse), 1.0);
+}
+
+constexpr sampler smooth(filter::linear, address::clamp_to_edge);
+
 fragment float4 hologram_fragment(Varyings in [[stage_in]],
                                   constant Uniforms &u [[buffer(0)]],
                                   texture2d<float> current [[texture(0)]],
-                                  texture2d<float> next [[texture(1)]]) {
+                                  texture2d<float> next [[texture(1)]],
+                                  texture2d<float> backdrop [[texture(2)]]) {
     float t = u.time;
     float aspect = u.size.x / u.size.y;
     // Points in the box's height: x from 0 to `aspect`, y from 0 to 1.
     float2 p = float2(in.uv.x * aspect, in.uv.y);
-    float3 c = city(p, aspect, t, u.pulse);
+    float3 c = backdrop.sample(smooth, in.uv).rgb;
+    c += rain(p, t) * mix(float3(0.6, 0.75, 0.9), fog_at(p.y), 0.3);
 
-    if (u.has_poses > 0.5) {
-        // Where she stands: her pose's height a little short of the box's, from the street.
-        float height = 0.94;
-        float width = height * u.aspect;
-        float2 origin = float2(aspect * 0.5 - width * 0.5, 0.05);
-        float2 uv = (p - origin) / float2(width, height);
+    // Where she stands: her pose's height a little short of the box's, from the street.
+    float height = 0.94;
+    float width = height * u.aspect;
+    float2 origin = float2(aspect * 0.5 - width * 0.5, 0.05);
+    float2 uv = (p - origin) / float2(width, height);
+    // Only near her is there anything to project: her glow reaches a little beyond her.
+    bool near = all(uv > float2(-0.12)) && all(uv < float2(1.12));
+
+    if (u.has_poses > 0.5 && near) {
         // Breathing and a slow sway, more at her head than at her waist.
         uv.x += 0.006 * sin(t * 0.8) * (1.0 - uv.y);
         uv.y += 0.004 * sin(t * 1.6) * (1.0 - uv.y);
@@ -192,11 +214,12 @@ fragment float4 hologram_fragment(Varyings in [[stage_in]],
         float2 slipped = uv + float2(slip, 0.0);
         float fringe = 0.0025 + 0.006 * u.pulse + abs(slip) * 0.4;
 
-        float4 here = light_of(current, slipped, fringe);
-        float4 there = light_of(next, slipped, fringe);
-        // The change of pose: block by block, in noise, with a flash halfway.
+        // The change of pose: block by block, in noise, with a flash halfway. Each pixel reads
+        // only the pose it shows.
         float blocks = hash(floor(uv * float2(18.0, 30.0)) + u.seed);
-        float4 she = blocks < u.transition ? there : here;
+        float4 she = blocks < u.transition
+            ? light_of(next, slipped, fringe)
+            : light_of(current, slipped, fringe);
 
         // Scanlines drifting up, and flicker.
         float scan = 0.72 + 0.28 * sin(in.uv.y * u.size.y * 0.55 + t * 18.0);

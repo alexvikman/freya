@@ -23,8 +23,8 @@ use objc2_metal::{
     MTLBlitCommandEncoder, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
     MTLCreateSystemDefaultDevice, MTLDevice, MTLLibrary, MTLLoadAction, MTLOrigin, MTLPixelFormat,
     MTLPrimitiveType, MTLRegion, MTLRenderCommandEncoder, MTLRenderPassDescriptor,
-    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLSize, MTLStoreAction, MTLTexture,
-    MTLTextureDescriptor,
+    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLSize, MTLStorageMode, MTLStoreAction,
+    MTLTexture, MTLTextureDescriptor, MTLTextureUsage,
 };
 use objc2_quartz_core::{CALayer, CAMetalDrawable, CAMetalLayer, CATransaction};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -84,11 +84,21 @@ unsafe impl Send for ThreadLayer {}
 
 type Texture = Retained<ProtocolObject<dyn MTLTexture>>;
 
+/// The city is drawn at this fraction of the drawable's size: the fog blurs it anyway, and it
+/// is the most work per pixel. Drawn full size it took 16 ms a frame in a large window.
+const CITY_SCALE: usize = 4;
+/// The city is drawn again this often: it changes slowly (fog, flicker, ripples), while she and
+/// the rain are drawn every frame.
+const CITY_INTERVAL: f32 = 1.0 / 30.0;
+/// The city's texture: half floats, so its fog has no visible steps when scaled up.
+const CITY_FORMAT: MTLPixelFormat = MTLPixelFormat::RGBA16Float;
+
 /// What the drawing thread draws with.
 struct Gpu {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
     pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+    city_pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
 }
 
 pub struct Renderer {
@@ -226,20 +236,26 @@ impl Gpu {
                 .newFunctionWithName(&NSString::from_str(name))
                 .ok_or_else(|| format!("no shader {name}"))
         };
-        let descriptor = MTLRenderPipelineDescriptor::new();
-        let (vertex, fragment) = (function("hologram_vertex")?, function("hologram_fragment")?);
-        descriptor.setVertexFunction(Some(&vertex));
-        descriptor.setFragmentFunction(Some(&fragment));
-        // SAFETY: attachment 0 exists on every render pipeline descriptor.
-        unsafe { descriptor.colorAttachments().objectAtIndexedSubscript(0) }
-            .setPixelFormat(MTLPixelFormat::BGRA8Unorm);
-        let pipeline = device
-            .newRenderPipelineStateWithDescriptor_error(&descriptor)
-            .map_err(|e| format!("no render pipeline: {e}"))?;
+        let vertex = function("hologram_vertex")?;
+        let pipeline = |fragment: &str, format: MTLPixelFormat| {
+            let descriptor = MTLRenderPipelineDescriptor::new();
+            let fragment = function(fragment)?;
+            descriptor.setVertexFunction(Some(&vertex));
+            descriptor.setFragmentFunction(Some(&fragment));
+            // SAFETY: attachment 0 exists on every render pipeline descriptor.
+            unsafe { descriptor.colorAttachments().objectAtIndexedSubscript(0) }
+                .setPixelFormat(format);
+            device
+                .newRenderPipelineStateWithDescriptor_error(&descriptor)
+                .map_err(|e| format!("no render pipeline: {e}"))
+        };
+        let main = pipeline("hologram_fragment", MTLPixelFormat::BGRA8Unorm)?;
+        let city_pipeline = pipeline("city_fragment", CITY_FORMAT)?;
         Ok(Self {
             device,
             queue,
-            pipeline,
+            pipeline: main,
+            city_pipeline,
         })
     }
 
@@ -325,43 +341,92 @@ impl Gpu {
         commands.waitUntilCompleted();
     }
 
-    /// Draws one frame into `drawable`.
-    fn frame(
-        &self,
-        drawable: &ProtocolObject<dyn CAMetalDrawable>,
-        uniforms: &Uniforms,
-        current: &Texture,
-        next: &Texture,
-    ) {
-        let pass = MTLRenderPassDescriptor::new();
-        // SAFETY: attachment 0 exists on every render pass descriptor.
-        let attachment = unsafe { pass.colorAttachments().objectAtIndexedSubscript(0) };
-        attachment.setTexture(Some(&drawable.texture()));
-        attachment.setLoadAction(MTLLoadAction::DontCare);
-        attachment.setStoreAction(MTLStoreAction::Store);
-        let Some(commands) = self.queue.commandBuffer() else {
-            return;
+    /// The texture the city is drawn into for a drawable of `size` pixels.
+    fn city_texture(&self, size: (f64, f64)) -> Option<Texture> {
+        let width = (size.0 as usize / CITY_SCALE).max(1);
+        let height = (size.1 as usize / CITY_SCALE).max(1);
+        // SAFETY: a plain descriptor of a 2D texture.
+        let descriptor = unsafe {
+            MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+                CITY_FORMAT,
+                width,
+                height,
+                false,
+            )
         };
-        let Some(encoder) = commands.renderCommandEncoderWithDescriptor(&pass) else {
-            return;
-        };
-        encoder.setRenderPipelineState(&self.pipeline);
-        // SAFETY: `uniforms` has the layout of the shader's `Uniforms` at buffer 0, and Metal
-        // copies it before this call returns; the textures are the shader's textures 0 and 1.
-        unsafe {
-            encoder.setFragmentBytes_length_atIndex(
-                NonNull::from(uniforms).cast(),
-                size_of::<Uniforms>(),
-                0,
-            );
-            encoder.setFragmentTexture_atIndex(Some(current), 0);
-            encoder.setFragmentTexture_atIndex(Some(next), 1);
-            encoder.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
-        }
-        encoder.endEncoding();
-        commands.presentDrawable(ProtocolObject::from_ref(drawable));
-        commands.commit();
+        descriptor.setUsage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+        descriptor.setStorageMode(MTLStorageMode::Private);
+        self.device.newTextureWithDescriptor(&descriptor)
     }
+
+    /// Draws one frame into `drawable` and shows it.
+    fn frame(&self, drawable: &ProtocolObject<dyn CAMetalDrawable>, scene: &Scene<'_>) {
+        if let Some(commands) = self.encode(&drawable.texture(), scene) {
+            commands.presentDrawable(ProtocolObject::from_ref(drawable));
+            commands.commit();
+        }
+    }
+
+    /// The commands that draw one frame into `target`, not yet committed: the city into its
+    /// texture, then the full picture from it.
+    fn encode(
+        &self,
+        target: &ProtocolObject<dyn MTLTexture>,
+        scene: &Scene<'_>,
+    ) -> Option<Retained<ProtocolObject<dyn MTLCommandBuffer>>> {
+        let commands = self.queue.commandBuffer()?;
+        let pass = |into: &ProtocolObject<dyn MTLTexture>,
+                    pipeline: &ProtocolObject<dyn MTLRenderPipelineState>| {
+            let descriptor = MTLRenderPassDescriptor::new();
+            // SAFETY: attachment 0 exists on every render pass descriptor.
+            let attachment = unsafe { descriptor.colorAttachments().objectAtIndexedSubscript(0) };
+            attachment.setTexture(Some(into));
+            attachment.setLoadAction(MTLLoadAction::DontCare);
+            attachment.setStoreAction(MTLStoreAction::Store);
+            let encoder = commands.renderCommandEncoderWithDescriptor(&descriptor)?;
+            encoder.setRenderPipelineState(pipeline);
+            // SAFETY: `uniforms` has the layout of the shader's `Uniforms` at buffer 0, and
+            // Metal copies it before this call returns.
+            unsafe {
+                encoder.setFragmentBytes_length_atIndex(
+                    NonNull::from(scene.uniforms).cast(),
+                    size_of::<Uniforms>(),
+                    0,
+                );
+            }
+            Some(encoder)
+        };
+
+        if scene.draw_city {
+            let city = pass(scene.city, &self.city_pipeline)?;
+            // SAFETY: a triangle covering the target, as the vertex shader makes it.
+            unsafe {
+                city.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3)
+            };
+            city.endEncoding();
+        }
+
+        let main = pass(target, &self.pipeline)?;
+        // SAFETY: the shader's textures 0, 1 and 2; then a triangle covering the target.
+        unsafe {
+            main.setFragmentTexture_atIndex(Some(scene.current), 0);
+            main.setFragmentTexture_atIndex(Some(scene.next), 1);
+            main.setFragmentTexture_atIndex(Some(scene.city), 2);
+            main.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
+        }
+        main.endEncoding();
+        Some(commands)
+    }
+}
+
+/// One frame's inputs: the shader's values, her poses and the city's texture, and whether the
+/// city is drawn again this frame.
+struct Scene<'a> {
+    uniforms: &'a Uniforms,
+    current: &'a Texture,
+    next: &'a Texture,
+    city: &'a Texture,
+    draw_city: bool,
 }
 
 /// The drawing thread: a frame whenever the layer has a drawable free, which happens at the
@@ -369,6 +434,8 @@ impl Gpu {
 fn draw(shared: &Shared, layer: &ThreadLayer, gpu: &Gpu, poses: &[Texture], has_poses: bool) {
     let started = Instant::now();
     let mut drawable_size = (0.0, 0.0);
+    let mut city: Option<Texture> = None;
+    let mut city_drawn = f32::NEG_INFINITY;
     let mut frames = 0u32;
     let mut counted = Instant::now();
     let mut cpu_counted = thread_cpu_time();
@@ -390,14 +457,23 @@ fn draw(shared: &Shared, layer: &ThreadLayer, gpu: &Gpu, poses: &[Texture], has_
             (state.size, state.pulse)
         };
         autoreleasepool(|_| {
-            if size != drawable_size {
+            if size != drawable_size || city.is_none() {
                 layer.0.setDrawableSize(CGSize::new(size.0, size.1));
                 drawable_size = size;
+                city = gpu.city_texture(size);
+                city_drawn = f32::NEG_INFINITY;
             }
+            let Some(city) = &city else {
+                return;
+            };
             let Some(drawable) = layer.0.nextDrawable() else {
                 return;
             };
             let time = started.elapsed().as_secs_f32();
+            let draw_city = time - city_drawn >= CITY_INTERVAL;
+            if draw_city {
+                city_drawn = time;
+            }
             let (current, next, transition) = poses_at(time, poses.len());
             let uniforms = Uniforms {
                 time,
@@ -408,7 +484,16 @@ fn draw(shared: &Shared, layer: &ThreadLayer, gpu: &Gpu, poses: &[Texture], has_
                 seed: current as f32,
                 has_poses: if has_poses { 1.0 } else { 0.0 },
             };
-            gpu.frame(&drawable, &uniforms, &poses[current], &poses[next]);
+            gpu.frame(
+                &drawable,
+                &Scene {
+                    uniforms: &uniforms,
+                    current: &poses[current],
+                    next: &poses[next],
+                    city,
+                    draw_city,
+                },
+            );
         });
         frames += 1;
         if counted.elapsed() >= Duration::from_secs(5) {
@@ -469,5 +554,74 @@ mod tests {
         println!("{count} poses in {took:?}");
         assert_eq!(textures.len(), count.max(1));
         assert!(took < Duration::from_millis(500), "{took:?}");
+    }
+
+    /// What a frame costs, drawn into a texture the size of a large window: the CPU's time on
+    /// this thread, and the graphics card's. Run with `--release --ignored --nocapture`.
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn frame_cost() {
+        const FRAMES: u32 = 600;
+        let device = MTLCreateSystemDefaultDevice().expect("a Metal device");
+        let gpu = Gpu::new(device).expect("the shaders compile");
+        let (poses, _) = gpu.poses(super::super::poses::POSES);
+        // A 1400 × 900 point view on a Retina display.
+        let (width, height) = (2800usize, 1800usize);
+        // SAFETY: a plain descriptor of a 2D texture.
+        let descriptor = unsafe {
+            MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+                MTLPixelFormat::BGRA8Unorm,
+                width,
+                height,
+                false,
+            )
+        };
+        descriptor.setUsage(MTLTextureUsage::RenderTarget);
+        descriptor.setStorageMode(MTLStorageMode::Private);
+        let target = gpu.device.newTextureWithDescriptor(&descriptor).unwrap();
+        let city = gpu.city_texture((width as f64, height as f64)).unwrap();
+
+        let cpu_start = thread_cpu_time();
+        let started = Instant::now();
+        let mut gpu_seconds = 0.0;
+        for frame in 0..FRAMES {
+            let time = frame as f32 / 120.0;
+            let (current, next, transition) = poses_at(time, poses.len());
+            let uniforms = Uniforms {
+                time,
+                pulse: 0.5,
+                size: [width as f32, height as f32],
+                transition,
+                aspect: 0.75,
+                seed: current as f32,
+                has_poses: 1.0,
+            };
+            autoreleasepool(|_| {
+                let scene = Scene {
+                    uniforms: &uniforms,
+                    current: &poses[current],
+                    next: &poses[next],
+                    city: &city,
+                    draw_city: frame % 4 == 0,
+                };
+                let commands = gpu.encode(&target, &scene).unwrap();
+                commands.commit();
+                commands.waitUntilCompleted();
+                gpu_seconds += commands.GPUEndTime() - commands.GPUStartTime();
+            });
+        }
+        let cpu = (thread_cpu_time() - cpu_start).as_secs_f64() / f64::from(FRAMES);
+        let gpu_time = gpu_seconds / f64::from(FRAMES);
+        println!(
+            "per frame: CPU {:.0} µs, graphics card {:.2} ms ({:?} for {FRAMES} frames)",
+            cpu * 1e6,
+            gpu_time * 1e3,
+            started.elapsed()
+        );
+        println!(
+            "at 120 frames a second: {:.2} % of a CPU core, {:.0} % of the graphics card's time",
+            cpu * 120.0 * 100.0,
+            gpu_time * 120.0 * 100.0
+        );
     }
 }

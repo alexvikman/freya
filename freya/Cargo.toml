@@ -119,7 +119,7 @@ objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["
 libc = "0.2.190"
 # The demo, drawn by the graphics card (see gui/demo/metal.rs). Already in the tree through
 # Slint's renderers.
-objc2-metal = { version = "0.3.2", default-features = false, features = ["std", "MTLAllocation", "MTLBlitCommandEncoder", "MTLCommandBuffer", "MTLCommandEncoder", "MTLCommandQueue", "MTLDevice", "MTLDrawable", "MTLLibrary", "MTLPixelFormat", "MTLRenderCommandEncoder", "MTLRenderPass", "MTLRenderPipeline", "MTLResource", "MTLTexture", "MTLTypes"] }
+objc2-metal = { version = "0.3.2", default-features = false, features = ["std", "MTLAllocation", "MTLBlitCommandEncoder", "MTLCommandBuffer", "MTLCommandEncoder", "MTLCommandQueue", "MTLDevice", "MTLDrawable", "MTLLibrary", "MTLPixelFormat", "MTLRenderCommandEncoder", "MTLRenderPass", "MTLRenderPipeline", "MTLResource", "MTLTexture", "MTLTypes", "objc2-core-foundation"] }
 
 [target.'cfg(windows)'.dependencies]
 # Printing to the terminal Freya was started from.
