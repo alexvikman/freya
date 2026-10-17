@@ -313,8 +313,8 @@ export struct SpectrumArea {
     background: color,
 }
 
-/// Where `NativeDemo` is; kept up to date by that component.
-export struct DemoArea {
+/// Where `NativeHologram` is; kept up to date by that component.
+export struct HologramArea {
     x: length,
     y: length,
     width: length,
@@ -326,7 +326,7 @@ export struct DemoArea {
 /// Visualization of what is playing. Optional. Updated up to 60 times a second while
 /// something plays; nothing is computed when the skin does not export this global.
 export global Visualizer {
-    /// "spectrum", "oscilloscope", "demo" or "off".
+    /// "spectrum", "oscilloscope", "hologram" or "off".
     in property <string> mode: "spectrum";
     /// How many spectrum bars the skin draws. Set it once, e.g. in `init`; `bars` and `peaks`
     /// then have this many values.
@@ -338,9 +338,9 @@ export global Visualizer {
     /// The last few milliseconds of audio, from -1 to 1.
     in property <[float]> waveform;
 
-    /// Switch to the next mode: spectrum, oscilloscope, demo, off.
+    /// Switch to the next mode: spectrum, oscilloscope, hologram, off.
     callback cycle-mode();
-    /// Switch to `mode`: "spectrum", "oscilloscope", "demo" or "off". Other values are ignored.
+    /// Switch to `mode`: "spectrum", "oscilloscope", "hologram" or "off". Other values are ignored.
     callback set-mode(string);
     /// Whether the skin shows a visualization right now. A skin that puts it in a view of its
     /// own sets this to false while another view is shown; Freya then computes nothing for it.
@@ -361,23 +361,24 @@ export global Visualizer {
     /// Where the `NativeSpectrum` is; kept up to date by that component.
     in-out property <SpectrumArea> native-area;
 
-    /// True when Freya can draw the demo (`NativeDemo`): so far on macOS.
-    in property <bool> demo-drawing;
-    /// Where the `NativeDemo` is; kept up to date by that component.
-    in-out property <DemoArea> demo-area;
+    /// True when Freya can draw the hologram (`NativeHologram`): so far on macOS.
+    in property <bool> hologram-drawing;
+    /// Where the `NativeHologram` is; kept up to date by that component.
+    in-out property <HologramArea> hologram-area;
 }
 
-/// The demo, for `Visualizer.mode` "demo": a girl dancing over copper bars, in the style of an
-/// old Amiga demo. Freya draws it with the graphics card, in a layer of its own on top of the
-/// window, at the display's refresh rate; she dances whether or not something plays, and the
-/// background pulses with the bass. Nothing of the skin can be drawn on top of it. Where Freya
-/// cannot draw it (`Visualizer.demo-drawing` is false), the box shows its background.
-export component NativeDemo inherits Rectangle {
-    /// Set to false while the demo should not show.
+/// The hologram, for `Visualizer.mode` "hologram": a woman projected in translucent light over a
+/// city at night in the rain, after Blade Runner 2049. Freya draws it with the graphics card,
+/// in a layer of its own on top of the window, at the display's refresh rate; it moves whether
+/// or not something plays, and the bass drives its glitches and glow. Nothing of the skin can
+/// be drawn on top of it. Where Freya cannot draw it (`Visualizer.hologram-drawing` is false),
+/// the box shows its background.
+export component NativeHologram inherits Rectangle {
+    /// Set to false while the hologram should not show.
     in property <bool> shown: true;
 
     function report() {
-        Visualizer.demo-area = {
+        Visualizer.hologram-area = {
             x: self.absolute-position.x,
             y: self.absolute-position.y,
             width: self.width,

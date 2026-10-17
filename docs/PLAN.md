@@ -123,28 +123,29 @@ navigation is meant to grow over time.
 | **U6** | **macOS window**: the window buttons inside the navigation, without a separate title bar | |
 | **U7** | **Advanced visualizer**: new modes drawn by the graphics card (Metal, Direct3D, OpenGL/Vulkan) through a native layer like the spectrum's | Planned with the user when U1–U6 are done |
 
-### U7: the demo (from 2026-10-17)
+### U7: the hologram (from 2026-10-17)
 
-The advanced visualizer becomes a demo in the old demoscene style, like Spaceballs' "State of
-the Art" (1992): a girl who looks like the README's listener (blonde bob, headphones, black
-top, peach choker) dances as a filled vector figure, over copper and raster bars, on a
-low-resolution screen with a CRT look. She dances at her own pace; the background pulses
-lightly with the bass. Decided with the user: a vector figure in code (not frame-by-frame
-pixel art), copper/raster bars and CRT, the background (not the dance) reacting to the music.
+The advanced visualizer becomes a hologram in the style of Joi in Blade Runner 2049: a woman
+projected in translucent pink, violet and cyan light, with scanlines, flicker, glitches and a
+soft glow, over a dark city in the rain with blurred neon. She is Freya's own character, the
+README's listener (blonde bob, white headphones, black top, peach choker), photorealistic,
+and resembles no real person. She breathes and sways a little, and moves from pose to pose
+with a hologram glitch; the bass drives the glitches and the glow. Decided with the user
+(2026-10-17), after a first try in the Amiga demoscene style was not what they wanted.
 
-The graphics card draws all of it, at the screen's refresh rate (120 Hz on ProMotion), in a
-layer of its own like the native spectrum: Slint and the app's main thread take no part, and
-per frame the CPU only computes the dancer's pose and hands over a few hundred bytes. The aim
-is under 1 % of a core at 120 frames per second. macOS (Metal) first; the shaders are kept
-simple enough to port to Direct3D and Vulkan later. Assembly was considered and ruled out: the
-analysis costs about 0.1 percentage points, and drawing is the GPU's work.
+Her poses are photographs the user makes (with Codex): the same woman in five poses, on pure
+black, so black is see-through in the hologram. The graphics card does everything else.
+
+It is drawn by the Metal layer of the first try: a thread of its own, in step with the display
+(120 Hz measured), asleep while hidden; per frame the CPU only hands over the time, the bass
+and which poses to blend. macOS first; the shaders stay simple enough to port.
 
 | # | Milestone | Done when |
 |---|---|---|
-| **D1** | **A Metal layer** in the visualizer view: a CAMetalLayer, drawn by a thread of its own in step with the display, paused when the view is hidden or the window covered; a test pattern | Runs at the display's rate; CPU measured |
-| **D2** | **The screen**: a 320×256 picture scaled up with sharp pixels, copper and raster bars in a small palette, the CRT look (scanlines, glow), the bass pulse | Looks like an Amiga demo |
-| **D3** | **The dancer**: a 2D skeleton posed from keyframes, its parts drawn as filled shapes in her colours, a dance loop of several steps | She is recognisably the listener, and dances smoothly |
-| **D4** | **In Freya**: `demo` as a visualizer mode, chosen in the Visualizer view; other systems keep the spectrum until the port | Documented in the skin API; CPU measured at 60 and 120 Hz |
+| **H1** | **The Metal layer** (done in the first try): a CAMetalLayer drawn by its own thread at the display's rate, the bass handed over | 120 frames per second |
+| **H2** | **The city**: night, fog, rain and blurred neon, drawn by the shader | Looks like the film's streets |
+| **H3** | **The hologram**: the poses as textures, tinted light added over the city, scanlines, flicker, colour fringes, glitch slices and glow; breathing and sway; glitch transitions between poses; the bass in the glitches | She reads as a hologram, and the user likes it |
+| **H4** | **In Freya**: the mode named and documented, other systems told it is macOS only, CPU measured | Under 1 % of a core at 120 Hz for the drawing |
 
 ### Releases (from 2026-10-17, before U7)
 

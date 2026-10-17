@@ -84,15 +84,13 @@ base64 = "0.23.1"
 ring = "0.17.14"
 serde_json = "1.0.152"
 ureq = "3"
+# Freya's icon on its windows (see gui/app_icon.rs) and the hologram's poses (see
+# gui/hologram), with the decoders the library and skin loader already use.
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 
 [target.'cfg(any(windows, target_os = "macos", target_os = "linux"))'.dependencies]
 # The native window behind Slint's: for Windows' media controls and the spectrum layer.
 raw-window-handle = "0.6"
-
-[target.'cfg(not(target_os = "macos"))'.dependencies]
-# Freya's icon on its windows (see gui/app_icon.rs), decoded with the PNG support Freya's skin
-# loader already has.
-image = { version = "0.25.10", default-features = false, features = ["png"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # MPRIS, the system media controls (see gui/system_media/mpris.rs): the zbus that Slint's
@@ -121,7 +119,7 @@ objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["
 libc = "0.2.190"
 # The demo, drawn by the graphics card (see gui/demo/metal.rs). Already in the tree through
 # Slint's renderers.
-objc2-metal = { version = "0.3.2", default-features = false, features = ["std", "MTLAllocation", "MTLCommandBuffer", "MTLCommandEncoder", "MTLCommandQueue", "MTLDevice", "MTLDrawable", "MTLLibrary", "MTLPixelFormat", "MTLRenderCommandEncoder", "MTLRenderPass", "MTLRenderPipeline", "MTLResource", "MTLTexture", "MTLTypes"] }
+objc2-metal = { version = "0.3.2", default-features = false, features = ["std", "MTLAllocation", "MTLBlitCommandEncoder", "MTLCommandBuffer", "MTLCommandEncoder", "MTLCommandQueue", "MTLDevice", "MTLDrawable", "MTLLibrary", "MTLPixelFormat", "MTLRenderCommandEncoder", "MTLRenderPass", "MTLRenderPipeline", "MTLResource", "MTLTexture", "MTLTypes"] }
 
 [target.'cfg(windows)'.dependencies]
 # Printing to the terminal Freya was started from.

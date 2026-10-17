@@ -4,7 +4,7 @@
 // contrast against the background it is drawn on (WCAG AA), light and dark mode follow the
 // system.
 
-import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, PlaybackState, Shortcuts, TrackRow, LibraryRow, PlaylistRow, StationRow, NativeSpectrum, NativeDemo } from "@freya/v1.slint";
+import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, PlaybackState, Shortcuts, TrackRow, LibraryRow, PlaylistRow, StationRow, NativeSpectrum, NativeHologram } from "@freya/v1.slint";
 import { ListView, Palette, ScrollView } from "std-widgets.slint";
 
 // Every skin re-exports the API globals so the app can reach them.
@@ -298,14 +298,14 @@ component VisualizerView inherits Rectangle {
                 fill: transparent;
             }
             // Drawn by Freya with the graphics card, filling the box.
-            if Visualizer.mode == "demo": NativeDemo {
+            if Visualizer.mode == "hologram": NativeHologram {
                 width: box.width;
                 height: box.height;
                 border-radius: box.border-radius;
                 shown: root.shown;
             }
-            if Visualizer.mode == "demo" && !Visualizer.demo-drawing: Text {
-                text: "The demo is only drawn on macOS so far";
+            if Visualizer.mode == "hologram" && !Visualizer.hologram-drawing: Text {
+                text: "The hologram is only drawn on macOS so far";
                 font-size: 16px;
                 color: #b0b0b0;
             }
@@ -2914,9 +2914,9 @@ component Toolbar inherits HorizontalLayout {
         alignment: center;
 
         ChoiceButton {
-            text: "Demo";
-            selected: Visualizer.mode == "demo";
-            clicked => { Visualizer.set-mode("demo"); }
+            text: "Hologram";
+            selected: Visualizer.mode == "hologram";
+            clicked => { Visualizer.set-mode("hologram"); }
         }
     }
     if root.view == "visualizer": VerticalLayout {

@@ -1,11 +1,12 @@
-//! macOS: the demo drawn with Metal into a CAMetalLayer on the window's view layer. A thread of
-//! its own draws it: waiting for the layer's next drawable paces it to the display's refresh,
-//! and while the demo is hidden the thread sleeps.
+//! macOS: the hologram drawn with Metal into a CAMetalLayer on the window's view layer. A thread
+//! of its own draws it: waiting for the layer's next drawable paces it to the display's
+//! refresh, and while the hologram is hidden the thread sleeps. Her poses are decoded on that
+//! thread too, so the window never waits for them.
 
 #![allow(
     unsafe_code,
-    reason = "Metal's bindings mark drawing calls unsafe, as the GPU runs what they set up; \
-              each is given data of the size and layout the shader declares"
+    reason = "Metal's bindings mark drawing and texture calls unsafe, as the GPU runs what they \
+              set up; each is given data of the size and layout the shader or texture declares"
 )]
 
 use std::ptr::NonNull;
@@ -19,27 +20,40 @@ use objc2_app_kit::NSView;
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLCreateSystemDefaultDevice, MTLDevice,
-    MTLLibrary, MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder,
-    MTLRenderPassDescriptor, MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLStoreAction,
+    MTLBlitCommandEncoder, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
+    MTLCreateSystemDefaultDevice, MTLDevice, MTLLibrary, MTLLoadAction, MTLOrigin, MTLPixelFormat,
+    MTLPrimitiveType, MTLRegion, MTLRenderCommandEncoder, MTLRenderPassDescriptor,
+    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLSize, MTLStoreAction, MTLTexture,
+    MTLTextureDescriptor,
 };
 use objc2_quartz_core::{CALayer, CAMetalDrawable, CAMetalLayer, CATransaction};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use slint::winit_030::WinitWindowAccessor;
 
-use super::Area;
+use super::{Area, poses_at};
 
 pub const NAME: &str = "Metal";
 pub const SUPPORTED: bool = true;
 
-const SHADERS: &str = include_str!("demo.metal");
+const SHADERS: &str = include_str!("hologram.metal");
+/// Her poses, as textures: tall enough to stay sharp in a large window, small enough to decode
+/// in moments.
+const POSE_HEIGHT: u32 = 1024;
 
-/// What the shader gets each frame; laid out like `Uniforms` in demo.metal.
+/// What the shader gets each frame; laid out like `Uniforms` in hologram.metal.
 #[repr(C)]
 struct Uniforms {
     time: f32,
     pulse: f32,
     size: [f32; 2],
+    /// How far the glitch from the current pose to the next has come, 0 to 1.
+    transition: f32,
+    /// The poses' width over their height.
+    aspect: f32,
+    /// Changes with each pose, so each glitch looks different.
+    seed: f32,
+    /// Whether there are poses at all.
+    has_poses: f32,
 }
 
 /// What the drawing thread is told.
@@ -71,8 +85,11 @@ struct ThreadLayer(Retained<CAMetalLayer>);
 // which Metal supports from any thread; everything else is done on the main thread.
 unsafe impl Send for ThreadLayer {}
 
+type Texture = Retained<ProtocolObject<dyn MTLTexture>>;
+
 /// What the drawing thread draws with.
 struct Gpu {
+    device: Retained<ProtocolObject<dyn MTLDevice>>,
     queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
     pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
 }
@@ -85,13 +102,13 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new(window: &slint::Window) -> Option<Self> {
+    pub fn new(window: &slint::Window, poses: &'static [&'static [u8]]) -> Option<Self> {
         let parent = view(window)?.layer()?;
         let device = MTLCreateSystemDefaultDevice()?;
-        let gpu = match Gpu::new(&device) {
+        let gpu = match Gpu::new(device.clone()) {
             Ok(gpu) => gpu,
             Err(e) => {
-                log::warn!("the demo cannot use the graphics card: {e}");
+                log::warn!("the hologram cannot use the graphics card: {e}");
                 return None;
             }
         };
@@ -114,8 +131,11 @@ impl Renderer {
             let shared = Arc::clone(&shared);
             let layer = ThreadLayer(layer.clone());
             std::thread::Builder::new()
-                .name("freya-demo".into())
-                .spawn(move || draw(&shared, &layer, &gpu))
+                .name("freya-hologram".into())
+                .spawn(move || {
+                    let (textures, count) = gpu.poses(poses);
+                    draw(&shared, &layer, &gpu, &textures, count > 0);
+                })
                 .ok()?
         };
         Some(Self {
@@ -176,7 +196,7 @@ impl Drop for Renderer {
 }
 
 impl Gpu {
-    fn new(device: &ProtocolObject<dyn MTLDevice>) -> Result<Self, String> {
+    fn new(device: Retained<ProtocolObject<dyn MTLDevice>>) -> Result<Self, String> {
         let queue = device.newCommandQueue().ok_or("no command queue")?;
         let library = device
             .newLibraryWithSource_options_error(&NSString::from_str(SHADERS), None)
@@ -187,7 +207,7 @@ impl Gpu {
                 .ok_or_else(|| format!("no shader {name}"))
         };
         let descriptor = MTLRenderPipelineDescriptor::new();
-        let (vertex, fragment) = (function("demo_vertex")?, function("demo_fragment")?);
+        let (vertex, fragment) = (function("hologram_vertex")?, function("hologram_fragment")?);
         descriptor.setVertexFunction(Some(&vertex));
         descriptor.setFragmentFunction(Some(&fragment));
         // SAFETY: attachment 0 exists on every render pipeline descriptor.
@@ -196,11 +216,112 @@ impl Gpu {
         let pipeline = device
             .newRenderPipelineStateWithDescriptor_error(&descriptor)
             .map_err(|e| format!("no render pipeline: {e}"))?;
-        Ok(Self { queue, pipeline })
+        Ok(Self {
+            device,
+            queue,
+            pipeline,
+        })
+    }
+
+    /// Her poses as textures with mipmaps (the shader's glow reads the small ones), all the
+    /// same size, and how many there are. Poses that cannot be read are left out; with none,
+    /// one black texture stands in.
+    fn poses(&self, files: &[&[u8]]) -> (Vec<Texture>, usize) {
+        let images: Vec<image::RgbaImage> = files
+            .iter()
+            .filter_map(|bytes| match image::load_from_memory(bytes) {
+                Ok(image) => Some(image.into_rgba8()),
+                Err(e) => {
+                    log::warn!("a hologram pose cannot be read: {e}");
+                    None
+                }
+            })
+            .collect();
+        // The first pose sets the shape; the others are fitted to it.
+        let (width, height) = images.first().map_or((1, 1), |first| {
+            let (w, h) = first.dimensions();
+            let height = POSE_HEIGHT.min(h);
+            ((w * height / h).max(1), height)
+        });
+        let mut textures: Vec<Texture> = images
+            .iter()
+            .filter_map(|image| {
+                let image = image::imageops::resize(
+                    image,
+                    width,
+                    height,
+                    image::imageops::FilterType::CatmullRom,
+                );
+                self.texture(image.as_raw(), width, height)
+            })
+            .collect();
+        let count = textures.len();
+        if textures.is_empty()
+            && let Some(black) = self.texture(&[0, 0, 0, 255], 1, 1)
+        {
+            textures.push(black);
+        }
+        self.mipmaps(&textures);
+        (textures, count)
+    }
+
+    fn texture(&self, rgba: &[u8], width: u32, height: u32) -> Option<Texture> {
+        let levels = 32 - width.max(height).leading_zeros();
+        // SAFETY: a plain descriptor of a 2D texture of the image's size.
+        let descriptor = unsafe {
+            MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+                MTLPixelFormat::RGBA8Unorm,
+                width as usize,
+                height as usize,
+                levels > 1,
+            )
+        };
+        let texture = self.device.newTextureWithDescriptor(&descriptor)?;
+        let region = MTLRegion {
+            origin: MTLOrigin { x: 0, y: 0, z: 0 },
+            size: MTLSize {
+                width: width as usize,
+                height: height as usize,
+                depth: 1,
+            },
+        };
+        // SAFETY: `rgba` holds width × height RGBA pixels, 4 bytes each, row by row.
+        unsafe {
+            texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(
+                region,
+                0,
+                NonNull::from(rgba).cast(),
+                width as usize * 4,
+            );
+        }
+        Some(texture)
+    }
+
+    fn mipmaps(&self, textures: &[Texture]) {
+        let Some(commands) = self.queue.commandBuffer() else {
+            return;
+        };
+        let Some(blit) = commands.blitCommandEncoder() else {
+            return;
+        };
+        for texture in textures {
+            if texture.mipmapLevelCount() > 1 {
+                blit.generateMipmapsForTexture(texture);
+            }
+        }
+        blit.endEncoding();
+        commands.commit();
+        commands.waitUntilCompleted();
     }
 
     /// Draws one frame into `drawable`.
-    fn frame(&self, drawable: &ProtocolObject<dyn CAMetalDrawable>, uniforms: &Uniforms) {
+    fn frame(
+        &self,
+        drawable: &ProtocolObject<dyn CAMetalDrawable>,
+        uniforms: &Uniforms,
+        current: &Texture,
+        next: &Texture,
+    ) {
         let pass = MTLRenderPassDescriptor::new();
         // SAFETY: attachment 0 exists on every render pass descriptor.
         let attachment = unsafe { pass.colorAttachments().objectAtIndexedSubscript(0) };
@@ -215,13 +336,15 @@ impl Gpu {
         };
         encoder.setRenderPipelineState(&self.pipeline);
         // SAFETY: `uniforms` has the layout of the shader's `Uniforms` at buffer 0, and Metal
-        // copies it before this call returns.
+        // copies it before this call returns; the textures are the shader's textures 0 and 1.
         unsafe {
             encoder.setFragmentBytes_length_atIndex(
                 NonNull::from(uniforms).cast(),
                 size_of::<Uniforms>(),
                 0,
             );
+            encoder.setFragmentTexture_atIndex(Some(current), 0);
+            encoder.setFragmentTexture_atIndex(Some(next), 1);
             encoder.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
         }
         encoder.endEncoding();
@@ -231,13 +354,16 @@ impl Gpu {
 }
 
 /// The drawing thread: a frame whenever the layer has a drawable free, which happens at the
-/// display's refresh rate; asleep while the demo is hidden.
-fn draw(shared: &Shared, layer: &ThreadLayer, gpu: &Gpu) {
+/// display's refresh rate; asleep while the hologram is hidden.
+fn draw(shared: &Shared, layer: &ThreadLayer, gpu: &Gpu, poses: &[Texture], has_poses: bool) {
     let started = Instant::now();
     let mut drawable_size = (0.0, 0.0);
     let mut frames = 0u32;
     let mut counted = Instant::now();
     let mut cpu_counted = thread_cpu_time();
+    let aspect = poses
+        .first()
+        .map_or(0.75, |t| t.width() as f32 / t.height().max(1) as f32);
     loop {
         let (size, pulse) = {
             let mut state = shared.state();
@@ -257,21 +383,28 @@ fn draw(shared: &Shared, layer: &ThreadLayer, gpu: &Gpu) {
                 layer.0.setDrawableSize(CGSize::new(size.0, size.1));
                 drawable_size = size;
             }
-            if let Some(drawable) = layer.0.nextDrawable() {
-                let uniforms = Uniforms {
-                    time: started.elapsed().as_secs_f32(),
-                    pulse,
-                    size: [size.0 as f32, size.1 as f32],
-                };
-                gpu.frame(&drawable, &uniforms);
-            }
+            let Some(drawable) = layer.0.nextDrawable() else {
+                return;
+            };
+            let time = started.elapsed().as_secs_f32();
+            let (current, next, transition) = poses_at(time, poses.len());
+            let uniforms = Uniforms {
+                time,
+                pulse,
+                size: [size.0 as f32, size.1 as f32],
+                transition,
+                aspect,
+                seed: current as f32,
+                has_poses: if has_poses { 1.0 } else { 0.0 },
+            };
+            gpu.frame(&drawable, &uniforms, &poses[current], &poses[next]);
         });
         frames += 1;
         if counted.elapsed() >= Duration::from_secs(5) {
             let seconds = counted.elapsed().as_secs_f64();
             let cpu = thread_cpu_time().saturating_sub(cpu_counted).as_secs_f64();
             log::debug!(
-                "the demo drew {:.1} frames per second, using {:.2} % of a core",
+                "the hologram drew {:.1} frames per second, using {:.2} % of a core",
                 f64::from(frames) / seconds,
                 cpu * 100.0 / seconds
             );

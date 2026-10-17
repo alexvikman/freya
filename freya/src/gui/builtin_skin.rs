@@ -326,7 +326,7 @@ impl Convert for SpectrumArea {
     }
 }
 
-impl Convert for DemoArea {
+impl Convert for HologramArea {
     fn from_value(value: Value) -> Option<Self> {
         let Value::Struct(s) = value else { return None };
         Some(Self {
@@ -502,8 +502,8 @@ skin_api! {
         Visualizer."waveform" => set_waveform, get_waveform;
         Visualizer."native-drawing" => set_native_drawing, get_native_drawing;
         Visualizer."native-area" => set_native_area, get_native_area;
-        Visualizer."demo-drawing" => set_demo_drawing, get_demo_drawing;
-        Visualizer."demo-area" => set_demo_area, get_demo_area;
+        Visualizer."hologram-drawing" => set_hologram_drawing, get_hologram_drawing;
+        Visualizer."hologram-area" => set_hologram_area, get_hologram_area;
         Visualizer."showing" => set_showing, get_showing;
 
         App."version" => set_version, get_version;
