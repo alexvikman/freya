@@ -45,7 +45,13 @@ the repository token, and only the release job may write.
 - **With a Developer ID** (later): the variable `FREYA_MACOS_IDENTITY`, and the secrets
   `APPLE_CERTIFICATE` (the `.p12`, base64), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_API_KEY` (the
   `.p8`'s contents), `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`. The macOS jobs then sign with
-  it and notarize.
+  it and notarize. Keep them in an environment that only `v*` tags may use (and give the macOS
+  jobs that `environment:`), not as repository secrets: started by hand, the workflow builds
+  any branch, and repository secrets would reach it.
+- **Actions** (Settings, Actions, General): only actions by GitHub allowed, every action pinned
+  to a full commit SHA, workflow permissions read-only, and approval required for workflows
+  from all outside contributors.
+- **Ruleset "Protect main"** (Settings, Rules): `main` cannot be deleted or force-pushed.
 
 ### Checking a release by hand
 
