@@ -1,8 +1,14 @@
-# Freya
+<p align="center">
+  <img src="assets/readme/logo.png" alt="Freya" width="460">
+</p>
+
+<p align="center">
+  <img src="assets/readme/listener.png" alt="A listener with headphones" width="320">
+</p>
 
 A cross-platform music player written in Rust, with its own skin format. Readability and efficiency come first: the interface is drawn at the screen's physical resolution and stays crisp at any size.
 
-Status: early development. The audio engine, playlist model and equalizer are in place, and the new [Slint](https://slint.dev)-based interface plays music from a skinnable window. See [docs/PLAN.md](docs/PLAN.md) for the architecture and milestones.
+Status: early, but in use. [Download the latest release](https://github.com/alexvikman/freya/releases/latest) for macOS, Windows or Linux; Freya then finds and installs its updates itself, when you say so. The interface is built with [Slint](https://slint.dev). See [docs/PLAN.md](docs/PLAN.md) for the architecture and milestones.
 
 ## Building
 
@@ -77,7 +83,7 @@ freya skin pack path/to/my-skin     # make my-skin.freyaskin for sharing
 | `skins/` | The built-in skin (`freya/`) and an example skin (`mini/`) |
 | `docs/` | Plan, design notes, the skin authoring guide, packaging and dependency policy |
 | `deny.toml`, `supply-chain/` | Dependency checks: cargo-deny rules and cargo-vet audits |
-| `assets/` | The app icon: the artwork and the sizes made from it by `ci/make-icons.swift` |
+| `assets/` | The app icon (the artwork and the sizes made from it by `ci/make-icons.swift`), and the logo and illustration in this README |
 | `ci/` | Docker image and script that check Linux and Windows builds locally |
 
 ## History
