@@ -22,6 +22,12 @@ ignore = [
     { id = "RUSTSEC-2024-0436", reason = "unmaintained, no known flaw; runs only at build time, inside lofty" },
     # `ttf-parser`, via winit's title bar drawing on Wayland (sctk-adwaita).
     { id = "RUSTSEC-2026-0192", reason = "unmaintained, no known flaw; goes when winit drops it" },
+    # `zvariant`, `zbus_names` and `zvariant_derive`, merged into zbus 6: via zbus 5, which
+    # Slint's accessibility on Linux (accesskit_unix, atspi) brings and Freya's system media
+    # controls use.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: unmaintained (merged into zbus 6), no known flaw; goes when Slint and accesskit move to zbus 6" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: unmaintained (merged into zbus 6), no known flaw; goes when Slint and accesskit move to zbus 6" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: unmaintained (merged into zbus 6), no known flaw; goes when Slint and accesskit move to zbus 6" },
 ]
 
 [licenses]
