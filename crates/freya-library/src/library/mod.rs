@@ -230,10 +230,12 @@ impl Library {
     }
 
     fn setup(db: Connection) -> Result<Self> {
+        // First, so that every statement below waits for a lock another connection holds
+        // (the window's, while a scan opens its own) instead of failing at once.
+        db.busy_timeout(Duration::from_secs(5))?;
         // WAL lets the window read while a scan writes on another connection.
         db.pragma_update(None, "journal_mode", "WAL")?;
         db.pragma_update(None, "synchronous", "NORMAL")?;
-        db.busy_timeout(Duration::from_secs(5))?;
         let version: i32 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
         if version != SCHEMA_VERSION {
             if version != 0 {

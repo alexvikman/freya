@@ -224,8 +224,6 @@ fn unselected(mut entry: Entry) -> Entry {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use super::*;
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -248,15 +246,15 @@ mod tests {
     #[test]
     fn keeps_playlists_as_files_in_name_order() {
         let dir = temp_dir("files");
+        // Absolute on every system, unlike "/m" on Windows.
+        let music = std::env::temp_dir().join("m");
+        let track = |name: &str| entry(&music.join(name).to_string_lossy());
         let mut playlists = Playlists::load(Some(dir.clone()));
         assert_eq!(playlists.len(), 0);
 
-        assert_eq!(
-            playlists.create("Road trip", vec![entry("/m/a.flac")]),
-            Ok(0)
-        );
+        assert_eq!(playlists.create("Road trip", vec![track("a.flac")]), Ok(0));
         assert_eq!(playlists.create("calm", Vec::new()), Ok(0));
-        playlists.add(1, vec![entry("/m/b.flac")]);
+        playlists.add(1, vec![track("b.flac")]);
         playlists.remove_track(1, 0);
         assert_eq!(playlists.rename(0, "Calm evenings"), Ok(0));
         assert_eq!(playlists.create("Workout", Vec::new()), Ok(2));
@@ -266,7 +264,7 @@ mod tests {
         assert_eq!(names(&again), ["Calm evenings", "Road trip"]);
         let road = again.get(1).unwrap();
         assert_eq!(road.entries.len(), 1);
-        assert_eq!(road.entries[0].path, Path::new("/m/b.flac"));
+        assert_eq!(road.entries[0].path, music.join("b.flac"));
         assert!(!road.entries[0].selected, "selection is not kept");
         let files: Vec<PathBuf> = std::fs::read_dir(&dir)
             .unwrap()

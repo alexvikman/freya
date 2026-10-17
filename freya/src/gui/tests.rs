@@ -147,6 +147,8 @@ fn current_ui(app: &Rc<RefCell<App>>) -> SkinWindow {
 
 #[test]
 fn skin_callbacks_drive_the_app() {
+    // Freya's log, shown if the test fails.
+    let _ = env_logger::builder().is_test(true).try_init();
     freya_skin::render::init_headless().unwrap();
     let ui = SkinWindow::load(&SkinSource::Builtin).unwrap();
     assert!(
