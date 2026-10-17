@@ -27,6 +27,7 @@ use super::system_media::{MediaRequest, SystemMedia};
 use super::title_bar::TitleBar;
 use super::visualizer::{self, Visualizer};
 use super::window_events::{WindowEvent, WindowEvents};
+use crate::lastfm::{self, LastFm};
 use crate::settings::{self, Settings};
 use crate::update::{self, Updater};
 
@@ -54,6 +55,7 @@ pub struct View {
     station_rows: ModelRows,
     playlists_out: GlobalWriter,
     updates_out: GlobalWriter,
+    lastfm_out: GlobalWriter,
     playlist_list_rows: ModelRows,
     playlist_track_rows: ModelRows,
     /// The playlists' version and the playlist shown when their rows were last given to the
@@ -81,6 +83,7 @@ impl View {
             station_rows: ModelRows::new(),
             playlists_out: GlobalWriter::new(&ui, "Playlists"),
             updates_out: GlobalWriter::new(&ui, "Updates"),
+            lastfm_out: GlobalWriter::new(&ui, "LastFm"),
             playlist_list_rows: ModelRows::new(),
             playlist_track_rows: ModelRows::new(),
             playlists_synced: None,
@@ -257,6 +260,20 @@ pub struct App {
 
     pub updater: Updater,
     started: Instant,
+    pub lastfm: LastFm,
+    /// The play Last.fm hears about, if the track may be scrobbled at all.
+    lastfm_play: Option<LastFmPlay>,
+    /// Whether something played at the last tick, so a resume can tell Last.fm again.
+    lastfm_was_playing: bool,
+}
+
+/// What Last.fm is told about the track that plays.
+struct LastFmPlay {
+    track: lastfm::Track,
+    /// When it started, in seconds since 1970.
+    started: u64,
+    /// Whether it may be scrobbled once heard enough: not when 30 seconds or shorter.
+    scrobble: bool,
 }
 
 /// The music the user keeps in Freya, handed to the app when it starts.
@@ -280,6 +297,7 @@ impl App {
             stations,
             playlists,
         } = collections;
+        let lastfm = LastFm::start(settings.lastfm_user.clone());
         let mut app = Self {
             player,
             playlist: Playlist::new(),
@@ -315,6 +333,9 @@ impl App {
             picker_skins: Vec::new(),
             updater: Updater::new(),
             started: Instant::now(),
+            lastfm,
+            lastfm_play: None,
+            lastfm_was_playing: false,
         };
         app.watch_skin();
         app.attach_library();
@@ -717,6 +738,7 @@ impl App {
                     self.name_station(&track);
                     self.playlist.set_current_track(&track.path, track.start);
                     self.listening.start(self.countable(&track), track.duration);
+                    self.lastfm_started(&track);
                     self.covers.request(&track.path);
                     self.track = Some(track);
                     self.playlist_dirty = true;
@@ -799,12 +821,16 @@ impl App {
         }
 
         let status = self.player.status();
-        if let Some((path, part)) = self
-            .listening
-            .update(status.position, status.state == PlaybackState::Playing)
-        {
+        let playing = status.state == PlaybackState::Playing;
+        if let Some((path, part)) = self.listening.update(status.position, playing) {
             self.library.record_play(path, part);
+            self.lastfm_heard();
         }
+        // After a pause, Last.fm shows the track as playing again.
+        if playing && !self.lastfm_was_playing {
+            self.lastfm_now_playing();
+        }
+        self.lastfm_was_playing = playing;
 
         self.library.poll();
         self.follow_updates();
@@ -854,6 +880,50 @@ impl App {
             }),
         };
         Some((&track.path, part))
+    }
+
+    /// A track started: Last.fm shows it as playing, if it may be scrobbled at all (tagged,
+    /// not radio).
+    fn lastfm_started(&mut self, track: &TrackInfo) {
+        self.lastfm_play = track
+            .station
+            .is_none()
+            .then(|| {
+                lastfm::track(
+                    track.artist.as_deref(),
+                    track.title.as_deref(),
+                    track.album.as_deref(),
+                    track.duration,
+                )
+            })
+            .flatten()
+            .map(|t| LastFmPlay {
+                track: t,
+                started: lastfm::now(),
+                scrobble: lastfm::long_enough(track.duration),
+            });
+        self.lastfm_now_playing();
+        self.lastfm_was_playing = true;
+    }
+
+    fn lastfm_now_playing(&self) {
+        if self.settings.lastfm_scrobbling
+            && let Some(play) = &self.lastfm_play
+        {
+            self.lastfm.now_playing(play.track.clone());
+        }
+    }
+
+    /// The track that plays has been heard enough to count: Last.fm gets the play.
+    fn lastfm_heard(&self) {
+        if self.settings.lastfm_scrobbling
+            && let Some(play) = self.lastfm_play.as_ref().filter(|p| p.scrobble)
+        {
+            self.lastfm.scrobble(lastfm::Scrobble {
+                track: play.track.clone(),
+                started: play.started,
+            });
+        }
     }
 
     /// A request from the system's media controls: media keys, Now Playing.
@@ -1012,6 +1082,22 @@ impl App {
             view.icon_set = app_icon::set_window_icon(ui.window());
         }
         let buttons_width = view.title_bar.update(ui);
+        let lastfm = self.lastfm.status();
+        match lastfm.state {
+            lastfm::State::Connected => self.settings.lastfm_user = Some(lastfm.user.clone()),
+            lastfm::State::Disconnected => self.settings.lastfm_user = None,
+            lastfm::State::Unavailable | lastfm::State::Authorizing => {}
+        }
+        view.lastfm_out.write(
+            ui,
+            vec![
+                ("state", skin_state::string(lastfm.state.name())),
+                ("user", skin_state::string(&lastfm.user)),
+                ("scrobbling", Value::Bool(self.settings.lastfm_scrobbling)),
+                ("waiting", Value::Number(lastfm.waiting as f64)),
+                ("error", skin_state::string(&lastfm.error)),
+            ],
+        );
         if view.updates_out.available {
             let mut values = self.updater.values();
             values.push((

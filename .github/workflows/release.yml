@@ -108,6 +108,10 @@ jobs:
           printf '%s' "$APPLE_API_KEY" > "$RUNNER_TEMP/notary.p8"
           echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/notary.p8" >> "$GITHUB_ENV"
       - name: Package and sign
+        # Freya's Last.fm API key, for scrobbling (see docs/RELEASING.md); only this step sees it.
+        env:
+          FREYA_LASTFM_API_KEY: ${{ secrets.FREYA_LASTFM_API_KEY }}
+          FREYA_LASTFM_SECRET: ${{ secrets.FREYA_LASTFM_SECRET }}
         run: ci/package-macos.sh
       - name: Smoke test
         run: |
@@ -152,6 +156,10 @@ jobs:
       - name: cargo-packager
         run: cargo install cargo-packager --locked --version "$CARGO_PACKAGER_VERSION"
       - name: Package
+        # Freya's Last.fm API key, for scrobbling (see docs/RELEASING.md); only this step sees it.
+        env:
+          FREYA_LASTFM_API_KEY: ${{ secrets.FREYA_LASTFM_API_KEY }}
+          FREYA_LASTFM_SECRET: ${{ secrets.FREYA_LASTFM_SECRET }}
         run: cargo packager -p freya --release --formats appimage,deb
       - name: Smoke test and name the packages
         run: |
@@ -183,6 +191,10 @@ jobs:
       - name: cargo-packager
         run: cargo install cargo-packager --locked --version "$CARGO_PACKAGER_VERSION"
       - name: Package
+        # Freya's Last.fm API key, for scrobbling (see docs/RELEASING.md); only this step sees it.
+        env:
+          FREYA_LASTFM_API_KEY: ${{ secrets.FREYA_LASTFM_API_KEY }}
+          FREYA_LASTFM_SECRET: ${{ secrets.FREYA_LASTFM_SECRET }}
         run: cargo packager -p freya --release --formats wix
       - name: Smoke test and name the package
         run: |

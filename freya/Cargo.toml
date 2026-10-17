@@ -110,10 +110,12 @@ x11rb = { version = "0.13.2", features = ["shape"] }
 block2 = { version = "0.6.2", default-features = false, features = ["alloc"] }
 objc2 = "0.6.5"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSButton", "NSControl", "NSEvent", "NSImage", "NSResponder", "NSView", "NSWindow", "objc2-quartz-core"] }
-objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFCGTypes"] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFCGTypes", "CFData", "CFDictionary", "CFNumber", "CFString"] }
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGColor", "CGPath"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSBundle", "NSData", "NSDictionary", "NSProcessInfo", "NSString", "NSUserDefaults", "NSValue"] }
 objc2-media-player = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "MPMediaItem", "MPNowPlayingInfoCenter", "MPRemoteCommand", "MPRemoteCommandCenter", "MPRemoteCommandEvent"] }
+# The Last.fm session key, kept in the login keychain (see lastfm/session.rs).
+objc2-security = { version = "0.3.2", default-features = false, features = ["std", "SecBase", "SecItem"] }
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CALayer", "CAMetalLayer", "CAShapeLayer", "CATransaction", "objc2-core-foundation", "objc2-core-graphics", "objc2-metal"] }
 # The hologram's drawing thread measures its own CPU time (see gui/hologram/metal.rs).
 libc = "0.2.190"
@@ -123,7 +125,7 @@ objc2-metal = { version = "0.3.2", default-features = false, features = ["std", 
 
 [target.'cfg(windows)'.dependencies]
 # Printing to the terminal Freya was started from.
-windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Credentials", "Win32_System_Console"] }
 # The spectrum drawn with Windows.UI.Composition (see gui/native_spectrum.rs), and media keys
 # and the media overlay (see gui/system_media/smtc.rs).
 windows = { version = "0.62.2", features = [

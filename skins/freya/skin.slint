@@ -4,11 +4,11 @@
 // contrast against the background it is drawn on (WCAG AA), light and dark mode follow the
 // system.
 
-import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, PlaybackState, Shortcuts, TrackRow, LibraryRow, PlaylistRow, StationRow, NativeSpectrum, NativeOscilloscope, NativeHologram } from "@freya/v1.slint";
+import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, LastFm, PlaybackState, Shortcuts, TrackRow, LibraryRow, PlaylistRow, StationRow, NativeSpectrum, NativeOscilloscope, NativeHologram } from "@freya/v1.slint";
 import { AboutSlint, ListView, Palette, ScrollView } from "std-widgets.slint";
 
 // Every skin re-exports the API globals so the app can reach them.
-export { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates } from "@freya/v1.slint";
+export { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, LastFm } from "@freya/v1.slint";
 
 /// Whether the visualizer fills the screen: everything else is hidden, and the skin turns dark,
 /// as fits a TV.
@@ -3337,6 +3337,80 @@ component SettingsView inherits Rectangle {
                             text: "Add Folder…";
                             clicked => { Library.add-folder(); }
                         }
+                    }
+                }
+            }
+        }
+
+        SettingsSection {
+            title: "Last.fm";
+
+            if LastFm.state == "unavailable": SettingsRow {
+                label: "Scrobbling is not available in this build of Freya.";
+                detail: "Release builds have it; a build made without Freya's Last.fm API key does not.";
+            }
+            if LastFm.state == "disconnected": SettingsRow {
+                label: "Scrobble what you play to your Last.fm profile";
+                detail: LastFm.error != "" ? LastFm.error
+                    : "Tracks count once heard for half their length or four minutes. Radio is never scrobbled.";
+
+                VerticalLayout {
+                    alignment: center;
+
+                    TextButton {
+                        text: "Connect…";
+                        primary: true;
+                        clicked => { LastFm.connect(); }
+                    }
+                }
+            }
+            if LastFm.state == "authorizing": SettingsRow {
+                label: "Allow Freya on the Last.fm page that opened in your browser";
+                detail: "Freya connects by itself once you have.";
+
+                VerticalLayout {
+                    alignment: center;
+
+                    HorizontalLayout {
+                        spacing: 8px;
+
+                        TextButton {
+                            text: "Open the Page Again";
+                            clicked => { LastFm.connect(); }
+                        }
+                        TextButton {
+                            text: "Cancel";
+                            clicked => { LastFm.cancel(); }
+                        }
+                    }
+                }
+            }
+            if LastFm.state == "connected": SettingsRow {
+                label: "Connected as " + LastFm.user;
+
+                VerticalLayout {
+                    alignment: center;
+
+                    TextButton {
+                        text: "Disconnect";
+                        clicked => { LastFm.disconnect(); }
+                    }
+                }
+            }
+            if LastFm.state == "connected": SettingsRow {
+                label: "Scrobble what you play";
+                detail: LastFm.error != "" ? LastFm.error
+                    : LastFm.waiting == 1 ? "1 play waits to be sent."
+                    : LastFm.waiting > 1 ? LastFm.waiting + " plays wait to be sent."
+                    : "";
+
+                VerticalLayout {
+                    alignment: center;
+
+                    Toggle {
+                        label: "Scrobble what you play";
+                        checked: LastFm.scrobbling;
+                        toggled => { LastFm.set-scrobbling(!LastFm.scrobbling); }
                     }
                 }
             }

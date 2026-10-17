@@ -457,7 +457,7 @@ macro_rules! skin_api {
     };
 }
 
-const GLOBALS: [&str; 9] = [
+const GLOBALS: [&str; 10] = [
     "Player",
     "Playlist",
     "Playlists",
@@ -467,6 +467,7 @@ const GLOBALS: [&str; 9] = [
     "Visualizer",
     "App",
     "Updates",
+    "LastFm",
 ];
 
 skin_api! {
@@ -549,6 +550,11 @@ skin_api! {
         Updates."progress" => set_progress, get_progress;
         Updates."error" => set_error, get_error;
         Updates."can-install" => set_can_install, get_can_install;
+        LastFm."state" => set_state, get_state;
+        LastFm."user" => set_user, get_user;
+        LastFm."scrobbling" => set_scrobbling, get_scrobbling;
+        LastFm."waiting" => set_waiting, get_waiting;
+        LastFm."error" => set_error, get_error;
         Updates."check-automatically" => set_check_automatically, get_check_automatically;
     }
     callbacks {
@@ -634,6 +640,10 @@ skin_api! {
         Updates."later" => on_later, invoke_later();
         Updates."skip" => on_skip, invoke_skip();
         Updates."set-check-automatically" => on_set_check_automatically, invoke_set_check_automatically(on: bool);
+        LastFm."connect" => on_connect, invoke_connect();
+        LastFm."cancel" => on_cancel, invoke_cancel();
+        LastFm."disconnect" => on_disconnect, invoke_disconnect();
+        LastFm."set-scrobbling" => on_set_scrobbling, invoke_set_scrobbling(on: bool);
     }
 }
 

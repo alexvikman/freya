@@ -380,6 +380,22 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     );
 
     bind("App", "show-about", Box::new(|app, _| app.show_about()));
+    bind("LastFm", "connect", Box::new(|app, _| app.lastfm.connect()));
+    bind("LastFm", "cancel", Box::new(|app, _| app.lastfm.cancel()));
+    bind(
+        "LastFm",
+        "disconnect",
+        Box::new(|app, _| app.lastfm.disconnect()),
+    );
+    bind(
+        "LastFm",
+        "set-scrobbling",
+        Box::new(|app, args| {
+            if let Some(Value::Bool(on)) = args.first() {
+                app.settings.lastfm_scrobbling = *on;
+            }
+        }),
+    );
     bind(
         "App",
         "open-link",

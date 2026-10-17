@@ -6,6 +6,9 @@
 //!
 //! Builds the hologram's poses (assets/hologram/, JPEG or PNG) into Freya: the hologram
 //! visualizer projects them.
+//!
+//! Gives Freya its Last.fm API key and shared secret, when the build has them (see
+//! docs/RELEASING.md); never from the repository.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -22,6 +25,36 @@ fn main() {
         windows_resources(&root);
     }
     hologram_poses(&root);
+    lastfm_credentials(&root);
+}
+
+/// `FREYA_LASTFM_API_KEY` and `FREYA_LASTFM_SECRET` for `option_env!`: from the environment, as
+/// release builds set them from the repository's secrets, or else from the checkout's `.env`,
+/// which Git ignores. Without them Freya builds, and Last.fm scrobbling is off.
+fn lastfm_credentials(root: &std::path::Path) {
+    const NAMES: [&str; 2] = ["FREYA_LASTFM_API_KEY", "FREYA_LASTFM_SECRET"];
+    let env_file = root.join(".env");
+    // A missing file is not watched (Cargo would then run this script on every build): after
+    // creating `.env`, touch build.rs once.
+    if env_file.exists() {
+        println!("cargo:rerun-if-changed={}", env_file.display());
+    }
+    let file = std::fs::read_to_string(&env_file).unwrap_or_default();
+    for name in NAMES {
+        println!("cargo:rerun-if-env-changed={name}");
+        let from_file = file
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .find(|(key, _)| key.trim() == name)
+            .map(|(_, value)| value.trim().trim_matches('"').to_owned());
+        let value = std::env::var(name)
+            .ok()
+            .filter(|v| !v.is_empty())
+            .or(from_file);
+        if let Some(value) = value.filter(|v| !v.is_empty()) {
+            println!("cargo:rustc-env={name}={value}");
+        }
+    }
 }
 
 /// `POSES`: the hologram's pose images, in the order of their file names.

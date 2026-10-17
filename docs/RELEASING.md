@@ -48,6 +48,13 @@ the repository token, and only the release job may write.
   it and notarize. Keep them in an environment that only `v*` tags may use (and give the macOS
   jobs that `environment:`), not as repository secrets: started by hand, the workflow builds
   any branch, and repository secrets would reach it.
+- **Last.fm**: the repository secrets `FREYA_LASTFM_API_KEY` and `FREYA_LASTFM_SECRET`, the
+  key and shared secret of Freya's application on [Last.fm](https://www.last.fm/api/accounts),
+  set from the checkout's `.env` with `gh secret set -f .env --repo alexvikman/freya`. Only the
+  packaging steps see them, and build them into Freya; without them a release has scrobbling
+  off. Repository secrets rather than an environment's: they end up in every published build,
+  where any desktop app's Last.fm secret can be read, so they identify Freya rather than guard
+  anything. To change them, make a new application on Last.fm and set both again.
 - **Actions** (Settings, Actions, General): only actions by GitHub allowed, every action pinned
   to a full commit SHA, workflow permissions read-only, and approval required for workflows
   from all outside contributors.
@@ -83,6 +90,16 @@ tokens and many more), plus one for Apple app-specific passwords. Build output (
 agent worktrees (`.claude/`) are skipped when scanning a folder; they are never committed.
 `.gitignore` also keeps key and certificate files (`*.p12`, `*.p8`, `*.pem`, `*.key`, `*.cer`)
 and `.env` files out.
+
+Local builds read Freya's Last.fm API key from `.env` in the checkout, which Git ignores:
+
+```sh
+FREYA_LASTFM_API_KEY=<the application's API key>
+FREYA_LASTFM_SECRET=<its shared secret>
+```
+
+After creating or changing it, `touch freya/build.rs` so the next build reads it. Without it,
+Freya builds and runs with scrobbling off.
 
 Credentials are only ever referred to, never written down: as environment variables set by
 the CI's secret store, a keychain profile (`xcrun notarytool store-credentials`) or a password

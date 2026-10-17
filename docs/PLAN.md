@@ -185,7 +185,10 @@ features (playback, Last.fm) come as steps of their own.
 | **S2** | **Freya's About window** (F1, for other skins): the icon, the links, and dark mode | |
 | **S3** | **Third-party licenses**, generated at build time (`cargo-about`) and shown from About: MIT and Apache-2.0 ask for their notices to go with the binaries Freya ships | |
 | Later | **Playback**: output device, and maybe ReplayGain, gapless and crossfade | |
-| Later | **Last.fm scrobbling**: signing in, scrobbles queued while offline; the API key kept out of the repository | |
+| **L1** | **Last.fm's API**: signed calls (MD5 of Freya's own, tested against RFC 1321), signing in through the browser; Freya's API key from the build's environment or the checkout's `.env`, never the repository | Done |
+| **L2** | **Scrobbling**: now playing on start and resume; a play once heard for half its length or four minutes, if tagged with artist and title, longer than 30 seconds, not a placeholder, not radio | Done |
+| **L3** | **Queue and retries**: plays kept on disk for one account, sent 50 at a time, again after 30 s doubling to 30 min while Last.fm cannot be reached | Done |
+| **L4** | **Settings**: connect (Freya connects by itself once the user allows it), disconnect, scrobbling on or off, plays waiting, the last error. The session key in the login keychain on macOS, the Credential Manager on Windows, an owner-only file elsewhere | Done; tried against Last.fm on 2026-10-17: connected through the browser, the session kept in the keychain, "now playing" shown and the play scrobbled with its start time |
 
 ## Results from M7
 

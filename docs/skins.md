@@ -377,6 +377,25 @@ TouchArea {
 
 On other systems the title bar stays the system's, and `window-buttons-width` stays 0, so the same skin works everywhere.
 
+### `LastFm`
+
+Scrobbling to the user's Last.fm profile. Optional, and off until the user connects an account. Freya then tells Last.fm what plays ("now playing"), and sends each track heard for half its length or four minutes, whichever comes first, if it is tagged with an artist and a title and is longer than 30 seconds; radio never. Plays wait on disk while Last.fm cannot be reached.
+
+| Property | Type | |
+|---|---|---|
+| `state` | string | "unavailable" (this build has no Last.fm API key), "disconnected", "authorizing" (Freya opened Last.fm's page and waits for the user to allow it; it connects by itself once they have) or "connected" |
+| `user` | string | The connected user's name |
+| `scrobbling` | bool | Whether plays are scrobbled while connected; kept between runs |
+| `waiting` | int | Plays waiting to be sent |
+| `error` | string | What went wrong last, until something works again |
+
+| Callback | |
+|---|---|
+| `connect()` | Opens Last.fm's page in the browser, where the user lets Freya scrobble for them |
+| `cancel()` | Stops waiting for the user to allow Freya |
+| `disconnect()` | Forgets the account, and the plays waiting to be sent |
+| `set-scrobbling(on)` | |
+
 ### `Updates`
 
 Updates to Freya. Freya looks at launch and once a day while `check-automatically` is on, and installs only when the user asks: it downloads the new version, checks it against the release's signed checksums, puts it in place of the running Freya and restarts. On macOS (the app bundle) and Linux (the AppImage) Freya installs updates itself; elsewhere `install` opens the release's page.

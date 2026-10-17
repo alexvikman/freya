@@ -4,6 +4,7 @@
 
 mod cli_player;
 mod gui;
+mod lastfm;
 mod settings;
 mod update;
 

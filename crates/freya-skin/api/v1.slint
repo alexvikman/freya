@@ -541,6 +541,33 @@ export global App {
     callback open-link(string);
 }
 
+/// Scrobbling what plays to the user's Last.fm profile. Optional, and off until the user
+/// connects an account: Freya then tells Last.fm what plays, and sends each track heard for half
+/// its length or four minutes, whichever comes first, if it is tagged with an artist and a title
+/// and longer than 30 seconds. Radio is never scrobbled.
+export global LastFm {
+    /// "unavailable" (this build of Freya has no Last.fm API key), "disconnected",
+    /// "authorizing" (Freya opened Last.fm's page in the browser and waits for the user to allow
+    /// it; it connects by itself once they have) or "connected".
+    in property <string> state: "unavailable";
+    /// The connected Last.fm user's name.
+    in property <string> user;
+    /// Whether plays are scrobbled while connected; kept between runs.
+    in property <bool> scrobbling: true;
+    /// Plays waiting to be sent, as while Last.fm cannot be reached.
+    in property <int> waiting;
+    /// What went wrong last, until something works again; empty otherwise.
+    in property <string> error;
+
+    /// Open Last.fm's page in the browser, to let Freya scrobble for the user.
+    callback connect();
+    /// Stop waiting for the user to allow Freya.
+    callback cancel();
+    /// Forget the account, and the plays waiting to be sent.
+    callback disconnect();
+    callback set-scrobbling(bool);
+}
+
 /// Updates to Freya. Optional: without it, Freya never looks for updates. Freya looks at
 /// launch and once a day when `check-automatically` is on, and installs only when the user asks.
 export global Updates {

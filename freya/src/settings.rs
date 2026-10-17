@@ -33,6 +33,10 @@ pub struct Settings {
     pub last_update_check: Option<u64>,
     /// A version the user does not want offered again.
     pub skipped_update: Option<String>,
+    /// The Last.fm user Freya scrobbles for; their session key is in the system's keychain.
+    pub lastfm_user: Option<String>,
+    /// Whether plays are scrobbled while an account is connected.
+    pub lastfm_scrobbling: bool,
 }
 
 impl Default for Settings {
@@ -52,6 +56,8 @@ impl Default for Settings {
             check_for_updates: true,
             last_update_check: None,
             skipped_update: None,
+            lastfm_user: None,
+            lastfm_scrobbling: true,
         }
     }
 }
