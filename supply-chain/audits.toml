@@ -1,11 +1,65 @@
 
 # cargo-vet audits file
 
+[[audits.ab_glyph]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.2.21 -> 0.2.32"
+notes = "ttf-parser 0.19 to 0.25, new italic angle, raster and SVG glyph image accessors, FontArc gated on pointer atomics; include_bytes! only in doctests on dev fonts. No unsafe, build script or I/O."
+
+[[audits.android_system_properties]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.1.5 -> 0.1.6"
+notes = 'The FFI callback becomes `unsafe extern "C"` (it was a Rust-ABI fn passed to C, UB) and non-UTF-8 values give None instead of panicking across FFI. A soundness fix.'
+
 [[audits.anyhow]]
 who = "Freya maintainers (AI-assisted review by Claude)"
 criteria = "safe-to-deploy"
 delta = "1.0.103 -> 1.0.104"
 notes = "Only version numbers and a dev-dependency (syn 3) changed."
+
+[[audits.arrayvec]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.7.6 -> 0.7.8"
+notes = "Fixes a zero-sized-type double drop in extend, adds a safe spare_capacity_mut, u16 lengths on 16-bit targets. Soundness improvements, no capabilities."
+
+[[audits.async-channel]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "1.8.0 -> 2.5.0"
+notes = "Moves to event-listener-strategy and pin-project-lite, adds force_send, closed() and same_channel, optional portable-atomic, no_std. Keeps #![forbid(unsafe_code)]; only process::abort on refcount overflow, as before."
+
+[[audits.bitflags]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "2.11.1 -> 2.13.2"
+notes = "macro_rules changes only: flag renaming attribute, all_named(), iter_equal_names(), const all(). No unsafe, build script or I/O."
+
+[[audits.borsh]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "1.5.7 -> 1.8.1"
+notes = "Network address impls move from std::net to core::net, optional uuid impls via byte arrays, an Error::other helper, license files, test updates. No unsafe added, build.rs unchanged, no new capabilities."
+
+[[audits.bytemuck]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "1.22.0 -> 1.25.2"
+notes = "The raw diff is mostly CRLF to LF line endings; the real changes: an `impl core::error::Error` behind the new `impl_core_error` feature, a hidden derive helper module, AVX-512 impls moved from `nightly_stdsimd` to `avx512_simd`. New unsafe marker impls, all sound: `NoUninit` for arrays of char/bool/NonZero, `AnyBitPattern` for arrays of `MaybeUninit<T: AnyBitPattern>`, `ZeroableInOption` for fn pointers (null niche), `Pod`/`Zeroable` for `Simd<T, N>` behind a nightly feature. No build script, I/O, process, network, env or FFI changes."
+
+[[audits.bytemuck_derive]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "1.9.3 -> 1.12.1"
+notes = "Proc-macro, syn 2 to 3. NoUninit for packed/transparent generics and enums with fields, guarded by per-variant compile-time size asserts and field bounds, sound for repr(C) and repr(int); padding check as an equivalent const assert; TransparentWrapper forwards where-clauses with the ZST check unchanged. No filesystem, environment or network access."
+
+[[audits.core-graphics]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.24.0 -> 0.23.2"
+notes = "A downgrade that removes 0.24's additions and returns to bitflags 1 and core-foundation 0.9; the retained CGGetActiveDisplayList change is memory-safe as the buffer is sized to the count passed. No build script."
 
 [[audits.ctrlc]]
 who = "Freya maintainers (AI-assisted review by Claude)"
@@ -13,17 +67,203 @@ criteria = "safe-to-deploy"
 version = "3.5.2"
 notes = "Installs a SIGINT (and with the termination feature SIGTERM/SIGHUP) handler that only posts a semaphore (sem_post, dispatch semaphore on Apple, a Win32 semaphore on Windows); a named thread waits on it and calls the user's handler. The static semaphore is written once under a mutex-guarded init. No I/O or network."
 
+[[audits.data-url]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.3.0 -> 0.3.2"
+notes = "Display/Error impls, Mime helpers, and a percent-decoding fix; safe code only."
+
 [[audits.directories]]
 who = "Freya maintainers (AI-assisted review by Claude)"
 criteria = "safe-to-deploy"
 version = "6.0.0"
 notes = "Builds platform directory paths from the home directory, XDG variables (absolute paths only) and dirs-sys known folders. No unsafe, no I/O beyond what dirs-sys does, no network."
 
+[[audits.fastrand]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "2.3.0 -> 2.5.0"
+notes = "getrandom 0.4 for seeding, new inclusive float generators, const with_seed, tests. No unsafe, no build script."
+
+[[audits.find-msvc-tools]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.1.12 -> 0.1.14"
+notes = "Regenerated Windows bindings in a private module, constants converted at call sites; the changed signatures are the same 32-bit types and the extern list is the same set or smaller. No new capabilities."
+
+[[audits.font-types]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.12.1 -> 0.12.6"
+notes = "New fixed-point type and helpers, a bounds-checked shortest-decimal Display, a version clamp instead of a panic, bytemuck derives on transparent integer newtypes. No unsafe or capabilities."
+
+[[audits.foreign-types-macros]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.2.3 -> 0.2.4"
+notes = "Manifest only: syn 2 to syn 3 for the proc-macro. No source, unsafe or build changes."
+
+[[audits.futures]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.3.31 -> 0.3.34"
+notes = "Manifest, README and tests only; no library code, unsafe or build changes."
+
+[[audits.futures-channel]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.3.31 -> 0.3.34"
+notes = "Adds try_recv/recv, a Recv future and RecvError in safe code; cfg gates simplified. No unsafe, build script or I/O."
+
+[[audits.futures-executor]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.3.31 -> 0.3.34"
+notes = "available_parallelism instead of num_cpus, std::pin::pin!, a const thread_local, MSRV 1.71. No unsafe, I/O or build script."
+
+[[audits.futures-io]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.3.31 -> 0.3.34"
+notes = "Manifest only."
+
+[[audits.futures-macro]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.3.32 -> 0.3.34"
+notes = "Manifest only: version and syn 2 to syn 3. No source changes."
+
+[[audits.futures-sink]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.3.32 -> 0.3.34"
+notes = "Version in Cargo.toml only."
+
+[[audits.half]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "2.5.0 -> 2.7.1"
+notes = "Most of the raw diff is line endings; the real changes remove unsafe: transmutes, copy_nonoverlapping and slice casts become zerocopy's size-checked transmute macros, with zerocopy a required dependency. NaN fixes in min/max, new trait impls; new loongarch64 unsafe code only builds on nightly on that architecture. No build script, I/O or env access."
+
+[[audits.hermit-abi]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.2.6 -> 0.3.1"
+notes = 'Hermit unikernel ABI: hand-written wrappers replaced by extern declarations, socket bindings added; pure FFI declarations for target_os = "hermit" only.'
+
+[[audits.iana-time-zone]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.1.64 -> 0.1.65"
+notes = "Adds a WASI backend (reads TZ) and an Emscripten backend that runs a constant Intl.DateTimeFormat script and copies the null-checked result; neither builds for desktop targets. Other changes are CI files outside the build."
+
+[[audits.icu_collections]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "2.2.0 -> 2.3.0"
+notes = "Edition 2024 with formatting and let-chain refactors in the CodePointTrie lookup (same bounds-checked `.get()`), a logic fix in `contains_set`, `Hash` on `CodePointInversionList`, dependency bumps. The only unsafe change is an `#[allow(unused_unsafe)]` in an existing generated unsafe block; no build script or capability changes."
+
+[[audits.icu_decimal]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "2.2.0 -> 2.3.0"
+notes = "Uses icu_locale_fallback, an unstable formatter trait and a compact-decimal refactor, writeable delegation macros. No unsafe, I/O or build script."
+
+[[audits.icu_decimal_data]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "2.2.0 -> 2.3.0"
+notes = "Edition 2024, MSRV 1.88, CLDR metadata 48.2.1; in the baked data only lint attributes and the fallbacker path changed, the byte tables and existing unchecked constructors are unchanged. build.rs unchanged; no capability changes."
+
+[[audits.icu_locale_core]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "2.2.0 -> 2.3.0"
+notes = "Edition 2024 migration; extensions accept digit tags (the unchecked UTF-8 conversion of one-byte ASCII stays sound); const constructors via the existing const parser; a data_locale! macro. The only unsafe change wraps an existing body in an explicit unsafe block. No build script or capabilities."
+
+[[audits.icu_normalizer_data]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "2.2.0 -> 2.3.0"
+notes = "Regenerated baked normalization data; with the byte literals removed, only the usual generated unchecked constructors remain. build.rs unchanged."
+
+[[audits.icu_plurals]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "2.2.0 -> 2.3.0"
+notes = "Edition 2024 (existing unchecked constructors only wrapped in explicit unsafe blocks), new helpers and ZeroFrom impls, a saturating_add overflow fix. No new unsafe logic, I/O or build script."
+
+[[audits.icu_plurals_data]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "2.2.0 -> 2.3.0"
+notes = "Lint attribute strings, the CLDR version and the fallbacker path only; baked trie bytes unchanged; build.rs unchanged."
+
+[[audits.icu_provider]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "2.2.0 -> 2.3.1"
+notes = "Edition 2024; marker attributes allow '/' with the ASCII invariant kept; a Box<str> transmute replaced by a sound raw-pointer cast on a transparent type; a cursor optimization and payload helpers. No I/O or build script."
+
+[[audits.icu_segmenter_data]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "2.2.0 -> 2.3.0"
+notes = "Regenerated baked data (CLDR 48.2.1) and new state machines; with the byte literals removed, the code is only ICU4X's usual generated provider macros, as in the audited version. build.rs unchanged."
+
+[[audits.idna_adapter]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "1.2.1 -> 1.2.2"
+notes = "is_virama uses the UTS 46 mapper instead of the combining class map; edition and README updates. No unsafe or capabilities."
+
+[[audits.litemap]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.8.2 -> 0.8.3"
+notes = "Concrete iterator types instead of impl Trait, dependency bumps, lint renames. Safe code only."
+
 [[audits.log]]
 who = "Freya maintainers (AI-assisted review by Claude)"
 criteria = "safe-to-deploy"
 delta = "0.4.33 -> 0.4.34"
 notes = "Adds an alloc feature that gates set_boxed_logger and the Box<T> impl instead of std; no new unsafe, I/O or network."
+
+[[audits.lyon_path]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "1.0.3 -> 1.0.19"
+notes = "Bug fixes in rounded rects, arcs, reversed iteration and path buffers, validator messages, lint cleanups; new indexing is bounds-checked and the existing unsafe blocks are unchanged."
+
+[[audits.miniz_oxide]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.8.9 -> 0.9.1"
+notes = "Still forbid(unsafe_code). New flush modes, window-bits limits, a compacted distance table checked equivalent, output limits, stricter Huffman over-subscription checks in inflate. No I/O or build script."
+
+[[audits.naga]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "30.0.0 -> 30.0.1"
+notes = "Manifest only: version and cfg_aliases build dependency; build.rs unchanged."
+
+[[audits.naga-types]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "30.0.0 -> 30.0.1"
+notes = "Version number in Cargo.toml only."
+
+[[audits.num_enum]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.7.2 -> 0.7.6"
+notes = "Adds a `core::error::Error` impl gated by rustversion, which becomes a normal dependency; the rest is tests, fixtures and manifest normalisation. No unsafe, build script or capability changes."
+
+[[audits.num_enum_derive]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.7.2 -> 0.7.6"
+notes = "Proc-macro: a crate path attribute, merged attributes, byte-literal discriminants, catch_all filtering. The generated UnsafeFromPrimitive body is unchanged; no filesystem, environment or network access beyond the existing proc-macro-crate lookup."
 
 [[audits.objc2]]
 who = "Freya maintainers (AI-assisted review by Claude)"
@@ -43,11 +283,41 @@ criteria = "safe-to-deploy"
 version = "0.3.2"
 notes = "Bindings to Apple's Security framework generated by objc2's header-translator: extern functions, extern statics, CF type declarations and enum newtypes, plus one #[link] to Security.framework. Hand-written parts are type aliases, an SSLCipherSuite alias, CSSM structs and one extern declaration (AuthorizationExecuteWithPrivileges), none with a body. The only Send/Sync impls are for SecCertificate, which Apple documents as immutable and thread-safe. No build script, no I/O or network. Freya uses SecItemAdd, SecItemCopyMatching and SecItemDelete to keep the Last.fm session key in the login keychain."
 
+[[audits.pin-project-lite]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.2.16 -> 0.2.17"
+notes = "Lint settings, docs and test expectations only; macro logic and unsafe code unchanged."
+
+[[audits.pollster]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.3.0 -> 0.4.0"
+notes = "Removes the crate's only unsafe code (pin! instead of Pin::new_unchecked), block_on takes IntoFuture, wake_by_ref added. No capabilities."
+
+[[audits.potential_utf]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.1.5 -> 0.1.6"
+notes = "from_boxed_bytes uses Box::from_raw on a transparent [u8] wrapper instead of a transmute, which is sound; path tweaks and lint renames."
+
+[[audits.range-alloc]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.1.3 -> 0.1.5"
+notes = "Aligned best-fit allocation and a grow_to fix in safe code, docs, CI and tests. No unsafe, I/O or build script."
+
 [[audits.realfft]]
 who = "Freya maintainers (AI-assisted review by Claude)"
 criteria = "safe-to-deploy"
 version = "3.5.0"
 notes = "Real-to-complex FFTs on top of rustfft. The two unsafe blocks view a checked-length &mut [T] as &mut [Complex<T>] of half the length; Complex is repr(C), so this is sound. No I/O or network."
+
+[[audits.rustc-hash]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "2.1.1 -> 2.1.3"
+notes = "Default derived, architecture-dependent multiply_mix with wrapping_mul, the bulk hashing loop uses split_first_chunk; optional rand 0.9. No unsafe, no build script."
 
 [[audits.serde]]
 who = "Freya maintainers (AI-assisted review by Claude)"
@@ -55,17 +325,167 @@ criteria = "safe-to-deploy"
 delta = "1.0.228 -> 1.0.229"
 notes = "Version bumps, lint names, MSRV check in build.rs, and a reborrow in seq_impl's visit_seq; no new unsafe, I/O or network."
 
+[[audits.signal-hook-registry]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "1.4.1 -> 1.4.8"
+notes = "`static mut` global becomes an AtomicPtr to a leaked Box (initialized once), fn-pointer transmutes keep provenance, the handler saves and restores errno, and maps become an allocation-free vector map in safe code. No build script, network or filesystem access."
+
+[[audits.simd-adler32]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.3.7 -> 0.3.10"
+notes = "Enables a NEON backend on aarch64, ported from Chromium; its loads stay inside chunks_exact(32) blocks and NEON is guaranteed at compile time. Other changes are tests and CI. No build script, network or filesystem use."
+
+[[audits.smol_str]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.3.2 -> 0.2.2"
+notes = "A downgrade: drops the borsh feature, some AsRef impls and the builder, restores the hidden Writer and a deprecated ctor. Its unsafe is sound: ptr::read clone only for non-heap variants, inline transmutes guarded by len <= 23, the const ctor enforces ASCII by indexing, Writer copies whole &str chunks. No I/O or build script."
+
+[[audits.smol_str]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.3.2 -> 0.3.6"
+notes = "New fast paths for case conversion, replacen and clone add unsafe code, all checked and sound (inline lengths bounded by 23, one-byte replacements are ASCII, unchecked indexing bounded by equal slice lengths, UTF-8 split only after ASCII). Adds a gdb pretty-printer embedded via debugger_visualizer; removes the old publish script."
+
 [[audits.spin_on]]
 who = "Freya maintainers (AI-assisted review by Claude)"
 criteria = "safe-to-deploy"
 version = "0.1.1"
 notes = "116 lines: a busy-polling block_on with a no-op waker. The only unsafe builds a Waker from a static no-op vtable, which is sound. No I/O or network."
 
+[[audits.stable_deref_trait]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "1.2.0 -> 1.2.1"
+notes = "New `unsafe impl StableDeref` for `Cow<str>`, `Cow<[T]>`, `Cow<Path>`, `Cow<CStr>`, `Cow<OsStr>`: sound, as both variants deref to an address that does not move with the Cow; `Arc` impls gated on pointer-width atomics. No build or capability changes."
+
+[[audits.strum]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.27.2 -> 0.28.0"
+notes = "Version and dependency bumps, doc re-indentation, ParseError's Display moved to core. No unsafe or capability changes."
+
+[[audits.strum_macros]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.27.2 -> 0.28.0"
+notes = "Proc-macro: From<&str> for EnumString with a default variant, EnumDiscriminants propagates Default and passes attributes through, fully qualified paths. No unsafe in generated code, no filesystem, environment or network access."
+
+[[audits.synstructure]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.13.2 -> 0.14.0"
+notes = "syn 2 to 3 port and small refactors in this build-time library. No filesystem, environment, network or unsafe changes."
+
+[[audits.sys-locale]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.3.1 -> 0.3.2"
+notes = "Unix reads LANGUAGE, LC_ALL, LC_MESSAGES and LANG and parses POSIX locales to BCP 47 in safe code; on Windows the buffer's set_len follows a successful GetUserPreferredUILanguages, which writes at most the length it reported. No build script."
+
+[[audits.tinystr]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.8.3 -> 0.8.4"
+notes = "The unsafe `to_ascii_byte_array` uses in the case conversions were refactored with named masks and SAFETY comments, identical bit math that keeps bytes ASCII; plus a path change, a `Default` impl and lint renames. No build or capability changes."
+
+[[audits.tracing-attributes]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.1.30 -> 0.1.31"
+notes = "Proc-macro adds `{const_expr}` field names in `#[instrument(fields(...))]` and removes an unused helper; it only emits the user's expression in braces. No file, env, network or process access at build time, no unsafe."
+
+[[audits.version_check]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.9.4 -> 0.9.5"
+notes = "Documentation and manifest normalisation only."
+
+[[audits.wasm-bindgen-macro]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.2.105 -> 0.2.129"
+notes = "Proc-macro entry crate: format strings and a helper attribute only; code generation is in wasm-bindgen-macro-support. No new I/O."
+
+[[audits.wasm-bindgen-shared]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.2.100 -> 0.2.129"
+notes = "build.rs hashes its own src/lib.rs and src/tys.rs inside CARGO_MANIFEST_DIR and sets SCHEMA_FILE_HASH; the library becomes no_std with schema and naming helpers. No unsafe, network or process use."
+
+[[audits.wgpu-core]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "30.0.0 -> 30.0.1"
+notes = "Version and the cfg_aliases build dependency in Cargo.toml only; build.rs unchanged."
+
+[[audits.wgpu-core-deps-apple]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "30.0.0 -> 30.0.1"
+notes = "Version in Cargo.toml only."
+
+[[audits.wgpu-core-deps-windows-linux-android]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "30.0.0 -> 30.0.1"
+notes = "Version in Cargo.toml only."
+
+[[audits.wgpu-naga-bridge]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "30.0.0 -> 30.0.1"
+notes = "Version in Cargo.toml only."
+
+[[audits.wgpu-types]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "30.0.0 -> 30.0.1"
+notes = "Manifest only: version and wasm-only dependency bumps."
+
 [[audits.winresource]]
 who = "Freya maintainers (AI-assisted review by Claude)"
 criteria = "safe-to-deploy"
 version = "0.1.34"
 notes = "A build-script helper, no unsafe. Writes a resource script to OUT_DIR, runs the resource compiler (windres and ar for gnu, rc.exe or llvm-rc for msvc; paths from RC_PATH, WINDRES, AR, CROSS_COMPILE or the Windows SDK found with `reg query`) and prints cargo link directives. Reads Cargo.toml only with its default toml feature, which Freya leaves off. No network."
+
+[[audits.writeable]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.6.3 -> 0.6.4"
+notes = "Delegation macros, TryWriteable for Either, transparent LossyWrap, a streaming Replace adapter using checked str.get slicing. No unsafe, I/O or build script."
+
+[[audits.zerofrom]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.1.7 -> 0.1.8"
+notes = "Manifest only: authors, metadata and a lint. No source changes."
+
+[[audits.zerofrom-derive]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.1.7 -> 0.1.8"
+notes = "Proc-macro ported to syn 3 and synstructure 0.14, lint names normalized; pure token transformation with no filesystem, network, env or process use."
+
+[[audits.zeroize]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "1.8.2 -> 1.9.1"
+notes = "Edition 2024; zeroing still by volatile writes, with a new optimization barrier (an empty asm! with a read-only pointer input, or black_box/read_volatile elsewhere), zeroize_stack, repr(transparent) Zeroizing with an opaque Debug, Vec order fix. All unsafe is volatile writes or asm barriers, sound; no I/O or FFI."
+
+[[audits.zerotrie]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.2.4 -> 0.2.5"
+notes = "get_with_write_fn and into_suffix_trie returning existing borrowed data, a refactor and lint renames. No unsafe, I/O or build script."
+
+[[audits.zerovec-derive]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.11.5 -> 0.11.6"
+notes = "Generated VarULE code uses ptr::slice_from_raw_parts instead of an intermediate slice of the wrong length, fixing UB miri found; a miri test is added. No filesystem, environment or network access."
 
 [[audits.zip]]
 who = "Freya maintainers (AI-assisted review by Claude)"
@@ -853,10 +1273,40 @@ user-id = 6743 # Ed Page (epage)
 start = "2025-07-08"
 end = "2027-10-17"
 
+[[trusted.toml_writer]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2025-07-08"
+end = "2027-10-17"
+
+[[trusted.tree_magic_mini]]
+criteria = "safe-to-deploy"
+user-id = 2017 # Matt Brubeck (mbrubeck)
+start = "2020-06-10"
+end = "2027-10-17"
+
 [[trusted.unicase]]
 criteria = "safe-to-deploy"
 user-id = 359 # Sean McArthur (seanmonstar)
 start = "2019-03-05"
+end = "2027-10-17"
+
+[[trusted.unicode-ident]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2021-10-02"
+end = "2027-10-17"
+
+[[trusted.unicode-script]]
+criteria = "safe-to-deploy"
+user-id = 1139 # Manish Goregaokar (Manishearth)
+start = "2020-01-02"
+end = "2027-10-17"
+
+[[trusted.url]]
+criteria = "safe-to-deploy"
+user-id = 1139 # Manish Goregaokar (Manishearth)
+start = "2021-02-18"
 end = "2027-10-17"
 
 [[trusted.vtable]]
@@ -873,10 +1323,58 @@ start = "2020-08-26"
 end = "2027-10-16"
 notes = "Slint's helper crates (vtable, const-field-offset, pin-weak), published by Slint's co-founder. Trusted by publisher, not reviewed by Freya."
 
+[[trusted.walkdir]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-06-09"
+end = "2027-10-17"
+
 [[trusted.wasi]]
 criteria = "safe-to-deploy"
 user-id = 1 # Alex Crichton (alexcrichton)
 start = "2020-06-03"
+end = "2027-10-17"
+
+[[trusted.wasm-bindgen]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2027-10-17"
+
+[[trusted.wasm-bindgen-futures]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2027-10-17"
+
+[[trusted.wasm-bindgen-macro]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2027-10-17"
+
+[[trusted.wasm-bindgen-macro-support]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2027-10-17"
+
+[[trusted.wasm-bindgen-shared]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2027-10-17"
+
+[[trusted.web-sys]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2027-10-17"
+
+[[trusted.winapi-util]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2020-01-11"
 end = "2027-10-17"
 
 [[trusted.windows]]
@@ -1018,3 +1516,69 @@ user-id = 64539 # Kenny Kerr (kennykerr)
 start = "2021-10-27"
 end = "2027-10-16"
 notes = "Microsoft's windows-rs crates, published by their Microsoft maintainer. Trusted by publisher, not reviewed by Freya."
+
+[[trusted.winnow]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2023-02-22"
+end = "2027-10-17"
+
+[[trusted.writeable]]
+criteria = "safe-to-deploy"
+user-id = 1139 # Manish Goregaokar (Manishearth)
+start = "2021-11-01"
+end = "2027-10-17"
+
+[[trusted.yoke]]
+criteria = "safe-to-deploy"
+user-id = 1139 # Manish Goregaokar (Manishearth)
+start = "2021-05-01"
+end = "2027-10-17"
+
+[[trusted.yoke-derive]]
+criteria = "safe-to-deploy"
+user-id = 166196 # Robert Bastian (robertbastian)
+start = "2023-01-26"
+end = "2027-10-17"
+
+[[trusted.zerofrom]]
+criteria = "safe-to-deploy"
+user-id = 1139 # Manish Goregaokar (Manishearth)
+start = "2022-04-06"
+end = "2027-10-17"
+
+[[trusted.zerofrom-derive]]
+criteria = "safe-to-deploy"
+user-id = 1139 # Manish Goregaokar (Manishearth)
+start = "2022-04-06"
+end = "2027-10-17"
+
+[[trusted.zerotrie]]
+criteria = "safe-to-deploy"
+user-id = 1139 # Manish Goregaokar (Manishearth)
+start = "2023-10-03"
+end = "2027-10-17"
+
+[[trusted.zerovec]]
+criteria = "safe-to-deploy"
+user-id = 1139 # Manish Goregaokar (Manishearth)
+start = "2021-04-19"
+end = "2027-10-17"
+
+[[trusted.zerovec-derive]]
+criteria = "safe-to-deploy"
+user-id = 1139 # Manish Goregaokar (Manishearth)
+start = "2021-12-11"
+end = "2027-10-17"
+
+[[trusted.zlib-rs]]
+criteria = "safe-to-deploy"
+user-id = 1303
+start = "2024-02-23"
+end = "2027-10-17"
+
+[[trusted.zmij]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2025-12-18"
+end = "2027-10-17"

@@ -71,6 +71,47 @@ That leaves 176 crates covered, 3 partly and 506 exempted. Of the 45 crates Frey
 directly, 21 are covered; the other 24 (among them symphonia, cpal, rusqlite, lofty, image,
 ureq and zbus) are exempted.
 
+On 2026-10-17, after the npm supply-chain attacks, the exemptions were worked down further:
+
+- **The publishers our auditors trust:** Mozilla, ISRG, Ariel OS and the Bytecode Alliance
+  already trust some publishers for the crates they publish (David Tolnay, Ed Page, Andrew
+  Gallant, Alex Crichton, Josh Stone, Amanieu d'Antras, Manish Goregaokar, Alice Ryhl and
+  others). Freya trusts the same publishers, for each crate `cargo vet suggest` named and only
+  for that publisher's releases, until 2027-10-17. 121 crates.
+- **Version steps:** 70 exempted versions that were a step of under 1,000 changed lines from a
+  version those auditors had already audited, read in full (four AI-assisted reviewers, by
+  Claude, each diff against cargo vet's safe-to-deploy criteria: every changed `unsafe` block,
+  build scripts, procedural macros, file, network, process and environment use, encoded or
+  obfuscated content). All 70 were recorded as delta audits; many were manifest-only, and
+  several fix undefined behaviour (zerovec-derive, android_system_properties) or remove
+  `unsafe` (pollster, half). One step was not certified: wgpu-hal 30.0.1 resolves three
+  CoreGraphics colour-space constants with `libloading` and returns the address of each
+  `kCGColorSpace…` variable as if it were the string (`Symbol<&CFString>` dereferenced): a
+  memory-safety bug, not malice, reached only by an app that picks those colour spaces.
+  wgpu-hal is not built for any of Freya's targets (it is in `Cargo.lock` for one of Slint's
+  optional renderers), so it stays exempted with this note.
+- **A capability scan of every remaining exemption:** `ci/capability-scan.py` reads the
+  sources of each exempted version (it runs nothing) and lists process spawning, network and
+  dynamic loading, references to credentials, encoded blobs and executables, and in build
+  scripts and procedural macros the file writes, environment variables and addresses. Nothing
+  pointed to malice. The only executable is a test DLL in libloading's tests, never built;
+  the credential hits were PEM and RSA names in TLS code and Windows constants; the one
+  token read is `CRATES_IO_TOKEN` in smol_str's own publishing script, outside the build. No
+  build script or macro uses the network. Build scripts start only build tools (`rustc` for
+  its version, `clang`, `llvm-config`, `rustfmt`, `ninja`, `git rev-parse`), read only
+  configuration variables, and write only to `OUT_DIR`, except under features Freya never
+  enables (`update_bindings`, `gen-tests`, bindgen updates). skia-bindings, whose build
+  script downloads prebuilt Skia, is not built for any of Freya's targets either.
+
+That leaves 341 crates covered, 3 partly and 342 exempted. Run the scan again when exemptions
+change, and read what it lists in build scripts and macros first.
+
+What is left is large: about 300 crates in full (6 million lines by cargo vet's estimate,
+most of it generated bindings and bundled C such as SQLite and Opus) and 41 larger version
+steps. Work them down most-exposed first: what Freya calls directly and what parses files
+from outside (symphonia, lofty, image, the M3U and CUE readers' dependencies, zip), then
+build-time code, then the rest.
+
 ## Patched crates
 
 A crate Freya needs changed is copied into [`vendor/`](../vendor) from the release it is
