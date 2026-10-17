@@ -1,0 +1,116 @@
+// Mini: a compact one-line player.
+//
+// A minimal example skin. It only uses the `Player` global; everything else in the skin API
+// is optional. Keyboard shortcuts come from the API's `Shortcuts` component.
+
+import { Player, PlaybackState, Shortcuts } from "@freya/v1.slint";
+
+// Every skin re-exports the globals it uses, so the app can reach them.
+export { Player } from "@freya/v1.slint";
+
+// Icons as SVG path data in a 24×24 box: text symbols such as ▶ are missing from many fonts.
+global Icons {
+    out property <string> play: "M8 5 L19 12 L8 19 Z";
+    out property <string> pause: "M6 5 H10 V19 H6 Z M14 5 H18 V19 H14 Z";
+    out property <string> next: "M5 6 L14 12 L5 18 Z M16 6 H19 V18 H16 Z";
+    out property <string> previous: "M19 6 L10 12 L19 18 Z M5 6 H8 V18 H5 Z";
+}
+
+component Button inherits Rectangle {
+    in property <string> icon;
+    in property <string> label;
+    callback clicked;
+
+    width: 36px;
+    height: 36px;
+    border-radius: 18px;
+    background: touch.has-hover ? #ffffff1f : transparent;
+    accessible-role: button;
+    accessible-label: label;
+    accessible-action-default => { root.clicked(); }
+
+    Path {
+        width: 18px;
+        height: 18px;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        commands: root.icon;
+        fill: #f2f2f2;
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+export component Mini inherits Window {
+    title: "Freya";
+    preferred-width: 520px;
+    height: 64px;
+    min-width: 360px;
+    background: #1b1d21;
+    forward-focus: keys;
+
+    keys := Shortcuts {
+        HorizontalLayout {
+            padding: 14px;
+            spacing: 8px;
+
+            Button {
+                icon: Icons.previous;
+                label: "Previous";
+                clicked => { Player.previous(); }
+            }
+            Button {
+                icon: Player.state == PlaybackState.playing ? Icons.pause : Icons.play;
+                label: Player.state == PlaybackState.playing ? "Pause" : "Play";
+                clicked => { Player.toggle-pause(); }
+            }
+            Button {
+                icon: Icons.next;
+                label: "Next";
+                clicked => { Player.next(); }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 4px;
+                horizontal-stretch: 1;
+
+                Text {
+                    text: Player.title == "" ? "Nothing playing"
+                        : Player.artist == "" ? Player.title : Player.artist + " – " + Player.title;
+                    font-size: 14px;
+                    // 14:1 on the background.
+                    color: #f2f2f2;
+                    overflow: elide;
+                }
+                // Progress, click to seek.
+                Rectangle {
+                    height: 4px;
+                    border-radius: 2px;
+                    background: #3a3e45;
+
+                    Rectangle {
+                        x: 0;
+                        width: Player.length > 0 ? parent.width * Player.position / Player.length : 0;
+                        border-radius: 2px;
+                        background: #7cc4ff;
+                    }
+
+                    TouchArea {
+                        clicked => { Player.seek(self.mouse-x / self.width); }
+                    }
+                }
+            }
+
+            Text {
+                vertical-alignment: center;
+                text: Player.position-text;
+                font-size: 13px;
+                // 9:1 on the background.
+                color: #c4c8cf;
+            }
+        }
+    }
+}

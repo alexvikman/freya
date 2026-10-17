@@ -1,0 +1,545 @@
+// Freya skin API, version 1.
+//
+// Skins import this file, and must re-export its globals so the app can reach them:
+//
+//     import { Player, Shortcuts } from "@freya/v1.slint";
+//     export { Player } from "@freya/v1.slint";
+//
+// The app writes state into the globals below and reacts to their callbacks. A skin only
+// presents that state; it has no access to files or the network. Properties marked `in` are
+// set by the app; to change them, a skin calls the matching callback and the app updates the
+// property in response.
+
+import { AboutSlint } from "std-widgets.slint";
+
+export enum PlaybackState { stopped, playing, paused }
+
+/// One row of the playlist.
+export struct TrackRow {
+    /// 1-based position in the playlist.
+    number: int,
+    /// "Artist - Title" when tagged, otherwise the file name.
+    title: string,
+    /// "3:45", or empty when unknown.
+    duration: string,
+    selected: bool,
+    /// The track that is playing, paused, or would play next on Play.
+    current: bool,
+}
+
+export global Player {
+    /// Title of the current track; empty when nothing is loaded.
+    in property <string> title;
+    in property <string> artist;
+    in property <string> album;
+    /// For example "FLAC · 912 kbps · 44.1 kHz · Stereo"; for radio the station comes first.
+    /// Empty when stopped.
+    in property <string> format-info;
+    /// True for internet radio: there is no length, and seeking does nothing.
+    in property <bool> live;
+    /// Why the last track could not be played, until another one starts. Empty otherwise.
+    in property <string> error;
+    in property <PlaybackState> state: PlaybackState.stopped;
+
+    /// Position and length in seconds; `length` is 0 when unknown.
+    in property <float> position;
+    in property <float> length;
+    /// The same, formatted for display: "1:23", "3:45" and "-2:22".
+    in property <string> position-text: "0:00";
+    in property <string> length-text: "0:00";
+    in property <string> remaining-text: "-0:00";
+
+    /// 0.0 to 1.0.
+    in property <float> volume: 1.0;
+
+    /// Cover art of the current track, if it has any.
+    in property <image> cover;
+    in property <bool> has-cover;
+
+    callback play();
+    callback pause();
+    /// Play when paused or stopped, pause when playing.
+    callback toggle-pause();
+    callback stop();
+    callback next();
+    callback previous();
+    /// Seek to a fraction (0.0 to 1.0) of the track.
+    callback seek(float);
+    /// Seek relative to the current position, in seconds (may be negative).
+    callback seek-by(float);
+    callback set-volume(float);
+    /// Ask the user for files to play.
+    callback open-files();
+}
+
+/// The playlist. Optional: a skin without a playlist does not export it.
+export global Playlist {
+    in property <[TrackRow]> rows;
+    /// "12 tracks · 47:13"; ends with "+" when some lengths are unknown.
+    in property <string> summary;
+    /// Row the keyboard acts on, or -1.
+    in property <int> cursor: -1;
+    in property <bool> shuffle;
+    in property <bool> repeat;
+    /// True while files are dragged over the window.
+    in property <bool> drop-hover;
+
+    /// Play this row (double-click or Enter).
+    callback activate(int);
+    /// Click on a row. `extend` selects a range (Shift), `toggle` adds or removes one row
+    /// (Ctrl, or Cmd on macOS).
+    callback select(int, bool, bool);
+    /// Move the keyboard cursor by a number of rows; `extend` grows the selection (Shift).
+    callback move-cursor(int, bool);
+    callback select-all();
+    callback clear-selection();
+    callback remove-selected();
+    /// Move the selected rows to before the given row (the row count means the end).
+    callback move-selected(int);
+    callback clear();
+    callback add-files();
+    callback add-folder();
+    /// Add an internet radio stream, or a station playlist (.pls, .m3u) from a radio
+    /// directory, and play it.
+    callback add-url(string);
+    callback save();
+    callback load();
+    callback toggle-shuffle();
+    callback toggle-repeat();
+}
+
+/// One row of the library: an artist, an album or a track.
+export struct LibraryRow {
+    /// "artist", "album", "genre" or "track".
+    kind: string,
+    /// The artist's, album's, genre's or track's name; "Unknown artist", "Unknown album" or
+    /// "Unknown genre" when untagged.
+    title: string,
+    /// "3 albums · 41 tracks" for artists and genres, "1997 · 12 tracks" for albums, and for
+    /// tracks the artist and album when they are not already clear from the heading. May be
+    /// empty.
+    detail: string,
+    /// The artist of an album or track, for columns and album covers; otherwise empty.
+    artist: string,
+    /// The album of a track; otherwise empty.
+    album: string,
+    /// For albums: what to pass to `Library.cover` for the album's cover. Otherwise empty.
+    cover: string,
+    /// Track number for tracks shown in their album ("3", or "2.03" on the second disc);
+    /// otherwise empty.
+    number: string,
+    /// "3:45" for tracks; otherwise empty.
+    duration: string,
+    /// For tracks in Recently Played: when the track was played last, "3 days ago"; in Most
+    /// Played: how often, "12 plays". Otherwise empty.
+    played: string,
+}
+
+/// The media library: the music in the folders the user chose, browsed by artist and album,
+/// or searched. Optional; Freya only reads the folders when the skin exports this global.
+export global Library {
+    /// What is shown: all artists, an artist's albums, an album's tracks, or search results.
+    in property <[LibraryRow]> rows;
+    /// Where browsing started: "artists", "albums", "songs", "genres", "recently-added",
+    /// "recently-played" or "most-played". Change it with `show`.
+    in property <string> section: "artists";
+    /// How the rows are best shown: "list" (artists, genres, an album's tracks), "grid"
+    /// (albums, as covers) or "table" (tracks from many albums, with artist and album columns,
+    /// and in Recently Played and Most Played the rows' `played`).
+    in property <string> layout: "list";
+    /// Heading for the rows: "Artists", "Albums", "Songs", "Genres", "Recently Added",
+    /// "Recently Played", "Most Played", an artist, a genre, an album, or "Search".
+    in property <string> title;
+    /// A line under the heading, like "Björk · 1995 · 11 tracks · 46:12". May be empty.
+    in property <string> subtitle;
+    /// True below the section's own list, or while searching, where `back()` goes back.
+    in property <bool> can-go-back;
+    /// The search text. Bind a text field to it (`text <=> Library.query`) and call `search`
+    /// when it is edited; Freya clears it when the search ends.
+    in-out property <string> query;
+    /// The music folders the library is made from.
+    in property <[string]> folders;
+    /// True while Freya reads the folders.
+    in property <bool> scanning;
+    /// "10,412 tracks · 682 albums", or a scan's progress: "Reading 1,234 of 5,000 files".
+    in property <string> status;
+
+    /// Search for tracks whose artist, album, title, genre or file name has words starting
+    /// with each word of the text. Empty text goes back to browsing.
+    callback search(string);
+    /// Double-click or Enter: open an artist or album. On a track, the playlist becomes the
+    /// tracks shown, playing from this one.
+    callback activate(int);
+    /// Replace the playlist with the row's tracks (all of an artist's or album's) and play.
+    callback play(int);
+    /// Add the row's tracks to the end of the playlist.
+    callback enqueue(int);
+    /// `play` and `enqueue` for every row shown.
+    callback play-all();
+    callback enqueue-all();
+    /// Start browsing `section`: "artists", "albums", "songs" or "genres"; or the Recents:
+    /// "recently-added" (the 200 albums that came last), "recently-played" (the 200 tracks
+    /// played last) or "most-played" (the 200 tracks played most). A track counts as played
+    /// once it has been listened to for half its length or four minutes.
+    callback show(string);
+    /// Goes up by one whenever new covers are ready. Pass it to `cover`, so covers shown empty
+    /// are asked for again.
+    in property <int> covers-ready;
+    /// A small cover for a row's `cover`, about 300 pixels: `cover(row.cover, covers-ready)`.
+    /// Empty (zero width) while it is being made, and for albums without one. Covers are made
+    /// as they are first asked for, so only call it for rows that are on screen.
+    pure callback cover(string, int) -> image;
+    /// Back to the list shown before: from an album to the artist or genre it was opened from,
+    /// and so on up to the section's own list. Ends a search first.
+    callback back();
+    /// Ask the user for a music folder to add.
+    callback add-folder();
+    /// Stop using a folder; its tracks leave the library.
+    callback remove-folder(int);
+    /// Read the folders again, for changes made while Freya was running.
+    callback rescan();
+}
+
+/// One of the playlists the user keeps, as the navigation lists them.
+export struct PlaylistRow {
+    name: string,
+    /// How many tracks it has, as text.
+    count: string,
+}
+
+/// Playlists the user keeps in Freya, apart from the queue (`Playlist`, shown as Up Next).
+/// Optional. Each is an M3U file in Freya's data folder.
+export global Playlists {
+    in property <[PlaylistRow]> playlists;
+    /// The playlist chosen with `show`, or -1.
+    in property <int> shown: -1;
+    /// The tracks of the playlist shown. `selected` and `current` are always false.
+    in property <[TrackRow]> tracks;
+    /// "12 tracks · 48:10" for the playlist shown.
+    in property <string> summary;
+    /// Why the last `create`, `save-queue` or `rename` failed, like "There is already a
+    /// playlist called …"; empty after one that worked. Freya answers at once.
+    in property <string> error;
+    callback show(int);
+    /// Make a new, empty playlist, and show it.
+    callback create(string);
+    /// Keep Up Next as a new playlist, and show it.
+    callback save-queue(string);
+    /// Rename the playlist shown.
+    callback rename(string);
+    /// Delete the playlist shown, and its file.
+    callback delete();
+    /// Up Next becomes the playlist shown, playing from the given row.
+    callback play(int);
+    /// Add the playlist shown to the end of Up Next.
+    callback enqueue();
+    /// Remove a track from the playlist shown.
+    callback remove(int);
+    /// Add Up Next's selected tracks (all of them when none is selected) to a playlist.
+    callback add-queue-selection(int);
+    /// Add everything a library row stands for to a playlist: `add-library-row(playlist, row)`.
+    callback add-library-row(int, int);
+}
+
+/// One saved radio station.
+export struct StationRow {
+    name: string,
+    /// The station's address without "https://", for showing.
+    address: string,
+    /// True while this station plays.
+    playing: bool,
+}
+
+/// Saved internet radio stations. Optional. New users start with a few well-known ones.
+export global Radio {
+    in property <[StationRow]> stations;
+    /// Why the last `add` failed, like "Not a web address: …"; empty after one that worked.
+    in property <string> error;
+    /// Play a station: its entry in the playlist when it is there, else added to the end.
+    callback play(int);
+    /// Save a station: a name, and the address of its stream or of its .pls or .m3u file.
+    /// "http://" may be left out; without a name, the station is named after the address.
+    callback add(string, string);
+    callback remove(int);
+}
+
+/// The 10-band equalizer. Optional. Gains are in decibels, from -12 to +12.
+export global Equalizer {
+    in property <bool> enabled;
+    in property <float> preamp;
+    /// Gains of the bands, low to high.
+    in property <[float]> bands;
+    /// Labels of the bands: "60", "170", … "16k".
+    in property <[string]> band-labels;
+    /// Names of the built-in presets, for `load-preset`.
+    in property <[string]> presets;
+    /// Name of the preset matching the current settings, or "Custom".
+    in property <string> preset-name;
+    /// SVG path data for the response curve through `bands`, in a box of `width` × `height`
+    /// (plain numbers, e.g. pixels): x runs from the lowest to the highest band; 0 dB is at half
+    /// the height, +12 dB at 5 % and -12 dB at 95 %. Use the box size as the Path's viewbox:
+    ///
+    ///     Path {
+    ///         viewbox-width: self.width / 1px;
+    ///         viewbox-height: self.height / 1px;
+    ///         commands: Equalizer.curve(self.width / 1px, self.height / 1px, Equalizer.bands);
+    ///     }
+    pure callback curve(float, float, [float]) -> string;
+
+    callback toggle();
+    callback set-preamp(float);
+    /// Set band `index` to `gain` dB.
+    callback set-band(int, float);
+    /// Load the built-in preset at this index in `presets`.
+    callback load-preset(int);
+    /// Set every band and the preamp to 0 dB.
+    callback reset();
+    /// Load or save a Winamp `.eqf` preset file.
+    callback load-file();
+    callback save-file();
+}
+
+/// Where a `NativeSpectrum` is in the window, and how it looks. `NativeSpectrum` keeps this up
+/// to date; skins do not set it themselves.
+export struct SpectrumArea {
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+    shown: bool,
+    bar-color: color,
+    peak-color: color,
+    peak-thickness: length,
+    background: color,
+}
+
+/// Visualization of what is playing. Optional. Updated up to 60 times a second while
+/// something plays; nothing is computed when the skin does not export this global.
+export global Visualizer {
+    /// "spectrum", "oscilloscope" or "off".
+    in property <string> mode: "spectrum";
+    /// How many spectrum bars the skin draws. Set it once, e.g. in `init`; `bars` and `peaks`
+    /// then have this many values.
+    in-out property <int> bar-count: 32;
+    /// Bar heights from 0 to 1, from low to high frequencies on a logarithmic scale.
+    in property <[float]> bars;
+    /// Peak markers from 0 to 1; they stay up briefly after a bar falls.
+    in property <[float]> peaks;
+    /// The last few milliseconds of audio, from -1 to 1.
+    in property <[float]> waveform;
+
+    /// Switch to the next mode: spectrum, oscilloscope, off.
+    callback cycle-mode();
+    /// Switch to `mode`: "spectrum", "oscilloscope" or "off". Other values are ignored.
+    callback set-mode(string);
+    /// Whether the skin shows a visualization right now. A skin that puts it in a view of its
+    /// own sets this to false while another view is shown; Freya then computes nothing for it.
+    in-out property <bool> showing: true;
+    /// SVG path data for `waveform` in a `width` × `height` box; use the box as the Path's
+    /// viewbox, like `Equalizer.curve`.
+    pure callback wave(float, float, [float]) -> string;
+    /// SVG path data for spectrum bars in a `width` × `height` box: pass `bars`. Drawing the
+    /// spectrum as one Path is much cheaper than one Rectangle per bar, because every frame
+    /// then evaluates one binding instead of several per bar.
+    pure callback bars-path(float, float, [float]) -> string;
+    /// The same for peak markers: pass `peaks` and the markers' thickness.
+    pure callback peaks-path(float, float, [float], float) -> string;
+
+    /// True when Freya draws `NativeSpectrum` itself, on top of the window. `bars` and
+    /// `peaks` are then not updated, so nothing else in the skin should show them.
+    in property <bool> native-drawing;
+    /// Where the `NativeSpectrum` is; kept up to date by that component.
+    in-out property <SpectrumArea> native-area;
+}
+
+/// A spectrum that costs little CPU: where it can, Freya draws it itself in a layer on top of
+/// the window, so the window is not redrawn for every frame of the spectrum. Elsewhere it is
+/// drawn like any other part of the skin. Use at most one; nothing of the skin can be drawn
+/// on top of it, and its colors are solid (no gradients or transparency effects).
+export component NativeSpectrum inherits Rectangle {
+    in property <color> bar-color: #a35f00;
+    in property <color> peak-color: #8a4f00;
+    in property <length> peak-thickness: 2px;
+    /// The color behind the bars, filling the box. Set it to the color around the spectrum:
+    /// where Freya cannot draw see-through (X11), its own layer is filled with it too.
+    in property <color> background-color: transparent;
+    /// Set to false while the spectrum should not show, e.g. when its box is too small.
+    in property <bool> shown: true;
+
+    function report() {
+        Visualizer.native-area = {
+            x: self.absolute-position.x,
+            y: self.absolute-position.y,
+            width: self.width,
+            height: self.height,
+            shown: self.shown,
+            bar-color: self.bar-color,
+            peak-color: self.peak-color,
+            peak-thickness: self.peak-thickness,
+            background: self.background-color,
+        };
+    }
+
+    init => { self.report(); }
+    changed absolute-position => { self.report(); }
+    changed width => { self.report(); }
+    changed height => { self.report(); }
+    changed shown => { self.report(); }
+    changed bar-color => { self.report(); }
+    changed peak-color => { self.report(); }
+    changed background-color => { self.report(); }
+
+    background: self.background-color;
+
+    if !Visualizer.native-drawing: Path {
+        viewbox-width: self.width / 1px;
+        viewbox-height: self.height / 1px;
+        commands: Visualizer.bars-path(self.width / 1px, self.height / 1px, Visualizer.bars);
+        fill: root.bar-color;
+    }
+    if !Visualizer.native-drawing: Path {
+        viewbox-width: self.width / 1px;
+        viewbox-height: self.height / 1px;
+        commands: Visualizer.peaks-path(self.width / 1px, self.height / 1px, Visualizer.peaks, root.peak-thickness / 1px);
+        fill: root.peak-color;
+    }
+}
+
+/// The application. Optional.
+export global App {
+    in property <string> version;
+    /// "system", "light" or "dark". Skins that support both color schemes should follow it.
+    in property <string> theme: "system";
+    /// Whether the skin shows its equalizer; kept between runs.
+    in property <bool> equalizer-visible;
+    /// To draw into the window's title bar on macOS, set this to the height of the skin's top
+    /// bar, e.g. in the window's `init`. The title bar then turns transparent, the skin reaches
+    /// the window's top edge, and the window buttons sit at the left of the top bar, centred in
+    /// its height. 0, the default, keeps the system's title bar, as other systems always do.
+    in-out property <length> title-bar-height;
+    /// The room the window buttons take at the left of the skin's top bar, from the window's
+    /// edge: 0 when the system draws its own title bar, and in full screen.
+    in property <length> window-buttons-width;
+
+    /// Open the About window, which credits Freya's licences and Slint.
+    callback show-about();
+    /// Open Freya's skin picker.
+    callback show-skins();
+    /// "system", "light" or "dark".
+    callback set-theme(string);
+    callback toggle-equalizer();
+    /// Call on a mouse press in an empty part of the top bar, when the skin draws into the
+    /// title bar: the window follows the mouse, and a double click zooms or minimizes it, as
+    /// the system's settings say.
+    callback drag-window();
+}
+
+/// Updates to Freya. Optional: without it, Freya never looks for updates. Freya looks at
+/// launch and once a day when `check-automatically` is on, and installs only when the user asks.
+export global Updates {
+    /// "idle", "checking" (only when the user asked), "up-to-date", "available",
+    /// "downloading", "installed" (Freya restarts into it), or "failed".
+    in property <string> state: "idle";
+    /// The running Freya's version, and the newer one while one is available, downloading or
+    /// installed.
+    in property <string> current-version;
+    in property <string> version;
+    /// The new version's release notes, as plain text, bullets as "• ".
+    in property <string> notes;
+    /// 0 to 1 while downloading.
+    in property <float> progress;
+    /// Why looking for or installing an update failed.
+    in property <string> error;
+    /// Whether Freya can install the update itself. Otherwise, as for a Windows or .deb
+    /// install, `install` opens the release's page.
+    in property <bool> can-install;
+    /// Whether Freya looks for updates on its own; kept between runs.
+    in property <bool> check-automatically: true;
+
+    /// Look for an update now; the answer shows in `state` either way, and a skipped version
+    /// is offered again.
+    callback check();
+    /// Download, check and install the available update, then restart Freya into it.
+    callback install();
+    /// Hide the update until Freya looks again.
+    callback later();
+    /// Never offer this version again; a later one is offered.
+    callback skip();
+    callback set-check-automatically(bool);
+}
+
+/// Credits for Freya and Slint. Freya shows this in its own About window, so every skin
+/// fulfils the licence requirement to credit Slint.
+export component AboutFreya inherits Rectangle {
+    in property <string> version;
+    in property <color> text-color: #1a1a1a;
+
+    VerticalLayout {
+        padding: 24px;
+        spacing: 8px;
+        alignment: start;
+
+        Text {
+            text: "Freya";
+            font-size: 28px;
+            font-weight: 700;
+            color: root.text-color;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "Version " + root.version;
+            font-size: 14px;
+            color: root.text-color;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "A skinnable music player. Licensed under MIT or Apache-2.0.";
+            font-size: 14px;
+            color: root.text-color;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        AboutSlint {
+            height: 160px;
+        }
+    }
+}
+
+/// Freya's standard keyboard shortcuts. Put one in the skin's window, filling it, so the
+/// shortcuts work the same in every skin:
+///
+///     Space play/pause, ←/→ seek 5 s, ↑/↓ volume, N/P next/previous, S stop, O open files,
+///     F1 about, F2 skins.
+export component Shortcuts inherits FocusScope {
+    key-pressed(event) => {
+        if (event.modifiers.control || event.modifiers.meta || event.modifiers.alt) {
+            return reject;
+        }
+        if (event.text == " ") {
+            Player.toggle-pause();
+        } else if (event.text == Key.RightArrow) {
+            Player.seek-by(5);
+        } else if (event.text == Key.LeftArrow) {
+            Player.seek-by(-5);
+        } else if (event.text == Key.UpArrow) {
+            Player.set-volume(min(1.0, Player.volume + 0.05));
+        } else if (event.text == Key.DownArrow) {
+            Player.set-volume(max(0.0, Player.volume - 0.05));
+        } else if (event.text == "n" || event.text == "N") {
+            Player.next();
+        } else if (event.text == "p" || event.text == "P") {
+            Player.previous();
+        } else if (event.text == "s" || event.text == "S") {
+            Player.stop();
+        } else if (event.text == "o" || event.text == "O") {
+            Player.open-files();
+        } else if (event.text == Key.F1) {
+            App.show-about();
+        } else if (event.text == Key.F2) {
+            App.show-skins();
+        } else {
+            return reject;
+        }
+        accept
+    }
+}

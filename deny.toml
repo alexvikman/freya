@@ -1,0 +1,100 @@
+# What `cargo deny check` accepts in Freya's dependencies; run by `ci/check.sh deps`.
+# See docs/DEPENDENCIES.md for why each rule is here and how to update dependencies.
+
+[graph]
+# Only the platforms Freya is built for, so code for other systems does not count.
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-gnu",
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+]
+
+[advisories]
+# The RustSec database: known vulnerabilities, malicious crates, and crates whose authors
+# have given them up. Any of these fails the check until it is handled. Ignored below: crates
+# given up by their authors, deep in other crates' dependencies, with no known flaw; look
+# again when the crate that pulls them in is updated.
+ignore = [
+    # `paste`, a build-time macro used by lofty (tags).
+    { id = "RUSTSEC-2024-0436", reason = "unmaintained, no known flaw; runs only at build time, inside lofty" },
+    # `ttf-parser`, via winit's title bar drawing on Wayland (sctk-adwaita).
+    { id = "RUSTSEC-2026-0192", reason = "unmaintained, no known flaw; goes when winit drops it" },
+]
+
+[licenses]
+# Licenses that let Freya be shared under MIT OR Apache-2.0 without conditions beyond keeping
+# notices. MPL-2.0 (Symphonia) applies only to Symphonia's own files.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+# Slint is offered under GPL-3.0, a commercial license, or its royalty-free license; Freya uses
+# the royalty-free one, which requires crediting Slint (done in the About window).
+[[licenses.exceptions]]
+crate = "slint"
+allow = ["LicenseRef-Slint-Royalty-free-2.0"]
+[[licenses.exceptions]]
+crate = "slint-build"
+allow = ["LicenseRef-Slint-Royalty-free-2.0"]
+[[licenses.exceptions]]
+crate = "slint-interpreter"
+allow = ["LicenseRef-Slint-Royalty-free-2.0"]
+[[licenses.exceptions]]
+crate = "slint-macros"
+allow = ["LicenseRef-Slint-Royalty-free-2.0"]
+[[licenses.exceptions]]
+crate = "i-slint-backend-selector"
+allow = ["LicenseRef-Slint-Royalty-free-2.0"]
+[[licenses.exceptions]]
+crate = "i-slint-backend-winit"
+allow = ["LicenseRef-Slint-Royalty-free-2.0"]
+[[licenses.exceptions]]
+crate = "i-slint-common"
+allow = ["LicenseRef-Slint-Royalty-free-2.0"]
+[[licenses.exceptions]]
+crate = "i-slint-compiler"
+allow = ["LicenseRef-Slint-Royalty-free-2.0"]
+[[licenses.exceptions]]
+crate = "i-slint-core"
+allow = ["LicenseRef-Slint-Royalty-free-2.0"]
+[[licenses.exceptions]]
+crate = "i-slint-core-macros"
+allow = ["LicenseRef-Slint-Royalty-free-2.0"]
+[[licenses.exceptions]]
+crate = "i-slint-renderer-femtovg"
+allow = ["LicenseRef-Slint-Royalty-free-2.0"]
+[[licenses.exceptions]]
+crate = "i-slint-renderer-software"
+allow = ["LicenseRef-Slint-Royalty-free-2.0"]
+
+[bans]
+# Two versions of one crate cost build time and size, not safety; Slint and winit pull in
+# several Windows and objc versions that Freya cannot change.
+multiple-versions = "allow"
+# A dependency without a version (`*`) could become anything. Freya's own crates refer to each
+# other by path, which is allowed because they are never published.
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+# Crates come only from crates.io: no other registries and no git repositories, which are not
+# checksummed or immutable the way published crates are.
+unknown-registry = "deny"
+unknown-git = "deny"

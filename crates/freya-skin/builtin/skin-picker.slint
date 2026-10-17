@@ -1,0 +1,97 @@
+import { Button, ListView, Palette } from "std-widgets.slint";
+
+export struct SkinEntry {
+    name: string,
+    details: string,
+    current: bool,
+}
+
+export component SkinPicker inherits Window {
+    in property <[SkinEntry]> skins;
+    in property <string> error;
+    in property <string> folder;
+    callback select(int);
+    callback install();
+    callback open-folder();
+
+    title: "Skins – Freya";
+    preferred-width: 460px;
+    preferred-height: 440px;
+    min-width: 360px;
+    min-height: 320px;
+    background: Palette.background;
+    default-font-size: 14px;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 10px;
+
+        Text {
+            text: "Skins";
+            font-size: 20px;
+            font-weight: 600;
+            color: Palette.foreground;
+        }
+        ListView {
+            vertical-stretch: 1;
+            for skin[i] in root.skins: Rectangle {
+                height: 60px;
+                border-radius: 6px;
+                background: skin.current ? Palette.selection-background : (touch.has-hover ? Palette.alternate-background : transparent);
+                accessible-role: list-item;
+                accessible-label: skin.name + (skin.current ? ", in use" : "");
+                accessible-action-default => { root.select(i); }
+
+                VerticalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    alignment: center;
+                    spacing: 2px;
+
+                    Text {
+                        text: skin.name + (skin.current ? "  ✓" : "");
+                        font-size: 15px;
+                        font-weight: 600;
+                        color: skin.current ? Palette.selection-foreground : Palette.foreground;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: skin.details;
+                        font-size: 13px;
+                        color: skin.current ? Palette.selection-foreground : Palette.foreground;
+                        overflow: elide;
+                    }
+                }
+
+                touch := TouchArea {
+                    clicked => { root.select(i); }
+                }
+            }
+        }
+        if root.error != "": Text {
+            text: root.error;
+            color: Palette.foreground;
+            font-weight: 600;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+
+            Button {
+                text: "Install skin…";
+                clicked => { root.install(); }
+            }
+            Button {
+                text: "Open skins folder";
+                clicked => { root.open-folder(); }
+            }
+        }
+        Text {
+            text: "Skins in " + root.folder + " are listed here. A skin used from a folder reloads when its files are saved.";
+            font-size: 12px;
+            color: Palette.foreground;
+            wrap: word-wrap;
+        }
+    }
+}

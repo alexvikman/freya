@@ -1,0 +1,509 @@
+//! Sample state for previews and screenshot tests.
+
+use slint::{Model, ModelRc, VecModel};
+use slint_interpreter::{ComponentInstance, SharedString, Struct, Value};
+
+fn text(s: &str) -> Value {
+    Value::String(SharedString::from(s))
+}
+
+/// Fills the skin API with a track that is playing and a short playlist.
+pub fn fill(ui: &ComponentInstance) {
+    let set = |global: &str, name: &str, value: Value| {
+        // Skins may leave out optional globals.
+        let _ = ui.set_global_property(global, name, value);
+    };
+    set("Player", "title", text("Avril 14th"));
+    set("Player", "artist", text("Aphex Twin"));
+    set(
+        "Player",
+        "format-info",
+        text("FLAC · 912 kbps · 44.1 kHz · Stereo"),
+    );
+    set(
+        "Player",
+        "state",
+        Value::EnumerationValue("PlaybackState".into(), "playing".into()),
+    );
+    set("Player", "position", Value::Number(83.0));
+    set("Player", "length", Value::Number(125.0));
+    set("Player", "position-text", text("1:23"));
+    set("Player", "remaining-text", text("-0:42"));
+    set("Player", "volume", Value::Number(0.7));
+
+    let tracks = [
+        ("Kraftwerk - Computer Love", "7:15"),
+        ("Daft Punk - Something About Us", "3:52"),
+        ("Aphex Twin - Avril 14th", "2:05"),
+        ("Röyksopp - Eple", "3:40"),
+        ("Boards of Canada - Roygbiv", "2:31"),
+        ("Massive Attack - Teardrop", "5:30"),
+        ("Portishead - Glory Box", "5:06"),
+        (
+            "Lykke Li - I Follow Rivers (The Magician Remix, an unusually long title)",
+            "4:47",
+        ),
+        ("untagged file", ""),
+    ];
+    let rows: Vec<Value> = tracks
+        .iter()
+        .enumerate()
+        .map(|(i, (title, duration))| {
+            Value::Struct(Struct::from_iter([
+                ("number".to_owned(), Value::Number(i as f64 + 1.0)),
+                ("title".to_owned(), text(title)),
+                ("duration".to_owned(), text(duration)),
+                ("selected".to_owned(), Value::Bool(i == 4 || i == 5)),
+                ("current".to_owned(), Value::Bool(i == 2)),
+            ]))
+        })
+        .collect();
+    set(
+        "Playlist",
+        "rows",
+        Value::Model(ModelRc::new(VecModel::from(rows))),
+    );
+    set("Playlist", "summary", text("9 tracks · 34:38+"));
+
+    // Winamp's "Rock" preset.
+    let bands = [4.8, 2.9, -3.8, -5.3, -2.5, 2.5, 5.5, 6.6, 6.6, 6.6];
+    let numbers = |values: &[f64]| {
+        Value::Model(ModelRc::new(VecModel::from(
+            values.iter().map(|&v| Value::Number(v)).collect::<Vec<_>>(),
+        )))
+    };
+    let strings = |values: &[&str]| {
+        Value::Model(ModelRc::new(VecModel::from(
+            values.iter().map(|v| text(v)).collect::<Vec<_>>(),
+        )))
+    };
+    set("Equalizer", "enabled", Value::Bool(true));
+    set("Equalizer", "bands", numbers(&bands));
+    set(
+        "Equalizer",
+        "band-labels",
+        strings(&[
+            "60", "170", "310", "600", "1k", "3k", "6k", "12k", "14k", "16k",
+        ]),
+    );
+    set(
+        "Equalizer",
+        "presets",
+        strings(&["Flat", "Classical", "Rock"]),
+    );
+    set("Equalizer", "preset-name", text("Rock"));
+    // The app draws a spline; a polyline through the band points will do for previews.
+    let _ = ui.set_global_callback("Equalizer", "curve", move |args| {
+        let size = |i: usize| match args.get(i) {
+            Some(Value::Number(n)) => *n,
+            _ => 0.0,
+        };
+        let (w, h) = (size(0), size(1));
+        let path: String = bands
+            .iter()
+            .enumerate()
+            .map(|(i, db)| {
+                let cmd = if i == 0 { 'M' } else { 'L' };
+                format!(
+                    "{cmd}{:.1} {:.1} ",
+                    i as f64 * w / 9.0,
+                    (0.5 - db / 12.0 * 0.45) * h
+                )
+            })
+            .collect();
+        text(path.trim_end())
+    });
+    set("App", "equalizer-visible", Value::Bool(true));
+
+    // A spectrum that falls off towards the treble, with peaks a little above the bars.
+    let bars: Vec<f64> = (0..24)
+        .map(|i| {
+            let x = f64::from(i) / 23.0;
+            (0.85 - 0.6 * x + 0.12 * (x * 19.0).sin()).clamp(0.05, 1.0)
+        })
+        .collect();
+    let peaks: Vec<f64> = bars.iter().map(|b| (b + 0.08).min(1.0)).collect();
+    let _ = ui.set_global_callback("Visualizer", "bars-path", |args| {
+        text(&crate::paths::bars_path(
+            arg_number(args, 0),
+            arg_number(args, 1),
+            &arg_numbers(args, 2),
+        ))
+    });
+    let _ = ui.set_global_callback("Visualizer", "peaks-path", |args| {
+        text(&crate::paths::peaks_path(
+            arg_number(args, 0),
+            arg_number(args, 1),
+            &arg_numbers(args, 2),
+            arg_number(args, 3),
+        ))
+    });
+    set("Visualizer", "bar-count", Value::Number(24.0));
+    set("Visualizer", "bars", numbers(&bars));
+    set("Visualizer", "peaks", numbers(&peaks));
+    set("Playlist", "cursor", Value::Number(5.0));
+    set("Playlist", "repeat", Value::Bool(true));
+
+    // The library, open at an album.
+    let library_row = |kind: &str, title: &str, detail: &str, number: &str, duration: &str| {
+        Value::Struct(Struct::from_iter([
+            ("kind".to_owned(), text(kind)),
+            ("title".to_owned(), text(title)),
+            ("detail".to_owned(), text(detail)),
+            ("number".to_owned(), text(number)),
+            ("duration".to_owned(), text(duration)),
+        ]))
+    };
+    let album = [
+        ("1", "Wildlife Analysis", "", "1:17"),
+        ("2", "An Eagle in Your Mind", "", "6:23"),
+        ("3", "The Color of the Fire", "", "1:45"),
+        ("4", "Telephasic Workshop", "", "6:35"),
+        ("5", "Triangles & Rhombuses", "", "1:50"),
+        ("6", "Sixtyten", "", "5:48"),
+        ("7", "Turquoise Hexagon Sun", "", "5:07"),
+        ("8", "Kaini Industries", "", "1:00"),
+        ("9", "Bocuma", "", "1:35"),
+        ("10", "Roygbiv", "", "2:31"),
+        ("11", "Rue the Whirl", "", "6:39"),
+        ("12", "Aquarius", "Boards of Canada feat. a guest", "5:58"),
+    ];
+    let rows: Vec<Value> = album
+        .iter()
+        .map(|(n, title, detail, duration)| library_row("track", title, detail, n, duration))
+        .collect();
+    set(
+        "Library",
+        "rows",
+        Value::Model(ModelRc::new(VecModel::from(rows))),
+    );
+    set("Library", "title", text("Music Has the Right to Children"));
+    set(
+        "Library",
+        "subtitle",
+        text("Boards of Canada · 1998 · 18 tracks · 1:10:52"),
+    );
+    set("Library", "can-go-back", Value::Bool(true));
+    set("Library", "folders", strings(&["~/Music"]));
+    set("Library", "status", text("10,412 tracks · 682 albums"));
+
+    // Radio stations, one of them playing.
+    let station = |name: &str, address: &str, playing: bool| {
+        Value::Struct(Struct::from_iter([
+            ("name".to_owned(), text(name)),
+            ("address".to_owned(), text(address)),
+            ("playing".to_owned(), Value::Bool(playing)),
+        ]))
+    };
+    let stations = vec![
+        station("SomaFM: Groove Salad", "somafm.com/groovesalad.pls", true),
+        station("SomaFM: Drone Zone", "somafm.com/dronezone.pls", false),
+        station(
+            "Radio Paradise",
+            "www.radioparadise.com/m3u/mp3-128.m3u",
+            false,
+        ),
+        station("FIP", "icecast.radiofrance.fr/fip-midfi.mp3", false),
+        station("KEXP", "kexp.streamguys1.com/kexp160.aac", false),
+    ];
+    set(
+        "Radio",
+        "stations",
+        Value::Model(ModelRc::new(VecModel::from(stations))),
+    );
+
+    // Playlists in the navigation; the second one is shown.
+    let playlist = |name: &str, count: &str| {
+        Value::Struct(Struct::from_iter([
+            ("name".to_owned(), text(name)),
+            ("count".to_owned(), text(count)),
+        ]))
+    };
+    let playlists = vec![
+        playlist("Calm evenings", "24"),
+        playlist("Road trip", "6"),
+        playlist("Workout", "18"),
+    ];
+    set(
+        "Playlists",
+        "playlists",
+        Value::Model(ModelRc::new(VecModel::from(playlists))),
+    );
+    set("Playlists", "shown", Value::Number(1.0));
+    set("Playlists", "summary", text("6 tracks · 27:04"));
+    let road: Vec<Value> = [
+        ("Daft Punk - Something About Us", "3:52"),
+        ("Röyksopp - Eple", "3:40"),
+        ("Air - La femme d'argent", "7:11"),
+        ("Portishead - Glory Box", "5:06"),
+        ("Kraftwerk - Computer Love", "7:15"),
+        ("A stream", ""),
+    ]
+    .iter()
+    .enumerate()
+    .map(|(i, (title, duration))| {
+        Value::Struct(Struct::from_iter([
+            ("number".to_owned(), Value::Number(i as f64 + 1.0)),
+            ("title".to_owned(), text(title)),
+            ("duration".to_owned(), text(duration)),
+            ("selected".to_owned(), Value::Bool(false)),
+            ("current".to_owned(), Value::Bool(false)),
+        ]))
+    })
+    .collect();
+    set(
+        "Playlists",
+        "tracks",
+        Value::Model(ModelRc::new(VecModel::from(road))),
+    );
+}
+
+/// Internet radio: a station with a song, no length.
+pub fn fill_radio(ui: &ComponentInstance) {
+    let set = |name: &str, value: Value| {
+        let _ = ui.set_global_property("Player", name, value);
+    };
+    set("title", text("Teleseme (Hallo Halo Remix)"));
+    set("artist", text("Steve Cobby"));
+    set(
+        "format-info",
+        text("Groove Salad [SomaFM] · MP3 · 128 kbps · 44.1 kHz · Stereo"),
+    );
+    set("length", Value::Number(0.0));
+    set("position-text", text("12:07"));
+    set("live", Value::Bool(true));
+}
+
+/// A track that could not be played.
+pub fn fill_error(ui: &ComponentInstance) {
+    let set = |name: &str, value: Value| {
+        let _ = ui.set_global_property("Player", name, value);
+    };
+    set(
+        "state",
+        Value::EnumerationValue("PlaybackState".into(), "stopped".into()),
+    );
+    set("title", text("radio.example.com"));
+    set("artist", text(""));
+    set(
+        "error",
+        text("cannot open http://radio.example.com/live: Connection refused"),
+    );
+}
+
+/// Shows the library's list of artists instead of an album, with a search typed.
+pub fn fill_library_search(ui: &ComponentInstance) {
+    fill(ui);
+    let row = |kind: &str, title: &str, detail: &str| {
+        Value::Struct(Struct::from_iter([
+            ("kind".to_owned(), text(kind)),
+            ("title".to_owned(), text(title)),
+            ("detail".to_owned(), text(detail)),
+            ("number".to_owned(), text("")),
+            ("duration".to_owned(), text("")),
+        ]))
+    };
+    let rows = vec![
+        row("artist", "Aphex Twin", "6 albums · 84 tracks"),
+        row("artist", "Björk", "9 albums · 112 tracks"),
+        row("artist", "Boards of Canada", "4 albums · 61 tracks"),
+        row("album", "Debut", "1993 · 11 tracks"),
+        row("track", "Hyperballad", "Björk · Post"),
+    ];
+    let _ = ui.set_global_property(
+        "Library",
+        "rows",
+        Value::Model(ModelRc::new(VecModel::from(rows))),
+    );
+    let _ = ui.set_global_property("Library", "title", text("Artists"));
+    let _ = ui.set_global_property("Library", "subtitle", text("214 artists"));
+    let _ = ui.set_global_property("Library", "can-go-back", Value::Bool(false));
+    let _ = ui.set_global_property("Library", "query", text("bj"));
+}
+
+/// A `LibraryRow`.
+fn library_row(
+    kind: &str,
+    title: &str,
+    detail: &str,
+    artist: &str,
+    album: &str,
+    duration: &str,
+) -> Value {
+    Value::Struct(Struct::from_iter([
+        ("kind".to_owned(), text(kind)),
+        ("title".to_owned(), text(title)),
+        ("detail".to_owned(), text(detail)),
+        ("artist".to_owned(), text(artist)),
+        ("album".to_owned(), text(album)),
+        ("number".to_owned(), text("")),
+        ("duration".to_owned(), text(duration)),
+    ]))
+}
+
+fn show_library(
+    ui: &ComponentInstance,
+    section: &str,
+    layout: &str,
+    title: &str,
+    subtitle: &str,
+    rows: Vec<Value>,
+) {
+    let set = |name: &str, value: Value| {
+        let _ = ui.set_global_property("Library", name, value);
+    };
+    set("rows", Value::Model(ModelRc::new(VecModel::from(rows))));
+    set("section", text(section));
+    set("layout", text(layout));
+    set("title", text(title));
+    set("subtitle", text(subtitle));
+    set("can-go-back", Value::Bool(false));
+}
+
+/// The library's Albums section: a grid.
+pub fn fill_library_albums(ui: &ComponentInstance) {
+    fill(ui);
+    let albums = [
+        ("Arrival", "ABBA", "1976 · 10 tracks"),
+        ("Moon Safari", "Air", "1998 · 10 tracks"),
+        (
+            "Selected Ambient Works 85–92",
+            "Aphex Twin",
+            "1992 · 13 tracks",
+        ),
+        ("Post", "Björk", "1995 · 11 tracks"),
+        (
+            "Music Has the Right to Children",
+            "Boards of Canada",
+            "1998 · 18 tracks",
+        ),
+        ("Discovery", "Daft Punk", "2001 · 14 tracks"),
+        ("Computer World", "Kraftwerk", "1981 · 7 tracks"),
+        ("Mezzanine", "Massive Attack", "1998 · 11 tracks"),
+        ("Dummy", "Portishead", "1994 · 11 tracks"),
+        ("Melody A.M.", "Röyksopp", "2001 · 10 tracks"),
+        ("Unknown album", "Unknown artist", "3 tracks"),
+    ];
+    let rows = albums
+        .iter()
+        .map(|(title, artist, detail)| library_row("album", title, detail, artist, "", ""))
+        .collect();
+    show_library(ui, "albums", "grid", "Albums", "682 albums", rows);
+}
+
+/// The library's Songs section: a table.
+pub fn fill_library_songs(ui: &ComponentInstance) {
+    fill(ui);
+    show_library(ui, "songs", "table", "Songs", "10,412 tracks", song_rows());
+}
+
+/// The Recents' Most Played: a table with how often each track was played.
+pub fn fill_library_most_played(ui: &ComponentInstance) {
+    fill(ui);
+    let rows = song_rows()
+        .into_iter()
+        .enumerate()
+        .map(|(i, mut row)| {
+            if let Value::Struct(row) = &mut row {
+                row.set_field("played".to_owned(), text(&format!("{} plays", 48 - 3 * i)));
+            }
+            row
+        })
+        .collect();
+    show_library(
+        ui,
+        "most-played",
+        "table",
+        "Most Played",
+        "200 tracks",
+        rows,
+    );
+}
+
+fn song_rows() -> Vec<Value> {
+    let songs = [
+        ("Army of Me", "Björk", "Post", "3:54"),
+        ("Avril 14th", "Aphex Twin", "Drukqs", "2:05"),
+        ("Computer Love", "Kraftwerk", "Computer World", "7:15"),
+        ("Dancing Queen", "ABBA", "Arrival", "3:51"),
+        ("Eple", "Röyksopp", "Melody A.M.", "3:40"),
+        ("Glory Box", "Portishead", "Dummy", "5:06"),
+        ("Hyperballad", "Björk", "Post", "5:21"),
+        (
+            "I Follow Rivers (The Magician Remix, an unusually long title)",
+            "Lykke Li",
+            "Wounded Rhymes",
+            "4:47",
+        ),
+        ("La femme d'argent", "Air", "Moon Safari", "7:11"),
+        (
+            "Roygbiv",
+            "Boards of Canada",
+            "Music Has the Right to Children",
+            "2:31",
+        ),
+        ("Something About Us", "Daft Punk", "Discovery", "3:52"),
+        ("Teardrop", "Massive Attack", "Mezzanine", "5:30"),
+    ];
+    songs
+        .iter()
+        .map(|(title, artist, album, time)| {
+            library_row(
+                "track",
+                title,
+                &format!("{artist} · {album}"),
+                artist,
+                album,
+                time,
+            )
+        })
+        .collect()
+}
+
+/// A number argument of a callback.
+fn arg_number(args: &[Value], i: usize) -> f32 {
+    match args.get(i) {
+        Some(Value::Number(n)) => *n as f32,
+        _ => 0.0,
+    }
+}
+
+/// A list-of-numbers argument of a callback.
+fn arg_numbers(args: &[Value], i: usize) -> Vec<f32> {
+    match args.get(i) {
+        Some(Value::Model(model)) => model
+            .iter()
+            .map(|v| match v {
+                Value::Number(n) => n as f32,
+                _ => 0.0,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Fills the skin picker with a few skins.
+pub fn fill_picker(picker: &ComponentInstance) {
+    let entry = |name: &str, details: &str, current: bool| {
+        Value::Struct(Struct::from_iter([
+            ("name".to_owned(), text(name)),
+            ("details".to_owned(), text(details)),
+            ("current".to_owned(), Value::Bool(current)),
+        ]))
+    };
+    let skins = vec![
+        entry("Freya", "by Freya · 0.1.0 · The built-in skin.", false),
+        entry("Mini", "by Freya · 1.0 · A compact one-line player.", true),
+        entry(
+            "Midnight",
+            "by Someone · 2.3 · A dark skin with large text.",
+            false,
+        ),
+    ];
+    let _ = picker.set_property("skins", Value::Model(ModelRc::new(VecModel::from(skins))));
+    let _ = picker.set_property("folder", text("~/Library/Application Support/Freya/skins"));
+    let _ = picker.set_property(
+        "error",
+        text("Could not use this skin: skin does not compile: skin.slint:3: 'Player' does not have a property 'titel'"),
+    );
+}

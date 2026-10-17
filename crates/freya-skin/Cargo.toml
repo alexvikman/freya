@@ -1,0 +1,23 @@
+[package]
+name = "freya-skin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+directories = "6.0.0"
+log = "0.4.34"
+serde = { version = "1.0.229", features = ["derive"] }
+slint = "1.18.1"
+slint-interpreter = "1.18.1"
+spin_on = "0.1.1"
+thiserror = "2.0.21"
+toml = "1.1.8"
+zip = { version = "9.0.1", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png"] }

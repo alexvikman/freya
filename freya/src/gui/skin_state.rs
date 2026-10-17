@@ -1,0 +1,330 @@
+//! Turning app state into values for the skin API, and writing only what changed.
+
+use std::rc::Rc;
+use std::sync::Arc;
+use std::time::Duration;
+
+use freya_audio::{PlaybackState, Status, TrackInfo};
+use freya_library::{Entry, Playlist};
+use slint::{Model, ModelRc, VecModel};
+use slint_interpreter::{SharedString, Struct, Value};
+
+use super::skin_window::SkinWindow;
+
+/// Position is reported to the skin in steps of this size: the time shown changes once a
+/// second, and every change redraws the whole window. On a 500 px progress bar a three-minute
+/// track moves under 3 px per step.
+const POSITION_STEP: Duration = Duration::from_secs(1);
+
+/// Writes values into one of the skin's globals, skipping those that did not change.
+pub struct GlobalWriter {
+    global: &'static str,
+    shown: Vec<(&'static str, Value)>,
+    /// Whether the skin exports this global at all.
+    pub available: bool,
+}
+
+impl GlobalWriter {
+    pub fn new(ui: &SkinWindow, global: &'static str) -> Self {
+        Self {
+            global,
+            shown: Vec::new(),
+            available: ui.has_global(global),
+        }
+    }
+
+    pub fn write(&mut self, ui: &SkinWindow, values: Vec<(&'static str, Value)>) {
+        if !self.available {
+            return;
+        }
+        for (name, value) in values {
+            if self.shown.iter().any(|(n, v)| *n == name && *v == value) {
+                continue;
+            }
+            if let Err(e) = ui.set_global_property(self.global, name, value.clone()) {
+                log::warn!("skin API {}.{name}: {e}", self.global);
+            }
+            self.shown.retain(|(n, _)| *n != name);
+            self.shown.push((name, value));
+        }
+    }
+}
+
+/// Rows of a list the skin shows. Only rows that changed are updated, so large lists stay
+/// cheap and the skin keeps its scroll position.
+pub struct ModelRows {
+    model: Rc<VecModel<Value>>,
+    shown: Vec<Value>,
+}
+
+impl ModelRows {
+    pub fn new() -> Self {
+        Self {
+            model: Rc::new(VecModel::default()),
+            shown: Vec::new(),
+        }
+    }
+
+    pub fn model_value(&self) -> Value {
+        Value::Model(ModelRc::from(Rc::clone(&self.model)))
+    }
+
+    pub fn sync(&mut self, rows: Vec<Value>) {
+        if rows.len() == self.shown.len() {
+            for (i, (new, old)) in rows.iter().zip(&self.shown).enumerate() {
+                if new != old {
+                    self.model.set_row_data(i, new.clone());
+                }
+            }
+        } else {
+            self.model.set_vec(rows.clone());
+        }
+        debug_assert_eq!(self.model.row_count(), rows.len());
+        self.shown = rows;
+    }
+}
+
+/// The playlist rows shown by the skin.
+pub struct Rows(ModelRows);
+
+impl Rows {
+    pub fn new() -> Self {
+        Self(ModelRows::new())
+    }
+
+    pub fn model_value(&self) -> Value {
+        self.0.model_value()
+    }
+
+    pub fn sync(&mut self, playlist: &Playlist) {
+        let rows = playlist
+            .entries()
+            .iter()
+            .enumerate()
+            .map(|(i, e)| track_row(i, e, playlist.current() == Some(i)))
+            .collect();
+        self.0.sync(rows);
+    }
+}
+
+/// A `TrackRow`: the `index`th entry of a list, `current` when it is the one playing.
+pub fn track_row(index: usize, entry: &Entry, current: bool) -> Value {
+    Value::Struct(Struct::from_iter([
+        ("number".to_owned(), Value::Number(index as f64 + 1.0)),
+        ("title".to_owned(), string(entry.display_title())),
+        (
+            "duration".to_owned(),
+            string(entry.duration.map(format_time).unwrap_or_default()),
+        ),
+        ("selected".to_owned(), Value::Bool(entry.selected)),
+        ("current".to_owned(), Value::Bool(current)),
+    ]))
+}
+
+/// Values for the `Player` global.
+pub fn player_values(
+    status: &Status,
+    track: Option<&Arc<TrackInfo>>,
+    playlist: &Playlist,
+    volume: f32,
+) -> Vec<(&'static str, Value)> {
+    let track = status.track.as_ref().or(track);
+    let playing = status.state != PlaybackState::Stopped;
+    let entry = playlist.current_entry();
+    let (title, artist) = match (track, entry) {
+        (Some(t), _) if playing => (
+            t.title.clone().unwrap_or_else(|| t.display_title()),
+            t.artist.clone().unwrap_or_default(),
+        ),
+        (_, Some(e)) => (
+            e.title.clone().unwrap_or_else(|| e.display_title()),
+            e.artist.clone().unwrap_or_default(),
+        ),
+        _ => (String::new(), String::new()),
+    };
+    let length = track.and_then(|t| t.duration).filter(|_| playing);
+    let position = if playing {
+        let steps = status.position.as_millis() / POSITION_STEP.as_millis();
+        POSITION_STEP * steps as u32
+    } else {
+        Duration::ZERO
+    };
+    let state = match status.state {
+        PlaybackState::Stopped => "stopped",
+        PlaybackState::Playing => "playing",
+        PlaybackState::Paused => "paused",
+    };
+    let remaining = length.map_or(Duration::ZERO, |l| l.saturating_sub(position));
+    let live = playing && track.is_some_and(|t| freya_audio::is_url(&t.path.to_string_lossy()));
+    vec![
+        ("title", string(title)),
+        ("artist", string(artist)),
+        (
+            "album",
+            string(track.and_then(|t| t.album.clone()).unwrap_or_default()),
+        ),
+        (
+            "format-info",
+            string(
+                track
+                    .filter(|_| playing)
+                    .map(format_info)
+                    .unwrap_or_default(),
+            ),
+        ),
+        (
+            "state",
+            Value::EnumerationValue("PlaybackState".into(), state.into()),
+        ),
+        ("position", Value::Number(position.as_secs_f64())),
+        (
+            "length",
+            Value::Number(length.map_or(0.0, |l| l.as_secs_f64())),
+        ),
+        ("position-text", string(format_time(position))),
+        (
+            "length-text",
+            string(format_time(length.unwrap_or_default())),
+        ),
+        (
+            "remaining-text",
+            string(format!("-{}", format_time(remaining))),
+        ),
+        ("volume", Value::Number(f64::from(volume))),
+        ("live", Value::Bool(live)),
+    ]
+}
+
+/// Values for the `Playlist` global, except the rows.
+pub fn playlist_values(
+    playlist: &Playlist,
+    shuffle: bool,
+    repeat: bool,
+) -> Vec<(&'static str, Value)> {
+    vec![
+        ("summary", string(summary(playlist))),
+        (
+            "cursor",
+            Value::Number(playlist.cursor().map_or(-1.0, |c| c as f64)),
+        ),
+        ("shuffle", Value::Bool(shuffle)),
+        ("repeat", Value::Bool(repeat)),
+    ]
+}
+
+/// "12 tracks · 47:13", with "+" when some lengths are unknown.
+pub fn summary(playlist: &Playlist) -> String {
+    match playlist.len() {
+        0 => String::new(),
+        n => {
+            let (total, known) = playlist.total_duration();
+            let tracks = if n == 1 { "track" } else { "tracks" };
+            format!(
+                "{n} {tracks} · {}{}",
+                format_time(total),
+                if known { "" } else { "+" }
+            )
+        }
+    }
+}
+
+pub fn string(s: impl AsRef<str>) -> Value {
+    Value::String(SharedString::from(s.as_ref()))
+}
+
+pub fn format_time(d: Duration) -> String {
+    let secs = d.as_secs();
+    if secs >= 3600 {
+        format!("{}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60)
+    } else {
+        format!("{}:{:02}", secs / 60, secs % 60)
+    }
+}
+
+/// "MP3 · 320 kbps · 44.1 kHz · Stereo". For radio the station comes first, unless it is
+/// already shown as the title because the station names no song.
+pub fn format_info(track: &Arc<TrackInfo>) -> String {
+    let mut parts = Vec::new();
+    if let Some(station) = track.station.as_ref().filter(|_| track.title.is_some()) {
+        parts.push(station.clone());
+    }
+    parts.push(track.codec.to_uppercase());
+    if let Some(kbps) = track.bitrate_kbps {
+        parts.push(format!("{kbps} kbps"));
+    }
+    if track.sample_rate > 0 {
+        // As many decimals as needed: 48, 44.1, 22.05, 11.025.
+        let khz = format!("{:.3}", f64::from(track.sample_rate) / 1000.0);
+        let khz = khz.trim_end_matches('0').trim_end_matches('.');
+        parts.push(format!("{khz} kHz"));
+    }
+    parts.push(
+        match track.channels {
+            1 => "Mono",
+            2 => "Stereo",
+            _ => "Surround",
+        }
+        .to_owned(),
+    );
+    parts.join(" · ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formats_times_and_info() {
+        assert_eq!(format_time(Duration::from_secs(83)), "1:23");
+        assert_eq!(format_time(Duration::from_secs(3725)), "1:02:05");
+        let track = Arc::new(TrackInfo {
+            codec: "flac".into(),
+            sample_rate: 44_100,
+            channels: 2,
+            bitrate_kbps: Some(900),
+            ..Default::default()
+        });
+        assert_eq!(format_info(&track), "FLAC · 900 kbps · 44.1 kHz · Stereo");
+        for (rate, text) in [
+            (48_000, "48"),
+            (22_050, "22.05"),
+            (11_025, "11.025"),
+            (96_000, "96"),
+        ] {
+            let t = Arc::new(TrackInfo {
+                codec: "pcm".into(),
+                sample_rate: rate,
+                channels: 1,
+                ..Default::default()
+            });
+            assert_eq!(format_info(&t), format!("PCM · {text} kHz · Mono"));
+        }
+    }
+
+    #[test]
+    fn summary_marks_unknown_lengths() {
+        let mut p = Playlist::with_seed(1);
+        assert_eq!(summary(&p), "");
+        let mut e = Entry::new("/a.mp3");
+        e.duration = Some(Duration::from_secs(61));
+        p.insert(None, [e, Entry::new("/b.mp3")]);
+        assert_eq!(summary(&p), "2 tracks · 1:01+");
+    }
+
+    #[test]
+    fn rows_update_only_changed_entries() {
+        let mut p = Playlist::with_seed(1);
+        p.insert(None, ["/a.mp3", "/b.mp3", "/c.mp3"].map(Entry::new));
+        let mut rows = Rows::new();
+        rows.sync(&p);
+        assert_eq!(rows.0.model.row_count(), 3);
+        let before = rows.0.model.row_data(0);
+        p.click(1, freya_library::SelectMode::Single);
+        rows.sync(&p);
+        assert_eq!(rows.0.model.row_data(0), before);
+        let Some(Value::Struct(row)) = rows.0.model.row_data(1) else {
+            panic!("row is a struct");
+        };
+        assert_eq!(row.get_field("selected"), Some(&Value::Bool(true)));
+    }
+}

@@ -1,0 +1,1128 @@
+//! The app's state, and the skin window it is shown in.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::time::{Duration, Instant, SystemTime};
+
+use freya_audio::{Event, Media, MediaTags, PlaybackState, Player, TrackInfo};
+use freya_library::cover::{Cover, read_cover};
+use freya_library::cue::{self, Found, Part};
+use freya_library::library::Track;
+use freya_library::{Entry, Playlist, TagLoader, playlist_file};
+use freya_skin::SkinSource;
+use slint::winit_030::WinitWindowAccessor;
+use slint::{ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
+use slint_interpreter::{ComponentHandle, ComponentInstance, Value};
+
+use super::app_icon;
+use super::equalizer::{self, EqualizerSettings};
+use super::library::{self, LibraryPanel};
+use super::listening::Listening;
+use super::playlists::Playlists;
+use super::radio::{self, Stations};
+use super::skin_state::{self, GlobalWriter, ModelRows, Rows};
+use super::skin_window::SkinWindow;
+use super::system_media::{MediaRequest, SystemMedia};
+use super::title_bar::TitleBar;
+use super::visualizer::{self, Visualizer};
+use super::window_events::{WindowEvent, WindowEvents};
+use crate::settings::{self, Settings};
+use crate::update::{self, Updater};
+
+/// Covers are decoded at most this large; the built-in skin shows them at 88 points.
+const COVER_SIZE: u32 = 512;
+/// How often the files of a skin in use are checked for changes.
+const SKIN_WATCH_INTERVAL: Duration = Duration::from_secs(1);
+
+/// A downloaded station playlist, or why it could not be read.
+type StationList = Result<Vec<Entry>, String>;
+
+/// Everything tied to one skin window. Replaced as a whole when the skin changes.
+/// How long after starting Freya first looks for an update on its own.
+const UPDATE_CHECK_DELAY: Duration = Duration::from_secs(10);
+
+pub struct View {
+    pub ui: SkinWindow,
+    rows: Rows,
+    player_out: GlobalWriter,
+    playlist_out: GlobalWriter,
+    app_out: GlobalWriter,
+    eq_out: GlobalWriter,
+    library_out: GlobalWriter,
+    radio_out: GlobalWriter,
+    station_rows: ModelRows,
+    playlists_out: GlobalWriter,
+    updates_out: GlobalWriter,
+    playlist_list_rows: ModelRows,
+    playlist_track_rows: ModelRows,
+    /// The playlists' version and the playlist shown when their rows were last given to the
+    /// skin; rows are only rebuilt when either changes.
+    playlists_synced: Option<(u64, Option<usize>)>,
+    /// Band gains last given to the skin. A new model is set whenever they change, so the
+    /// skin's bindings that read the whole list (like the curve) are re-evaluated.
+    eq_bands_shown: Option<[f32; 10]>,
+    pub visualizer: Visualizer,
+    title_bar: TitleBar,
+    /// Whether the window has Freya's icon yet.
+    icon_set: bool,
+}
+
+impl View {
+    pub fn new(ui: SkinWindow) -> Self {
+        let mut view = Self {
+            rows: Rows::new(),
+            player_out: GlobalWriter::new(&ui, "Player"),
+            playlist_out: GlobalWriter::new(&ui, "Playlist"),
+            app_out: GlobalWriter::new(&ui, "App"),
+            eq_out: GlobalWriter::new(&ui, "Equalizer"),
+            library_out: GlobalWriter::new(&ui, "Library"),
+            radio_out: GlobalWriter::new(&ui, "Radio"),
+            station_rows: ModelRows::new(),
+            playlists_out: GlobalWriter::new(&ui, "Playlists"),
+            updates_out: GlobalWriter::new(&ui, "Updates"),
+            playlist_list_rows: ModelRows::new(),
+            playlist_track_rows: ModelRows::new(),
+            playlists_synced: None,
+            eq_bands_shown: None,
+            visualizer: Visualizer::new(&ui),
+            ui,
+            title_bar: TitleBar::default(),
+            icon_set: false,
+        };
+        if view.playlist_out.available {
+            let _ = view
+                .ui
+                .set_global_property("Playlist", "rows", view.rows.model_value());
+        }
+        if view.radio_out.available {
+            let _ =
+                view.ui
+                    .set_global_property("Radio", "stations", view.station_rows.model_value());
+        }
+        if view.playlists_out.available {
+            let _ = view.ui.set_global_property(
+                "Playlists",
+                "playlists",
+                view.playlist_list_rows.model_value(),
+            );
+            let _ = view.ui.set_global_property(
+                "Playlists",
+                "tracks",
+                view.playlist_track_rows.model_value(),
+            );
+        }
+        let version = skin_state::string(env!("CARGO_PKG_VERSION"));
+        view.app_out.write(&view.ui, vec![("version", version)]);
+        if view.eq_out.available {
+            // Lists that never change are set once.
+            let strings = |items: Vec<String>| {
+                let values: Vec<Value> = items.iter().map(skin_state::string).collect();
+                Value::Model(ModelRc::new(VecModel::from(values)))
+            };
+            let _ = view.ui.set_global_property(
+                "Equalizer",
+                "band-labels",
+                strings(equalizer::band_labels()),
+            );
+            let _ = view.ui.set_global_property(
+                "Equalizer",
+                "presets",
+                strings(equalizer::preset_names()),
+            );
+        }
+        view
+    }
+}
+
+/// A decoded cover, and the PNG file it was saved to for the system's Now Playing.
+type CoverResult = (PathBuf, Option<(Cover, Option<PathBuf>)>);
+
+/// Decodes cover art on a background thread, one track at a time.
+struct Covers {
+    tx: Sender<CoverResult>,
+    rx: Receiver<CoverResult>,
+    wanted: Option<PathBuf>,
+}
+
+impl Covers {
+    fn new() -> Self {
+        let (tx, rx) = channel();
+        Self {
+            tx,
+            rx,
+            wanted: None,
+        }
+    }
+
+    fn request(&mut self, path: &Path) {
+        if self.wanted.as_deref() == Some(path) {
+            return;
+        }
+        self.wanted = Some(path.to_owned());
+        let tx = self.tx.clone();
+        let path = path.to_owned();
+        std::thread::spawn(move || {
+            let cover = read_cover(&path, COVER_SIZE).map(|cover| {
+                let file = save_cover_file(&path, &cover);
+                (cover, file)
+            });
+            let _ = tx.send((path, cover));
+        });
+    }
+
+    /// The newest cover for the wanted track, if one arrived.
+    fn poll(&self) -> Option<Option<(Cover, Option<PathBuf>)>> {
+        let mut latest = None;
+        for (path, cover) in self.rx.try_iter() {
+            if self.wanted.as_ref() == Some(&path) {
+                latest = Some(cover);
+            }
+        }
+        latest
+    }
+}
+
+/// Saves `cover` for the system's Now Playing display, replacing the previous one. Named after
+/// the track, so the system does not show an old image it cached.
+fn save_cover_file(track: &Path, cover: &Cover) -> Option<PathBuf> {
+    use std::hash::{Hash, Hasher};
+    let dir = settings::cache_dir()?.join("now-playing");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).ok()?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    track.hash(&mut hasher);
+    let file = dir.join(format!("cover-{:016x}.png", hasher.finish()));
+    match cover.save_png(&file) {
+        Ok(()) => Some(file),
+        Err(e) => {
+            log::debug!("could not save the cover for Now Playing: {e}");
+            None
+        }
+    }
+}
+
+pub struct App {
+    pub player: Player,
+    pub playlist: Playlist,
+    pub settings: Settings,
+    tags: TagLoader,
+    window_events: WindowEvents,
+    /// Whether the skin window is hidden (covered, minimized) and whether it has focus, as
+    /// far as the system says.
+    window_hidden: bool,
+    window_focused: bool,
+    covers: Covers,
+    /// The cover shown, kept so a new skin can show it too, and its file for the system.
+    cover: Option<slint::Image>,
+    cover_file: Option<PathBuf>,
+    /// Media keys and the system's Now Playing display.
+    pub system_media: Option<SystemMedia>,
+    track: Option<Arc<TrackInfo>>,
+    /// Whether the track playing has been listened to long enough to count as played.
+    listening: Listening,
+    pub playlist_dirty: bool,
+    /// Station playlists being downloaded; they arrive here.
+    station_lists: (Sender<StationList>, Receiver<StationList>),
+    /// Why the last track could not be played, shown until another one starts.
+    pub error: String,
+    pub library: LibraryPanel,
+    pub stations: Stations,
+    pub playlists: Playlists,
+    /// The playlist shown in the skin.
+    pub shown_playlist: Option<usize>,
+    /// Why the last playlist could not be made or renamed.
+    pub playlists_error: String,
+    /// The address of the station played last, while a stream from it may still play.
+    station_playing: Option<String>,
+    /// Why the last station could not be saved.
+    pub radio_error: String,
+    pub view: View,
+
+    /// The skin in use.
+    pub skin: SkinSource,
+    /// A skin to switch to on the next tick; set by the skin picker and by file watching.
+    pub pending_skin: Option<SkinSource>,
+    /// Why the last skin change failed, shown in the skin picker.
+    pub skin_error: String,
+    skin_files: Vec<(PathBuf, Option<SystemTime>)>,
+    skin_checked: Instant,
+
+    about: Option<ComponentInstance>,
+    pub picker: Option<ComponentInstance>,
+    /// The skins listed in the picker, in order.
+    pub picker_skins: Vec<freya_skin::SkinInfo>,
+
+    pub updater: Updater,
+    started: Instant,
+}
+
+/// The music the user keeps in Freya, handed to the app when it starts.
+pub struct Collections {
+    pub library: LibraryPanel,
+    pub stations: Stations,
+    pub playlists: Playlists,
+}
+
+impl App {
+    pub fn new(
+        ui: SkinWindow,
+        skin: SkinSource,
+        player: Player,
+        settings: Settings,
+        window_events: WindowEvents,
+        collections: Collections,
+    ) -> Self {
+        let Collections {
+            library,
+            stations,
+            playlists,
+        } = collections;
+        let mut app = Self {
+            player,
+            playlist: Playlist::new(),
+            settings,
+            tags: TagLoader::new(),
+            window_events,
+            window_hidden: false,
+            window_focused: true,
+            covers: Covers::new(),
+            cover: None,
+            cover_file: None,
+            system_media: None,
+            track: None,
+            listening: Listening::default(),
+            playlist_dirty: true,
+            station_lists: channel(),
+            error: String::new(),
+            library,
+            stations,
+            playlists,
+            shown_playlist: None,
+            playlists_error: String::new(),
+            station_playing: None,
+            radio_error: String::new(),
+            view: View::new(ui),
+            skin,
+            pending_skin: None,
+            skin_error: String::new(),
+            skin_files: Vec::new(),
+            skin_checked: Instant::now(),
+            about: None,
+            picker: None,
+            picker_skins: Vec::new(),
+            updater: Updater::new(),
+            started: Instant::now(),
+        };
+        app.watch_skin();
+        app.attach_library();
+        app
+    }
+
+    /// Plays files from the command line, or restores the saved playlist.
+    pub fn start(&mut self, files: &[PathBuf]) {
+        if !files.is_empty() {
+            self.replace_and_play(files);
+            return;
+        }
+        let Some(path) = settings::playlist_path().filter(|p| p.exists()) else {
+            return;
+        };
+        match playlist_file::load(&path) {
+            Ok(entries) => {
+                self.playlist.insert(None, entries);
+                self.request_missing_tags();
+                self.playlist_dirty = true;
+            }
+            Err(e) => log::warn!("could not restore playlist: {e}"),
+        }
+    }
+
+    // ----- Playback ----------------------------------------------------------------------------
+
+    pub fn play_index(&mut self, index: usize) {
+        let Some(entry) = self.playlist.get(index) else {
+            return;
+        };
+        let media = media(entry);
+        self.playlist.set_current(Some(index));
+        self.covers.request(&media.path);
+        self.player.play(media);
+        self.playlist_dirty = true;
+    }
+
+    pub fn play(&mut self) {
+        match self.player.status().state {
+            PlaybackState::Paused => self.player.set_paused(false),
+            PlaybackState::Playing => {}
+            PlaybackState::Stopped => {
+                let index = self
+                    .playlist
+                    .current()
+                    .or_else(|| self.playlist.selected_indices().next())
+                    .unwrap_or(0);
+                self.play_index(index);
+            }
+        }
+    }
+
+    pub fn toggle_pause(&mut self) {
+        match self.player.status().state {
+            PlaybackState::Playing => self.player.set_paused(true),
+            _ => self.play(),
+        }
+    }
+
+    pub fn step(&mut self, forward: bool) {
+        let (shuffle, repeat) = (self.settings.shuffle, self.settings.repeat);
+        let target = if forward {
+            self.playlist.peek_next(shuffle, repeat)
+        } else {
+            self.playlist.peek_previous(shuffle, repeat)
+        };
+        if let Some(i) = target {
+            self.play_index(i);
+        }
+    }
+
+    pub fn seek(&mut self, fraction: f64) {
+        if let Some(length) = self.player.status().track.and_then(|t| t.duration) {
+            self.player.seek(length.mul_f64(fraction.clamp(0.0, 1.0)));
+        }
+    }
+
+    pub fn seek_by(&mut self, seconds: f64) {
+        let position = self.player.status().position.as_secs_f64();
+        self.player
+            .seek(Duration::from_secs_f64((position + seconds).max(0.0)));
+    }
+
+    pub fn toggle_shuffle(&mut self) {
+        self.settings.shuffle = !self.settings.shuffle;
+        self.queue_next();
+    }
+
+    pub fn toggle_repeat(&mut self) {
+        self.settings.repeat = !self.settings.repeat;
+        self.queue_next();
+    }
+
+    /// Tells the engine which track follows the current one, for gapless playback.
+    fn queue_next(&mut self) {
+        let next = self
+            .playlist
+            .peek_next(self.settings.shuffle, self.settings.repeat)
+            .and_then(|i| self.playlist.get(i))
+            .map(media);
+        self.player.set_next(next);
+    }
+
+    // ----- Playlist ----------------------------------------------------------------------------
+
+    /// Changes the playlist, then keeps the gapless queue and the skin in step.
+    pub fn edit(&mut self, change: impl FnOnce(&mut Playlist)) {
+        change(&mut self.playlist);
+        self.playlist_dirty = true;
+        self.queue_next();
+    }
+
+    /// Appends files, folders (recursively) and the contents of playlist files. A file that a
+    /// CUE sheet cuts into tracks, or the sheet itself, adds its tracks.
+    pub fn add_paths(&mut self, paths: &[PathBuf]) {
+        let mut entries = Vec::new();
+        for path in paths {
+            if path.is_file() && playlist_file::is_playlist(path) {
+                match playlist_file::load(path) {
+                    Ok(loaded) => entries.extend(loaded),
+                    Err(e) => log::warn!("could not read {}: {e}", path.display()),
+                }
+                continue;
+            }
+            let found = freya_library::files::collect_with_sheets(std::slice::from_ref(path));
+            for item in cue::apply_sheets(found) {
+                match item {
+                    Found::File(path) => entries.push(Entry::new(path)),
+                    Found::Disc(disc) => {
+                        entries.extend(disc.tracks.iter().map(|track| {
+                            Entry::with_tags(&track.path, Some(track.part), &track.tags)
+                        }))
+                    }
+                }
+            }
+        }
+        self.edit(|p| {
+            p.insert(None, entries);
+        });
+        self.request_missing_tags();
+    }
+
+    /// Adds an internet radio stream and plays it. A station playlist from a radio directory
+    /// is downloaded first, in the background.
+    pub fn add_url(&mut self, text: &str) {
+        if text.trim().is_empty() {
+            return;
+        }
+        let url = match radio::stream_url(text) {
+            Ok(url) => url,
+            Err(e) => {
+                self.error = e;
+                return;
+            }
+        };
+        if playlist_file::is_playlist_url(&url) {
+            let results = self.station_lists.0.clone();
+            std::thread::spawn(move || {
+                let _ = results.send(playlist_file::fetch(&url).map_err(|e| format!("{url}: {e}")));
+            });
+            return;
+        }
+        self.add_and_play(vec![Entry::new(url)]);
+    }
+
+    /// Plays a saved station: its entry in the playlist when it is there, else added.
+    pub fn play_station(&mut self, index: usize) {
+        let Some(station) = self.stations.get(index) else {
+            return;
+        };
+        let url = station.url.clone();
+        let entry = self
+            .playlist
+            .entries()
+            .iter()
+            .position(|entry| entry.path.to_string_lossy() == url);
+        match entry {
+            Some(index) => self.play_index(index),
+            None => self.add_url(&url),
+        }
+        self.station_playing = Some(url);
+    }
+
+    /// The address of the station playing: the one played last, while a stream plays.
+    fn playing_station(&self) -> Option<&str> {
+        let streaming = self.player.status().state != PlaybackState::Stopped
+            && self
+                .playlist
+                .current_entry()
+                .is_some_and(|entry| freya_audio::is_url(&entry.path.to_string_lossy()));
+        self.station_playing.as_deref().filter(|_| streaming)
+    }
+
+    /// Appends entries and plays the first of them.
+    fn add_and_play(&mut self, entries: Vec<Entry>) {
+        if entries.is_empty() {
+            return;
+        }
+        let first = self.playlist.len();
+        self.edit(|p| {
+            p.insert(None, entries);
+        });
+        self.play_index(first);
+    }
+
+    pub fn replace_and_play(&mut self, paths: &[PathBuf]) {
+        self.edit(Playlist::clear);
+        self.add_paths(paths);
+        self.play_index(0);
+    }
+
+    fn request_missing_tags(&self) {
+        for entry in self.playlist.entries().iter().filter(|e| !e.tags_loaded) {
+            if !entry.path.to_string_lossy().contains("://") {
+                self.tags.request(entry.path.clone());
+            }
+        }
+    }
+
+    // ----- Library -----------------------------------------------------------------------------
+
+    /// Shows the library, if the skin has one.
+    fn attach_library(&mut self) {
+        if self.view.library_out.available {
+            self.library
+                .attach(&self.view.ui, &self.settings.library_folders);
+        }
+    }
+
+    /// Replaces the playlist with library tracks and plays from `start`.
+    pub fn play_tracks(&mut self, tracks: &[Track], start: usize) {
+        self.play_entries(tracks.iter().map(library::entry).collect(), start);
+    }
+
+    pub fn enqueue_tracks(&mut self, tracks: &[Track]) {
+        self.enqueue_entries(tracks.iter().map(library::entry).collect());
+    }
+
+    /// Up Next becomes `entries`, playing from the one at `start`.
+    pub fn play_entries(&mut self, entries: Vec<Entry>, start: usize) {
+        let count = entries.len();
+        if count == 0 {
+            return;
+        }
+        self.edit(|p| {
+            p.clear();
+            p.insert(None, entries);
+        });
+        self.play_index(start.min(count - 1));
+    }
+
+    /// Adds `entries` to the end of Up Next.
+    pub fn enqueue_entries(&mut self, entries: Vec<Entry>) {
+        self.edit(|p| {
+            p.insert(None, entries);
+        });
+    }
+
+    // ----- Playlists ---------------------------------------------------------------------------
+
+    /// The entries of the playlist shown.
+    pub fn shown_playlist_entries(&self) -> Vec<Entry> {
+        self.shown_playlist
+            .and_then(|i| self.playlists.get(i))
+            .map(|p| p.entries.clone())
+            .unwrap_or_default()
+    }
+
+    /// Up Next's selected entries, or all of them when none is selected.
+    pub fn queue_selection(&self) -> Vec<Entry> {
+        let entries = self.playlist.entries();
+        let selected: Vec<Entry> = self
+            .playlist
+            .selected_indices()
+            .map(|i| entries[i].clone())
+            .collect();
+        if selected.is_empty() {
+            entries.to_vec()
+        } else {
+            selected
+        }
+    }
+
+    /// Makes a playlist and shows it, or keeps why it could not be made.
+    pub fn create_playlist(&mut self, name: &str, entries: Vec<Entry>) {
+        match self.playlists.create(name, entries) {
+            Ok(index) => {
+                self.shown_playlist = Some(index);
+                self.playlists_error.clear();
+            }
+            Err(e) => self.playlists_error = e,
+        }
+    }
+
+    pub fn rename_playlist(&mut self, name: &str) {
+        let Some(index) = self.shown_playlist else {
+            return;
+        };
+        match self.playlists.rename(index, name) {
+            Ok(index) => {
+                self.shown_playlist = Some(index);
+                self.playlists_error.clear();
+            }
+            Err(e) => self.playlists_error = e,
+        }
+    }
+
+    pub fn delete_playlist(&mut self) {
+        if let Some(index) = self.shown_playlist.take() {
+            self.playlists.delete(index);
+        }
+    }
+
+    pub fn add_library_folder(&mut self, folder: PathBuf) {
+        let folders = &mut self.settings.library_folders;
+        if folders.iter().any(|f| folder.starts_with(f)) {
+            return;
+        }
+        // A folder that holds folders already in the library replaces them.
+        folders.retain(|f| !f.starts_with(&folder));
+        folders.push(folder);
+        folders.sort();
+        self.library.rescan(&self.settings.library_folders);
+    }
+
+    pub fn remove_library_folder(&mut self, index: usize) {
+        if index < self.settings.library_folders.len() {
+            self.settings.library_folders.remove(index);
+            self.library.rescan(&self.settings.library_folders);
+        }
+    }
+
+    /// Changes the equalizer and sends the result to the audio engine.
+    pub fn edit_eq(&mut self, change: impl FnOnce(&mut EqualizerSettings)) {
+        change(&mut self.settings.equalizer);
+        self.player.set_equalizer(&self.settings.equalizer.engine());
+    }
+
+    // ----- Skins -------------------------------------------------------------------------------
+
+    /// Puts a newly loaded skin in place of the current one. The returned view is the old one,
+    /// whose window the caller hides.
+    pub fn replace_view(&mut self, ui: SkinWindow, skin: SkinSource) -> View {
+        // The new view starts with the visualization tap off; it turns it on when wanted.
+        self.player.set_visualization(false);
+        let old = std::mem::replace(&mut self.view, View::new(ui));
+        (self.window_hidden, self.window_focused) = (false, true);
+        self.skin = skin;
+        self.skin_error.clear();
+        self.playlist_dirty = true;
+        show_cover(&self.view.ui, self.cover.clone());
+        self.watch_skin();
+        self.attach_library();
+        self.refresh();
+        old
+    }
+
+    /// Remembers the modification times of the skin's files, to notice when they change.
+    pub fn watch_skin(&mut self) {
+        self.skin_files = self
+            .skin
+            .watched_files()
+            .into_iter()
+            .map(|p| {
+                let modified = std::fs::metadata(&p).and_then(|m| m.modified()).ok();
+                (p, modified)
+            })
+            .collect();
+        self.skin_checked = Instant::now();
+    }
+
+    /// Asks for the skin to be reloaded if any of its files changed since it was loaded.
+    fn check_skin_files(&mut self) {
+        if self.skin_files.is_empty() || self.skin_checked.elapsed() < SKIN_WATCH_INTERVAL {
+            return;
+        }
+        self.skin_checked = Instant::now();
+        let current: Vec<PathBuf> = self.skin.watched_files();
+        let changed = current.len() != self.skin_files.len()
+            || self.skin_files.iter().any(|(path, modified)| {
+                std::fs::metadata(path).and_then(|m| m.modified()).ok() != *modified
+            });
+        if changed {
+            log::info!("skin files changed; reloading");
+            self.pending_skin = Some(self.skin.clone());
+            // Even if the reload fails, the same edit should not be retried every second.
+            self.watch_skin();
+        }
+    }
+
+    // ----- Updates -----------------------------------------------------------------------------
+
+    pub fn tick(&mut self) {
+        self.player.rest_device_when_idle();
+        while let Ok(event) = self.player.events().try_recv() {
+            match event {
+                Event::TrackStarted(track) => {
+                    self.error.clear();
+                    self.name_station(&track);
+                    self.playlist.set_current_track(&track.path, track.start);
+                    self.listening.start(self.countable(&track), track.duration);
+                    self.covers.request(&track.path);
+                    self.track = Some(track);
+                    self.playlist_dirty = true;
+                    self.queue_next();
+                }
+                Event::Finished => {}
+                Event::Error(msg) => {
+                    log::warn!("{msg}");
+                    self.error = msg;
+                    // A track that fails to open leaves the engine stopped; skip it.
+                    if self.player.status().state == PlaybackState::Stopped {
+                        self.step(true);
+                    }
+                }
+            }
+        }
+
+        while let Ok(result) = self.station_lists.1.try_recv() {
+            match result {
+                Ok(entries) => self.add_and_play(entries),
+                Err(e) => {
+                    log::warn!("could not read station playlist {e}");
+                    self.error = format!("Could not read the station list: {e}");
+                }
+            }
+        }
+
+        for (path, tags) in self.tags.poll() {
+            self.playlist.apply_tags(&path, &tags);
+            self.playlist_dirty = true;
+        }
+
+        let mut dropped = Vec::new();
+        let main_window = self.view.ui.window().with_winit_window(|w| w.id());
+        for event in self.window_events.take() {
+            match event {
+                WindowEvent::FileHover(on) => self
+                    .view
+                    .playlist_out
+                    .write(&self.view.ui, vec![("drop-hover", Value::Bool(on))]),
+                WindowEvent::FileDropped(path) => dropped.push(path),
+                WindowEvent::Occluded(id, hidden) if Some(id) == main_window => {
+                    log::debug!("window hidden: {hidden}");
+                    self.window_hidden = hidden;
+                }
+                WindowEvent::Focused(id, focused) if Some(id) == main_window => {
+                    log::debug!("window focused: {focused}");
+                    self.window_focused = focused;
+                }
+                WindowEvent::Occluded(..) | WindowEvent::Focused(..) => {}
+            }
+        }
+        if !dropped.is_empty() {
+            let first_new = self.playlist.len();
+            let idle = self.player.status().state == PlaybackState::Stopped;
+            self.add_paths(&dropped);
+            // Dropping music onto an idle player starts it.
+            if idle && first_new < self.playlist.len() {
+                self.play_index(first_new);
+            }
+        }
+
+        if let Some(cover) = self.covers.poll() {
+            self.cover_file = cover.as_ref().and_then(|(_, file)| file.clone());
+            self.cover = cover.map(|(c, _)| {
+                let buffer =
+                    SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&c.rgba, c.width, c.height);
+                slint::Image::from_rgba8(buffer)
+            });
+            show_cover(&self.view.ui, self.cover.clone());
+        }
+
+        let requests: Vec<MediaRequest> = self
+            .system_media
+            .as_ref()
+            .map(|media| media.poll().collect())
+            .unwrap_or_default();
+        for request in requests {
+            self.handle_media_request(request);
+        }
+
+        let status = self.player.status();
+        if let Some((path, part)) = self
+            .listening
+            .update(status.position, status.state == PlaybackState::Playing)
+        {
+            self.library.record_play(path, part);
+        }
+
+        self.library.poll();
+        self.follow_updates();
+        self.check_skin_files();
+        self.refresh();
+    }
+
+    /// Looks for an update when it is time, and restarts into one that was installed.
+    fn follow_updates(&mut self) {
+        // Not in tests, and not before Freya has settled after starting.
+        let wanted = !cfg!(test)
+            && self.view.updates_out.available
+            && self.settings.check_for_updates
+            && self.started.elapsed() >= UPDATE_CHECK_DELAY
+            && matches!(self.updater.state(), update::State::Idle)
+            && update::due(self.settings.last_update_check, SystemTime::now());
+        if wanted {
+            self.settings.last_update_check = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .ok()
+                .map(|d| d.as_secs());
+            let skipped = self.settings.skipped_update.clone();
+            self.updater.check(false, skipped.as_deref());
+        }
+        if self.updater.poll()
+            && matches!(self.updater.state(), update::State::Installed(_))
+            && self.updater.restart()
+        {
+            log::info!("restarting into the update");
+            let _ = slint::quit_event_loop();
+        }
+    }
+
+    /// The file, and the part of it, that a track started plays, when its plays are counted:
+    /// not for radio.
+    fn countable<'a>(&self, track: &'a TrackInfo) -> Option<(&'a Path, Option<Part>)> {
+        if track.station.is_some() || freya_audio::is_url(&track.path.to_string_lossy()) {
+            return None;
+        }
+        // The playlist knows whether a track starting at 0 is a whole file or a CUE sheet's
+        // first track.
+        let part = match self.playlist.current_entry() {
+            Some(entry) if entry.plays(&track.path, track.start) => entry.part,
+            _ => (!track.start.is_zero() || track.end.is_some()).then_some(Part {
+                start: track.start,
+                end: track.end,
+            }),
+        };
+        Some((&track.path, part))
+    }
+
+    /// A request from the system's media controls: media keys, Now Playing.
+    fn handle_media_request(&mut self, request: MediaRequest) {
+        match request {
+            MediaRequest::Play => self.play(),
+            MediaRequest::Pause => self.player.set_paused(true),
+            MediaRequest::Toggle => self.toggle_pause(),
+            MediaRequest::Next => self.step(true),
+            MediaRequest::Previous => self.step(false),
+            MediaRequest::Stop => self.player.stop(),
+            MediaRequest::SeekBy(seconds) => self.seek_by(seconds),
+            MediaRequest::SetPosition(position) => self.player.seek(position),
+            MediaRequest::SetVolume(volume) => {
+                self.player.set_volume((volume as f32).clamp(0.0, 1.0));
+            }
+            MediaRequest::OpenUri(uri) => match uri.strip_prefix("file://") {
+                Some(path) => self.replace_and_play(&[PathBuf::from(path)]),
+                None => self.add_url(&uri),
+            },
+            MediaRequest::Raise => {
+                let _ = self.view.ui.show();
+            }
+            MediaRequest::Quit => {
+                let _ = slint::quit_event_loop();
+            }
+        }
+    }
+
+    /// A stream added by its address gets the station's name in the playlist.
+    fn name_station(&mut self, track: &TrackInfo) {
+        let Some(station) = &track.station else {
+            return;
+        };
+        let untitled = self
+            .playlist
+            .entries()
+            .iter()
+            .any(|e| e.path == track.path && e.title.is_none());
+        if untitled {
+            let tags = freya_library::TagInfo {
+                title: Some(station.clone()),
+                ..Default::default()
+            };
+            self.playlist.apply_tags(&track.path, &tags);
+            self.playlist_dirty = true;
+        }
+    }
+
+    /// Writes current state into the skin.
+    pub fn refresh(&mut self) {
+        let station_rows = self.stations.rows(self.playing_station());
+        let view = &mut self.view;
+        let ui = &view.ui;
+        let status = self.player.status();
+        view.visualizer.update(
+            ui,
+            &self.player,
+            status.state == PlaybackState::Playing && !self.window_hidden,
+            &self.settings.visualizer_mode,
+        );
+        let mut values = skin_state::player_values(
+            &status,
+            self.track.as_ref(),
+            &self.playlist,
+            self.player.volume(),
+        );
+        values.push(("error", skin_state::string(&self.error)));
+        view.player_out.write(ui, values);
+        if let Some(media) = &mut self.system_media {
+            let track = status.track.as_deref().or(self.track.as_deref());
+            media.update(
+                &status,
+                track,
+                self.cover_file.as_deref(),
+                self.player.volume(),
+            );
+        }
+        if view.playlist_out.available {
+            if self.playlist_dirty {
+                view.rows.sync(&self.playlist);
+                self.playlist_dirty = false;
+            }
+            let values = skin_state::playlist_values(
+                &self.playlist,
+                self.settings.shuffle,
+                self.settings.repeat,
+            );
+            view.playlist_out.write(ui, values);
+        }
+        let eq = &self.settings.equalizer;
+        if view.eq_out.available {
+            if view.eq_bands_shown != Some(eq.bands_db) {
+                let values: Vec<Value> = eq
+                    .bands_db
+                    .iter()
+                    .map(|&db| Value::Number(f64::from(db)))
+                    .collect();
+                let _ = ui.set_global_property(
+                    "Equalizer",
+                    "bands",
+                    Value::Model(ModelRc::new(VecModel::from(values))),
+                );
+                view.eq_bands_shown = Some(eq.bands_db);
+            }
+            view.eq_out.write(
+                ui,
+                vec![
+                    ("enabled", Value::Bool(eq.enabled)),
+                    ("preamp", Value::Number(f64::from(eq.preamp_db))),
+                    ("preset-name", skin_state::string(eq.preset_name())),
+                ],
+            );
+        }
+        if view.library_out.available {
+            self.library
+                .show_folders(ui, &self.settings.library_folders);
+            view.library_out.write(ui, self.library.values());
+        }
+        if view.playlists_out.available {
+            let shown = self.shown_playlist;
+            let synced = Some((self.playlists.version(), shown));
+            if view.playlists_synced != synced {
+                view.playlist_list_rows.sync(self.playlists.rows());
+                let tracks = shown
+                    .and_then(|i| self.playlists.get(i))
+                    .map(|p| {
+                        p.entries
+                            .iter()
+                            .enumerate()
+                            .map(|(i, e)| skin_state::track_row(i, e, false))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                view.playlist_track_rows.sync(tracks);
+                view.playlists_synced = synced;
+            }
+            let summary = shown.map(|i| self.playlists.summary(i)).unwrap_or_default();
+            view.playlists_out.write(
+                ui,
+                vec![
+                    ("shown", Value::Number(shown.map_or(-1.0, |i| i as f64))),
+                    ("summary", skin_state::string(summary)),
+                    ("error", skin_state::string(&self.playlists_error)),
+                ],
+            );
+        }
+        if view.radio_out.available {
+            view.station_rows.sync(station_rows);
+            view.radio_out
+                .write(ui, vec![("error", skin_state::string(&self.radio_error))]);
+        }
+        if !view.icon_set {
+            view.icon_set = app_icon::set_window_icon(ui.window());
+        }
+        let buttons_width = view.title_bar.update(ui);
+        if view.updates_out.available {
+            let mut values = self.updater.values();
+            values.push((
+                "check-automatically",
+                Value::Bool(self.settings.check_for_updates),
+            ));
+            view.updates_out.write(ui, values);
+        }
+        view.app_out.write(
+            ui,
+            vec![
+                (
+                    "window-buttons-width",
+                    Value::Number(f64::from(buttons_width)),
+                ),
+                ("theme", skin_state::string(&self.settings.theme)),
+                (
+                    "equalizer-visible",
+                    Value::Bool(self.settings.equalizer_visible),
+                ),
+            ],
+        );
+    }
+
+    /// Whether the app has things to follow closely: something plays, or the library is
+    /// being read.
+    pub fn is_busy(&self) -> bool {
+        self.player.status().state == PlaybackState::Playing || self.library.is_scanning()
+    }
+
+    /// How often to draw visualization frames, or `None` when there is nothing to draw:
+    /// nothing plays, or the window cannot be seen.
+    pub fn visualization_interval(&self) -> Option<Duration> {
+        let fps = visualizer::frame_rate(
+            self.settings.visualizer_fps,
+            self.view.visualizer.active(),
+            self.window_hidden,
+            self.window_focused,
+        )?;
+        Some(visualizer::frame_interval(fps))
+    }
+
+    /// Draws one visualization frame.
+    pub fn visualize(&mut self, dt: Duration) {
+        let playing = self.player.status().state == PlaybackState::Playing;
+        self.view.visualizer.frame(
+            &self.view.ui,
+            &self.player,
+            playing,
+            &self.settings.visualizer_mode,
+            dt,
+        );
+    }
+
+    pub fn show_about(&mut self) {
+        if self.about.is_none() {
+            match freya_skin::about_window() {
+                Ok(window) => {
+                    let _ = window
+                        .set_property("version", skin_state::string(env!("CARGO_PKG_VERSION")));
+                    self.about = Some(window);
+                }
+                Err(e) => {
+                    log::warn!("could not open About: {e}");
+                    return;
+                }
+            }
+        }
+        if let Some(about) = &self.about {
+            let _ = about.show();
+        }
+    }
+
+    pub fn save(&mut self) {
+        self.settings.volume = self.player.volume();
+        let window = self.view.ui.window();
+        let size = window.size().to_logical(window.scale_factor());
+        // Restored as the size under the system's title bar.
+        let height = size.height - self.view.title_bar.added_height();
+        self.settings.window_size = Some((size.width, height));
+        self.settings.skin = self.skin.path().map(Path::to_owned);
+        self.settings.save();
+        self.library.save();
+        if let Some(path) = settings::playlist_path() {
+            let result = path
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| playlist_file::save(&path, self.playlist.entries()));
+            if let Err(e) = result {
+                log::warn!("could not save playlist: {e}");
+            }
+        }
+    }
+}
+
+fn show_cover(ui: &SkinWindow, image: Option<slint::Image>) {
+    let has_cover = image.is_some();
+    let _ = ui.set_global_property("Player", "cover", Value::Image(image.unwrap_or_default()));
+    let _ = ui.set_global_property("Player", "has-cover", Value::Bool(has_cover));
+}
+
+/// What the player plays for a playlist entry: its file, or for a track of a CUE sheet, the
+/// part of the file the track is, with the track's own tags.
+fn media(entry: &Entry) -> Media {
+    let Some(part) = entry.part else {
+        return Media::from(&entry.path);
+    };
+    Media {
+        path: entry.path.clone(),
+        start: part.start,
+        end: part.end,
+        tags: MediaTags {
+            title: entry.title.clone(),
+            artist: entry.artist.clone(),
+            album: entry.album.clone(),
+        },
+    }
+}

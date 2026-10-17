@@ -1,0 +1,9 @@
+#!/bin/sh
+# Refuses a commit that adds a secret, found by gitleaks with the rules in .gitleaks.toml.
+# Turned on for a clone with: git config core.hooksPath .githooks
+if ! command -v gitleaks >/dev/null 2>&1; then
+    echo "pre-commit: gitleaks is not installed, so this commit cannot be checked for secrets." >&2
+    echo "Install it (e.g. brew install gitleaks) and commit again." >&2
+    exit 1
+fi
+exec gitleaks git --pre-commit --staged --redact --no-banner --log-level warn .

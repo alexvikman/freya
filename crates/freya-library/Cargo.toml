@@ -1,0 +1,16 @@
+[package]
+name = "freya-library"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
+lofty = "0.25.4"
+log = "0.4.34"
+rusqlite = { version = "0.40", features = ["bundled"] }
+ureq = "3"

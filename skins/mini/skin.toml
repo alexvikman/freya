@@ -1,0 +1,5 @@
+name = "Mini"
+author = "Freya"
+version = "1.0"
+description = "A compact one-line player. Also an example of how small a skin can be."
+api = 1

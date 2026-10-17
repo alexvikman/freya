@@ -1,0 +1,124 @@
+//! Reading tags and durations without decoding audio.
+
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::time::Duration;
+
+use lofty::prelude::*;
+use lofty::tag::ItemKey;
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TagInfo {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub album_artist: Option<String>,
+    pub genre: Option<String>,
+    pub year: Option<u32>,
+    pub track: Option<u32>,
+    pub disc: Option<u32>,
+    pub duration: Option<Duration>,
+}
+
+/// Reads tags and duration from a file. Returns `None` if the file cannot be parsed.
+pub fn read_tags(path: &Path) -> Option<TagInfo> {
+    let file = lofty::read_from_path(path).ok()?;
+    let duration = Some(file.properties().duration()).filter(|d| !d.is_zero());
+    let tag = file.primary_tag().or_else(|| file.first_tag());
+    let text = |s: Option<std::borrow::Cow<'_, str>>| {
+        s.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
+    };
+    Some(TagInfo {
+        title: tag.and_then(|t| text(t.title())),
+        artist: tag.and_then(|t| text(t.artist())),
+        album: tag.and_then(|t| text(t.album())),
+        album_artist: tag.and_then(|t| text(t.get_string(ItemKey::AlbumArtist).map(Into::into))),
+        genre: tag.and_then(|t| text(t.genre())),
+        year: tag.and_then(|t| t.date()).map(|d| u32::from(d.year)),
+        track: tag.and_then(|t| t.track()),
+        disc: tag.and_then(|t| t.disk()),
+        duration,
+    })
+}
+
+/// Reads tags on a background thread so adding thousands of files stays responsive.
+pub struct TagLoader {
+    requests: Sender<PathBuf>,
+    results: Receiver<(PathBuf, TagInfo)>,
+}
+
+impl Default for TagLoader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TagLoader {
+    pub fn new() -> Self {
+        let (req_tx, req_rx) = channel::<PathBuf>();
+        let (res_tx, res_rx) = channel();
+        std::thread::Builder::new()
+            .name("freya-tags".into())
+            .spawn(move || {
+                for path in req_rx {
+                    // Unreadable files still get a result, so they are not requested again.
+                    let tags = read_tags(&path).unwrap_or_default();
+                    if res_tx.send((path, tags)).is_err() {
+                        break;
+                    }
+                }
+            })
+            .expect("spawn tag thread");
+        Self {
+            requests: req_tx,
+            results: res_rx,
+        }
+    }
+
+    pub fn request(&self, path: PathBuf) {
+        let _ = self.requests.send(path);
+    }
+
+    /// Results that have arrived since the last call.
+    pub fn poll(&self) -> impl Iterator<Item = (PathBuf, TagInfo)> + '_ {
+        self.results.try_iter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../freya-audio/tests/fixtures")
+            .join(name)
+    }
+
+    #[test]
+    fn reads_id3_and_ape_tags_and_duration() {
+        for name in ["sine.mp3", "sine.ape"] {
+            let tags = read_tags(&fixture(name)).unwrap();
+            assert_eq!(tags.title.as_deref(), Some("Sine Test"), "{name}");
+            assert_eq!(tags.artist.as_deref(), Some("Freya"), "{name}");
+            let secs = tags.duration.unwrap().as_secs_f64();
+            assert!((secs - 1.0).abs() < 0.1, "{name}: {secs}");
+        }
+    }
+
+    #[test]
+    fn loader_returns_results_for_unreadable_files() {
+        let loader = TagLoader::new();
+        loader.request(fixture("sine.flac"));
+        loader.request(PathBuf::from("/nonexistent.mp3"));
+        let mut results = Vec::new();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while results.len() < 2 && std::time::Instant::now() < deadline {
+            results.extend(loader.poll());
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(results.len(), 2);
+        assert!(results[0].1.duration.is_some());
+        assert_eq!(results[1].1, TagInfo::default());
+    }
+}

@@ -1,0 +1,592 @@
+use std::sync::atomic::AtomicBool;
+use std::time::Instant;
+
+use super::*;
+
+fn fixtures() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../freya-audio/tests/fixtures")
+}
+
+fn temp_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("freya-library-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn scan_now(library: &mut Library, folders: &[PathBuf]) -> ScanSummary {
+    scan(library, folders, &AtomicBool::new(false), |_| {}).unwrap()
+}
+
+fn tags(artist: &str, album: &str, title: &str, track: u32) -> TagInfo {
+    TagInfo {
+        title: Some(title.into()),
+        artist: Some(artist.into()),
+        album: Some(album.into()),
+        track: Some(track),
+        duration: Some(Duration::from_secs(180)),
+        ..Default::default()
+    }
+}
+
+const STAMP: FileStamp = FileStamp {
+    size: 1,
+    modified: 1,
+};
+
+fn whole_file(path: &str, tags: &TagInfo) -> NewTrack {
+    NewTrack {
+        path: path.into(),
+        part: None,
+        tags: tags.clone(),
+    }
+}
+
+fn add(library: &mut Library, path: &str, tags: &TagInfo) {
+    add_at(library, path, tags, 0);
+}
+
+/// Adds a track that came into the library at `added`.
+fn add_at(library: &mut Library, path: &str, tags: &TagInfo, added: i64) {
+    let tx = library.transaction().unwrap();
+    put(&tx, Path::new(path), STAMP, added, &whole_file(path, tags)).unwrap();
+    tx.commit().unwrap();
+}
+
+/// A time `seconds` after 1970.
+fn at(seconds: u64) -> SystemTime {
+    SystemTime::UNIX_EPOCH + Duration::from_secs(seconds)
+}
+
+fn added_of(library: &Library, path: &str) -> i64 {
+    library
+        .db
+        .query_row("SELECT added FROM tracks WHERE path = ?1", [path], |row| {
+            row.get(0)
+        })
+        .unwrap()
+}
+
+fn titles(tracks: &[Track]) -> Vec<String> {
+    tracks.iter().map(Track::display_title).collect()
+}
+
+#[test]
+fn scans_add_update_and_remove_files() {
+    let music = temp_dir("scan");
+    for name in ["sine.mp3", "sine.flac", "sine.wav"] {
+        std::fs::copy(fixtures().join(name), music.join(name)).unwrap();
+    }
+    // Not audio, and hidden: both ignored.
+    std::fs::write(music.join("notes.txt"), "x").unwrap();
+    std::fs::write(music.join("._sine.mp3"), "x").unwrap();
+    let mut library = Library::open(&music.join("library.sqlite3")).unwrap();
+    let folders = [music.clone()];
+
+    let first = scan_now(&mut library, &folders);
+    assert_eq!((first.added, first.updated, first.removed), (3, 0, 0));
+    let mp3 = library.search("sine test", 10).unwrap();
+    assert_eq!(titles(&mp3), ["Sine Test"]);
+    assert_eq!(mp3[0].artist.as_deref(), Some("Freya"));
+    assert!(mp3[0].duration.is_some());
+
+    let again = scan_now(&mut library, &folders);
+    assert_eq!((again.added, again.updated, again.unchanged), (0, 0, 3));
+    // Found on the library's first scan, so dated by the file.
+    let flac = music.join("sine.flac");
+    let metadata = std::fs::metadata(&flac).unwrap();
+    let file_time = metadata.created().or_else(|_| metadata.modified()).unwrap();
+    let flac = flac.to_str().unwrap();
+    let first_added = added_of(&library, flac);
+    assert_eq!(first_added, epoch_millis(file_time));
+
+    std::fs::copy(fixtures().join("sine.ogg"), music.join("sine.flac")).unwrap();
+    std::fs::remove_file(music.join("sine.wav")).unwrap();
+    let changed = scan_now(&mut library, &folders);
+    assert_eq!(
+        (
+            changed.added,
+            changed.updated,
+            changed.removed,
+            changed.unchanged
+        ),
+        (0, 1, 1, 1)
+    );
+    assert_eq!(library.stats().unwrap().tracks, 2);
+    assert_eq!(
+        added_of(&library, flac),
+        first_added,
+        "a changed file keeps when it came"
+    );
+    std::fs::remove_dir_all(&music).unwrap();
+}
+
+/// A sheet that cuts `sine.wav`, one second long, into three tracks.
+fn write_sheet(path: &Path, second_title: &str) {
+    let sheet = format!(
+        "PERFORMER \"Freya Ensemble\"\nTITLE \"Test Disc\"\nREM DATE 2001\n\
+         FILE \"Album.wav\" WAVE\n\
+         TRACK 01 AUDIO\n TITLE \"One\"\n INDEX 01 00:00:00\n\
+         TRACK 02 AUDIO\n TITLE \"{second_title}\"\n PERFORMER \"Guest\"\n INDEX 01 00:00:30\n\
+         TRACK 03 AUDIO\n TITLE \"Three\"\n INDEX 01 00:00:60\n"
+    );
+    std::fs::write(path, sheet).unwrap();
+}
+
+#[test]
+fn a_cue_sheet_lists_its_file_as_tracks() {
+    let music = temp_dir("cue");
+    std::fs::copy(fixtures().join("sine.wav"), music.join("Album.wav")).unwrap();
+    std::fs::copy(fixtures().join("sine.mp3"), music.join("sine.mp3")).unwrap();
+    let sheet = music.join("Album.cue");
+    write_sheet(&sheet, "Two");
+    let mut library = Library::open(&music.join("library.sqlite3")).unwrap();
+    let folders = [music.clone()];
+
+    let first = scan_now(&mut library, &folders);
+    assert_eq!((first.added, first.updated, first.removed), (2, 0, 0));
+    assert_eq!(library.stats().unwrap().tracks, 4);
+    let disc = library
+        .album_tracks(Some("Freya Ensemble"), Some("Test Disc"))
+        .unwrap();
+    assert_eq!(titles(&disc), ["One", "Two", "Three"]);
+    assert_eq!(disc[1].artist.as_deref(), Some("Guest"));
+    assert_eq!((disc[1].track, disc[1].year), (Some(2), Some(2001)));
+    assert!(disc.iter().all(|t| t.path == music.join("Album.wav")));
+    let ms = Duration::from_millis;
+    assert_eq!(
+        disc[1].part,
+        Some(Part {
+            start: ms(400),
+            end: Some(ms(800))
+        })
+    );
+    assert_eq!(disc[1].duration, Some(ms(400)));
+    // The last track runs to the end of the file, which is a second long.
+    assert_eq!(disc[2].part.unwrap().end, None);
+    let last = disc[2].duration.unwrap().as_secs_f64();
+    assert!((last - 0.2).abs() < 0.01, "{last}");
+    // Found by what the sheet says, not by the file's name.
+    assert_eq!(titles(&library.search("guest", 10).unwrap()), ["Two"]);
+    assert!(library.search("album", 10).unwrap().is_empty());
+
+    let again = scan_now(&mut library, &folders);
+    assert_eq!((again.added, again.updated, again.unchanged), (0, 0, 2));
+
+    // Editing the sheet reads the disc again.
+    write_sheet(&sheet, "Second");
+    let later = std::time::SystemTime::now() + Duration::from_secs(10);
+    std::fs::File::options()
+        .write(true)
+        .open(&sheet)
+        .and_then(|f| f.set_modified(later))
+        .unwrap();
+    let edited = scan_now(&mut library, &folders);
+    assert_eq!((edited.added, edited.updated, edited.unchanged), (0, 1, 1));
+    assert_eq!(library.stats().unwrap().tracks, 4);
+    assert_eq!(titles(&library.search("guest", 10).unwrap()), ["Second"]);
+
+    // Without its sheet, the file is a single track again.
+    std::fs::remove_file(&sheet).unwrap();
+    let removed = scan_now(&mut library, &folders);
+    assert_eq!((removed.added, removed.removed), (1, 1));
+    assert_eq!(library.stats().unwrap().tracks, 2);
+    assert_eq!(titles(&library.search("album", 10).unwrap()), ["Album"]);
+    std::fs::remove_dir_all(&music).unwrap();
+}
+
+#[test]
+fn files_in_missing_folders_are_kept_and_others_dropped() {
+    let mut library = Library::open_in_memory().unwrap();
+    add(&mut library, "/unplugged/drive/a.mp3", &TagInfo::default());
+    add(
+        &mut library,
+        "/no/longer/a/folder/b.mp3",
+        &TagInfo::default(),
+    );
+    let summary = scan_now(&mut library, &[PathBuf::from("/unplugged/drive")]);
+    assert_eq!(summary.removed, 1);
+    let sources = library.sources().unwrap();
+    assert!(sources.contains_key(Path::new("/unplugged/drive/a.mp3")));
+}
+
+#[test]
+fn browses_by_artist_and_album() {
+    let mut library = Library::open_in_memory().unwrap();
+    add(
+        &mut library,
+        "/m/b/2.mp3",
+        &tags("Björk", "Post", "Hyperballad", 2),
+    );
+    add(
+        &mut library,
+        "/m/b/1.mp3",
+        &tags("Björk", "Post", "Army of Me", 1),
+    );
+    let mut debut = tags("Björk", "Debut", "Human Behaviour", 1);
+    debut.year = Some(1993);
+    add(&mut library, "/m/b/d1.mp3", &debut);
+    // Filed under the album artist, not the track artist.
+    let mut feature = tags("Guest", "Post", "Possibly Maybe", 3);
+    feature.album_artist = Some("Björk".into());
+    add(&mut library, "/m/b/3.mp3", &feature);
+    add(
+        &mut library,
+        "/m/a/1.mp3",
+        &tags("ABBA", "Arrival", "Dancing Queen", 1),
+    );
+    add(&mut library, "/m/untagged.mp3", &TagInfo::default());
+
+    let artists = library.artists().unwrap();
+    let names: Vec<Option<&str>> = artists.iter().map(|a| a.name.as_deref()).collect();
+    assert_eq!(names, [Some("ABBA"), Some("Björk"), None]);
+    assert_eq!((artists[1].albums, artists[1].tracks), (2, 4));
+
+    let albums = library.albums(Some("Björk")).unwrap();
+    let names: Vec<Option<&str>> = albums.iter().map(|a| a.name.as_deref()).collect();
+    assert_eq!(names, [Some("Debut"), Some("Post")]);
+
+    let post = library.album_tracks(Some("Björk"), Some("Post")).unwrap();
+    assert_eq!(
+        titles(&post),
+        ["Army of Me", "Hyperballad", "Possibly Maybe"]
+    );
+    assert_eq!(library.artist_tracks(Some("Björk")).unwrap().len(), 4);
+
+    let untagged = library.album_tracks(None, None).unwrap();
+    assert_eq!(titles(&untagged), ["untagged"]);
+    assert_eq!(
+        library.stats().unwrap(),
+        Stats {
+            tracks: 6,
+            albums: 3,
+            artists: 2
+        }
+    );
+}
+
+#[test]
+fn browses_all_albums_genres_and_songs() {
+    let mut library = Library::open_in_memory().unwrap();
+    let with_genre = |artist: &str, album: &str, title: &str, genre: Option<&str>| TagInfo {
+        genre: genre.map(str::to_owned),
+        ..tags(artist, album, title, 1)
+    };
+    add(
+        &mut library,
+        "/m/1.mp3",
+        &with_genre("Björk", "Post", "Hyperballad", Some("Electronic")),
+    );
+    add(
+        &mut library,
+        "/m/2.mp3",
+        &with_genre("Björk", "Post", "Army of Me", Some("Electronic")),
+    );
+    add(
+        &mut library,
+        "/m/3.mp3",
+        &with_genre("ABBA", "Arrival", "Dancing Queen", Some("pop")),
+    );
+    add(
+        &mut library,
+        "/m/4.mp3",
+        &with_genre(
+            "Air",
+            "Moon Safari",
+            "La femme d'argent",
+            Some("Electronic"),
+        ),
+    );
+    add(&mut library, "/m/untagged.mp3", &TagInfo::default());
+
+    let albums = library.all_albums().unwrap();
+    let names: Vec<Option<&str>> = albums.iter().map(|a| a.name.as_deref()).collect();
+    assert_eq!(
+        names,
+        [Some("Arrival"), Some("Moon Safari"), Some("Post"), None]
+    );
+    assert_eq!(albums[2].artist.as_deref(), Some("Björk"));
+    assert_eq!(albums[2].tracks, 2);
+
+    let genres = library.genres().unwrap();
+    let names: Vec<Option<&str>> = genres.iter().map(|g| g.name.as_deref()).collect();
+    assert_eq!(names, [Some("Electronic"), Some("pop"), None]);
+    assert_eq!((genres[0].albums, genres[0].tracks), (2, 3));
+    assert_eq!((genres[2].albums, genres[2].tracks), (1, 1));
+
+    let electronic = library.genre_albums(Some("Electronic")).unwrap();
+    let names: Vec<Option<&str>> = electronic.iter().map(|a| a.name.as_deref()).collect();
+    assert_eq!(names, [Some("Moon Safari"), Some("Post")]);
+    assert_eq!(
+        titles(&library.genre_tracks(Some("Electronic")).unwrap()),
+        ["La femme d'argent", "Hyperballad", "Army of Me"]
+    );
+
+    assert_eq!(
+        titles(&library.all_tracks().unwrap()),
+        [
+            "Army of Me",
+            "Dancing Queen",
+            "Hyperballad",
+            "La femme d'argent",
+            "untagged"
+        ]
+    );
+}
+
+#[test]
+fn search_matches_word_starts_and_ignores_accents_and_syntax() {
+    let mut library = Library::open_in_memory().unwrap();
+    add(
+        &mut library,
+        "/m/1.mp3",
+        &tags("Beyoncé", "Lemonade", "Formation", 1),
+    );
+    add(
+        &mut library,
+        "/m/2.mp3",
+        &tags("The Beatles", "Abbey Road", "Something", 1),
+    );
+    add(
+        &mut library,
+        "/m/3.mp3",
+        &tags("Glove", "Blue", "Like a Ribbon", 1),
+    );
+    add(&mut library, "/m/live-at-home.flac", &TagInfo::default());
+
+    let found = |q: &str| titles(&library.search(q, 100).unwrap());
+    assert_eq!(found("beyonce"), ["Formation"]);
+    assert_eq!(found("BEA"), ["Something"]);
+    assert_eq!(found("beatles some"), ["Something"]);
+    assert_eq!(found("beatles formation"), Vec::<String>::new());
+    // Word starts only: "love" does not find "Glove".
+    assert_eq!(found("love"), Vec::<String>::new());
+    // File names are searched too.
+    assert_eq!(found("home"), ["live-at-home"]);
+    // Query syntax is taken literally instead of failing.
+    for q in ["\"", "a*", "NOT", "(", "abbey -road", "col:umn", "^"] {
+        assert!(library.search(q, 100).is_ok(), "{q}");
+    }
+    assert_eq!(found("   "), Vec::<String>::new());
+}
+
+#[test]
+fn lists_albums_by_when_they_came_and_tracks_by_plays() {
+    let mut library = Library::open_in_memory().unwrap();
+    add_at(
+        &mut library,
+        "/m/a1.mp3",
+        &tags("A", "Old", "One", 1),
+        1_000,
+    );
+    add_at(
+        &mut library,
+        "/m/a2.mp3",
+        &tags("A", "Old", "Two", 2),
+        1_000,
+    );
+    add_at(
+        &mut library,
+        "/m/b1.mp3",
+        &tags("B", "New", "Three", 1),
+        3_000,
+    );
+    add_at(
+        &mut library,
+        "/m/c1.mp3",
+        &tags("C", "Middle", "Four", 1),
+        2_000,
+    );
+    let names = |albums: Vec<Album>| -> Vec<String> {
+        albums.into_iter().map(|a| a.name.unwrap()).collect()
+    };
+    assert_eq!(
+        names(library.recently_added(10).unwrap()),
+        ["New", "Middle", "Old"]
+    );
+    assert_eq!(names(library.recently_added(1).unwrap()), ["New"]);
+
+    assert!(library.recently_played(10).unwrap().is_empty());
+    let play = |path: &str, seconds: u64| {
+        library
+            .record_play(Path::new(path), None, at(seconds))
+            .unwrap();
+    };
+    play("/m/a1.mp3", 10);
+    play("/m/b1.mp3", 20);
+    play("/m/a1.mp3", 30);
+    play("/m/c1.mp3", 40);
+    // Not in the library: kept, but not listed.
+    play("/elsewhere/x.mp3", 50);
+
+    let titles_of = |played: &[Played]| -> Vec<String> {
+        played.iter().map(|p| p.track.display_title()).collect()
+    };
+    let recent = library.recently_played(10).unwrap();
+    assert_eq!(titles_of(&recent), ["Four", "One", "Three"]);
+    assert_eq!(recent[1].plays, 2);
+    assert_eq!(recent[1].last, at(30));
+    let most = library.most_played(2).unwrap();
+    assert_eq!(titles_of(&most), ["One", "Four"]);
+}
+
+#[test]
+fn plays_of_a_cue_sheet_track_count_for_that_track_only() {
+    let mut library = Library::open_in_memory().unwrap();
+    let tx = library.transaction().unwrap();
+    for (n, start) in [(1, 0), (2, 300)] {
+        let track = NewTrack {
+            path: "/m/disc.flac".into(),
+            part: Some(Part {
+                start: Duration::from_secs(start),
+                end: None,
+            }),
+            tags: tags("A", "Live", &format!("Part {n}"), n),
+        };
+        put(&tx, Path::new("/m/disc.cue"), STAMP, 0, &track).unwrap();
+    }
+    tx.commit().unwrap();
+    let second = Part {
+        start: Duration::from_secs(300),
+        end: None,
+    };
+    library
+        .record_play(Path::new("/m/disc.flac"), Some(second), at(1))
+        .unwrap();
+    let played = library.recently_played(10).unwrap();
+    assert_eq!(played.len(), 1);
+    assert_eq!(played[0].track.display_title(), "Part 2");
+}
+
+#[test]
+fn rebuilds_a_library_from_an_older_layout() {
+    let dir = temp_dir("schema");
+    let path = dir.join("library.sqlite3");
+    {
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch("CREATE TABLE tracks (path TEXT); PRAGMA user_version = 0;")
+            .unwrap();
+    }
+    let mut library = Library::open(&path).unwrap();
+    add(&mut library, "/m/1.mp3", &tags("A", "B", "C", 1));
+    assert_eq!(library.stats().unwrap().tracks, 1);
+    library
+        .record_play(Path::new("/m/1.mp3"), None, at(1))
+        .unwrap();
+
+    // A rebuild drops the tracks, which a scan reads again, but never the plays.
+    library
+        .db
+        .pragma_update(None, "user_version", SCHEMA_VERSION - 1)
+        .unwrap();
+    drop(library);
+    let mut library = Library::open(&path).unwrap();
+    assert_eq!(library.stats().unwrap().tracks, 0);
+    add(&mut library, "/m/1.mp3", &tags("A", "B", "C", 1));
+    assert_eq!(library.most_played(10).unwrap()[0].plays, 1);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The goal for M12: a library of 10 000+ tracks searches in under 50 ms.
+#[test]
+fn ten_thousand_tracks_browse_and_search_quickly() {
+    const WORDS: [&str; 16] = [
+        "love", "night", "blue", "river", "fire", "dream", "heart", "rain", "gold", "sky", "stone",
+        "light", "road", "home", "ocean", "summer",
+    ];
+    let mut library = Library::open_in_memory().unwrap();
+    let tx = library.transaction().unwrap();
+    for i in 0..12_000u32 {
+        let word = |n: u32| WORDS[(n as usize) % WORDS.len()];
+        let artist = format!("Artist {} {}", i / 120, word(i / 120));
+        let album = format!("{} {} {}", word(i / 12), word(i / 7), i / 12);
+        let title = format!("{} {} {}", word(i), word(i / 3), word(i * 7));
+        let path = format!("/music/{artist}/{album}/{i:05} {title}.flac");
+        let track = whole_file(&path, &tags(&artist, &album, &title, i % 12));
+        put(&tx, Path::new(&path), STAMP, i64::from(i), &track).unwrap();
+    }
+    tx.commit().unwrap();
+
+    let time = |what: &str, f: &mut dyn FnMut() -> usize| {
+        f(); // Warm up the statement cache.
+        let started = Instant::now();
+        let found = f();
+        let took = started.elapsed();
+        eprintln!("{what}: {found} rows in {took:?}");
+        assert!(took < Duration::from_millis(50), "{what} took {took:?}");
+        found
+    };
+    assert_eq!(
+        time("artists", &mut || library.artists().unwrap().len()),
+        100
+    );
+    let albums = time("albums", &mut || {
+        library.albums(Some("Artist 7 rain")).unwrap().len()
+    });
+    assert!(albums > 0);
+    // One letter matches nearly everything: the worst case while typing.
+    assert_eq!(
+        time("search 'l'", &mut || library
+            .search("l", 1000)
+            .unwrap()
+            .len()),
+        1000
+    );
+    time("search 'love'", &mut || {
+        library.search("love", 1000).unwrap().len()
+    });
+    time("search 'river night'", &mut || {
+        library.search("river night", 1000).unwrap().len()
+    });
+    time("stats", &mut || library.stats().unwrap().tracks as usize);
+    assert_eq!(
+        time("all albums", &mut || library.all_albums().unwrap().len()),
+        library.stats().unwrap().albums as usize
+    );
+    time("genres", &mut || library.genres().unwrap().len());
+    // Every track, for the Songs view: the most rows any view asks for.
+    assert_eq!(
+        time("all tracks", &mut || library.all_tracks().unwrap().len()),
+        12_000
+    );
+
+    assert_eq!(
+        time("recently added", &mut || library
+            .recently_added(RECENT)
+            .unwrap()
+            .len()),
+        RECENT
+    );
+    // A few years of listening: 20 000 plays of 3 000 tracks.
+    for i in 0..20_000u64 {
+        let track = (i * 7919) % 3_000;
+        let path = library
+            .db
+            .query_row(
+                "SELECT path FROM tracks WHERE id = ?1",
+                [track as i64 + 1],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        library
+            .record_play(Path::new(&path), None, at(i * 600))
+            .unwrap();
+    }
+    assert_eq!(
+        time("recently played", &mut || library
+            .recently_played(RECENT)
+            .unwrap()
+            .len()),
+        RECENT
+    );
+    assert_eq!(
+        time("most played", &mut || library
+            .most_played(RECENT)
+            .unwrap()
+            .len()),
+        RECENT
+    );
+}
+
+/// How many albums or tracks the Recents views show.
+const RECENT: usize = 200;

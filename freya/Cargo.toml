@@ -1,0 +1,144 @@
+[package]
+name = "freya"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+description = "A skinnable music player"
+
+[lints]
+workspace = true
+
+# Installers, made with cargo-packager (see docs/PACKAGING.md).
+[package.metadata.packager]
+product-name = "Freya"
+# Shown as the package maintainer, e.g. in the .deb.
+authors = ["Freya contributors"]
+# From the GitHub repository Freya is released from, alexvikman/freya. Freya's own files are
+# found by its name, not by this.
+identifier = "io.github.alexvikman.freya"
+category = "Music"
+description = "A skinnable music player"
+long-description = "Freya plays MP3, FLAC, APE, Ogg, Opus, AAC, ALAC, WAV and internet radio, with a playlist, a media library, a 10-band equalizer and skins."
+copyright = "Freya contributors. MIT OR Apache-2.0. The interface uses Slint under its royalty-free license."
+before-packaging-command = "cargo build --release -p freya"
+out-dir = "../target/packages"
+binaries-dir = "../target/release"
+binaries = [{ path = "freya", main = true }]
+icons = [
+    "../assets/icons/32x32.png",
+    "../assets/icons/64x64.png",
+    "../assets/icons/128x128.png",
+    "../assets/icons/256x256.png",
+    "../assets/icons/icon.png",
+    "../assets/icons/icon.ico",
+]
+
+[package.metadata.packager.macos]
+minimum-system-version = "11.0"
+
+[package.metadata.packager.deb]
+# Linked: audio and fonts. Loaded while running: keyboard layouts, OpenGL, and the X11 and
+# Wayland libraries winit opens for the window.
+depends = [
+    "libasound2",
+    "libfontconfig1",
+    "libxkbcommon0",
+    "libxkbcommon-x11-0",
+    "libegl1",
+    "libgl1",
+    "libx11-6",
+    "libx11-xcb1",
+    "libxcursor1",
+    "libxi6",
+    "libxrandr2",
+    "libwayland-client0",
+    "libwayland-cursor0",
+    "libwayland-egl1",
+]
+
+[package.metadata.packager.appimage]
+# For audio output.
+libs = ["libasound.so.2"]
+
+[dependencies]
+freya-audio = { path = "../crates/freya-audio" }
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive"] }
+crossterm = "0.29.0"
+env_logger = "0.11.11"
+freya-skin = { path = "../crates/freya-skin" }
+freya-library = { path = "../crates/freya-library" }
+slint = { version = "1.18.1", features = ["unstable-winit-030"] }
+slint-interpreter = "1.18.1"
+rfd = "0.17.2"
+log = "0.4.34"
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.8"
+directories = "6.0.0"
+ctrlc = "3.5.2"
+# Updates (see src/update): the release list, its signature and checksums, with the HTTP and
+# TLS stack Freya's radio already uses.
+base64 = "0.23.1"
+ring = "0.17.14"
+serde_json = "1.0.152"
+ureq = "3"
+
+[target.'cfg(any(windows, target_os = "macos", target_os = "linux"))'.dependencies]
+# The native window behind Slint's: for Windows' media controls and the spectrum layer.
+raw-window-handle = "0.6"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+# Freya's icon on its windows (see gui/app_icon.rs), decoded with the PNG support Freya's skin
+# loader already has.
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# MPRIS, the system media controls (see gui/system_media/mpris.rs): the zbus that Slint's
+# accessibility and tray support already bring, plus its blocking API, which adds no crates.
+zbus = { version = "5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
+# The spectrum drawn on a Wayland subsurface or an X11 child window (see gui/native_spectrum).
+memmap2 = "0.9.11"
+rustix = { version = "1.1.5", features = ["fs"] }
+wayland-backend = { version = "0.3.17", features = ["client_system"] }
+wayland-client = "0.31.15"
+x11rb = { version = "0.13.2", features = ["shape"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The spectrum drawn with Core Animation (see gui/native_spectrum.rs), media keys and Now
+# Playing through the MediaPlayer framework (see gui/system_media/now_playing.rs), and skins
+# drawn into the title bar (see gui/title_bar/mac.rs).
+block2 = { version = "0.6.2", default-features = false, features = ["alloc"] }
+objc2 = "0.6.5"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSButton", "NSControl", "NSEvent", "NSImage", "NSResponder", "NSView", "NSWindow", "objc2-quartz-core"] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFCGTypes"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGColor"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSBundle", "NSData", "NSDictionary", "NSProcessInfo", "NSString", "NSUserDefaults", "NSValue"] }
+objc2-media-player = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "MPMediaItem", "MPNowPlayingInfoCenter", "MPRemoteCommand", "MPRemoteCommandCenter", "MPRemoteCommandEvent"] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CALayer", "CATransaction", "objc2-core-foundation", "objc2-core-graphics"] }
+
+[target.'cfg(windows)'.dependencies]
+# Printing to the terminal Freya was started from.
+windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
+# The spectrum drawn with Windows.UI.Composition (see gui/native_spectrum.rs), and media keys
+# and the media overlay (see gui/system_media/smtc.rs).
+windows = { version = "0.62.2", features = [
+    "Foundation_Numerics",
+    "Media",
+    "Storage_Streams",
+    "System",
+    "UI",
+    "UI_Composition",
+    "UI_Composition_Desktop",
+    "Win32_Foundation",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Composition",
+] }
+windows-numerics = "0.3.1"
+
+[build-dependencies]
+slint-build = "1.18.1"
+# Freya's icon and version in freya.exe (see build.rs). Without its default features it reads no
+# Cargo.toml, and brings only version_check, which Freya already has.
+winresource = { version = "0.1.34", default-features = false }

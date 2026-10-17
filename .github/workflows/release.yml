@@ -1,0 +1,285 @@
+# Releases Freya (see docs/RELEASING.md). A version tag, vX.Y.Z, matching the version in
+# Cargo.toml, builds and packages Freya for every platform; the release job, which waits for the
+# owner's approval in the `release` environment, signs the checksums and publishes the GitHub
+# Release that Freya's updater reads. Started by hand, it only builds the packages.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PACKAGER_VERSION: 0.11.8
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: version
+        name: The version, and the tag that names it
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "$REF_TYPE" = tag ]; then
+            if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "::error::A release tag is vX.Y.Z, not $TAG"; exit 1
+            fi
+            if [ "$TAG" != "v$version" ]; then
+              echo "::error::The tag $TAG does not match the version $version in Cargo.toml"; exit 1
+            fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  # Every commit, scanned for credentials before anything is built or published.
+  secrets:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: sudo sh ci/install-gitleaks.sh
+      - run: gitleaks git --redact --no-banner .
+
+  macos:
+    needs: [check, secrets]
+    strategy:
+      matrix:
+        include:
+          - runner: macos-15
+            arch: aarch64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      # A Developer ID, when there is one: signing identity, certificate and notarization.
+      # Without them the app is signed ad hoc (see docs/RELEASING.md).
+      FREYA_MACOS_IDENTITY: ${{ vars.FREYA_MACOS_IDENTITY }}
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+      - name: cargo-packager
+        run: cargo install cargo-packager --locked --version "$CARGO_PACKAGER_VERSION"
+      - name: Developer ID certificate, into a keychain of its own
+        if: env.APPLE_CERTIFICATE != ''
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(openssl rand -hex 24)
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -k "$password" "$keychain"
+          security list-keychains -d user -s "$keychain" login.keychain-db
+          rm "$RUNNER_TEMP/certificate.p12"
+      - name: Notarization key
+        if: env.APPLE_API_KEY != ''
+        run: |
+          umask 077
+          printf '%s' "$APPLE_API_KEY" > "$RUNNER_TEMP/notary.p8"
+          echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/notary.p8" >> "$GITHUB_ENV"
+      - name: Package and sign
+        run: ci/package-macos.sh
+      - name: Smoke test
+        run: |
+          target/packages/Freya.app/Contents/MacOS/freya --version | grep -qx "freya $VERSION"
+          test -f "target/dist/Freya-$VERSION-macos-${{ matrix.arch }}.app.zip"
+      - name: Remove signing material
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/notary.p8"
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-${{ matrix.arch }}
+          path: target/dist/*
+          if-no-files-found: error
+
+  linux:
+    needs: [check, secrets]
+    strategy:
+      matrix:
+        include:
+          # The oldest supported Ubuntu, so the AppImage runs on as many systems as possible.
+          - runner: ubuntu-22.04
+            arch: x86_64
+          - runner: ubuntu-22.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake libasound2-dev \
+            libfontconfig1-dev libxkbcommon-dev libfuse2
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+      - name: cargo-packager
+        run: cargo install cargo-packager --locked --version "$CARGO_PACKAGER_VERSION"
+      - name: Package
+        run: cargo packager -p freya --release --formats appimage,deb
+      - name: Smoke test and name the packages
+        run: |
+          target/release/freya --version | grep -qx "freya $VERSION"
+          mkdir -p dist
+          mv target/packages/*.AppImage "dist/Freya-$VERSION-linux-${{ matrix.arch }}.AppImage"
+          mv target/packages/*.deb "dist/Freya-$VERSION-linux-${{ matrix.arch }}.deb"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  windows:
+    needs: [check, secrets]
+    runs-on: windows-2025
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+      - name: cargo-packager
+        run: cargo install cargo-packager --locked --version "$CARGO_PACKAGER_VERSION"
+      - name: Package
+        run: cargo packager -p freya --release --formats wix
+      - name: Smoke test and name the package
+        run: |
+          # A window app prints nothing here; its version resource says which version it is.
+          powershell -NoProfile -Command \
+            "(Get-Item target/release/freya.exe).VersionInfo.ProductVersion" |
+            tr -d '\r' | grep -qx "$VERSION"
+          mkdir -p dist
+          mv target/packages/*.msi "dist/Freya-$VERSION-windows-x86_64.msi"
+      # Signing goes here, once there is a certificate or a signing service (e.g. Azure Trusted
+      # Signing): sign target/release/freya.exe before packaging and the .msi after. Until then
+      # SmartScreen warns on first start.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-x86_64
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [check, macos, linux, windows]
+    runs-on: ubuntu-24.04
+    # Holds the release signing key, and waits for the owner's approval.
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+      - name: Sign the checksums
+        env:
+          SIGNING_KEY: ${{ secrets.FREYA_RELEASE_SIGNING_KEY }}
+          SIGNING_PASSPHRASE: ${{ secrets.FREYA_RELEASE_SIGNING_PASSPHRASE }}
+        run: |
+          umask 077
+          key="$RUNNER_TEMP/release-key"
+          trap 'rm -f "$key" "$key.pub" "$RUNNER_TEMP/askpass"' EXIT
+          printf '%s\n' "$SIGNING_KEY" > "$key"
+          rm -f dist/SHA256SUMS.sig
+          if [ -n "$SIGNING_PASSPHRASE" ]; then
+            # ssh-keygen only asks for a passphrase on a terminal; the agent can be given one.
+            # The askpass script reads the variable when it runs, hence the single quotes.
+            # shellcheck disable=SC2016
+            printf '#!/bin/sh\nprintf "%%s\\n" "$SIGNING_PASSPHRASE"\n' > "$RUNNER_TEMP/askpass"
+            chmod 700 "$RUNNER_TEMP/askpass"
+            eval "$(ssh-agent -s)" > /dev/null
+            SSH_ASKPASS="$RUNNER_TEMP/askpass" SSH_ASKPASS_REQUIRE=force ssh-add "$key" < /dev/null
+            ssh-add -L > "$key.pub"
+            ssh-keygen -Y sign -f "$key.pub" -n freya-release dist/SHA256SUMS
+            ssh-agent -k > /dev/null
+          else
+            ssh-keygen -Y sign -f "$key" -n freya-release dist/SHA256SUMS
+          fi
+      - name: Check the signature against the key built into Freya
+        run: |
+          grep -o '"ssh-ed25519 [^"]*"' freya/src/update/signing.rs | tr -d '"' |
+            awk '{ print "freya-release namespaces=\"freya-release\" " $1 " " $2 }' \
+            > "$RUNNER_TEMP/allowed_signers"
+          test -s "$RUNNER_TEMP/allowed_signers"
+          ssh-keygen -Y verify -f "$RUNNER_TEMP/allowed_signers" -I freya-release \
+            -n freya-release -s dist/SHA256SUMS.sig < dist/SHA256SUMS
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/SHA256SUMS
+      - name: Release notes
+        run: |
+          previous=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
+          {
+            echo "## Changes"
+            echo
+            git log --no-merges --format='- %s' ${previous:+"$previous.."}"$TAG" |
+              grep -v '^- Release [0-9]' || true
+            echo
+            echo "## Install"
+            echo
+            echo "- **macOS:** the \`.dmg\` (Apple Silicon: \`aarch64\`, Intel: \`x86_64\`). Freya is not notarized yet: the first time, right-click the app and choose Open."
+            echo "- **Windows:** the \`.msi\`. It is not signed yet, so SmartScreen asks first."
+            echo "- **Linux:** the \`.AppImage\` (which updates itself) or the \`.deb\`."
+            echo
+            echo "Freya finds later releases itself and installs them when you say so. Every file is listed in \`SHA256SUMS\`, signed with Freya's release key; see [RELEASING.md](https://github.com/${GITHUB_REPOSITORY}/blob/$TAG/docs/RELEASING.md) to check it by hand."
+          } > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" dist/* --verify-tag --latest \
+            --title "Freya $VERSION" --notes-file "$RUNNER_TEMP/notes.md"

@@ -1,0 +1,582 @@
+//! Drives the built-in skin's callbacks against the app, without a window or audio device.
+//!
+//! Everything runs in one test: Slint's headless platform can only be set up once per process,
+//! and its windows belong to the thread that created them.
+
+use std::path::Path;
+
+use freya_library::eq_presets::builtin_presets;
+use freya_skin::SkinSource;
+use slint::Model;
+use slint_interpreter::{Struct, Value};
+
+use super::app::App;
+use super::skin_window::SkinWindow;
+use super::*;
+
+fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../crates/freya-audio/tests/fixtures")
+        .join(name)
+}
+
+fn rows(ui: &SkinWindow) -> Vec<Struct> {
+    let Ok(Value::Model(model)) = ui.get_global_property("Playlist", "rows") else {
+        panic!("Playlist.rows is a model");
+    };
+    model
+        .iter()
+        .map(|v| match v {
+            Value::Struct(s) => s,
+            other => panic!("row is not a struct: {other:?}"),
+        })
+        .collect()
+}
+
+fn field(row: &Struct, name: &str) -> Value {
+    row.get_field(name).cloned().unwrap_or_default()
+}
+
+fn titles(ui: &SkinWindow) -> Vec<String> {
+    rows(ui)
+        .iter()
+        .map(|r| match field(r, "title") {
+            Value::String(s) => s.to_string(),
+            _ => String::new(),
+        })
+        .collect()
+}
+
+fn selected(ui: &SkinWindow) -> Vec<bool> {
+    rows(ui)
+        .iter()
+        .map(|r| field(r, "selected") == Value::Bool(true))
+        .collect()
+}
+
+fn global(ui: &SkinWindow, global: &str, name: &str) -> Value {
+    ui.get_global_property(global, name).unwrap()
+}
+
+fn call(ui: &SkinWindow, global: &str, name: &str, args: &[Value]) -> Value {
+    ui.invoke_global(global, name, args).unwrap()
+}
+
+fn num(n: f64) -> Value {
+    Value::Number(n)
+}
+
+fn text(s: &str) -> Value {
+    skin_state::string(s)
+}
+
+fn temp_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("freya-gui-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn library_titles(ui: &SkinWindow) -> Vec<String> {
+    let Ok(Value::Model(model)) = ui.get_global_property("Library", "rows") else {
+        panic!("Library.rows is a model");
+    };
+    model
+        .iter()
+        .map(|v| match v {
+            Value::Struct(s) => match field(&s, "title") {
+                Value::String(s) => s.to_string(),
+                _ => String::new(),
+            },
+            other => panic!("row is not a struct: {other:?}"),
+        })
+        .collect()
+}
+
+/// Ticks the app until the library scan is done.
+fn wait_for_scan(app: &Rc<RefCell<App>>) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        app.borrow_mut().tick();
+        if global(&current_ui(app), "Library", "scanning") == Value::Bool(false) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "library scan did not finish");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// A web server on localhost: `/stream` is a radio station playing `audio` once, `/list.pls`
+/// a station playlist pointing at it.
+fn radio_server(audio: Vec<u8>) -> String {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let pls = format!("[playlist]\nFile1={base}/stream\nTitle1=Local - Test FM\nLength1=-1\n");
+    std::thread::spawn(move || {
+        for connection in listener.incoming().flatten() {
+            let mut reader = BufReader::new(connection);
+            let mut request = String::new();
+            let _ = reader.read_line(&mut request);
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            let mut connection = reader.into_inner();
+            if request.contains("/list.pls") {
+                let _ = write!(
+                    connection,
+                    "HTTP/1.0 200 OK\r\nContent-Type: audio/x-scpls\r\n\r\n{pls}"
+                );
+            } else {
+                let _ = connection.write_all(
+                    b"HTTP/1.0 200 OK\r\nContent-Type: audio/mpeg\r\nicy-name: Test Radio\r\n\r\n",
+                );
+                let _ = connection.write_all(&audio);
+            }
+        }
+    });
+    base
+}
+
+fn current_ui(app: &Rc<RefCell<App>>) -> SkinWindow {
+    app.borrow().view.ui.clone()
+}
+
+#[test]
+fn skin_callbacks_drive_the_app() {
+    freya_skin::render::init_headless().unwrap();
+    let ui = SkinWindow::load(&SkinSource::Builtin).unwrap();
+    assert!(
+        matches!(ui, SkinWindow::Builtin(_)),
+        "the built-in skin is compiled in"
+    );
+    let app = Rc::new(RefCell::new(App::new(
+        ui.clone(),
+        SkinSource::Builtin,
+        Player::silent(48_000),
+        Settings::default(),
+        WindowEvents::default(),
+        app::Collections {
+            library: library::LibraryPanel::new(
+                Some(temp_dir("library").join("library.sqlite3")),
+                Some(temp_dir("covers")),
+            ),
+            stations: radio::Stations::load(Some(temp_dir("radio").join("stations.m3u8"))),
+            playlists: playlists::Playlists::load(Some(temp_dir("playlists"))),
+        },
+    )));
+    bindings::connect(&ui, &app);
+
+    // Adding files shows them as rows.
+    app.borrow_mut().add_paths(&[
+        fixture("mono-22k.wav"),
+        fixture("sine-96k-24bit.wav"),
+        fixture("sine.flac"),
+    ]);
+    app.borrow_mut().refresh();
+    assert_eq!(titles(&ui), ["mono-22k", "sine-96k-24bit", "sine"]);
+    assert_eq!(global(&ui, "Playlist", "summary"), text("3 tracks · 0:00+"));
+
+    // Click, then Shift+Down.
+    call(
+        &ui,
+        "Playlist",
+        "select",
+        &[num(1.0), Value::Bool(false), Value::Bool(false)],
+    );
+    assert_eq!(selected(&ui), [false, true, false]);
+    call(
+        &ui,
+        "Playlist",
+        "move-cursor",
+        &[num(1.0), Value::Bool(true)],
+    );
+    assert_eq!(selected(&ui), [false, true, true]);
+    assert_eq!(global(&ui, "Playlist", "cursor"), num(2.0));
+
+    // Drag the selection to the top, then remove it.
+    call(&ui, "Playlist", "move-selected", &[num(0.0)]);
+    assert_eq!(titles(&ui), ["sine-96k-24bit", "sine", "mono-22k"]);
+    call(&ui, "Playlist", "remove-selected", &[]);
+    assert_eq!(titles(&ui), ["mono-22k"]);
+
+    // Shuffle and repeat.
+    call(&ui, "Playlist", "toggle-repeat", &[]);
+    assert_eq!(global(&ui, "Playlist", "repeat"), Value::Bool(true));
+
+    // Equalizer: a band, a preset, on/off, and the curve.
+    call(&ui, "Equalizer", "set-band", &[num(0.0), num(5.0)]);
+    let Value::Model(bands) = global(&ui, "Equalizer", "bands") else {
+        panic!("bands is a model");
+    };
+    assert_eq!(bands.row_data(0), Some(num(5.0)));
+    assert_eq!(global(&ui, "Equalizer", "preset-name"), text("Custom"));
+    let rock = builtin_presets()
+        .iter()
+        .position(|p| p.name == "Rock")
+        .unwrap();
+    call(&ui, "Equalizer", "load-preset", &[num(rock as f64)]);
+    assert_eq!(global(&ui, "Equalizer", "preset-name"), text("Rock"));
+    call(&ui, "Equalizer", "toggle", &[]);
+    assert_eq!(global(&ui, "Equalizer", "enabled"), Value::Bool(true));
+    assert!(
+        app.borrow().player.equalizer().enabled,
+        "engine gets the settings"
+    );
+    let Value::String(curve) = call(
+        &ui,
+        "Equalizer",
+        "curve",
+        &[num(300.0), num(100.0), Value::Model(bands)],
+    ) else {
+        panic!("curve is a string");
+    };
+    assert!(curve.starts_with("M0.00 "), "{curve}");
+
+    // App settings.
+    call(&ui, "App", "set-theme", &[text("dark")]);
+    assert_eq!(global(&ui, "App", "theme"), text("dark"));
+    call(&ui, "App", "set-theme", &[text("purple")]);
+    assert_eq!(
+        global(&ui, "App", "theme"),
+        text("dark"),
+        "unknown themes are ignored"
+    );
+    call(&ui, "App", "toggle-equalizer", &[]);
+    assert_eq!(global(&ui, "App", "equalizer-visible"), Value::Bool(true));
+
+    // Volume and playback.
+    call(&ui, "Player", "set-volume", &[num(0.25)]);
+    assert_eq!(global(&ui, "Player", "volume"), num(0.25));
+    call(&ui, "Playlist", "activate", &[num(0.0)]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let playing = Value::EnumerationValue("PlaybackState".into(), "playing".into());
+    while global(&ui, "Player", "state") != playing {
+        assert!(Instant::now() < deadline, "playback did not start");
+        std::thread::sleep(Duration::from_millis(20));
+        app.borrow_mut().tick();
+    }
+    assert_eq!(global(&ui, "Player", "title"), text("mono-22k"));
+
+    // Visualization: computed only while the skin shows it. The built-in skin shows it in a
+    // view of its own, so act as if that view is open, with 24 bars; a 440 Hz tone lights some.
+    app.borrow_mut().tick();
+    assert!(app.borrow().visualization_interval().is_none());
+    ui.set_global_property("Visualizer", "showing", Value::Bool(true))
+        .unwrap();
+    ui.set_global_property("Visualizer", "bar-count", num(24.0))
+        .unwrap();
+    app.borrow_mut().tick();
+    let mut lit = false;
+    for _ in 0..40 {
+        let frame = visualizer::frame_interval(60);
+        std::thread::sleep(frame);
+        app.borrow_mut().tick();
+        app.borrow_mut().visualize(frame);
+        let Value::Model(bars) = global(&ui, "Visualizer", "bars") else {
+            panic!("bars is a model");
+        };
+        assert_eq!(bars.row_count(), 24);
+        if bars
+            .iter()
+            .any(|v| matches!(v, Value::Number(n) if n > 0.3))
+        {
+            lit = true;
+            break;
+        }
+    }
+    assert!(lit, "spectrum stayed dark while playing");
+    assert!(app.borrow().visualization_interval().is_some());
+    call(&ui, "Visualizer", "set-mode", &[text("off")]);
+    call(&ui, "Visualizer", "set-mode", &[text("sparkles")]);
+    app.borrow_mut().refresh();
+    assert_eq!(global(&ui, "Visualizer", "mode"), text("off"));
+    call(&ui, "Visualizer", "set-mode", &[text("spectrum")]);
+    call(&ui, "Visualizer", "cycle-mode", &[]);
+    assert_eq!(global(&ui, "Visualizer", "mode"), text("oscilloscope"));
+    app.borrow_mut().visualize(visualizer::frame_interval(60));
+    let Value::Model(wave) = global(&ui, "Visualizer", "waveform") else {
+        panic!("waveform is a model");
+    };
+    assert_eq!(wave.row_count(), 128);
+
+    // Switching to the Mini skin, which only has the Player global.
+    let mini = Path::new(env!("CARGO_MANIFEST_DIR")).join("../skins/mini");
+    skins::switch_skin(&app, SkinSource::Folder(mini.clone()));
+    assert_eq!(app.borrow().skin, SkinSource::Folder(mini));
+    let mini_ui = current_ui(&app);
+    assert!(mini_ui.get_global_property("Playlist", "rows").is_err());
+    app.borrow_mut().tick();
+    assert_eq!(global(&mini_ui, "Player", "title"), text("mono-22k"));
+    call(&mini_ui, "Player", "set-volume", &[num(0.5)]);
+    assert_eq!(app.borrow().player.volume(), 0.5);
+
+    // A broken skin keeps the current one and explains why.
+    let dir = temp_dir("skin");
+    std::fs::write(dir.join("skin.slint"), "this is not slint").unwrap();
+    skins::switch_skin(&app, SkinSource::Folder(dir.clone()));
+    assert!(
+        app.borrow().skin_error.contains("does not compile"),
+        "{}",
+        app.borrow().skin_error
+    );
+    assert!(matches!(app.borrow().skin, SkinSource::Folder(ref p) if p.ends_with("mini")));
+
+    // A skin in use reloads when its files change.
+    let skin = r#"import { Player } from "@freya/v1.slint";
+export { Player } from "@freya/v1.slint";
+export component W inherits Window { Text { text: Player.title; } }
+"#;
+    std::fs::write(dir.join("skin.slint"), skin).unwrap();
+    skins::switch_skin(&app, SkinSource::Folder(dir.clone()));
+    assert!(app.borrow().skin_error.is_empty());
+    let before = current_ui(&app);
+    std::thread::sleep(Duration::from_millis(1100));
+    std::fs::write(
+        dir.join("skin.slint"),
+        skin.replace("Player.title", "Player.artist"),
+    )
+    .unwrap();
+    app.borrow_mut().tick();
+    let pending = app.borrow_mut().pending_skin.take();
+    assert_eq!(
+        pending,
+        Some(SkinSource::Folder(dir.clone())),
+        "a changed file asks for a reload"
+    );
+    skins::switch_skin(&app, pending.unwrap());
+    assert!(matches!(current_ui(&app), SkinWindow::Loaded(_)));
+    assert!(
+        before.window().size() == current_ui(&app).window().size(),
+        "a reload keeps the window size"
+    );
+
+    // And back to the built-in skin, which shows the playlist again.
+    skins::switch_skin(&app, SkinSource::Builtin);
+    app.borrow_mut().tick();
+    assert_eq!(titles(&current_ui(&app)), ["mono-22k"]);
+    assert_eq!(
+        global(&ui, "Player", "format-info"),
+        text("PCM_S16LE · 353 kbps · 22.05 kHz · Mono")
+    );
+
+    // The library: a music folder is scanned, browsed, searched and played from.
+    let ui = current_ui(&app);
+    assert_eq!(global(&ui, "Library", "title"), text("Artists"));
+    assert!(library_titles(&ui).is_empty());
+    let music = temp_dir("music");
+    for name in ["sine.mp3", "sine.flac", "mono-22k.wav"] {
+        std::fs::copy(fixture(name), music.join(name)).unwrap();
+    }
+    app.borrow_mut().add_library_folder(music.clone());
+    wait_for_scan(&app);
+    assert_eq!(library_titles(&ui), ["Freya", "Unknown artist"]);
+    assert_eq!(global(&ui, "Library", "status"), text("3 tracks · 1 album"));
+    let Value::Model(folders) = global(&ui, "Library", "folders") else {
+        panic!("folders is a model");
+    };
+    assert_eq!(folders.row_count(), 1);
+
+    call(&ui, "Library", "activate", &[num(1.0)]);
+    assert_eq!(global(&ui, "Library", "title"), text("Unknown artist"));
+    assert_eq!(library_titles(&ui), ["Unknown album"]);
+    call(&ui, "Library", "activate", &[num(0.0)]);
+    assert_eq!(library_titles(&ui), ["mono-22k", "sine"]);
+    assert_eq!(global(&ui, "Library", "can-go-back"), Value::Bool(true));
+    call(&ui, "Library", "back", &[]);
+    call(&ui, "Library", "back", &[]);
+    assert_eq!(global(&ui, "Library", "title"), text("Artists"));
+    assert_eq!(global(&ui, "Library", "can-go-back"), Value::Bool(false));
+
+    call(&ui, "Library", "search", &[text("sine te")]);
+    assert_eq!(library_titles(&ui), ["Sine Test"]);
+    assert_eq!(global(&ui, "Library", "query"), text("sine te"));
+    call(&ui, "Library", "activate", &[num(0.0)]);
+    assert_eq!(
+        titles(&ui),
+        ["Freya - Sine Test"],
+        "the playlist becomes the results"
+    );
+    call(&ui, "Library", "enqueue", &[num(0.0)]);
+    assert_eq!(titles(&ui).len(), 2);
+    call(&ui, "Library", "back", &[]);
+    assert_eq!(
+        global(&ui, "Library", "query"),
+        text(""),
+        "back ends the search"
+    );
+    assert_eq!(library_titles(&ui), ["Freya", "Unknown artist"]);
+
+    // Playing an artist plays all of their tracks.
+    call(&ui, "Library", "play", &[num(1.0)]);
+    assert_eq!(titles(&ui), ["mono-22k", "sine"]);
+
+    // The other sections, and back retracing the way in.
+    call(&ui, "Library", "show", &[text("songs")]);
+    assert_eq!(global(&ui, "Library", "layout"), text("table"));
+    // Untitled tracks (named by their files) come last.
+    assert_eq!(library_titles(&ui), ["Sine Test", "mono-22k", "sine"]);
+    call(&ui, "Library", "show", &[text("genres")]);
+    assert_eq!(global(&ui, "Library", "section"), text("genres"));
+    assert_eq!(library_titles(&ui), ["Unknown genre"]);
+    call(&ui, "Library", "activate", &[num(0.0)]);
+    assert_eq!(global(&ui, "Library", "layout"), text("grid"));
+    assert_eq!(library_titles(&ui), ["Fixtures", "Unknown album"]);
+    call(&ui, "Library", "activate", &[num(1.0)]);
+    assert_eq!(global(&ui, "Library", "layout"), text("list"));
+    call(&ui, "Library", "back", &[]);
+    assert_eq!(global(&ui, "Library", "title"), text("Unknown genre"));
+    call(&ui, "Library", "show", &[text("albums")]);
+    assert_eq!(global(&ui, "Library", "title"), text("Albums"));
+    assert_eq!(global(&ui, "Library", "can-go-back"), Value::Bool(false));
+
+    // The Recents: albums by when they came, and tracks by when and how often they were
+    // played.
+    call(&ui, "Library", "show", &[text("recently-added")]);
+    assert_eq!(global(&ui, "Library", "layout"), text("grid"));
+    assert_eq!(library_titles(&ui).len(), 2);
+    call(&ui, "Library", "show", &[text("recently-played")]);
+    assert_eq!(global(&ui, "Library", "title"), text("Recently Played"));
+    assert!(library_titles(&ui).is_empty());
+    for _ in 0..2 {
+        app.borrow_mut()
+            .library
+            .record_play(music.join("mono-22k.wav"), None);
+    }
+    app.borrow_mut().tick();
+    assert_eq!(library_titles(&ui), ["mono-22k"]);
+    let played = |ui: &SkinWindow| -> Vec<Value> {
+        let Value::Model(model) = global(ui, "Library", "rows") else {
+            panic!("Library.rows is a model");
+        };
+        model
+            .iter()
+            .map(|row| match row {
+                Value::Struct(row) => field(&row, "played"),
+                other => panic!("row is not a struct: {other:?}"),
+            })
+            .collect()
+    };
+    assert_eq!(played(&ui), [text("Just now")]);
+    call(&ui, "Library", "show", &[text("most-played")]);
+    assert_eq!(global(&ui, "Library", "layout"), text("table"));
+    assert_eq!(played(&ui), [text("2 plays")]);
+    call(&ui, "Library", "activate", &[num(0.0)]);
+    assert_eq!(titles(&ui), ["mono-22k"]);
+    call(&ui, "Library", "show", &[text("artists")]);
+
+    // Radio: the starter stations, saving one, playing it twice without a second entry, and
+    // removing it.
+    let stations = |ui: &SkinWindow| match global(ui, "Radio", "stations") {
+        Value::Model(model) => model.row_count(),
+        other => panic!("stations is a model, not {other:?}"),
+    };
+    assert_eq!(stations(&ui), 5);
+    call(&ui, "Radio", "add", &[text("Nothing"), text(" ")]);
+    assert_eq!(global(&ui, "Radio", "error"), text("No address given"));
+    call(&ui, "Radio", "add", &[text(""), text("127.0.0.1:9/live")]);
+    assert_eq!(global(&ui, "Radio", "error"), text(""));
+    assert_eq!(stations(&ui), 6);
+    let queued = titles(&ui).len();
+    call(&ui, "Radio", "play", &[num(5.0)]);
+    call(&ui, "Radio", "play", &[num(5.0)]);
+    assert_eq!(
+        titles(&ui).len(),
+        queued + 1,
+        "a station already queued plays from there"
+    );
+    call(&ui, "Radio", "remove", &[num(5.0)]);
+    assert_eq!(stations(&ui), 5);
+    call(&ui, "Player", "stop", &[]);
+
+    // Playlists: made empty or from Up Next, filled from the library, played, edited, deleted.
+    let count = |ui: &SkinWindow, name: &str| match global(ui, "Playlists", name) {
+        Value::Model(model) => model.row_count(),
+        other => panic!("Playlists.{name} is a model, not {other:?}"),
+    };
+    call(&ui, "Playlists", "create", &[text("Mix")]);
+    assert_eq!(global(&ui, "Playlists", "error"), text(""));
+    assert_eq!(global(&ui, "Playlists", "shown"), num(0.0));
+    assert_eq!(count(&ui, "tracks"), 0);
+    call(&ui, "Playlists", "create", &[text("mix")]);
+    assert_eq!(
+        global(&ui, "Playlists", "error"),
+        text("There is already a playlist called mix")
+    );
+    let queued = titles(&ui).len();
+    call(&ui, "Playlists", "save-queue", &[text("Evening")]);
+    assert_eq!(
+        global(&ui, "Playlists", "shown"),
+        num(0.0),
+        "Evening sorts first"
+    );
+    assert_eq!(count(&ui, "tracks"), queued);
+    assert_eq!(count(&ui, "playlists"), 2);
+
+    // The library shows its artists; the first one's tracks go into Mix.
+    let artist_tracks = library_titles(&ui).len();
+    assert!(artist_tracks > 0);
+    call(&ui, "Playlists", "add-library-row", &[num(1.0), num(0.0)]);
+    call(&ui, "Playlists", "show", &[num(1.0)]);
+    let mix = count(&ui, "tracks");
+    assert!(mix > 0);
+    call(&ui, "Playlists", "play", &[num(0.0)]);
+    assert_eq!(titles(&ui).len(), mix, "Up Next becomes the playlist");
+    call(&ui, "Playlists", "remove", &[num(0.0)]);
+    assert_eq!(count(&ui, "tracks"), mix - 1);
+    call(&ui, "Playlists", "rename", &[text("Morning")]);
+    assert_eq!(global(&ui, "Playlists", "shown"), num(1.0));
+    call(&ui, "Playlists", "delete", &[]);
+    assert_eq!(global(&ui, "Playlists", "shown"), num(-1.0));
+    assert_eq!(count(&ui, "playlists"), 1);
+    call(&ui, "Player", "stop", &[]);
+
+    call(&ui, "Library", "remove-folder", &[num(0.0)]);
+    wait_for_scan(&app);
+    assert!(library_titles(&ui).is_empty());
+    assert!(app.borrow().settings.library_folders.is_empty());
+    let _ = std::fs::remove_dir_all(&music);
+
+    // Internet radio: a station playlist is fetched, and its station plays live.
+    let base = radio_server(std::fs::read(fixture("sine.mp3")).unwrap());
+    app.borrow_mut().player.set_paused(true);
+    call(
+        &ui,
+        "Playlist",
+        "add-url",
+        &[text(&format!("{base}/list.pls"))],
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while global(&ui, "Player", "live") != Value::Bool(true) {
+        assert!(Instant::now() < deadline, "the station did not start");
+        std::thread::sleep(Duration::from_millis(10));
+        app.borrow_mut().tick();
+    }
+    assert_eq!(
+        titles(&ui).last().map(String::as_str),
+        Some("Local - Test FM")
+    );
+    assert_eq!(global(&ui, "Player", "title"), text("Sine Test"));
+    assert_eq!(global(&ui, "Player", "artist"), text("Freya"));
+    let Value::String(info) = global(&ui, "Player", "format-info") else {
+        panic!("format-info is a string");
+    };
+    assert!(info.starts_with("Test Radio · MP3"), "{info}");
+
+    // An address that does not answer shows an error.
+    call(
+        &ui,
+        "Playlist",
+        "add-url",
+        &[text("http://127.0.0.1:9/nothing")],
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while global(&ui, "Player", "error") == text("") {
+        assert!(Instant::now() < deadline, "no error shown");
+        std::thread::sleep(Duration::from_millis(10));
+        app.borrow_mut().tick();
+    }
+}

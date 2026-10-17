@@ -1,0 +1,17 @@
+# Secret scanning with gitleaks (see docs/RELEASING.md): before every commit (.githooks), in
+# CI and before every release. gitleaks' own rules cover private keys, cloud and GitHub tokens
+# and the like; the rule below adds what Freya's releases bring close to the repository.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "apple-app-specific-password"
+description = "An Apple app-specific password, as used for notarization"
+regex = '''(?i)(?:apple|notar|app[-_ ]?specific|altool)[^\n]{0,60}?\b([a-z]{4}-[a-z]{4}-[a-z]{4}-[a-z]{4})\b'''
+secretGroup = 1
+keywords = ["apple", "notar", "specific", "altool"]
+
+[[allowlists]]
+description = "Build output and agent worktrees, which are never committed"
+paths = ['''^target/''', '''^\.claude/''']
