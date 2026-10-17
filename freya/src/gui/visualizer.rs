@@ -7,6 +7,7 @@ use freya_audio::analysis::Analyzer;
 use slint::{ModelRc, VecModel};
 use slint_interpreter::Value;
 
+use super::demo::{self, Demo};
 use super::native_spectrum::{Area, NativeSpectrum};
 use super::skin_state;
 use super::skin_window::SkinWindow;
@@ -39,13 +40,18 @@ pub fn frame_rate(fps: u32, active: bool, hidden: bool, focused: bool) -> Option
 const WAVE_POINTS: usize = 128;
 /// Skins may ask for at most this many bars.
 const MAX_BARS: usize = 256;
-const MODES: [&str; 3] = ["spectrum", "oscilloscope", "off"];
+const MODES: [&str; 4] = ["spectrum", "oscilloscope", "demo", "off"];
+/// The demo's background pulses with the strongest of the lowest bars: this share of them,
+/// on the spectrum's logarithmic scale up to about 150 Hz.
+const BASS_SHARE: usize = 8;
+/// At least this many bars are computed, so the demo has a bass even without a spectrum.
+const MIN_BARS: usize = 16;
 
 pub fn is_mode(mode: &str) -> bool {
     MODES.contains(&mode)
 }
 
-/// The mode after `mode`, in the order spectrum, oscilloscope, off.
+/// The mode after `mode`, in the order spectrum, oscilloscope, demo, off.
 pub fn next_mode(mode: &str) -> &'static str {
     let i = MODES
         .iter()
@@ -67,6 +73,12 @@ pub struct Visualizer {
     native: Option<NativeSpectrum>,
     native_placed: Option<(Option<Area>, slint::PhysicalSize)>,
     mode_shown: Option<String>,
+    /// The demo, drawn by the graphics card where the system allows it, and where it was
+    /// last placed.
+    demo: Option<Demo>,
+    demo_placed: Option<Option<demo::Area>>,
+    /// Whether the system cannot show the demo, so it is not tried again.
+    demo_unavailable: bool,
     /// Whether the audio callback is copying samples for us.
     tapping: bool,
     /// Something is playing and should be shown.
@@ -87,6 +99,9 @@ impl Visualizer {
             native: None,
             native_placed: None,
             mode_shown: None,
+            demo: None,
+            demo_placed: None,
+            demo_unavailable: false,
             tapping: false,
             wanted: false,
             settling: false,
@@ -99,7 +114,15 @@ impl Visualizer {
     }
 
     /// Called on every app tick: shows the mode and decides whether frames are needed.
-    pub fn update(&mut self, ui: &SkinWindow, player: &Player, playing: bool, mode: &str) {
+    /// `window_shown` is false while the window is hidden, and the demo then rests.
+    pub fn update(
+        &mut self,
+        ui: &SkinWindow,
+        player: &Player,
+        playing: bool,
+        mode: &str,
+        window_shown: bool,
+    ) {
         if !self.available {
             return;
         }
@@ -108,6 +131,11 @@ impl Visualizer {
             self.mode_shown = Some(mode.to_owned());
         }
         self.update_native(ui, mode);
+        self.update_demo(ui, mode, window_shown);
+        // No frames are computed while nothing plays: the demo's pulse fades out instead.
+        if !playing && let Some(demo) = &self.demo {
+            demo.set_pulse(0.0);
+        }
         let showing = !matches!(
             ui.get_global_property("Visualizer", "showing"),
             Ok(Value::Bool(false))
@@ -146,6 +174,32 @@ impl Visualizer {
         }
     }
 
+    /// Starts the demo once the window is open, and keeps it where the skin's `NativeDemo` is,
+    /// hidden while the demo is not shown or the window is hidden.
+    fn update_demo(&mut self, ui: &SkinWindow, mode: &str, window_shown: bool) {
+        if !Demo::SUPPORTED || self.demo_unavailable {
+            return;
+        }
+        let area = demo::Area::read(ui).filter(|_| mode == "demo" && window_shown);
+        if self.demo.is_none() {
+            if area.is_none() {
+                return;
+            }
+            self.demo = Demo::new(ui.window());
+            if self.demo.is_none() {
+                self.demo_unavailable = true;
+                return;
+            }
+            let _ = ui.set_global_property("Visualizer", "demo-drawing", Value::Bool(true));
+        }
+        if self.demo_placed.as_ref() != Some(&area)
+            && let Some(demo) = &mut self.demo
+        {
+            demo.place(area.as_ref());
+            self.demo_placed = Some(area);
+        }
+    }
+
     /// Draws one frame.
     pub fn frame(
         &mut self,
@@ -173,7 +227,13 @@ impl Visualizer {
             Ok(Value::Number(n)) => (n.max(0.0) as usize).min(MAX_BARS),
             _ => 0,
         };
-        analyzer.update(count, dt);
+        // The demo's pulse needs the lowest bars even when the skin draws none.
+        analyzer.update(count.max(MIN_BARS), dt);
+        if let Some(demo) = &self.demo {
+            let bars = analyzer.bars();
+            let low = &bars[..(bars.len() / BASS_SHARE).max(2).min(bars.len())];
+            demo.set_pulse(low.iter().copied().fold(0.0, f32::max));
+        }
         match &mut self.native {
             // Freya draws the spectrum: the skin's window is not touched.
             Some(native) => native.draw(analyzer.bars(), analyzer.peaks()),
@@ -227,7 +287,8 @@ mod tests {
     #[test]
     fn modes_cycle() {
         assert_eq!(next_mode("spectrum"), "oscilloscope");
-        assert_eq!(next_mode("oscilloscope"), "off");
+        assert_eq!(next_mode("oscilloscope"), "demo");
+        assert_eq!(next_mode("demo"), "off");
         assert_eq!(next_mode("off"), "spectrum");
         assert_eq!(next_mode("nonsense"), "spectrum");
     }

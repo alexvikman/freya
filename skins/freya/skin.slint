@@ -4,7 +4,7 @@
 // contrast against the background it is drawn on (WCAG AA), light and dark mode follow the
 // system.
 
-import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, PlaybackState, Shortcuts, TrackRow, LibraryRow, PlaylistRow, StationRow, NativeSpectrum } from "@freya/v1.slint";
+import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, PlaybackState, Shortcuts, TrackRow, LibraryRow, PlaylistRow, StationRow, NativeSpectrum, NativeDemo } from "@freya/v1.slint";
 import { ListView, Palette, ScrollView } from "std-widgets.slint";
 
 // Every skin re-exports the API globals so the app can reach them.
@@ -297,13 +297,25 @@ component VisualizerView inherits Rectangle {
                 stroke-width: 2px;
                 fill: transparent;
             }
+            // Drawn by Freya with the graphics card, filling the box.
+            if Visualizer.mode == "demo": NativeDemo {
+                width: box.width;
+                height: box.height;
+                border-radius: box.border-radius;
+                shown: root.shown;
+            }
+            if Visualizer.mode == "demo" && !Visualizer.demo-drawing: Text {
+                text: "The demo is only drawn on macOS so far";
+                font-size: 16px;
+                color: #b0b0b0;
+            }
             if Visualizer.mode == "off": Text {
                 text: "Visualization is off";
                 font-size: 16px;
                 color: Theme.text-secondary;
             }
             // In the upper half, so it stays clear of the bars along the bottom.
-            if Visualizer.mode != "off" && Player.state == PlaybackState.stopped: Text {
+            if (Visualizer.mode == "spectrum" || Visualizer.mode == "oscilloscope") && Player.state == PlaybackState.stopped: Text {
                 y: box.height / 3;
                 width: box.width;
                 text: "Play something to see it here";
@@ -2896,6 +2908,15 @@ component Toolbar inherits HorizontalLayout {
             text: "Oscilloscope";
             selected: Visualizer.mode == "oscilloscope";
             clicked => { Visualizer.set-mode("oscilloscope"); }
+        }
+    }
+    if root.view == "visualizer": VerticalLayout {
+        alignment: center;
+
+        ChoiceButton {
+            text: "Demo";
+            selected: Visualizer.mode == "demo";
+            clicked => { Visualizer.set-mode("demo"); }
         }
     }
     if root.view == "visualizer": VerticalLayout {

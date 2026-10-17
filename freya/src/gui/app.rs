@@ -912,6 +912,7 @@ impl App {
             &self.player,
             status.state == PlaybackState::Playing && !self.window_hidden,
             &self.settings.visualizer_mode,
+            !self.window_hidden,
         );
         let mut values = skin_state::player_values(
             &status,

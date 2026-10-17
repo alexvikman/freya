@@ -326,6 +326,31 @@ impl Convert for SpectrumArea {
     }
 }
 
+impl Convert for DemoArea {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            x: field(&s, "x"),
+            y: field(&s, "y"),
+            width: field(&s, "width"),
+            height: field(&s, "height"),
+            corner_radius: field(&s, "corner-radius"),
+            shown: field(&s, "shown"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("x", self.x.to_value()),
+            ("y", self.y.to_value()),
+            ("width", self.width.to_value()),
+            ("height", self.height.to_value()),
+            ("corner-radius", self.corner_radius.to_value()),
+            ("shown", self.shown.to_value()),
+        ])
+    }
+}
+
 fn convert<T: Convert>(value: Value, what: &str) -> Result<T, String> {
     T::from_value(value).ok_or_else(|| format!("wrong type for {what}"))
 }
@@ -477,6 +502,8 @@ skin_api! {
         Visualizer."waveform" => set_waveform, get_waveform;
         Visualizer."native-drawing" => set_native_drawing, get_native_drawing;
         Visualizer."native-area" => set_native_area, get_native_area;
+        Visualizer."demo-drawing" => set_demo_drawing, get_demo_drawing;
+        Visualizer."demo-area" => set_demo_area, get_demo_area;
         Visualizer."showing" => set_showing, get_showing;
 
         App."version" => set_version, get_version;

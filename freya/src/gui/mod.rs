@@ -4,6 +4,7 @@ mod app;
 mod app_icon;
 mod bindings;
 mod builtin_skin;
+mod demo;
 pub mod equalizer;
 mod library;
 mod listening;
