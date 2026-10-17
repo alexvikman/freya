@@ -137,6 +137,8 @@ pub struct LibraryPanel {
     covers_ready: i32,
     /// Plays not yet written: a scan may be writing to the database.
     plays: Vec<(PathBuf, Option<Part>, SystemTime)>,
+    /// A scan was started and its end not yet taken in.
+    scanning: bool,
 }
 
 /// The covers shown last, so scrolling back does not decode them again.
@@ -189,6 +191,7 @@ impl LibraryPanel {
             recent_covers: RecentCovers::default(),
             covers_ready: 0,
             plays: Vec::new(),
+            scanning: false,
         }
     }
 
@@ -214,13 +217,16 @@ impl LibraryPanel {
         self.rescan(folders);
     }
 
+    /// Until the scan's end has been taken in by `poll`, not only while its thread runs: a
+    /// scan that ends between two polls has news that is not shown yet.
     pub fn is_scanning(&self) -> bool {
-        self.scanner.is_running()
+        self.scanning
     }
 
     pub fn rescan(&mut self, folders: &[PathBuf]) {
         if let (Some(path), Some(_)) = (&self.path, &self.db) {
             self.scanner.start(path.clone(), folders.to_vec());
+            self.scanning = true;
         }
     }
 
@@ -229,6 +235,8 @@ impl LibraryPanel {
         if self.thumbnails.as_mut().is_some_and(Thumbnails::poll) {
             self.covers_ready += 1;
         }
+        // Asked before the events are read: a scan that had ended by then has sent them all.
+        let ended = !self.scanner.is_running();
         let mut finished = false;
         for event in self.scanner.poll() {
             match event {
@@ -238,6 +246,7 @@ impl LibraryPanel {
                 }
                 ScanEvent::Finished(summary) => {
                     self.progress = None;
+                    self.scanning = false;
                     // A scan that found nothing new leaves the rows as they are.
                     self.stale |= summary.added + summary.updated + summary.removed > 0;
                     finished = true;
@@ -245,9 +254,15 @@ impl LibraryPanel {
                 ScanEvent::Failed(e) => {
                     log::warn!("library scan failed: {e}");
                     self.progress = None;
+                    self.scanning = false;
                     finished = true;
                 }
             }
+        }
+        // A scan whose thread ended without saying so is over all the same.
+        if ended && self.scanning {
+            self.scanning = false;
+            finished = true;
         }
         // Plays noted while the scan wrote.
         if finished && self.write_plays() && self.shows_plays() {
@@ -269,7 +284,7 @@ impl LibraryPanel {
         }
         self.plays.push((path, part, SystemTime::now()));
         // While a scan writes, the play waits rather than the window.
-        if !self.scanner.is_running() && self.write_plays() && self.shows_plays() {
+        if !self.scanning && self.write_plays() && self.shows_plays() {
             self.reload();
         }
     }
@@ -561,7 +576,7 @@ impl LibraryPanel {
             Some((done, total)) => {
                 format!("Reading {} of {} files", thousands(done), thousands(total))
             }
-            None if self.scanner.is_running() => "Checking for changes…".to_owned(),
+            None if self.scanning => "Checking for changes…".to_owned(),
             None => self.stats.clone(),
         };
         let layout = if self.searching() {
@@ -579,7 +594,7 @@ impl LibraryPanel {
                 Value::Bool(self.opened.len() > 1 || !self.query.is_empty()),
             ),
             ("query", string(&self.query)),
-            ("scanning", Value::Bool(self.scanner.is_running())),
+            ("scanning", Value::Bool(self.scanning)),
             ("covers-ready", Value::Number(f64::from(self.covers_ready))),
             ("status", string(status)),
         ]
