@@ -10,9 +10,11 @@ on:
 permissions:
   contents: read
 
-# A newer push to the same branch makes an older run pointless.
+# A newer push to the same branch makes an older run pointless. github.workflow is the calling
+# workflow when the release runs these checks, so a release and a push to the same branch never
+# cancel each other. (Group names ignore case: "ci-Release-…" is not the release's own group.)
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
