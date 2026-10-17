@@ -113,7 +113,9 @@ impl View {
             );
         }
         let version = skin_state::string(env!("CARGO_PKG_VERSION"));
-        view.app_out.write(&view.ui, vec![("version", version)]);
+        let built = skin_state::string(skin_state::build_date().unwrap_or_default());
+        view.app_out
+            .write(&view.ui, vec![("version", version), ("build-date", built)]);
         if view.eq_out.available {
             // Lists that never change are set once.
             let strings = |items: Vec<String>| {
@@ -914,6 +916,7 @@ impl App {
             &self.settings.visualizer_mode,
             !self.window_hidden,
         );
+        view.visualizer.show_fps(ui, self.settings.visualizer_fps);
         let mut values = skin_state::player_values(
             &status,
             self.track.as_ref(),

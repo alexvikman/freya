@@ -172,6 +172,21 @@ update feed, with a signed list of checksums as the trust anchor. Decided with t
 | **R4** | **Updates**: releases read from GitHub; `SHA256SUMS` signed with Ed25519 (SSH signature format, verified with `ring`, which Freya already has) against a public key built into Freya; skin API for "update available", its notes, Install, Later and Skip; the app swapped atomically and restarted | A local test release is found, verified, refused when tampered with, and installed |
 | **R5** | **Release pipeline**: a version tag builds every platform, packages and signs them, writes and signs `SHA256SUMS` in an approval-gated environment, checks the signature against the built-in key, attests the build and creates the GitHub Release with notes from the git log; a script bumps the version | The workflow passes `actionlint`, and its steps run locally as far as they can without GitHub |
 
+### U8: Settings and About (from 2026-10-17)
+
+A settings view and an About view in the main window, with what Bird's have, opened from the
+"⋯" menu at the top right and laid out like Spotify's settings: a large title, bold section
+headings straight on the page, each setting's control at the far right, using the view's width. Settings that are their own
+features (playback, Last.fm) come as steps of their own.
+
+| | Step | Done when |
+|---|---|---|
+| **S1** | **Settings and About views** in the built-in skin. Settings: color scheme, skin, music folders (add, remove, check for changes), visualization and frame rate. About: icon, version, build date, updates (check, install, check automatically), links (GitHub, release notes, issues, license), the Slint credit. Cmd+, (Ctrl+,) opens Settings; the "⋯" menu keeps only what concerns the lists | Done: `App.build-date`, `App.open-link(name)` (Freya's own pages only), `Visualizer.fps` and `set-fps` in the skin API |
+| **S2** | **Freya's About window** (F1, for other skins): the icon, the links, and dark mode | |
+| **S3** | **Third-party licenses**, generated at build time (`cargo-about`) and shown from About: MIT and Apache-2.0 ask for their notices to go with the binaries Freya ships | |
+| Later | **Playback**: output device, and maybe ReplayGain, gapless and crossfade | |
+| Later | **Last.fm scrobbling**: signing in, scrobbles queued while offline; the API key kept out of the repository | |
+
 ## Results from M7
 
 Measured on an Apple Silicon MacBook (release build, built-in skin, 560×260 window):

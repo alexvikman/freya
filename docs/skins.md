@@ -272,11 +272,13 @@ Saved internet radio stations, kept by Freya in `stations.m3u8` next to the play
 | `bars`, `peaks` | `[float]` | 0 to 1, low to high frequencies |
 | `waveform` | `[float]` | The last 10 ms, -1 to 1 |
 | `showing` | bool | `in-out`, true by default: set it to false while no visualization is on screen, for example when it has a view of its own and another view is shown |
+| `fps` | int | Frames a second the visualization is drawn at while the window has focus, 30 by default; kept between runs |
 
 | Callback | |
 |---|---|
 | `cycle-mode()` | Spectrum, oscilloscope, off |
 | `set-mode(mode)` | "spectrum", "oscilloscope", "hologram" or "off"; other values are ignored |
+| `set-fps(fps)` | Draw at `fps` frames a second, 10 to 120; other values are ignored |
 | `bars-path(width, height, bars) -> string` | SVG path data of the spectrum bars for a `width` × `height` box (or use `NativeSpectrum`, below) |
 | `peaks-path(width, height, peaks, thickness) -> string` | The same for the peak markers |
 | `wave(width, height, waveform) -> string` | SVG path data of the waveform for a `width` × `height` box (or use `NativeOscilloscope`, below) |
@@ -341,6 +343,7 @@ Her poses are pictures in `assets/hologram/` (JPEG or PNG, built into Freya), sh
 | Property | Type | |
 |---|---|---|
 | `version` | string | Freya's version |
+| `build-date` | string | When this copy of Freya was built, as "2026-10-17"; empty when unknown |
 | `theme` | string | "system", "light" or "dark", as chosen by the user |
 | `equalizer-visible` | bool | Whether the user wants the equalizer shown |
 | `title-bar-height` | length | `in-out`, set by the skin: see below. 0 by default |
@@ -351,6 +354,9 @@ Her poses are pictures in `assets/hologram/` (JPEG or PNG, built into Freya), sh
 | `show-about()`, `show-skins()` | Freya's About window and skin picker |
 | `set-theme(name)`, `toggle-equalizer()` | |
 | `drag-window()` | Call on a mouse press in an empty part of the top bar: the window follows the mouse, and a double click zooms or minimizes it, as the system's settings say |
+| `open-link(name)` | Opens one of Freya's own pages in the browser: "github", "releases", "issues" or "license". Other names are ignored: a skin cannot open other addresses |
+
+A settings page in a skin can be built from what the API already offers: `App.set-theme`, `App.show-skins`, the library's `folders`, `add-folder`, `remove-folder(index)` and `rescan`, the visualizer's `set-mode` and `set-fps`, and `Updates`. The built-in skin opens its Settings and About views from the "⋯" menu at the top right (Cmd+, or Ctrl+, opens Settings).
 
 #### Drawing into the title bar
 

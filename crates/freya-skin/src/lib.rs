@@ -28,6 +28,10 @@ const API_FILES: [(&str, &str); 1] = [("v1.slint", include_str!("../api/v1.slint
 
 /// The built-in skin.
 const BUILTIN_SKIN: &str = include_str!("../../../skins/freya/skin.slint");
+/// Where the built-in skin is in the source tree. It is compiled as if read from there, so its
+/// images next to it are found where the tree is at hand, as in tests and `freya skin check`;
+/// Freya itself runs the skin compiled with its images (see freya/build.rs).
+const BUILTIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../skins/freya/skin.slint");
 
 /// Freya's About window. Built from the API's `AboutFreya`, independent of the skin.
 const ABOUT_WINDOW: &str = r#"
@@ -134,8 +138,7 @@ fn compile_with_warnings(source: &SkinSource) -> Result<(ComponentDefinition, Ve
     let compiler = compiler();
     let result = match source.main_file()? {
         None => spin_on::spin_on(
-            compiler
-                .build_from_source(BUILTIN_SKIN.to_owned(), PathBuf::from("builtin/skin.slint")),
+            compiler.build_from_source(BUILTIN_SKIN.to_owned(), PathBuf::from(BUILTIN_PATH)),
         ),
         Some(path) => spin_on::spin_on(compiler.build_from_path(path)),
     };
@@ -321,8 +324,7 @@ mod tests {
     fn builtin_skin_compiles_cleanly() {
         let compiler = compiler();
         let result = spin_on::spin_on(
-            compiler
-                .build_from_source(BUILTIN_SKIN.to_owned(), PathBuf::from("builtin/skin.slint")),
+            compiler.build_from_source(BUILTIN_SKIN.to_owned(), PathBuf::from(BUILTIN_PATH)),
         );
         let diagnostics: Vec<String> = result.diagnostics().map(|d| d.to_string()).collect();
         assert!(diagnostics.is_empty(), "{diagnostics:#?}");

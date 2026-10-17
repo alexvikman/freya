@@ -354,6 +354,11 @@ export global Visualizer {
     callback cycle-mode();
     /// Switch to `mode`: "spectrum", "oscilloscope", "hologram" or "off". Other values are ignored.
     callback set-mode(string);
+    /// Frames a second the visualization is drawn at while the window has focus; kept
+    /// between runs.
+    in property <int> fps: 30;
+    /// Draw at this many frames a second, from 10 to 120.
+    callback set-fps(int);
     /// Whether the skin shows a visualization right now. A skin that puts it in a view of its
     /// own sets this to false while another view is shown; Freya then computes nothing for it.
     in-out property <bool> showing: true;
@@ -505,6 +510,8 @@ export component NativeSpectrum inherits Rectangle {
 /// The application. Optional.
 export global App {
     in property <string> version;
+    /// When this copy of Freya was built, as "2026-10-17"; empty when unknown.
+    in property <string> build-date;
     /// "system", "light" or "dark". Skins that support both color schemes should follow it.
     in property <string> theme: "system";
     /// Whether the skin shows its equalizer; kept between runs.
@@ -529,6 +536,9 @@ export global App {
     /// title bar: the window follows the mouse, and a double click zooms or minimizes it, as
     /// the system's settings say.
     callback drag-window();
+    /// Open one of Freya's own pages in the browser: "github", "releases", "issues" or
+    /// "license". Other names are ignored; skins cannot open other addresses.
+    callback open-link(string);
 }
 
 /// Updates to Freya. Optional: without it, Freya never looks for updates. Freya looks at

@@ -5,7 +5,7 @@
 // system.
 
 import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, PlaybackState, Shortcuts, TrackRow, LibraryRow, PlaylistRow, StationRow, NativeSpectrum, NativeOscilloscope, NativeHologram } from "@freya/v1.slint";
-import { ListView, Palette, ScrollView } from "std-widgets.slint";
+import { AboutSlint, ListView, Palette, ScrollView } from "std-widgets.slint";
 
 // Every skin re-exports the API globals so the app can reach them.
 export { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates } from "@freya/v1.slint";
@@ -75,6 +75,10 @@ global Icons {
     out property <string> star: "M12 3 L14.8 8.8 L21 9.6 L16.5 14 L17.6 20.3 L12 17.3 L6.4 20.3 L7.5 14 L3 9.6 L9.2 8.8 Z";
     out property <string> genre: "M3 4 V11 L13 21 L21 13 L11 3 H4 C3.4 3 3 3.4 3 4 Z M7.5 7.5 H7.6";
     out property <string> expand: "M4 9 V4 H9 M15 4 H20 V9 M20 15 V20 H15 M9 20 H4 V15";
+    out property <string> external: "M7 17 L17 7 M9 7 H17 V15";
+    out property <string> code: "M8 6 L2 12 L8 18 M16 6 L22 12 L16 18";
+    out property <string> document: "M6 3 H14 L19 8 V21 H6 Z M14 3 V8 H19 M9 13 H16 M9 17 H16";
+    out property <string> bubble: "M4 5 H20 V16 H11 L6 20 V16 H4 Z";
     out property <string> shrink: "M9 4 V9 H4 M20 9 H15 V4 M15 20 V15 H20 M4 15 H9 V20";
 }
 
@@ -3117,6 +3121,429 @@ component VisualizerView inherits Rectangle {
     }
 }
 
+/// A group of settings under a bold heading, straight on the page.
+component SettingsSection inherits VerticalLayout {
+    in property <string> title;
+
+    spacing: 4px;
+
+    if root.title != "": Text {
+        text: root.title;
+        font-size: 17px;
+        font-weight: 700;
+        color: Theme.text;
+    }
+    @children
+}
+
+/// One setting: what it is on the left, with an explanation below when it needs one, and its
+/// control at the far right.
+component SettingsRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> detail;
+
+    min-height: 44px;
+    spacing: 24px;
+
+    VerticalLayout {
+        horizontal-stretch: 1;
+        min-width: 160px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        alignment: center;
+        spacing: 3px;
+
+        if root.label != "": Text {
+            text: root.label;
+            font-size: 14px;
+            color: Theme.text-secondary;
+            wrap: word-wrap;
+        }
+        if root.detail != "": Text {
+            text: root.detail;
+            font-size: 12px;
+            color: Theme.text-secondary;
+            wrap: word-wrap;
+        }
+    }
+    HorizontalLayout {
+        alignment: end;
+        spacing: 8px;
+        padding-top: 6px;
+        padding-bottom: 6px;
+
+        @children
+    }
+}
+
+/// A link to one of Freya's pages, opened in the browser.
+component LinkRow inherits Rectangle {
+    in property <string> icon;
+    in property <string> text;
+    callback clicked;
+
+    height: 40px;
+    accessible-role: button;
+    accessible-label: text;
+    accessible-action-default => { root.clicked(); }
+
+    HorizontalLayout {
+        spacing: 12px;
+        alignment: start;
+
+        VerticalLayout {
+            alignment: center;
+
+            Icon {
+                width: 18px;
+                height: 18px;
+                data: root.icon;
+                stroked: true;
+                color: Theme.text-secondary;
+            }
+        }
+        Text {
+            text: root.text;
+            font-size: 14px;
+            color: touch.has-hover ? Theme.accent-text : Theme.text-secondary;
+            vertical-alignment: center;
+        }
+        VerticalLayout {
+            alignment: center;
+
+            Icon {
+                width: 14px;
+                height: 14px;
+                data: Icons.external;
+                stroked: true;
+                color: Theme.text-secondary;
+            }
+        }
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// A page of settings with a large title, using the view's width, and scrolling.
+component SettingsPage inherits ScrollView {
+    in property <string> title;
+
+    VerticalLayout {
+        alignment: start;
+        padding-top: 28px;
+        padding-bottom: 40px;
+        padding-left: 40px;
+        // Very wide windows keep the controls within reach of what they set.
+        padding-right: max(40px, root.visible-width - 40px - 1200px);
+        spacing: 32px;
+
+        Text {
+            text: root.title;
+            font-size: 32px;
+            font-weight: 800;
+            color: Theme.text;
+        }
+        @children
+    }
+}
+
+/// Settings: appearance, the music folders, the visualization and the skin.
+component SettingsView inherits Rectangle {
+    SettingsPage {
+        width: 100%;
+        height: 100%;
+        title: "Settings";
+
+        SettingsSection {
+            title: "Appearance";
+
+            SettingsRow {
+                label: "Color scheme";
+                detail: "System follows the light or dark mode of your computer.";
+
+                VerticalLayout {
+                    alignment: center;
+
+                    HorizontalLayout {
+                        spacing: 4px;
+
+                        ChoiceButton {
+                            text: "System";
+                            selected: App.theme == "system";
+                            clicked => { App.set-theme("system"); }
+                        }
+                        ChoiceButton {
+                            text: "Light";
+                            selected: App.theme == "light";
+                            clicked => { App.set-theme("light"); }
+                        }
+                        ChoiceButton {
+                            text: "Dark";
+                            selected: App.theme == "dark";
+                            clicked => { App.set-theme("dark"); }
+                        }
+                    }
+                }
+            }
+            SettingsRow {
+                label: "Skin";
+                detail: "How Freya looks: this one, or one of your own.";
+
+                VerticalLayout {
+                    alignment: center;
+
+                    TextButton {
+                        text: "Choose Skin…";
+                        clicked => { App.show-skins(); }
+                    }
+                }
+            }
+        }
+
+        SettingsSection {
+            title: "Library";
+
+            if Library.folders.length == 0: SettingsRow {
+                label: "No music folders yet. Freya lists the music in them by artist and album.";
+            }
+            for folder[i] in Library.folders: SettingsRow {
+                label: folder;
+
+                VerticalLayout {
+                    alignment: center;
+
+                    TextButton {
+                        text: "Remove";
+                        clicked => { Library.remove-folder(i); }
+                    }
+                }
+            }
+            SettingsRow {
+                label: Library.scanning ? Library.status : "Freya checks the folders for changes each time it starts.";
+
+                VerticalLayout {
+                    alignment: center;
+
+                    HorizontalLayout {
+                        spacing: 8px;
+
+                        TextButton {
+                            text: "Check for Changes";
+                            clicked => { Library.rescan(); }
+                        }
+                        TextButton {
+                            text: "Add Folder…";
+                            clicked => { Library.add-folder(); }
+                        }
+                    }
+                }
+            }
+        }
+
+        SettingsSection {
+            title: "Visualizer";
+
+            SettingsRow {
+                label: "Visualization";
+
+                VerticalLayout {
+                    alignment: center;
+
+                    HorizontalLayout {
+                        spacing: 4px;
+
+                        ChoiceButton {
+                            text: "Spectrum";
+                            selected: Visualizer.mode == "spectrum";
+                            clicked => { Visualizer.set-mode("spectrum"); }
+                        }
+                        ChoiceButton {
+                            text: "Oscilloscope";
+                            selected: Visualizer.mode == "oscilloscope";
+                            clicked => { Visualizer.set-mode("oscilloscope"); }
+                        }
+                        ChoiceButton {
+                            text: "Hologram";
+                            selected: Visualizer.mode == "hologram";
+                            clicked => { Visualizer.set-mode("hologram"); }
+                        }
+                        ChoiceButton {
+                            text: "Off";
+                            selected: Visualizer.mode == "off";
+                            clicked => { Visualizer.set-mode("off"); }
+                        }
+                    }
+                }
+            }
+            SettingsRow {
+                label: "Frame rate";
+                detail: "60 moves more smoothly and uses a little more power. The hologram always draws 60.";
+
+                VerticalLayout {
+                    alignment: center;
+
+                    HorizontalLayout {
+                        spacing: 4px;
+
+                        ChoiceButton {
+                            text: "30 fps";
+                            selected: Visualizer.fps == 30;
+                            clicked => { Visualizer.set-fps(30); }
+                        }
+                        ChoiceButton {
+                            text: "60 fps";
+                            selected: Visualizer.fps == 60;
+                            clicked => { Visualizer.set-fps(60); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// About Freya: its icon and version, updates, links to its pages, and the credits.
+component AboutView inherits Rectangle {
+    /// Show the update's notes, and install it.
+    callback show-update();
+
+    property <string> state: Updates.state;
+
+    SettingsPage {
+        width: 100%;
+        height: 100%;
+        title: "About Freya";
+
+        HorizontalLayout {
+            spacing: 20px;
+            alignment: start;
+
+            Image {
+                width: 88px;
+                height: 88px;
+                source: @image-url("freya-icon.png");
+            }
+            VerticalLayout {
+                alignment: center;
+                spacing: 3px;
+
+                Text {
+                    text: "Freya";
+                    font-size: 22px;
+                    font-weight: 700;
+                    color: Theme.text;
+                }
+                Text {
+                    text: "Version " + App.version + (App.build-date != "" ? " · built " + App.build-date : "");
+                    font-size: 13px;
+                    color: Theme.text-secondary;
+                }
+                Text {
+                    text: "A music player you can make look your own.";
+                    font-size: 13px;
+                    color: Theme.text-secondary;
+                }
+            }
+        }
+
+        SettingsSection {
+            title: "Updates";
+
+            SettingsRow {
+                label: root.state == "checking" ? "Looking for updates…"
+                    : root.state == "up-to-date" ? "Freya is up to date."
+                    : root.state == "available" ? "Freya " + Updates.version + " is available."
+                    : root.state == "downloading" ? "Downloading Freya " + Updates.version + "…"
+                    : root.state == "installed" ? "Restarting into Freya " + Updates.version + "…"
+                    : root.state == "failed" ? "The update did not work."
+                    : "Not checked yet.";
+                detail: root.state == "failed" ? Updates.error : "";
+
+                VerticalLayout {
+                    alignment: center;
+
+                    HorizontalLayout {
+                        spacing: 8px;
+
+                        if root.state == "available": TextButton {
+                            text: "Release Notes";
+                            clicked => { App.open-link("releases"); }
+                        }
+                        if root.state == "available": TextButton {
+                            text: "Update…";
+                            primary: true;
+                            clicked => { root.show-update(); }
+                        }
+                        TextButton {
+                            text: "Check for Updates";
+                            clicked => { Updates.check(); }
+                        }
+                    }
+                }
+            }
+            SettingsRow {
+                label: "Check for updates automatically";
+                detail: "When Freya starts and once a day. Updates are only installed when you ask.";
+
+                VerticalLayout {
+                    alignment: center;
+
+                    Toggle {
+                        label: "Check for updates automatically";
+                        checked: Updates.check-automatically;
+                        toggled => { Updates.set-check-automatically(!Updates.check-automatically); }
+                    }
+                }
+            }
+        }
+
+        SettingsSection {
+            title: "Links";
+
+            LinkRow {
+                icon: Icons.code;
+                text: "GitHub";
+                clicked => { App.open-link("github"); }
+            }
+            LinkRow {
+                icon: Icons.document;
+                text: "Release Notes";
+                clicked => { App.open-link("releases"); }
+            }
+            LinkRow {
+                icon: Icons.bubble;
+                text: "Report an Issue";
+                clicked => { App.open-link("issues"); }
+            }
+            LinkRow {
+                icon: Icons.check;
+                text: "License";
+                clicked => { App.open-link("license"); }
+            }
+        }
+
+        SettingsSection {
+            title: "Made with";
+
+            HorizontalLayout {
+                alignment: start;
+
+                AboutSlint {
+                    width: 240px;
+                    height: 130px;
+                }
+            }
+            Text {
+                text: "© 2026 Alexander Vikman. MIT or Apache-2.0.";
+                font-size: 12px;
+                color: Theme.text-secondary;
+            }
+        }
+    }
+}
+
 /// The bar above the content: the navigation button, back, the view's title and actions,
 /// search, and the menu.
 component Toolbar inherits HorizontalLayout {
@@ -3377,38 +3804,12 @@ component Toolbar inherits HorizontalLayout {
                 }
                 if root.view == "queue" || root.view == "library" || root.view == "playlist": MenuDivider { }
                 MenuItem {
-                    text: "Appearance: system";
-                    checked: App.theme == "system";
-                    activated => { App.set-theme("system"); }
-                }
-                MenuItem {
-                    text: "Appearance: light";
-                    checked: App.theme == "light";
-                    activated => { App.set-theme("light"); }
-                }
-                MenuItem {
-                    text: "Appearance: dark";
-                    checked: App.theme == "dark";
-                    activated => { App.set-theme("dark"); }
-                }
-                MenuDivider { }
-                MenuItem {
-                    text: "Check for Updates…";
-                    activated => { root.check-updates(); }
-                }
-                MenuItem {
-                    text: "Check for Updates Automatically";
-                    checked: Updates.check-automatically;
-                    activated => { Updates.set-check-automatically(!Updates.check-automatically); }
-                }
-                MenuDivider { }
-                MenuItem {
-                    text: "Skins…";
-                    activated => { App.show-skins(); }
+                    text: "Settings";
+                    activated => { root.show-view("settings"); }
                 }
                 MenuItem {
                     text: "About Freya";
-                    activated => { App.show-about(); }
+                    activated => { root.show-view("about"); }
                 }
             }
         }
@@ -3487,8 +3888,8 @@ export component FreyaSkin inherits Window {
     default-font-size: 14px;
     forward-focus: shortcuts;
 
-    /// The view in the content area: "queue", "library", "radio", "playlist", "visualizer" or
-    /// "equalizer".
+    /// The view in the content area: "queue", "library", "radio", "playlist", "visualizer",
+    /// "equalizer", "settings" or "about".
     in-out property <string> view: "queue";
     /// The view the visualizer and equalizer buttons go back to.
     property <string> music-view: "queue";
@@ -3554,6 +3955,11 @@ export component FreyaSkin inherits Window {
     // F fills the screen with the visualizer, and Esc leaves it again.
     stage-keys := FocusScope {
         key-pressed(event) => {
+            // Cmd+, (Ctrl+, elsewhere) opens Settings, as in most apps.
+            if (event.text == "," && (event.modifiers.meta || event.modifiers.control) && !event.modifiers.alt) {
+                root.show("settings");
+                return accept;
+            }
             if (event.modifiers.control || event.modifiers.meta || event.modifiers.alt) {
                 return reject;
             }
@@ -3604,6 +4010,7 @@ export component FreyaSkin inherits Window {
                                     : root.view == "radio" ? "Radio"
                                     : root.view == "playlist" ? (Playlists.shown >= 0 ? Playlists.playlists[Playlists.shown].name : "Playlist")
                                     : root.view == "visualizer" ? "Visualizer"
+                                    : root.view == "settings" || root.view == "about" ? ""
                                     : "Equalizer";
                                 subtitle: root.view == "queue" ? Playlist.summary
                                     : root.view == "library" ? (Library.subtitle != "" ? Library.subtitle : Library.status)
@@ -3662,6 +4069,15 @@ export component FreyaSkin inherits Window {
                             if root.view == "equalizer": EqualizerView {
                                 width: 100%;
                                 height: 100%;
+                            }
+                            if root.view == "settings": SettingsView {
+                                width: 100%;
+                                height: 100%;
+                            }
+                            if root.view == "about": AboutView {
+                                width: 100%;
+                                height: 100%;
+                                show-update => { update-popup.show(); }
                             }
                         }
                     }

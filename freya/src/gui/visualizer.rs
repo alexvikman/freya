@@ -17,6 +17,13 @@ use slint::winit_030::WinitWindowAccessor;
 /// Allowed visualization frame rates.
 const FPS_RANGE: std::ops::RangeInclusive<u32> = 10..=120;
 
+/// `fps` as a frame rate Freya draws at, or `None` when it is out of range.
+pub fn fps(fps: f64) -> Option<u32> {
+    let fps = fps.round();
+    (fps >= f64::from(*FPS_RANGE.start()) && fps <= f64::from(*FPS_RANGE.end()))
+        .then_some(fps as u32)
+}
+
 /// Time between visualization frames at `fps` frames per second.
 pub fn frame_interval(fps: u32) -> Duration {
     Duration::from_secs_f64(1.0 / f64::from(fps.clamp(*FPS_RANGE.start(), *FPS_RANGE.end())))
@@ -75,6 +82,7 @@ pub struct Visualizer {
     native: Option<NativeSpectrum>,
     native_placed: Option<(Option<Area>, slint::PhysicalSize)>,
     mode_shown: Option<String>,
+    fps_shown: Option<u32>,
     /// The oscilloscope layer Freya draws itself, where the system allows it, and the area
     /// and window size it was last placed for.
     oscilloscope: Option<NativeOscilloscope>,
@@ -105,6 +113,7 @@ impl Visualizer {
             native: None,
             native_placed: None,
             mode_shown: None,
+            fps_shown: None,
             oscilloscope: None,
             oscilloscope_placed: None,
             hologram: None,
@@ -155,6 +164,14 @@ impl Visualizer {
             self.tapping = want;
         }
         self.wanted = want;
+    }
+
+    /// Tells the skin the frame rate, when it changed.
+    pub fn show_fps(&mut self, ui: &SkinWindow, fps: u32) {
+        if self.available && self.fps_shown != Some(fps) {
+            let _ = ui.set_global_property("Visualizer", "fps", Value::Number(f64::from(fps)));
+            self.fps_shown = Some(fps);
+        }
     }
 
     /// Adds Freya's own spectrum layer once the window is open, and keeps it where the skin's

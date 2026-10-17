@@ -380,6 +380,17 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     );
 
     bind("App", "show-about", Box::new(|app, _| app.show_about()));
+    bind(
+        "App",
+        "open-link",
+        Box::new(|_, args| {
+            if let Some(Value::String(name)) = args.first()
+                && let Some(url) = crate::update::page(name)
+            {
+                crate::update::open_page(&url);
+            }
+        }),
+    );
 
     bind(
         "Updates",
@@ -468,6 +479,15 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
                 && visualizer::is_mode(mode)
             {
                 app.settings.visualizer_mode = mode.to_string();
+            }
+        }),
+    );
+    bind(
+        "Visualizer",
+        "set-fps",
+        Box::new(|app, args| {
+            if let Some(fps) = visualizer::fps(number(args, 0)) {
+                app.settings.visualizer_fps = fps;
             }
         }),
     );

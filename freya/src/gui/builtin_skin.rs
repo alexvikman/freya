@@ -534,8 +534,10 @@ skin_api! {
         Visualizer."hologram-drawing" => set_hologram_drawing, get_hologram_drawing;
         Visualizer."hologram-area" => set_hologram_area, get_hologram_area;
         Visualizer."showing" => set_showing, get_showing;
+        Visualizer."fps" => set_fps, get_fps;
 
         App."version" => set_version, get_version;
+        App."build-date" => set_build_date, get_build_date;
         App."theme" => set_theme, get_theme;
         App."equalizer-visible" => set_equalizer_visible, get_equalizer_visible;
         App."title-bar-height" => set_title_bar_height, get_title_bar_height;
@@ -616,6 +618,7 @@ skin_api! {
 
         Visualizer."cycle-mode" => on_cycle_mode, invoke_cycle_mode();
         Visualizer."set-mode" => on_set_mode, invoke_set_mode(mode: SharedString);
+        Visualizer."set-fps" => on_set_fps, invoke_set_fps(fps: i32);
         Visualizer."wave" => on_wave, invoke_wave(width: f32, height: f32, samples: ModelRc<f32>) -> SharedString;
         Visualizer."bars-path" => on_bars_path, invoke_bars_path(width: f32, height: f32, bars: ModelRc<f32>) -> SharedString;
         Visualizer."peaks-path" => on_peaks_path, invoke_peaks_path(width: f32, height: f32, peaks: ModelRc<f32>, thickness: f32) -> SharedString;
@@ -625,6 +628,7 @@ skin_api! {
         App."set-theme" => on_set_theme, invoke_set_theme(theme: SharedString);
         App."toggle-equalizer" => on_toggle_equalizer, invoke_toggle_equalizer();
         App."drag-window" => on_drag_window, invoke_drag_window();
+        App."open-link" => on_open_link, invoke_open_link(name: SharedString);
         Updates."check" => on_check, invoke_check();
         Updates."install" => on_install, invoke_install();
         Updates."later" => on_later, invoke_later();

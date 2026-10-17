@@ -232,6 +232,34 @@ pub fn string(s: impl AsRef<str>) -> Value {
     Value::String(SharedString::from(s.as_ref()))
 }
 
+/// When the running program was built, as "2026-10-17" (in UTC): its file's modification time,
+/// which a build or an install sets. `None` when the file cannot be read.
+pub fn build_date() -> Option<String> {
+    let modified = std::fs::metadata(std::env::current_exe().ok()?)
+        .ok()?
+        .modified()
+        .ok()?;
+    let seconds = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    Some(civil_date(seconds / 86_400))
+}
+
+/// The date `days` after 1970-01-01, as "YYYY-MM-DD" (Howard Hinnant's `civil_from_days`).
+fn civil_date(days: u64) -> String {
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
 pub fn format_time(d: Duration) -> String {
     let secs = d.as_secs();
     if secs >= 3600 {
@@ -272,6 +300,13 @@ pub fn format_info(track: &Arc<TrackInfo>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dates_from_days() {
+        assert_eq!(civil_date(0), "1970-01-01");
+        assert_eq!(civil_date(11_016), "2000-02-29");
+        assert_eq!(civil_date(20_743), "2026-10-17");
+    }
 
     #[test]
     fn formats_times_and_info() {

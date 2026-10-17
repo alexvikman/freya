@@ -286,8 +286,20 @@ pub fn due(last: Option<u64>, now: SystemTime) -> bool {
     last.is_none_or(|last| now.saturating_sub(last) >= CHECK_INTERVAL.as_secs())
 }
 
+/// The address of one of Freya's own pages, by the name skins use (`App.open-link`).
+pub fn page(name: &str) -> Option<String> {
+    let base = format!("https://github.com/{}", release::REPOSITORY);
+    Some(match name {
+        "github" => base,
+        "releases" => format!("{base}/releases"),
+        "issues" => format!("{base}/issues"),
+        "license" => format!("{base}/blob/main/README.md#license"),
+        _ => return None,
+    })
+}
+
 /// Opens a web page in the user's browser.
-fn open_page(url: &str) {
+pub fn open_page(url: &str) {
     let opener = if cfg!(target_os = "macos") {
         "open"
     } else if cfg!(windows) {
