@@ -62,7 +62,8 @@ impl Area {
 /// Which poses to show `seconds` in: the one she holds, the next, and how far the glitch from
 /// one to the other has come, from 0 to 1.
 pub fn poses_at(seconds: f32, count: usize) -> (usize, usize, f32) {
-    if count == 0 {
+    // With one pose there is nothing to change to.
+    if count <= 1 {
         return (0, 0, 0.0);
     }
     let held = (seconds.max(0.0) / POSE_SECONDS) as usize;
@@ -122,5 +123,10 @@ mod tests {
         assert_eq!(poses_at(POSE_SECONDS, 5), (1, 2, 0.0));
         assert_eq!(poses_at(5.0 * POSE_SECONDS, 5).0, 0, "round again");
         assert_eq!(poses_at(3.0, 0), (0, 0, 0.0));
+        assert_eq!(
+            poses_at(POSE_SECONDS - 0.5, 1),
+            (0, 0, 0.0),
+            "one pose never glitches"
+        );
     }
 }

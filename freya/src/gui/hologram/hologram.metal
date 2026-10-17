@@ -82,11 +82,13 @@ float3 buildings(float2 p, float3 c, float3 fog) {
         float top = mix(0.05, 0.3, depth) + hash(float2(column, float(layer))) * mix(0.25, 0.18, depth);
         if (p.y > top) {
             float3 wall = mix(float3(0.015, 0.02, 0.035), fog, 0.35 + 0.5 * depth);
-            // Windows: a grid, a few of them lit.
-            float2 cell = floor(float2((p.x + float(layer) * 0.37) / (width / 6.0), p.y / 0.016));
-            float lit = step(0.9, hash(cell + float(layer) * 11.0));
+            // Windows: a fine grid, a few of them lit, each a soft point of light.
+            float2 grid = float2((p.x + float(layer) * 0.37) / (width / 9.0), p.y / 0.011);
+            float2 cell = floor(grid);
+            float lit = step(0.93, hash(cell + float(layer) * 11.0));
+            float point = smoothstep(0.5, 0.05, length(fract(grid) - 0.5));
             float3 window = mix(float3(1.0, 0.7, 0.35), float3(0.4, 0.8, 1.0), hash(cell * 1.3));
-            c = wall + window * lit * mix(0.5, 0.15, depth);
+            c = wall + window * lit * point * mix(0.35, 0.1, depth);
         }
     }
     return c;
@@ -114,12 +116,13 @@ float3 city(float2 p, float aspect, float t, float pulse) {
     c += lights(p, t, 1.0) * 0.35;
     c = buildings(p, c, fog * 0.6);
     c += lights(p * float2(1.0, 1.1) + float2(0.3, 0.02), t, 0.4) * 0.45;
-    // The street: wet, mirroring the lights above it, with ripples.
-    if (p.y > HORIZON) {
-        float below = p.y - HORIZON;
-        float2 mirrored = float2(p.x + 0.004 * sin(p.y * 220.0 + t * 3.0), HORIZON - below * 1.6);
-        c = float3(0.01, 0.012, 0.02) + lights(mirrored, t, 0.6) * 0.3 * (1.0 - below * 1.8);
-    }
+    // The street: wet, mirroring the city above it, with ripples, under the same fog. It
+    // takes over from the city gradually, so there is no edge where they meet.
+    float below = max(p.y - HORIZON, 0.0);
+    float2 mirrored = float2(p.x + 0.004 * sin(p.y * 220.0 + t * 3.0), HORIZON - below * 1.6);
+    float3 street = float3(0.012, 0.014, 0.024) + fog * 0.18 * exp(-below * 6.0)
+        + lights(mirrored, t, 0.6) * 0.42 * exp(-below * 2.2);
+    c = mix(c, street, smoothstep(HORIZON - 0.03, HORIZON + 0.05, p.y));
     c += rain(p, t) * mix(float3(0.6, 0.75, 0.9), fog, 0.3);
     // The fog breathes a little with the bass.
     c += fog * 0.05 * (1.0 + pulse);
@@ -137,7 +140,7 @@ float3 projected(float3 colour) {
     float3 tint = luma < 0.5
         ? mix(float3(0.25, 0.05, 0.55), float3(1.0, 0.35, 0.75), luma * 2.0)
         : mix(float3(1.0, 0.35, 0.75), float3(0.75, 0.95, 1.0), luma * 2.0 - 1.0);
-    return mix(tint * (0.4 + luma), colour * 1.1, 0.42);
+    return mix(tint * (0.45 + luma), colour * 1.15, 0.6);
 }
 
 // The pose in `pose`, at `uv`, as projected light with its colour fringes.
@@ -146,9 +149,15 @@ float4 light_of(texture2d<float> pose, float2 uv, float fringe) {
     float4 g = pose.sample(poses, uv);
     float b = pose.sample(poses, uv - float2(fringe, 0.0)).b;
     float3 colour = float3(r, g.g, b);
-    // Black is no light at all: it is see-through.
-    float alpha = smoothstep(0.03, 0.22, max(colour.r, max(colour.g, colour.b)));
-    return float4(projected(colour), alpha);
+    // Only black is no light at all and see-through; dark clothes still glow faintly, so all
+    // of her is projected, not only her face and skin.
+    float brightest = max(colour.r, max(colour.g, colour.b));
+    float alpha = smoothstep(0.01, 0.09, brightest);
+    // Lifted, most where dark: her clothes glow, and her skin stays bright but keeps its
+    // detail.
+    float luma = dot(colour, float3(0.3, 0.59, 0.11));
+    float3 lifted = mix(pow(colour, float3(0.55)), colour, 0.5 * smoothstep(0.08, 0.45, luma));
+    return float4(projected(lifted), alpha);
 }
 
 fragment float4 hologram_fragment(Varyings in [[stage_in]],
@@ -195,13 +204,13 @@ fragment float4 hologram_fragment(Varyings in [[stage_in]],
         if (hash(float2(tick, 3.1)) > 0.97) {
             flicker *= 0.6;
         }
-        float flash = 1.0 + 1.4 * exp(-pow((u.transition - 0.5) * 7.0, 2.0)) * step(0.01, u.transition);
-        float strength = 0.82 * scan * flicker * flash * (0.9 + 0.35 * u.pulse);
+        float flash = 1.0 + 0.5 * exp(-pow((u.transition - 0.5) * 7.0, 2.0)) * step(0.01, u.transition);
+        float strength = 0.78 * scan * flicker * flash * (0.9 + 0.35 * u.pulse);
 
         // Her glow, from a blurred copy of the pose.
         float4 haze = current.sample(poses, uv, level(6.0));
         float glow = smoothstep(0.02, 0.3, max(haze.r, max(haze.g, haze.b)));
-        float3 glow_colour = float3(1.0, 0.4, 0.8) * glow * (0.22 + 0.3 * u.pulse);
+        float3 glow_colour = float3(1.0, 0.4, 0.8) * glow * (0.2 + 0.3 * u.pulse);
 
         // The projector's beam, rising faintly from the street to her.
         float beam = exp(-pow((p.x - aspect * 0.5) / (0.08 + 0.25 * (1.0 - p.y)), 2.0))

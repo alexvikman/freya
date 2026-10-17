@@ -11,6 +11,7 @@ use super::hologram::{self, Hologram};
 use super::native_spectrum::{Area, NativeSpectrum};
 use super::skin_state;
 use super::skin_window::SkinWindow;
+use slint::winit_030::WinitWindowAccessor;
 
 /// Allowed visualization frame rates.
 const FPS_RANGE: std::ops::RangeInclusive<u32> = 10..=120;
@@ -182,7 +183,9 @@ impl Visualizer {
         }
         let area = hologram::Area::read(ui).filter(|_| mode == "hologram" && window_shown);
         if self.hologram.is_none() {
-            if area.is_none() {
+            // Started as soon as the mode is chosen, even before its view is shown: setting it
+            // up takes moments, which then pass out of sight. The window must be open first.
+            if mode != "hologram" || !ui.window().has_winit_window() {
                 return;
             }
             self.hologram = Hologram::new(ui.window());

@@ -36,9 +36,6 @@ pub const NAME: &str = "Metal";
 pub const SUPPORTED: bool = true;
 
 const SHADERS: &str = include_str!("hologram.metal");
-/// Her poses, as textures: tall enough to stay sharp in a large window, small enough to decode
-/// in moments.
-const POSE_HEIGHT: u32 = 1024;
 
 /// What the shader gets each frame; laid out like `Uniforms` in hologram.metal.
 #[repr(C)]
@@ -102,19 +99,12 @@ pub struct Renderer {
 }
 
 impl Renderer {
+    /// Adds the layer, and starts the drawing thread, which sets up the graphics card and her
+    /// poses: that takes moments (Metal itself up to a second and a half the first time), so
+    /// none of it is done on the window's thread.
     pub fn new(window: &slint::Window, poses: &'static [&'static [u8]]) -> Option<Self> {
         let parent = view(window)?.layer()?;
-        let device = MTLCreateSystemDefaultDevice()?;
-        let gpu = match Gpu::new(device.clone()) {
-            Ok(gpu) => gpu,
-            Err(e) => {
-                log::warn!("the hologram cannot use the graphics card: {e}");
-                return None;
-            }
-        };
-
         let layer = CAMetalLayer::new();
-        layer.setDevice(Some(&device));
         layer.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
         layer.setFramebufferOnly(true);
         layer.setDisplaySyncEnabled(true);
@@ -133,7 +123,9 @@ impl Renderer {
             std::thread::Builder::new()
                 .name("freya-hologram".into())
                 .spawn(move || {
-                    let (textures, count) = gpu.poses(poses);
+                    let Some((gpu, textures, count)) = set_up(&layer, poses) else {
+                        return;
+                    };
                     draw(&shared, &layer, &gpu, &textures, count > 0);
                 })
                 .ok()?
@@ -195,6 +187,34 @@ impl Drop for Renderer {
     }
 }
 
+/// The graphics card, the shaders and her poses, ready to draw into `layer`.
+fn set_up(layer: &ThreadLayer, poses: &[&[u8]]) -> Option<(Gpu, Vec<Texture>, usize)> {
+    let started = Instant::now();
+    let Some(device) = MTLCreateSystemDefaultDevice() else {
+        log::warn!("the hologram finds no graphics card");
+        return None;
+    };
+    let metal = started.elapsed();
+    let gpu = match Gpu::new(device) {
+        Ok(gpu) => gpu,
+        Err(e) => {
+            log::warn!("the hologram cannot use the graphics card: {e}");
+            return None;
+        }
+    };
+    CATransaction::begin();
+    layer.0.setDevice(Some(&gpu.device));
+    CATransaction::commit();
+    let shaders = started.elapsed() - metal;
+    let (textures, count) = gpu.poses(poses);
+    log::info!(
+        "the hologram was ready in {:?} (Metal {metal:?}, shaders {shaders:?}, {count} poses {:?})",
+        started.elapsed(),
+        started.elapsed() - metal - shaders
+    );
+    Some((gpu, textures, count))
+}
+
 impl Gpu {
     fn new(device: Retained<ProtocolObject<dyn MTLDevice>>) -> Result<Self, String> {
         let queue = device.newCommandQueue().ok_or("no command queue")?;
@@ -223,8 +243,8 @@ impl Gpu {
         })
     }
 
-    /// Her poses as textures with mipmaps (the shader's glow reads the small ones), all the
-    /// same size, and how many there are. Poses that cannot be read are left out; with none,
+    /// Her poses as textures with mipmaps (the shader's glow reads the small ones), and how
+    /// many there are. Poses that cannot be read are left out; with none,
     /// one black texture stands in.
     fn poses(&self, files: &[&[u8]]) -> (Vec<Texture>, usize) {
         let images: Vec<image::RgbaImage> = files
@@ -237,21 +257,12 @@ impl Gpu {
                 }
             })
             .collect();
-        // The first pose sets the shape; the others are fitted to it.
-        let (width, height) = images.first().map_or((1, 1), |first| {
-            let (w, h) = first.dimensions();
-            let height = POSE_HEIGHT.min(h);
-            ((w * height / h).max(1), height)
-        });
+        // Each at its own size: the graphics card scales them as it draws. (Scaling them here
+        // took four seconds.) Poses of another shape than the first are stretched to it.
         let mut textures: Vec<Texture> = images
             .iter()
             .filter_map(|image| {
-                let image = image::imageops::resize(
-                    image,
-                    width,
-                    height,
-                    image::imageops::FilterType::CatmullRom,
-                );
+                let (width, height) = image.dimensions();
                 self.texture(image.as_raw(), width, height)
             })
             .collect();
@@ -438,4 +449,25 @@ fn view(window: &slint::Window) -> Option<Retained<NSView>> {
         .flatten()?;
     // SAFETY: the pointer is the live NSView of a window that is open, on the main thread.
     unsafe { Retained::retain(pointer.as_ptr().cast::<NSView>()) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The poses must be ready in moments: they were once scaled on the CPU, which took four
+    /// seconds before the hologram showed.
+    #[test]
+    fn poses_are_ready_quickly() {
+        let Some(device) = MTLCreateSystemDefaultDevice() else {
+            return;
+        };
+        let gpu = Gpu::new(device).expect("the shaders compile");
+        let started = Instant::now();
+        let (textures, count) = gpu.poses(super::super::poses::POSES);
+        let took = started.elapsed();
+        println!("{count} poses in {took:?}");
+        assert_eq!(textures.len(), count.max(1));
+        assert!(took < Duration::from_millis(500), "{took:?}");
+    }
 }
