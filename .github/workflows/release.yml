@@ -1,7 +1,8 @@
 # Releases Freya (see docs/RELEASING.md). A version tag, vX.Y.Z, matching the version in
-# Cargo.toml, builds and packages Freya for every platform; the release job, which waits for the
-# owner's approval in the `release` environment, signs the checksums and publishes the GitHub
-# Release that Freya's updater reads. Started by hand, it only builds the packages.
+# Cargo.toml and on main, first passes all of CI (ci.yml, on the tagged commit), then builds and
+# packages Freya for every platform; the release job, which waits for the owner's approval in the
+# `release` environment, signs the checksums and publishes the GitHub Release that Freya's
+# updater reads. Started by hand, it only checks and builds the packages.
 name: Release
 
 on:
@@ -28,6 +29,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # All branches, to see that the tag is on main.
+          fetch-depth: 0
           persist-credentials: false
       - id: version
         name: The version, and the tag that names it
@@ -43,22 +46,20 @@ jobs:
             if [ "$TAG" != "v$version" ]; then
               echo "::error::The tag $TAG does not match the version $version in Cargo.toml"; exit 1
             fi
+            # Released commits have been pushed to main, never only to a side branch.
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "::error::$TAG is not on main"; exit 1
+            fi
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-  # Every commit, scanned for credentials before anything is built or published.
-  secrets:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - run: sudo sh ci/install-gitleaks.sh
-      - run: gitleaks git --redact --no-banner .
+  # All of CI on the commit being released: tests on every platform, dependencies, scripts and
+  # every commit scanned for credentials. Nothing is built or published unless it passes.
+  ci:
+    uses: ./.github/workflows/ci.yml
 
   macos:
-    needs: [check, secrets]
+    needs: [check, ci]
     strategy:
       matrix:
         include:
@@ -123,7 +124,7 @@ jobs:
           if-no-files-found: error
 
   linux:
-    needs: [check, secrets]
+    needs: [check, ci]
     strategy:
       matrix:
         include:
@@ -163,7 +164,7 @@ jobs:
           if-no-files-found: error
 
   windows:
-    needs: [check, secrets]
+    needs: [check, ci]
     runs-on: windows-2025
     env:
       VERSION: ${{ needs.check.outputs.version }}
@@ -199,7 +200,7 @@ jobs:
 
   release:
     if: github.ref_type == 'tag'
-    needs: [check, macos, linux, windows]
+    needs: [check, ci, macos, linux, windows]
     runs-on: ubuntu-24.04
     # Holds the release signing key, and waits for the owner's approval.
     environment: release

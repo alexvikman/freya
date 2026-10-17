@@ -15,8 +15,10 @@ it scans every commit for secrets before it commits, and pushes nothing.
 
 The tag starts [`.github/workflows/release.yml`](../.github/workflows/release.yml):
 
-1. **check**: the tag is `vX.Y.Z` and matches the version in `Cargo.toml`.
-2. **secrets**: gitleaks scans every commit.
+1. **check**: the tag is `vX.Y.Z`, matches the version in `Cargo.toml`, and is on `main`.
+2. **ci**: all of [`ci.yml`](../.github/workflows/ci.yml) on the tagged commit: tests on
+   macOS, Linux and Windows, the dependency checks, shellcheck, and gitleaks over every
+   commit. Nothing is built unless it passes.
 3. **macos**, **linux**, **windows**: build, package and sign on each platform (Apple Silicon
    and Intel; Linux x86-64 and arm64 on Ubuntu 22.04, so the AppImage runs widely; Windows
    x86-64), each with a smoke test of the version, giving the files named in *How it
@@ -67,7 +69,8 @@ may ever be committed, so every commit is scanned:
   (`brew install gitleaks`) and refuses to commit without it.
 - **In CI**, the `secrets` job of `.github/workflows/ci.yml` scans every commit; locally,
   `ci/check.sh secrets` does the same in Docker.
-- **Before each release**, the release workflow scans again before anything is published.
+- **Before each release**, the release workflow runs all of CI again, scan included, before
+  anything is built or published.
 
 `.gitleaks.toml` holds the configuration: gitleaks' own rules (private keys, cloud and GitHub
 tokens and many more), plus one for Apple app-specific passwords. Build output (`target/`) and
