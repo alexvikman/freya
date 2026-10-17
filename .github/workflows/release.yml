@@ -250,7 +250,9 @@ jobs:
           fi
       - name: Check the signature against the key built into Freya
         run: |
-          grep -o '"ssh-ed25519 [^"]*"' freya/src/update/signing.rs | tr -d '"' |
+          # Only the keys in RELEASE_KEYS: signing.rs also holds keys for its tests.
+          awk '/^pub const RELEASE_KEYS/,/^\];/' freya/src/update/signing.rs |
+            grep -o '"ssh-ed25519 [^"]*"' | tr -d '"' |
             awk '{ print "freya-release namespaces=\"freya-release\" " $1 " " $2 }' \
             > "$RUNNER_TEMP/allowed_signers"
           test -s "$RUNNER_TEMP/allowed_signers"
