@@ -118,6 +118,8 @@ fn scans_add_update_and_remove_files() {
         first_added,
         "a changed file keeps when it came"
     );
+    // Closed first: Windows does not delete a database that is open.
+    drop(library);
     std::fs::remove_dir_all(&music).unwrap();
 }
 
@@ -192,6 +194,8 @@ fn a_cue_sheet_lists_its_file_as_tracks() {
     assert_eq!((removed.added, removed.removed), (1, 1));
     assert_eq!(library.stats().unwrap().tracks, 2);
     assert_eq!(titles(&library.search("album", 10).unwrap()), ["Album"]);
+    // Closed first: Windows does not delete a database that is open.
+    drop(library);
     std::fs::remove_dir_all(&music).unwrap();
 }
 
@@ -484,6 +488,8 @@ fn rebuilds_a_library_from_an_older_layout() {
     assert_eq!(library.stats().unwrap().tracks, 0);
     add(&mut library, "/m/1.mp3", &tags("A", "B", "C", 1));
     assert_eq!(library.most_played(10).unwrap()[0].plays, 1);
+    // Closed first: Windows does not delete a database that is open.
+    drop(library);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
