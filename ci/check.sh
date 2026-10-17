@@ -27,7 +27,8 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-docker build --quiet -t freya-ci ci >/dev/null
+rust=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+docker build --quiet --build-arg RUST_VERSION="$rust" -t freya-ci ci >/dev/null
 # Build output is kept per checkout: the source is always /src in the container, so two
 # checkouts sharing one volume would each find the other's newer build and skip rebuilding.
 target_volume="freya-ci-target-$(printf '%s' "$PWD" | cksum | cut -d ' ' -f 1)"

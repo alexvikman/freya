@@ -13,8 +13,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 
+# The Rust in rust-toolchain.toml, passed in by ci/check.sh, so the mounted checkout uses the
+# toolchain that is already here instead of downloading it on every run.
+ARG RUST_VERSION
 ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:$PATH
-RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal \
+RUN test -n "$RUST_VERSION" && curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal \
+        --default-toolchain "$RUST_VERSION" \
         --component clippy,rustfmt --target x86_64-pc-windows-gnu
 
 # MinGW for the Windows target, including the C code built by cmake (libopus). libopus is

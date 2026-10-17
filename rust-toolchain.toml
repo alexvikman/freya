@@ -1,0 +1,7 @@
+# The Rust that builds, checks and releases Freya: CI, releases, ci/check.sh's container and
+# rustup on your machine all use this one, so a release is built with the compiler it was
+# tested with. Updated by hand, like the crates (see docs/DEPENDENCIES.md).
+[toolchain]
+channel = "1.99.1"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

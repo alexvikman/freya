@@ -6,7 +6,7 @@ Status: early development. The audio engine, playlist model and equalizer are in
 
 ## Building
 
-Requires a stable Rust toolchain ([rustup](https://rustup.rs)) and [CMake](https://cmake.org), which builds the Opus decoder (`brew install cmake` on macOS; build without Opus with `--no-default-features` on `freya-audio`). On Linux, install the ALSA, fontconfig and xkbcommon development headers (`libasound2-dev libfontconfig1-dev libxkbcommon-dev` on Debian/Ubuntu).
+Requires Rust ([rustup](https://rustup.rs) installs the version in `rust-toolchain.toml` by itself) and [CMake](https://cmake.org), which builds the Opus decoder (`brew install cmake` on macOS; build without Opus with `--no-default-features` on `freya-audio`). On Linux, install the ALSA, fontconfig and xkbcommon development headers (`libasound2-dev libfontconfig1-dev libxkbcommon-dev` on Debian/Ubuntu).
 
 ```sh
 cargo build --release

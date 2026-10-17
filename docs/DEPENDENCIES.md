@@ -98,6 +98,10 @@ it or add an exemption. Run the tests and `ci/check.sh`, and commit `Cargo.lock`
 Moving to a new major version (changing `Cargo.toml`) works the same way, followed by the
 usual build and test.
 
+Rust itself is pinned in `rust-toolchain.toml`, so CI, releases and `ci/check.sh` build with the
+same compiler. Moving to a newer Rust is a step of its own too: change `channel` there, fix
+whatever new clippy lints find, and run the tests and `ci/check.sh`.
+
 ## Tools
 
 `cargo install --locked cargo-deny cargo-vet` installs both. `ci/check.sh deps` uses pinned

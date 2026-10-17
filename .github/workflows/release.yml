@@ -83,7 +83,8 @@ jobs:
         with:
           persist-credentials: false
       - name: Rust
-        run: rustup toolchain install stable --profile minimal && rustup default stable
+        # The version in rust-toolchain.toml.
+        run: rustup toolchain install
       - name: cargo-packager
         run: cargo install cargo-packager --locked --version "$CARGO_PACKAGER_VERSION"
       - name: Developer ID certificate, into a keychain of its own
@@ -146,7 +147,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends cmake libasound2-dev \
             libfontconfig1-dev libxkbcommon-dev libfuse2
       - name: Rust
-        run: rustup toolchain install stable --profile minimal && rustup default stable
+        # The version in rust-toolchain.toml.
+        run: rustup toolchain install
       - name: cargo-packager
         run: cargo install cargo-packager --locked --version "$CARGO_PACKAGER_VERSION"
       - name: Package
@@ -176,7 +178,8 @@ jobs:
         with:
           persist-credentials: false
       - name: Rust
-        run: rustup toolchain install stable --profile minimal && rustup default stable
+        # The version in rust-toolchain.toml.
+        run: rustup toolchain install
       - name: cargo-packager
         run: cargo install cargo-packager --locked --version "$CARGO_PACKAGER_VERSION"
       - name: Package
