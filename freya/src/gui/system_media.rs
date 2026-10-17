@@ -3,6 +3,7 @@
 //! Each system has its own small `Controls` in a module of its own; this file decides what to
 //! tell them and when.
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
@@ -156,7 +157,26 @@ impl SystemMedia {
     }
 }
 
+thread_local! {
+    /// What handles requests on the main thread, set by [`on_request`].
+    static HANDLER: RefCell<Option<Box<dyn Fn()>>> = const { RefCell::new(None) };
+}
+
+/// Has `handle` run on the main thread whenever a request comes, so a media key acts at once
+/// rather than at the app's next tick, which may be a fifth of a second away.
+pub fn on_request(handle: impl Fn() + 'static) {
+    HANDLER.with(|h| *h.borrow_mut() = Some(Box::new(handle)));
+}
+
 /// Sends a request to Freya; it is gone when Freya has closed the controls.
 fn send(requests: &Sender<MediaRequest>, request: MediaRequest) {
-    let _ = requests.send(request);
+    if requests.send(request).is_ok() {
+        let _ = slint::invoke_from_event_loop(|| {
+            HANDLER.with(|h| {
+                if let Some(handle) = &*h.borrow() {
+                    handle();
+                }
+            });
+        });
+    }
 }

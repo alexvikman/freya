@@ -394,11 +394,63 @@ pixels), with `cargo test -p freya frame_cost -- --ignored --nocapture`:
 | The city drawn 30 times a second | 27 µs | 1.8 ms | 0.3 % of a core, 22 % of the graphics card |
 
 The city behind her was the work; she costs about 0.3 ms a frame. In Freya the drawing thread
-logs its own CPU use with `RUST_LOG=freya::gui::hologram=debug`; it runs at the display's
-120 Hz. It used to take several seconds to appear: scaling the poses on the CPU took four.
+logs its own CPU use with `RUST_LOG=freya::gui::hologram=debug`; it ran at the display's
+120 Hz, and now at 60 (see below). It used to take several seconds to appear: scaling the poses on the CPU took four.
 Uploaded at their own size, the five poses take 50 ms; with Metal and the shaders, all is
 ready about 55 ms after Freya starts (240 ms when the shaders are not yet cached), on its own
 thread and before the view is shown.
+
+## Results: the full-screen visualizer and CPU, round two
+
+The visualizer can fill the screen for a TV (`F`, the full-screen buttons, or a double-click):
+what plays below it in large letters, and the controls, the visualizations and Up Next while
+the mouse moves. Measured with it, on an M-series MacBook at full screen, playing a FLAC file,
+release build, CPU as a share of one core:
+
+| | Before | After |
+|---|---|---|
+| Queue view, no visualization | about 5 % | 1.1 % |
+| Nothing playing | | 0.2 % |
+| Full screen, spectrum | 6.7 % | about 3 % |
+| Full screen, oscilloscope | 65 % | 2.9 % |
+| Full screen, hologram | 17 % CPU, 17 % of the graphics card | 9.4 % CPU, 10 % of the graphics card |
+
+The queue view and idle are measured with the built-in skin as compiled into Freya; the
+full-screen rows with the skin read from its folder, which costs a little more.
+
+- **The oscilloscope** was drawn by Slint, which on macOS draws on the CPU: its whole box, 30
+  times a second. It now has a layer of its own like the spectrum (`NativeOscilloscope`, Core
+  Animation on macOS), and the graphics card draws the line.
+- **The hologram** shows each frame at least 1/60 s instead of at the display's 120 Hz. What it
+  costs now is mostly the system handing frames to the screen (Metal and Core Animation
+  threads, half of it in the kernel), about 0.1 ms of CPU a frame.
+- **The audio engine** woke every 10 ms while its buffer was full, to top it up a little, and
+  its channel spun a while before sleeping each time: half of Freya's CPU while playing. It
+  now sleeps until the buffer is half empty, at most 50 ms; commands still wake it at once.
+- **Redrawing the window** cost about 26 ms for any change, as softbuffer handed every frame to
+  Core Animation as a new image to copy and color-convert on the CPU. Freya now builds with a
+  patched softbuffer (see `vendor/README.md`) that keeps the pixels between frames, so Slint
+  redraws only what changed, and shows them through IOSurfaces.
+- **The time** shown while playing changes every second. Inside the player bar's layout, each
+  change laid out the whole window again, and Slint redrew both lists' scroll bars, about 180,000
+  pixels, though nothing moved: Slint marks everything that depends on a property as changed
+  when it is set, without comparing values. The times are now drawn over fixed slots, outside the
+  layout; a second now redraws a few thousand pixels.
+- **Waking less:** the app's tick ran 30 times a second while playing, though the position
+  shown moves once a second; it now runs five times a second, playing or not, and media keys
+  wake it at once. The audio callback asks for 1024 frames (21 ms) where the device allows,
+  rather than the usual 512, halving how often the audio thread wakes.
+- **The spectrum** on macOS was one Core Animation layer per bar and per peak marker, moved
+  every frame; it is now two shape layers, one path each. Freya spends a little more (0.5
+  points) building the paths, the window server about 2 points less, and the graphics card
+  draws the shapes (about 1.5 points more of it).
+- **Tried and dropped:** pacing the hologram by sleeping and presenting plainly, instead of
+  `presentDrawable:afterMinimumDuration:`, cost the same.
+- **Assembler** was considered, and would not help: decoding FLAC takes about 0.03 % of a core,
+  the audio output about 0.05 %, and the resampler's FFTs, which use rustfft's hand-written
+  NEON (SIMD) code already, about 0.2 %. What
+  cost was how often things woke and how much was copied, not how fast code ran; the
+  hologram's shader runs on the graphics card, whose instruction set Apple does not publish.
 
 ## Risks and open questions
 

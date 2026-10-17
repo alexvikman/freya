@@ -8,6 +8,7 @@ use slint::{ModelRc, VecModel};
 use slint_interpreter::Value;
 
 use super::hologram::{self, Hologram};
+use super::native_oscilloscope::{self, NativeOscilloscope};
 use super::native_spectrum::{Area, NativeSpectrum};
 use super::skin_state;
 use super::skin_window::SkinWindow;
@@ -42,10 +43,10 @@ const WAVE_POINTS: usize = 128;
 /// Skins may ask for at most this many bars.
 const MAX_BARS: usize = 256;
 const MODES: [&str; 4] = ["spectrum", "oscilloscope", "hologram", "off"];
-/// The demo's background pulses with the strongest of the lowest bars: this share of them,
+/// The hologram pulses with the strongest of the lowest bars: this share of them,
 /// on the spectrum's logarithmic scale up to about 150 Hz.
 const BASS_SHARE: usize = 8;
-/// At least this many bars are computed, so the demo has a bass even without a spectrum.
+/// At least this many bars are computed, so the hologram has a bass even without a spectrum.
 const MIN_BARS: usize = 16;
 
 pub fn is_mode(mode: &str) -> bool {
@@ -74,6 +75,10 @@ pub struct Visualizer {
     native: Option<NativeSpectrum>,
     native_placed: Option<(Option<Area>, slint::PhysicalSize)>,
     mode_shown: Option<String>,
+    /// The oscilloscope layer Freya draws itself, where the system allows it, and the area
+    /// and window size it was last placed for.
+    oscilloscope: Option<NativeOscilloscope>,
+    oscilloscope_placed: Option<(Option<native_oscilloscope::Area>, slint::PhysicalSize)>,
     /// The hologram, drawn by the graphics card where the system allows it, and where it was
     /// last placed.
     hologram: Option<Hologram>,
@@ -100,6 +105,8 @@ impl Visualizer {
             native: None,
             native_placed: None,
             mode_shown: None,
+            oscilloscope: None,
+            oscilloscope_placed: None,
             hologram: None,
             hologram_placed: None,
             hologram_unavailable: false,
@@ -132,6 +139,7 @@ impl Visualizer {
             self.mode_shown = Some(mode.to_owned());
         }
         self.update_native(ui, mode);
+        self.update_oscilloscope(ui, mode);
         self.update_hologram(ui, mode, window_shown);
         // No frames are computed while nothing plays: the hologram's pulse fades out instead.
         if !playing && let Some(hologram) = &self.hologram {
@@ -172,6 +180,32 @@ impl Visualizer {
         {
             native.place(area, ui.window().scale_factor());
             self.native_placed = placed;
+        }
+    }
+
+    /// Adds Freya's own oscilloscope layer once the window is open, and keeps it where the
+    /// skin's `NativeOscilloscope` is.
+    fn update_oscilloscope(&mut self, ui: &SkinWindow, mode: &str) {
+        if !NativeOscilloscope::SUPPORTED {
+            return;
+        }
+        if self.oscilloscope.is_none() {
+            if !ui.window().has_winit_window() {
+                return;
+            }
+            self.oscilloscope = NativeOscilloscope::new(ui.window());
+            if self.oscilloscope.is_none() {
+                return;
+            }
+            let _ = ui.set_global_property("Visualizer", "oscilloscope-drawing", Value::Bool(true));
+        }
+        let area = native_oscilloscope::Area::read(ui).filter(|_| mode == "oscilloscope");
+        let placed = Some((area.clone(), ui.window().size()));
+        if self.oscilloscope_placed != placed
+            && let Some(oscilloscope) = &mut self.oscilloscope
+        {
+            oscilloscope.place(area);
+            self.oscilloscope_placed = placed;
         }
     }
 
@@ -247,8 +281,14 @@ impl Visualizer {
         }
 
         if mode == "oscilloscope" {
-            let wave: Vec<Value> = analyzer
-                .waveform(WAVE_POINTS)
+            let wave = analyzer.waveform(WAVE_POINTS);
+            // Freya draws the line: the skin's window is not touched.
+            if let Some(oscilloscope) = self.oscilloscope.as_mut().filter(|o| o.shown()) {
+                oscilloscope.draw(&wave);
+                self.settling = !analyzer.is_settled();
+                return;
+            }
+            let wave: Vec<Value> = wave
                 .into_iter()
                 .map(|v| Value::Number(f64::from(v)))
                 .collect();

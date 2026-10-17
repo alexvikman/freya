@@ -90,6 +90,9 @@ const CITY_SCALE: usize = 4;
 /// The city is drawn again this often: it changes slowly (fog, flicker, ripples), while she and
 /// the rain are drawn every frame.
 const CITY_INTERVAL: f32 = 1.0 / 30.0;
+/// Each frame shows at least this long: 60 frames a second look as smooth for rain and
+/// glitches as the 120 a ProMotion display could take, at half the graphics card's work.
+const FRAME_SECONDS: f64 = 1.0 / 60.0;
 /// The city's texture: half floats, so its fog has no visible steps when scaled up.
 const CITY_FORMAT: MTLPixelFormat = MTLPixelFormat::RGBA16Float;
 
@@ -362,7 +365,10 @@ impl Gpu {
     /// Draws one frame into `drawable` and shows it.
     fn frame(&self, drawable: &ProtocolObject<dyn CAMetalDrawable>, scene: &Scene<'_>) {
         if let Some(commands) = self.encode(&drawable.texture(), scene) {
-            commands.presentDrawable(ProtocolObject::from_ref(drawable));
+            commands.presentDrawable_afterMinimumDuration(
+                ProtocolObject::from_ref(drawable),
+                FRAME_SECONDS,
+            );
             commands.commit();
         }
     }
@@ -430,7 +436,7 @@ struct Scene<'a> {
 }
 
 /// The drawing thread: a frame whenever the layer has a drawable free, which happens at the
-/// display's refresh rate; asleep while the hologram is hidden.
+/// display's refresh rate, at most 60 times a second; asleep while the hologram is hidden.
 fn draw(shared: &Shared, layer: &ThreadLayer, gpu: &Gpu, poses: &[Texture], has_poses: bool) {
     let started = Instant::now();
     let mut drawable_size = (0.0, 0.0);

@@ -111,13 +111,13 @@ block2 = { version = "0.6.2", default-features = false, features = ["alloc"] }
 objc2 = "0.6.5"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSButton", "NSControl", "NSEvent", "NSImage", "NSResponder", "NSView", "NSWindow", "objc2-quartz-core"] }
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFCGTypes"] }
-objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGColor"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGColor", "CGPath"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSBundle", "NSData", "NSDictionary", "NSProcessInfo", "NSString", "NSUserDefaults", "NSValue"] }
 objc2-media-player = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "MPMediaItem", "MPNowPlayingInfoCenter", "MPRemoteCommand", "MPRemoteCommandCenter", "MPRemoteCommandEvent"] }
-objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CALayer", "CAMetalLayer", "CATransaction", "objc2-core-foundation", "objc2-core-graphics", "objc2-metal"] }
-# The demo's drawing thread measures its own CPU time (see gui/demo/metal.rs).
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CALayer", "CAMetalLayer", "CAShapeLayer", "CATransaction", "objc2-core-foundation", "objc2-core-graphics", "objc2-metal"] }
+# The hologram's drawing thread measures its own CPU time (see gui/hologram/metal.rs).
 libc = "0.2.190"
-# The demo, drawn by the graphics card (see gui/demo/metal.rs). Already in the tree through
+# The hologram, drawn by the graphics card (see gui/hologram/metal.rs). Already in the tree through
 # Slint's renderers.
 objc2-metal = { version = "0.3.2", default-features = false, features = ["std", "MTLAllocation", "MTLBlitCommandEncoder", "MTLCommandBuffer", "MTLCommandEncoder", "MTLCommandQueue", "MTLDevice", "MTLDrawable", "MTLLibrary", "MTLPixelFormat", "MTLRenderCommandEncoder", "MTLRenderPass", "MTLRenderPipeline", "MTLResource", "MTLTexture", "MTLTypes", "objc2-core-foundation"] }
 

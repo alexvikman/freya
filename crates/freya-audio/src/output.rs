@@ -154,7 +154,9 @@ impl Output {
 
     pub fn start(self, renderer: Renderer) -> Result<cpal::Stream, Error> {
         let format = self.config.sample_format();
-        let config: cpal::StreamConfig = self.config.into();
+        let buffer_size = buffer_size(self.config.buffer_size());
+        let mut config: cpal::StreamConfig = self.config.into();
+        config.buffer_size = buffer_size;
         let stream = match format {
             SampleFormat::F32 => build::<f32>(&self.device, config, renderer),
             SampleFormat::F64 => build::<f64>(&self.device, config, renderer),
@@ -166,6 +168,20 @@ impl Output {
         }?;
         stream.play().map_err(|e| Error::Output(e.to_string()))?;
         Ok(stream)
+    }
+}
+
+/// Frames per audio callback, where the device allows it: 21 ms at 48 kHz. Devices often
+/// default to 512, which wakes the audio thread about 94 times a second; this halves that,
+/// and still hands the visualization new samples for every frame it draws.
+const BUFFER_FRAMES: u32 = 1024;
+
+fn buffer_size(supported: &cpal::SupportedBufferSize) -> cpal::BufferSize {
+    match supported {
+        cpal::SupportedBufferSize::Range { min, max } if (*min..=*max).contains(&BUFFER_FRAMES) => {
+            cpal::BufferSize::Fixed(BUFFER_FRAMES)
+        }
+        _ => cpal::BufferSize::Default,
     }
 }
 

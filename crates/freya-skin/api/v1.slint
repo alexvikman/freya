@@ -323,6 +323,18 @@ export struct HologramArea {
     shown: bool,
 }
 
+/// Where `NativeOscilloscope` is in the window, and how its line looks; kept up to date by
+/// that component.
+export struct OscilloscopeArea {
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+    shown: bool,
+    line-color: color,
+    line-width: length,
+}
+
 /// Visualization of what is playing. Optional. Updated up to 60 times a second while
 /// something plays; nothing is computed when the skin does not export this global.
 export global Visualizer {
@@ -361,15 +373,54 @@ export global Visualizer {
     /// Where the `NativeSpectrum` is; kept up to date by that component.
     in-out property <SpectrumArea> native-area;
 
+    /// True when Freya draws `NativeOscilloscope` itself, on top of the window: so far on
+    /// macOS. `waveform` is then not updated while a `NativeOscilloscope` is shown.
+    in property <bool> oscilloscope-drawing;
+    /// Where the `NativeOscilloscope` is; kept up to date by that component.
+    in-out property <OscilloscopeArea> oscilloscope-area;
+
     /// True when Freya can draw the hologram (`NativeHologram`): so far on macOS.
     in property <bool> hologram-drawing;
     /// Where the `NativeHologram` is; kept up to date by that component.
     in-out property <HologramArea> hologram-area;
 }
 
+/// An oscilloscope that costs little CPU, for `Visualizer.mode` "oscilloscope": where it can
+/// (`Visualizer.oscilloscope-drawing`), Freya draws the line itself in a layer on top of the
+/// window, which the graphics card draws, so the window is not redrawn for every frame. The line
+/// spans the box's width and 90 % of its height, like `Visualizer.wave`. Nothing of the skin
+/// can be drawn on top of it. Where Freya cannot draw it, the box shows its background: draw
+/// the line with a `Path` and `Visualizer.wave` there instead.
+export component NativeOscilloscope inherits Rectangle {
+    in property <color> line-color: #a35f00;
+    in property <length> line-width: 2px;
+    /// Set to false while the oscilloscope should not show.
+    in property <bool> shown: true;
+
+    function report() {
+        Visualizer.oscilloscope-area = {
+            x: self.absolute-position.x,
+            y: self.absolute-position.y,
+            width: self.width,
+            height: self.height,
+            shown: self.shown,
+            line-color: self.line-color,
+            line-width: self.line-width,
+        };
+    }
+
+    init => { self.report(); }
+    changed absolute-position => { self.report(); }
+    changed width => { self.report(); }
+    changed height => { self.report(); }
+    changed shown => { self.report(); }
+    changed line-color => { self.report(); }
+    changed line-width => { self.report(); }
+}
+
 /// The hologram, for `Visualizer.mode` "hologram": a woman projected in translucent light over a
 /// city at night in the rain, after Blade Runner 2049. Freya draws it with the graphics card,
-/// in a layer of its own on top of the window, at the display's refresh rate; it moves whether
+/// in a layer of its own on top of the window, up to 60 frames a second; it moves whether
 /// or not something plays, and the bass drives its glitches and glow. Nothing of the skin can
 /// be drawn on top of it. Where Freya cannot draw it (`Visualizer.hologram-drawing` is false),
 /// the box shows its background.

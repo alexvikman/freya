@@ -279,7 +279,7 @@ Saved internet radio stations, kept by Freya in `stations.m3u8` next to the play
 | `set-mode(mode)` | "spectrum", "oscilloscope", "hologram" or "off"; other values are ignored |
 | `bars-path(width, height, bars) -> string` | SVG path data of the spectrum bars for a `width` × `height` box (or use `NativeSpectrum`, below) |
 | `peaks-path(width, height, peaks, thickness) -> string` | The same for the peak markers |
-| `wave(width, height, waveform) -> string` | SVG path data of the waveform for a `width` × `height` box |
+| `wave(width, height, waveform) -> string` | SVG path data of the waveform for a `width` × `height` box (or use `NativeOscilloscope`, below) |
 
 Freya only computes visualization while something plays, the mode is not "off", the skin is `showing` it and the window can be seen; while another app has focus it draws at most 15 frames a second. `bars`, `peaks` and `waveform` are new lists on every frame that changes.
 
@@ -301,9 +301,27 @@ Freya then draws the bars itself in a layer on top of the window, and the window
 
 Without `NativeSpectrum`, draw the spectrum with `bars-path` and `peaks-path` (two `Path` elements) rather than one `Rectangle` per bar: Slint then evaluates two bindings per frame instead of several per bar.
 
+#### `NativeOscilloscope`: an oscilloscope that costs almost no CPU
+
+Drawn with `wave` and a `Path`, the oscilloscope redraws its whole box every frame; with the software renderer Freya uses on macOS that costs about two thirds of a CPU core full screen. Put a `NativeOscilloscope` there instead, and keep the `Path` for systems where Freya cannot draw the line:
+
+```slint
+if Visualizer.mode == "oscilloscope" && Visualizer.oscilloscope-drawing: NativeOscilloscope {
+    width: 100%;
+    height: 100%;
+    line-color: #ffb22e;
+    line-width: 2px;
+}
+if Visualizer.mode == "oscilloscope" && !Visualizer.oscilloscope-drawing: Path {
+    // ... as under "Drawing curves and waveforms"
+}
+```
+
+Freya then hands the line's points to the system 30 times a second, and the graphics card draws it in a layer on top of the window; `waveform` is not updated meanwhile. The line has the same shape as `wave` draws: the box's full width and 90 % of its height. So far it is drawn on macOS (Core Animation) only. Properties: `line-color`, `line-width` (2 px) and `shown`. The same limits as for `NativeSpectrum` apply: one per skin, and nothing of the skin is drawn on top of it. `Visualizer.oscilloscope-area` is how the component tells Freya where it is.
+
 #### `NativeHologram`: the hologram
 
-The mode "hologram" is a woman projected in translucent light over a city at night in the rain, after Blade Runner 2049. Freya draws it with the graphics card, in a layer of its own on top of the window, at the display's refresh rate (120 frames a second on a ProMotion screen); the bass drives its glitches and glow, and she moves whether or not something plays. Put a `NativeHologram` where it should be:
+The mode "hologram" is a woman projected in translucent light over a city at night in the rain, after Blade Runner 2049. Freya draws it with the graphics card, in a layer of its own on top of the window, at 60 frames a second; the bass drives its glitches and glow, and she moves whether or not something plays. Put a `NativeHologram` where it should be:
 
 ```slint
 if Visualizer.mode == "hologram": NativeHologram {
@@ -314,7 +332,7 @@ if Visualizer.mode == "hologram": NativeHologram {
 }
 ```
 
-It costs little: measured in a 1400 × 900 point box on a Retina MacBook, about 0.3 % of a CPU core at 120 frames a second, and about 1.8 ms of the graphics card's time a frame (the city behind her is drawn at a quarter of the resolution and 30 times a second, she and the rain at full resolution every frame). Freya sets it up as soon as the mode is chosen, on a thread of its own, so it shows at once. So far it is drawn on macOS (Metal) only; elsewhere `Visualizer.hologram-drawing` is false and the box shows its background, so say so in it. The same limits as for `NativeSpectrum` apply: one per skin, and nothing of the skin is drawn on top of it.
+It costs little: measured in a 1400 × 900 point box on a Retina MacBook, about 0.3 % of a CPU core for the drawing, and about 1.8 ms of the graphics card's time a frame (the city behind her is drawn at a quarter of the resolution and 30 times a second, she and the rain at full resolution every frame). Freya sets it up as soon as the mode is chosen, on a thread of its own, so it shows at once. So far it is drawn on macOS (Metal) only; elsewhere `Visualizer.hologram-drawing` is false and the box shows its background, so say so in it. The same limits as for `NativeSpectrum` apply: one per skin, and nothing of the skin is drawn on top of it.
 
 Her poses are pictures in `assets/hologram/` (JPEG or PNG, built into Freya), shown in the order of their names: the same woman on a pure black background, which is see-through in the hologram, all of the same shape.
 
@@ -407,6 +425,7 @@ Passing `Equalizer.bands` makes Slint redraw the curve whenever the bands change
 - **Tooltips.** Icons alone are hard to guess: put a `Tooltip { text: "..."; }` (built into Slint) in each icon button, ideally with its keyboard shortcut. A tooltip opens next to the pointer inside the window, so one that would land on a `NativeSpectrum` is covered by it.
 - **Small windows.** Set `min-width` and `min-height`, and let long titles end with `overflow: elide`.
 - **Efficiency.** Avoid animations that run all the time: each frame redraws the whole window.
+- **Text that changes often**, like `Player.position-text`, is best kept out of layouts. Inside one, every change lays out the whole window again, and Slint redraws everything whose place depends on it, such as the lists' scroll bars, even when nothing moved. Leave a slot of fixed size in the layout, and draw the text over it as a child of the component's root element: `x: slot.absolute-position.x - root.absolute-position.x`, and the same for `y`, with the slot's width and height. The built-in skin does this for its times; only the text is then redrawn.
 
 ## Compatibility
 

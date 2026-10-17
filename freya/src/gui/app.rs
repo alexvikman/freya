@@ -1033,10 +1033,9 @@ impl App {
         );
     }
 
-    /// Whether the app has things to follow closely: something plays, or the library is
-    /// being read.
+    /// Whether the app has things to follow closely: the library is being read.
     pub fn is_busy(&self) -> bool {
-        self.player.status().state == PlaybackState::Playing || self.library.is_scanning()
+        self.library.is_scanning()
     }
 
     /// How often to draw visualization frames, or `None` when there is nothing to draw:
@@ -1085,10 +1084,13 @@ impl App {
     pub fn save(&mut self) {
         self.settings.volume = self.player.volume();
         let window = self.view.ui.window();
-        let size = window.size().to_logical(window.scale_factor());
-        // Restored as the size under the system's title bar.
-        let height = size.height - self.view.title_bar.added_height();
-        self.settings.window_size = Some((size.width, height));
+        // In full screen the window has the screen's size, not its own.
+        if !window.is_fullscreen() {
+            let size = window.size().to_logical(window.scale_factor());
+            // Restored as the size under the system's title bar.
+            let height = size.height - self.view.title_bar.added_height();
+            self.settings.window_size = Some((size.width, height));
+        }
         self.settings.skin = self.skin.path().map(Path::to_owned);
         self.settings.save();
         self.library.save();

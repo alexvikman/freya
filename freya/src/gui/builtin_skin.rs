@@ -326,6 +326,33 @@ impl Convert for SpectrumArea {
     }
 }
 
+impl Convert for OscilloscopeArea {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            x: field(&s, "x"),
+            y: field(&s, "y"),
+            width: field(&s, "width"),
+            height: field(&s, "height"),
+            shown: field(&s, "shown"),
+            line_color: field(&s, "line-color"),
+            line_width: field(&s, "line-width"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("x", self.x.to_value()),
+            ("y", self.y.to_value()),
+            ("width", self.width.to_value()),
+            ("height", self.height.to_value()),
+            ("shown", self.shown.to_value()),
+            ("line-color", self.line_color.to_value()),
+            ("line-width", self.line_width.to_value()),
+        ])
+    }
+}
+
 impl Convert for HologramArea {
     fn from_value(value: Value) -> Option<Self> {
         let Value::Struct(s) = value else { return None };
@@ -502,6 +529,8 @@ skin_api! {
         Visualizer."waveform" => set_waveform, get_waveform;
         Visualizer."native-drawing" => set_native_drawing, get_native_drawing;
         Visualizer."native-area" => set_native_area, get_native_area;
+        Visualizer."oscilloscope-drawing" => set_oscilloscope_drawing, get_oscilloscope_drawing;
+        Visualizer."oscilloscope-area" => set_oscilloscope_area, get_oscilloscope_area;
         Visualizer."hologram-drawing" => set_hologram_drawing, get_hologram_drawing;
         Visualizer."hologram-area" => set_hologram_area, get_hologram_area;
         Visualizer."showing" => set_showing, get_showing;

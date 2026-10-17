@@ -71,6 +71,15 @@ That leaves 176 crates covered, 3 partly and 506 exempted. Of the 45 crates Frey
 directly, 21 are covered; the other 24 (among them symphonia, cpal, rusqlite, lofty, image,
 ureq and zbus) are exempted.
 
+## Patched crates
+
+A crate Freya needs changed is copied into [`vendor/`](../vendor) from the release it is
+based on, changed there, and used instead of the published one through `[patch.crates-io]` in
+`Cargo.toml`. Its changes are described in `vendor/README.md`. Being a local folder, it is
+read as Freya's own code: `cargo vet` no longer asks about it, and its changes are reviewed
+like any other change to Freya. When updating Slint, compare the release the copy is based on
+with the one Slint then asks for, and move the changes over or drop the copy.
+
 ## Adding a dependency
 
 Prefer what the standard library or an existing dependency already does. Before adding a

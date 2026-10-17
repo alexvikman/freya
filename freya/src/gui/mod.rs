@@ -8,6 +8,7 @@ pub mod equalizer;
 mod hologram;
 mod library;
 mod listening;
+mod native_oscilloscope;
 mod native_spectrum;
 mod playlists;
 mod radio;
@@ -36,12 +37,12 @@ use app::App;
 use skin_window::SkinWindow;
 use window_events::WindowEvents;
 
-/// How often the app checks playback, tags, covers, dropped files and skin changes while
-/// something plays or the library is read. Cheap: the skin only redraws when a value it shows
-/// changes.
+/// How often the app checks the library's progress while it is read.
 const TICK: Duration = Duration::from_millis(33);
-/// The same while nothing plays, so the app mostly sleeps. Dropped files, media keys and the
-/// like are still handled within a fifth of a second; the skin's own callbacks are immediate.
+/// How often the app checks playback, tags, covers, dropped files and skin changes otherwise,
+/// playing or not: the position shown moves once a second, a new track shows within a fifth
+/// of one, and the skin's own callbacks are handled at once. Every wake costs more than the
+/// checks; at 30 a second this was most of the main thread's time while music played.
 const IDLE_TICK: Duration = Duration::from_millis(200);
 
 /// Measured in M7: FemtoVG (GPU) used 0.3 % CPU idle and 1.5 % while playing on an M-series
@@ -133,6 +134,16 @@ pub fn run(options: Options) -> anyhow::Result<()> {
     bindings::connect(&ui, &app);
     skins::attach_window(&ui);
     app.borrow_mut().system_media = system_media::SystemMedia::new(ui.window());
+    {
+        let app = Rc::downgrade(&app);
+        system_media::on_request(move || {
+            if let Some(app) = app.upgrade()
+                && let Ok(mut app) = app.try_borrow_mut()
+            {
+                app.tick();
+            }
+        });
+    }
     {
         let app = Rc::downgrade(&app);
         window_events.on_exit(move || {

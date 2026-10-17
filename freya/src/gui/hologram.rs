@@ -23,7 +23,15 @@ mod poses {
 }
 
 /// Seconds she holds a pose, and seconds the glitch to the next one takes.
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(dead_code, reason = "only the Metal renderer shows poses so far")
+)]
 pub const POSE_SECONDS: f32 = 9.0;
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(dead_code, reason = "only the Metal renderer shows poses so far")
+)]
 pub const TRANSITION_SECONDS: f32 = 1.1;
 
 /// Where the skin wants the hologram, in logical pixels from the window's top left.
@@ -61,6 +69,10 @@ impl Area {
 
 /// Which poses to show `seconds` in: the one she holds, the next, and how far the glitch from
 /// one to the other has come, from 0 to 1.
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(dead_code, reason = "only the Metal renderer shows poses so far")
+)]
 pub fn poses_at(seconds: f32, count: usize) -> (usize, usize, f32) {
     // With one pose there is nothing to change to.
     if count <= 1 {

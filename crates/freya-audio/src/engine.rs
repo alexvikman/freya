@@ -16,6 +16,9 @@ use crate::{Error, Media, TrackInfo};
 
 /// How often the thread wakes up while waiting on a full ring buffer or for playback to end.
 const POLL: Duration = Duration::from_millis(10);
+/// The longest the engine sleeps while the ring buffer is full. Commands wake it at once; this
+/// bounds how late it notices the next track starting to play.
+const REFILL_WAIT_MAX: Duration = Duration::from_millis(50);
 /// How long to wait for the audio callback to acknowledge a flush.
 const FLUSH_TIMEOUT: Duration = Duration::from_millis(500);
 
@@ -133,7 +136,7 @@ impl Engine {
 
             if !self.push_pending() {
                 // Ring buffer full: sleep until there is room or a command arrives.
-                match self.wait_command(Some(POLL)) {
+                match self.wait_command(Some(self.refill_wait())) {
                     Wake::Command(cmd) => {
                         if !self.handle(cmd) {
                             return;
@@ -417,6 +420,17 @@ impl Engine {
     /// Frames converted but not yet in the ring buffer.
     fn pending_frames(&self) -> u64 {
         ((self.pending.len() - self.pending_pos) / self.channels) as u64
+    }
+
+    /// How long until the ring buffer has drained to half full, at most [`REFILL_WAIT_MAX`].
+    /// Waking only then, rather than every few milliseconds to top it up a little, saves most
+    /// of the engine's CPU time while it plays: every wake costs more than the decoding.
+    fn refill_wait(&self) -> Duration {
+        let capacity = self.producer.buffer().capacity();
+        let missing = (capacity / 2).saturating_sub(self.producer.slots());
+        let frames = missing / self.channels.max(1);
+        let wait = Duration::from_secs_f64(frames as f64 / f64::from(self.rate.max(1)));
+        wait.clamp(POLL, REFILL_WAIT_MAX)
     }
 
     fn has_pending(&self) -> bool {

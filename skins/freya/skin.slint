@@ -4,14 +4,20 @@
 // contrast against the background it is drawn on (WCAG AA), light and dark mode follow the
 // system.
 
-import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, PlaybackState, Shortcuts, TrackRow, LibraryRow, PlaylistRow, StationRow, NativeSpectrum, NativeHologram } from "@freya/v1.slint";
+import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, PlaybackState, Shortcuts, TrackRow, LibraryRow, PlaylistRow, StationRow, NativeSpectrum, NativeOscilloscope, NativeHologram } from "@freya/v1.slint";
 import { ListView, Palette, ScrollView } from "std-widgets.slint";
 
 // Every skin re-exports the API globals so the app can reach them.
 export { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates } from "@freya/v1.slint";
 
+/// Whether the visualizer fills the screen: everything else is hidden, and the skin turns dark,
+/// as fits a TV.
+global Stage {
+    in-out property <bool> on;
+}
+
 global Theme {
-    out property <bool> dark: App.theme == "dark" || (App.theme != "light" && Palette.color-scheme == ColorScheme.dark);
+    out property <bool> dark: Stage.on || App.theme == "dark" || (App.theme != "light" && Palette.color-scheme == ColorScheme.dark);
     out property <color> background: dark ? #15171a : #f6f7f9;
     out property <color> surface: dark ? #1f2226 : #ffffff;
     // Behind the navigation: text-secondary keeps 10:1 (dark) and 6.7:1 (light) on it.
@@ -68,6 +74,8 @@ global Icons {
     out property <string> clock: "M12 3 A9 9 0 1 0 12 21 A9 9 0 1 0 12 3 Z M12 7 V12 L15.5 14";
     out property <string> star: "M12 3 L14.8 8.8 L21 9.6 L16.5 14 L17.6 20.3 L12 17.3 L6.4 20.3 L7.5 14 L3 9.6 L9.2 8.8 Z";
     out property <string> genre: "M3 4 V11 L13 21 L21 13 L11 3 H4 C3.4 3 3 3.4 3 4 Z M7.5 7.5 H7.6";
+    out property <string> expand: "M4 9 V4 H9 M15 4 H20 V9 M20 15 V20 H15 M9 20 H4 V15";
+    out property <string> shrink: "M9 4 V9 H4 M20 9 H15 V4 M15 20 V15 H20 M4 15 H9 V20";
 }
 
 /// A vector icon. Fills the given size; `stroked` draws outlines instead of filled shapes.
@@ -247,86 +255,6 @@ component Slider inherits Rectangle {
     }
 }
 
-/// The visualization view: the spectrum or oscilloscope of what is playing, as large as the
-/// window allows.
-component VisualizerView inherits Rectangle {
-    /// Whether this view is the one shown. Freya computes nothing for it while it is not.
-    in property <bool> shown;
-
-    property <length> pad: 16px;
-
-    init => { Visualizer.showing = root.shown; }
-    changed shown => { Visualizer.showing = root.shown; }
-
-    visible: shown;
-
-    VerticalLayout {
-        padding: 24px;
-
-        box := Rectangle {
-            border-radius: 12px;
-            clip: true;
-            background: Theme.surface;
-
-            // About one bar per 14 px, so wide windows get more detail.
-            init => { Visualizer.bar-count = max(16, min(128, floor(self.width / 14px))); }
-            changed width => { Visualizer.bar-count = max(16, min(128, floor(self.width / 14px))); }
-
-            // Drawn by Freya on top of the window where it can, which saves redrawing the
-            // window for every frame.
-            if Visualizer.mode == "spectrum": NativeSpectrum {
-                x: root.pad;
-                y: root.pad;
-                width: box.width - 2 * root.pad;
-                height: box.height - 2 * root.pad;
-                shown: root.shown;
-                bar-color: Theme.accent;
-                peak-color: Theme.accent-text;
-                peak-thickness: 3px;
-                background-color: Theme.surface;
-            }
-            if Visualizer.mode == "oscilloscope": Path {
-                x: root.pad;
-                y: root.pad;
-                width: box.width - 2 * root.pad;
-                height: box.height - 2 * root.pad;
-                viewbox-width: self.width / 1px;
-                viewbox-height: self.height / 1px;
-                commands: Visualizer.wave(self.width / 1px, self.height / 1px, Visualizer.waveform);
-                stroke: Theme.accent;
-                stroke-width: 2px;
-                fill: transparent;
-            }
-            // Drawn by Freya with the graphics card, filling the box.
-            if Visualizer.mode == "hologram": NativeHologram {
-                width: box.width;
-                height: box.height;
-                border-radius: box.border-radius;
-                shown: root.shown;
-            }
-            if Visualizer.mode == "hologram" && !Visualizer.hologram-drawing: Text {
-                text: "The hologram is only drawn on macOS so far";
-                font-size: 16px;
-                color: #b0b0b0;
-            }
-            if Visualizer.mode == "off": Text {
-                text: "Visualization is off";
-                font-size: 16px;
-                color: Theme.text-secondary;
-            }
-            // In the upper half, so it stays clear of the bars along the bottom.
-            if (Visualizer.mode == "spectrum" || Visualizer.mode == "oscilloscope") && Player.state == PlaybackState.stopped: Text {
-                y: box.height / 3;
-                width: box.width;
-                text: "Play something to see it here";
-                font-size: 16px;
-                color: Theme.text-secondary;
-                horizontal-alignment: center;
-            }
-        }
-    }
-}
-
 /// The bar along the bottom: what plays, the transport and position, the volume, and the
 /// buttons for the visualizer and equalizer views.
 component PlayerBar inherits Rectangle {
@@ -334,6 +262,8 @@ component PlayerBar inherits Rectangle {
     in property <string> view;
     /// Show `view`, or go back from it when it is already shown.
     callback toggle-view(string);
+    /// Fill the screen with the visualizer.
+    callback full-screen();
 
     height: 88px;
     background: Theme.surface;
@@ -477,14 +407,8 @@ component PlayerBar inherits Rectangle {
             HorizontalLayout {
                 spacing: 10px;
 
-                Text {
-                    min-width: 40px;
-                    text: Player.position-text;
-                    font-size: 12px;
-                    color: Theme.text-secondary;
-                    horizontal-alignment: right;
-                    vertical-alignment: center;
-                }
+                // The times are drawn over these, outside the layout (see below).
+                position-slot := Rectangle { width: 48px; }
                 Slider {
                     horizontal-stretch: 1;
                     label: "Position";
@@ -493,13 +417,7 @@ component PlayerBar inherits Rectangle {
                     live: false;
                     changed(fraction) => { Player.seek(fraction); }
                 }
-                Text {
-                    min-width: 40px;
-                    text: Player.length > 0 ? Player.remaining-text : (Player.live ? "Live" : "");
-                    font-size: 12px;
-                    color: Theme.text-secondary;
-                    vertical-alignment: center;
-                }
+                remaining-slot := Rectangle { width: 48px; }
             }
         }
 
@@ -564,7 +482,40 @@ component PlayerBar inherits Rectangle {
                 checked: root.view == "equalizer";
                 clicked => { root.toggle-view("equalizer"); }
             }
+            IconButton {
+                icon: Icons.expand;
+                stroked: true;
+                size: 36px;
+                label: "Full screen";
+                tooltip: "Show the visualizer full screen (F)";
+                clicked => { root.full-screen(); }
+            }
         }
+    }
+
+    // The times change every second. Inside the layout, each change would lay out the whole
+    // window again and redraw everything whose place depends on it, such as the lists' scroll
+    // bars; placed over their slots, they redraw only themselves.
+    Text {
+        x: position-slot.absolute-position.x - root.absolute-position.x;
+        y: position-slot.absolute-position.y - root.absolute-position.y;
+        width: position-slot.width;
+        height: position-slot.height;
+        text: Player.position-text;
+        font-size: 12px;
+        color: Theme.text-secondary;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+    Text {
+        x: remaining-slot.absolute-position.x - root.absolute-position.x;
+        y: remaining-slot.absolute-position.y - root.absolute-position.y;
+        width: remaining-slot.width;
+        height: remaining-slot.height;
+        text: Player.length > 0 ? Player.remaining-text : (Player.live ? "Live" : "");
+        font-size: 12px;
+        color: Theme.text-secondary;
+        vertical-alignment: center;
     }
 }
 
@@ -2756,6 +2707,416 @@ component ChoiceButton inherits Rectangle {
     }
 }
 
+/// Below the visualization in full screen: what plays, in letters large enough to read on a TV
+/// across the room, and the controls, which show while the mouse moves.
+component StageBar inherits Rectangle {
+    in property <bool> controls-shown;
+    in property <bool> queue-open;
+    callback toggle-queue();
+    callback leave();
+
+    height: 112px;
+
+    // What plays: the whole width while the controls are hidden, so a long title shows.
+    HorizontalLayout {
+        x: 0;
+        width: root.controls-shown ? root.width - controls.width - 32px : root.width;
+        height: root.height;
+        spacing: 24px;
+
+        Rectangle {
+            width: 112px;
+            height: 112px;
+            border-radius: 10px;
+            clip: true;
+            background: Theme.surface;
+
+            if Player.has-cover: Image {
+                width: parent.width;
+                height: parent.height;
+                source: Player.cover;
+                image-fit: cover;
+            }
+            if !Player.has-cover: Icon {
+                width: 48px;
+                height: 48px;
+                data: Icons.note;
+                stroked: true;
+                color: Theme.text-secondary;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 6px;
+            min-width: 0;
+
+            Text {
+                text: Player.title == "" ? "Nothing playing" : Player.title;
+                font-size: 34px;
+                font-weight: 700;
+                color: Player.title == "" ? Theme.text-secondary : Theme.text;
+                overflow: elide;
+            }
+            if Player.artist != "" || Player.album != "": Text {
+                text: Player.artist != "" && Player.album != "" ? Player.artist + " – " + Player.album
+                    : Player.artist + Player.album;
+                font-size: 22px;
+                color: Theme.text-secondary;
+                overflow: elide;
+            }
+            // The time is drawn over this, outside the layout (see below).
+            time-slot := Rectangle { height: 20px; }
+        }
+    }
+
+    // The time changes every second; inside the layout, each change would lay out the whole
+    // view again and redraw the visualization's box.
+    if Player.live || Player.length > 0: Text {
+        x: time-slot.absolute-position.x - root.absolute-position.x;
+        y: time-slot.absolute-position.y - root.absolute-position.y;
+        // Room for "10:00:00 / 10:00:00"; only this much is redrawn each second.
+        width: min(time-slot.width, 200px);
+        height: time-slot.height;
+        text: Player.live ? "Live" : Player.position-text + " / " + Player.length-text;
+        font-size: 16px;
+        color: Theme.text-secondary;
+        vertical-alignment: center;
+    }
+
+    // The controls fade out while the mouse rests, and the pointer hides with them.
+    controls := Rectangle {
+        x: root.width - self.width;
+        width: self.preferred-width;
+        height: root.height;
+        background: #000000;
+        opacity: root.controls-shown ? 1 : 0;
+        visible: self.opacity > 0;
+        animate opacity { duration: 200ms; }
+
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+
+            VerticalLayout {
+                alignment: center;
+
+                HorizontalLayout {
+                    spacing: 6px;
+
+                    IconButton {
+                        icon: Icons.previous;
+                        size: 44px;
+                        label: "Previous";
+                        tooltip: "Previous track (P)";
+                        clicked => { Player.previous(); }
+                    }
+                    IconButton {
+                        size: 56px;
+                        primary: true;
+                        icon: Player.state == PlaybackState.playing ? Icons.pause : Icons.play;
+                        label: Player.state == PlaybackState.playing ? "Pause" : "Play";
+                        tooltip: self.label + " (Space)";
+                        clicked => { Player.toggle-pause(); }
+                    }
+                    IconButton {
+                        icon: Icons.stop;
+                        size: 44px;
+                        label: "Stop";
+                        tooltip: "Stop (S)";
+                        clicked => { Player.stop(); }
+                    }
+                    IconButton {
+                        icon: Icons.next;
+                        size: 44px;
+                        label: "Next";
+                        tooltip: "Next track (N)";
+                        clicked => { Player.next(); }
+                    }
+                }
+            }
+            Rectangle { width: 12px; }
+            VerticalLayout {
+                alignment: center;
+
+                HorizontalLayout {
+                    spacing: 8px;
+
+                    Rectangle {
+                        width: 24px;
+
+                        Icon {
+                            width: 22px;
+                            height: 22px;
+                            data: Icons.speaker;
+                            color: Theme.text-secondary;
+                        }
+                        Icon {
+                            width: 22px;
+                            height: 22px;
+                            data: Icons.waves;
+                            stroked: true;
+                            color: Theme.text-secondary;
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+
+                        Slider {
+                            width: 140px;
+                            label: "Volume";
+                            value: Player.volume;
+                            changed(v) => { Player.set-volume(v); }
+                        }
+                    }
+                }
+            }
+            Rectangle { width: 12px; }
+            VerticalLayout {
+                alignment: center;
+
+                HorizontalLayout {
+                    spacing: 4px;
+
+                    ChoiceButton {
+                        text: "Spectrum";
+                        selected: Visualizer.mode == "spectrum";
+                        clicked => { Visualizer.set-mode("spectrum"); }
+                    }
+                    ChoiceButton {
+                        text: "Oscilloscope";
+                        selected: Visualizer.mode == "oscilloscope";
+                        clicked => { Visualizer.set-mode("oscilloscope"); }
+                    }
+                    ChoiceButton {
+                        text: "Hologram";
+                        selected: Visualizer.mode == "hologram";
+                        clicked => { Visualizer.set-mode("hologram"); }
+                    }
+                }
+            }
+            Rectangle { width: 12px; }
+            VerticalLayout {
+                alignment: center;
+
+                IconButton {
+                    icon: Icons.queue;
+                    stroked: true;
+                    size: 44px;
+                    label: "Up Next";
+                    tooltip: root.queue-open ? "Hide Up Next" : "Show Up Next";
+                    checkable: true;
+                    checked: root.queue-open;
+                    clicked => { root.toggle-queue(); }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+
+                IconButton {
+                    icon: Icons.shrink;
+                    stroked: true;
+                    size: 44px;
+                    label: "Leave full screen";
+                    tooltip: "Leave full screen (Esc)";
+                    clicked => { root.leave(); }
+                }
+            }
+        }
+    }
+}
+
+/// The visualization view: the spectrum, oscilloscope or hologram, as large as the window
+/// allows. Full screen (`stage`), for a TV, it shows what plays below it in large letters, and
+/// the controls while the mouse moves.
+component VisualizerView inherits Rectangle {
+    /// Whether this view is the one shown. Freya computes nothing for it while it is not.
+    in property <bool> shown;
+    /// Whether it fills the screen.
+    in property <bool> stage;
+    /// Fill the screen, or leave it: double-clicking the visualization or the controls.
+    callback toggle-stage();
+
+    property <length> pad: 16px;
+    /// Whether the controls show in full screen: for a few seconds after the mouse moved.
+    property <bool> awake: true;
+    property <bool> queue-open;
+    property <MouseCursor> cursor: root.stage && !root.awake ? MouseCursor.none : MouseCursor.default;
+
+    init => { Visualizer.showing = root.shown; }
+    changed shown => { Visualizer.showing = root.shown; }
+    changed stage => {
+        root.queue-open = false;
+        root.wake();
+    }
+
+    function wake() {
+        root.awake = true;
+        idle.stop();
+        if (root.stage) {
+            idle.start();
+        }
+    }
+
+    visible: shown;
+    background: root.stage ? #000000 : transparent;
+
+    idle := Timer {
+        interval: 3s;
+        running: false;
+        triggered => {
+            root.awake = false;
+            idle.stop();
+        }
+    }
+
+    // Follows the mouse over everything in the view, buttons included.
+    mouse := TouchArea {
+        mouse-cursor: root.cursor;
+        changed mouse-x => { root.wake(); }
+        changed mouse-y => { root.wake(); }
+
+        VerticalLayout {
+            padding: root.stage ? 48px : 24px;
+            spacing: 32px;
+
+            HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: 24px;
+
+                box := Rectangle {
+                    horizontal-stretch: 1;
+                    border-radius: root.stage ? 16px : 12px;
+                    clip: true;
+                    background: root.stage ? #0c0d10 : Theme.surface;
+
+                    // About one bar per 14 px, so wide windows get more detail.
+                    init => { Visualizer.bar-count = max(16, min(128, floor(self.width / 14px))); }
+                    changed width => { Visualizer.bar-count = max(16, min(128, floor(self.width / 14px))); }
+
+                    // Drawn by Freya on top of the window where it can, which saves redrawing
+                    // the window for every frame.
+                    if Visualizer.mode == "spectrum": NativeSpectrum {
+                        x: root.pad;
+                        y: root.pad;
+                        width: box.width - 2 * root.pad;
+                        height: box.height - 2 * root.pad;
+                        shown: root.shown;
+                        bar-color: Theme.accent;
+                        peak-color: Theme.accent-text;
+                        peak-thickness: 3px;
+                        background-color: box.background;
+                    }
+                    if Visualizer.mode == "oscilloscope" && Visualizer.oscilloscope-drawing: NativeOscilloscope {
+                        x: root.pad;
+                        y: root.pad;
+                        width: box.width - 2 * root.pad;
+                        height: box.height - 2 * root.pad;
+                        shown: root.shown;
+                        line-color: Theme.accent;
+                        line-width: root.stage ? 3px : 2px;
+                        background: transparent;
+                    }
+                    if Visualizer.mode == "oscilloscope" && !Visualizer.oscilloscope-drawing: Path {
+                        x: root.pad;
+                        y: root.pad;
+                        width: box.width - 2 * root.pad;
+                        height: box.height - 2 * root.pad;
+                        viewbox-width: self.width / 1px;
+                        viewbox-height: self.height / 1px;
+                        commands: Visualizer.wave(self.width / 1px, self.height / 1px, Visualizer.waveform);
+                        stroke: Theme.accent;
+                        stroke-width: root.stage ? 3px : 2px;
+                        fill: transparent;
+                    }
+                    // Drawn by Freya with the graphics card, filling the box.
+                    if Visualizer.mode == "hologram": NativeHologram {
+                        width: box.width;
+                        height: box.height;
+                        border-radius: box.border-radius;
+                        shown: root.shown;
+                    }
+                    if Visualizer.mode == "hologram" && !Visualizer.hologram-drawing: Text {
+                        text: "The hologram is only drawn on macOS so far";
+                        font-size: 16px;
+                        color: #b0b0b0;
+                    }
+                    if Visualizer.mode == "off": Text {
+                        text: "Visualization is off";
+                        font-size: 16px;
+                        color: Theme.text-secondary;
+                    }
+                    // In the upper half, so it stays clear of the bars along the bottom.
+                    if (Visualizer.mode == "spectrum" || Visualizer.mode == "oscilloscope") && Player.state == PlaybackState.stopped: Text {
+                        y: box.height / 3;
+                        width: box.width;
+                        text: "Play something to see it here";
+                        font-size: 16px;
+                        color: Theme.text-secondary;
+                        horizontal-alignment: center;
+                    }
+
+                    TouchArea {
+                        mouse-cursor: root.cursor;
+                        double-clicked => { root.toggle-stage(); }
+                    }
+                }
+                if root.stage && root.queue-open: Rectangle {
+                    width: 420px;
+                    border-radius: 16px;
+                    clip: true;
+                    background: Theme.surface;
+
+                    VerticalLayout {
+                        padding-top: 12px;
+                        spacing: 4px;
+
+                        HorizontalLayout {
+                            padding-left: 16px;
+                            padding-right: 8px;
+                            spacing: 8px;
+
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                alignment: center;
+                                spacing: 2px;
+
+                                Text {
+                                    text: "Up Next";
+                                    font-size: 20px;
+                                    font-weight: 600;
+                                    color: Theme.text;
+                                }
+                                Text {
+                                    text: Playlist.summary;
+                                    font-size: 13px;
+                                    color: Theme.text-secondary;
+                                    overflow: elide;
+                                }
+                            }
+                            IconButton {
+                                icon: Icons.close;
+                                stroked: true;
+                                size: 36px;
+                                label: "Hide Up Next";
+                                clicked => { root.queue-open = false; }
+                            }
+                        }
+                        TrackList {
+                            vertical-stretch: 1;
+                        }
+                    }
+                }
+            }
+            if root.stage: StageBar {
+                controls-shown: root.awake;
+                queue-open: root.queue-open;
+                toggle-queue => { root.queue-open = !root.queue-open; }
+                leave => { root.toggle-stage(); }
+            }
+        }
+    }
+}
+
 /// The bar above the content: the navigation button, back, the view's title and actions,
 /// search, and the menu.
 component Toolbar inherits HorizontalLayout {
@@ -2773,6 +3134,8 @@ component Toolbar inherits HorizontalLayout {
     callback show-view(string);
     /// "Check for Updates…" in the menu.
     callback check-updates();
+    /// Show the visualizer full screen.
+    callback full-screen();
 
     /// What the name form is for: keeping Up Next as a playlist, or renaming one.
     property <string> naming: "save-queue";
@@ -2927,6 +3290,14 @@ component Toolbar inherits HorizontalLayout {
             selected: Visualizer.mode == "off";
             clicked => { Visualizer.set-mode("off"); }
         }
+    }
+    if root.view == "visualizer": IconButton {
+        icon: Icons.expand;
+        stroked: true;
+        size: 36px;
+        label: "Full screen";
+        tooltip: "Full screen (F)";
+        clicked => { root.full-screen(); }
     }
 
     VerticalLayout {
@@ -3123,6 +3494,18 @@ export component FreyaSkin inherits Window {
     property <string> music-view: "queue";
     /// Whether the navigation shows; the toolbar's first button toggles it.
     property <bool> sidebar-shown: true;
+    /// Whether the visualizer fills the screen, for a TV; the view to go back to after, and
+    /// whether the window filled the screen already.
+    property <bool> stage;
+    property <string> before-stage;
+    property <bool> was-full-screen;
+
+    // Leaving full screen from the system, e.g. with the green button, leaves the stage too.
+    changed full-screen => {
+        if (!root.full-screen && root.stage) {
+            root.leave-stage();
+        }
+    }
 
     // On macOS, the window buttons go in the toolbar's row, at the top of the navigation.
     init => { App.title-bar-height = 56px; }
@@ -3134,6 +3517,32 @@ export component FreyaSkin inherits Window {
         root.view = view;
     }
 
+    function enter-stage() {
+        root.before-stage = root.view;
+        root.was-full-screen = root.full-screen;
+        root.view = "visualizer";
+        root.stage = true;
+        Stage.on = true;
+        root.full-screen = true;
+    }
+
+    function leave-stage() {
+        root.stage = false;
+        Stage.on = false;
+        root.view = root.before-stage;
+        if (!root.was-full-screen) {
+            root.full-screen = false;
+        }
+    }
+
+    function toggle-stage() {
+        if (root.stage) {
+            root.leave-stage();
+        } else {
+            root.enter-stage();
+        }
+    }
+
     function toggle-view(view: string) {
         if (root.view == view) {
             root.view = root.music-view;
@@ -3142,107 +3551,132 @@ export component FreyaSkin inherits Window {
         }
     }
 
-    shortcuts := Shortcuts {
-        VerticalLayout {
-            HorizontalLayout {
-                vertical-stretch: 1;
+    // F fills the screen with the visualizer, and Esc leaves it again.
+    stage-keys := FocusScope {
+        key-pressed(event) => {
+            if (event.modifiers.control || event.modifiers.meta || event.modifiers.alt) {
+                return reject;
+            }
+            if (event.text == "f" || event.text == "F") {
+                root.toggle-stage();
+                return accept;
+            }
+            if (event.text == Key.Escape && root.stage) {
+                root.leave-stage();
+                return accept;
+            }
+            reject
+        }
 
-                if root.sidebar-shown: Sidebar {
-                    width: 220px;
-                    view: root.view;
-                    selected(view) => { root.show(view); }
-                    show-section(section) => {
-                        library.show(section);
-                        root.show("library");
+        shortcuts := Shortcuts {
+            VerticalLayout {
+                HorizontalLayout {
+                    vertical-stretch: 1;
+
+                    if root.sidebar-shown && !root.stage: Sidebar {
+                        width: 220px;
+                        view: root.view;
+                        selected(view) => { root.show(view); }
+                        show-section(section) => {
+                            library.show(section);
+                            root.show("library");
+                        }
+                        show-update => { update-popup.show(); }
                     }
-                    show-update => { update-popup.show(); }
-                }
-                if root.sidebar-shown: Rectangle {
-                    width: 1px;
-                    background: Theme.divider;
-                }
-                VerticalLayout {
-                    horizontal-stretch: 1;
+                    if root.sidebar-shown && !root.stage: Rectangle {
+                        width: 1px;
+                        background: Theme.divider;
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
 
-                    Rectangle {
-                        height: toolbar.height;
+                        Rectangle {
+                            height: root.stage ? 0 : toolbar.height;
+                            visible: !root.stage;
 
-                        // Behind the toolbar: what its controls leave free moves the window.
-                        TitleBarArea { }
-                        toolbar := Toolbar {
-                            inset: root.sidebar-shown ? 0 : App.window-buttons-width;
-                            view: root.view;
-                            title: root.view == "queue" ? "Up Next"
-                                : root.view == "library" ? Library.title
-                                : root.view == "radio" ? "Radio"
-                                : root.view == "playlist" ? (Playlists.shown >= 0 ? Playlists.playlists[Playlists.shown].name : "Playlist")
-                                : root.view == "visualizer" ? "Visualizer"
-                                : "Equalizer";
-                            subtitle: root.view == "queue" ? Playlist.summary
-                                : root.view == "library" ? (Library.subtitle != "" ? Library.subtitle : Library.status)
-                                : root.view == "radio" ? (Radio.stations.length == 1 ? "1 station" : Radio.stations.length + " stations")
-                                : root.view == "playlist" ? Playlists.summary
-                                : "";
-                            can-go-back: root.view == "library" && Library.can-go-back;
-                            toggle-sidebar => { root.sidebar-shown = !root.sidebar-shown; }
-                            back => { library.back(); }
-                            search-edited => { root.show("library"); }
-                            search-accepted => { library.activate-current(); }
-                            show-view(view) => { root.show(view); }
-                            check-updates => {
-                                Updates.check();
-                                update-popup.show();
+                            // Behind the toolbar: what its controls leave free moves the window.
+                            TitleBarArea { }
+                            toolbar := Toolbar {
+                                inset: root.sidebar-shown ? 0 : App.window-buttons-width;
+                                view: root.view;
+                                title: root.view == "queue" ? "Up Next"
+                                    : root.view == "library" ? Library.title
+                                    : root.view == "radio" ? "Radio"
+                                    : root.view == "playlist" ? (Playlists.shown >= 0 ? Playlists.playlists[Playlists.shown].name : "Playlist")
+                                    : root.view == "visualizer" ? "Visualizer"
+                                    : "Equalizer";
+                                subtitle: root.view == "queue" ? Playlist.summary
+                                    : root.view == "library" ? (Library.subtitle != "" ? Library.subtitle : Library.status)
+                                    : root.view == "radio" ? (Radio.stations.length == 1 ? "1 station" : Radio.stations.length + " stations")
+                                    : root.view == "playlist" ? Playlists.summary
+                                    : "";
+                                can-go-back: root.view == "library" && Library.can-go-back;
+                                toggle-sidebar => { root.sidebar-shown = !root.sidebar-shown; }
+                                back => { library.back(); }
+                                search-edited => { root.show("library"); }
+                                search-accepted => { library.activate-current(); }
+                                show-view(view) => { root.show(view); }
+                                check-updates => {
+                                    Updates.check();
+                                    update-popup.show();
+                                }
+                                full-screen => { root.enter-stage(); }
+                            }
+                        }
+                        Rectangle {
+                            height: root.stage ? 0 : 1px;
+                            background: Theme.divider;
+                        }
+                        // The views. The ones with lists stay alive while hidden, so they keep
+                        // their scroll position and selection.
+                        Rectangle {
+                            vertical-stretch: 1;
+
+                            TrackList {
+                                width: 100%;
+                                height: 100%;
+                                visible: root.view == "queue";
+                            }
+                            library := LibraryPanel {
+                                width: 100%;
+                                height: 100%;
+                                visible: root.view == "library";
+                                find => { toolbar.focus-search(); }
+                            }
+                            if root.view == "playlist": PlaylistView {
+                                width: 100%;
+                                height: 100%;
+                            }
+                            if root.view == "radio": RadioView {
+                                width: 100%;
+                                height: 100%;
+                                add-station => { toolbar.add-station(); }
+                            }
+                            VisualizerView {
+                                width: 100%;
+                                height: 100%;
+                                shown: root.view == "visualizer";
+                                stage: root.stage;
+                                toggle-stage => { root.toggle-stage(); }
+                            }
+                            if root.view == "equalizer": EqualizerView {
+                                width: 100%;
+                                height: 100%;
                             }
                         }
                     }
-                    Rectangle {
-                        height: 1px;
-                        background: Theme.divider;
-                    }
-                    // The views. The ones with lists stay alive while hidden, so they keep
-                    // their scroll position and selection.
-                    Rectangle {
-                        vertical-stretch: 1;
-
-                        TrackList {
-                            width: 100%;
-                            height: 100%;
-                            visible: root.view == "queue";
-                        }
-                        library := LibraryPanel {
-                            width: 100%;
-                            height: 100%;
-                            visible: root.view == "library";
-                            find => { toolbar.focus-search(); }
-                        }
-                        if root.view == "playlist": PlaylistView {
-                            width: 100%;
-                            height: 100%;
-                        }
-                        if root.view == "radio": RadioView {
-                            width: 100%;
-                            height: 100%;
-                            add-station => { toolbar.add-station(); }
-                        }
-                        VisualizerView {
-                            width: 100%;
-                            height: 100%;
-                            shown: root.view == "visualizer";
-                        }
-                        if root.view == "equalizer": EqualizerView {
-                            width: 100%;
-                            height: 100%;
-                        }
-                    }
                 }
-            }
-            Rectangle {
-                height: 1px;
-                background: Theme.divider;
-            }
-            PlayerBar {
-                view: root.view;
-                toggle-view(view) => { root.toggle-view(view); }
+                Rectangle {
+                    height: root.stage ? 0 : 1px;
+                    background: Theme.divider;
+                }
+                PlayerBar {
+                    height: root.stage ? 0 : 88px;
+                    visible: !root.stage;
+                    view: root.view;
+                    toggle-view(view) => { root.toggle-view(view); }
+                    full-screen => { root.enter-stage(); }
+                }
             }
         }
     }
