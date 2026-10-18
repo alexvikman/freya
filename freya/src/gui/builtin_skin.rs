@@ -287,6 +287,7 @@ impl Convert for LibraryRow {
             number: field(&s, "number"),
             duration: field(&s, "duration"),
             played: field(&s, "played"),
+            plays: field(&s, "plays"),
         })
     }
 
@@ -301,6 +302,32 @@ impl Convert for LibraryRow {
             ("number", self.number.to_value()),
             ("duration", self.duration.to_value()),
             ("played", self.played.to_value()),
+            ("plays", self.plays.to_value()),
+        ])
+    }
+}
+
+impl Convert for AlbumPage {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            shown: field(&s, "shown"),
+            title: field(&s, "title"),
+            artist: field(&s, "artist"),
+            detail: field(&s, "detail"),
+            cover: field(&s, "cover"),
+            color: field(&s, "color"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("shown", self.shown.to_value()),
+            ("title", self.title.to_value()),
+            ("artist", self.artist.to_value()),
+            ("detail", self.detail.to_value()),
+            ("cover", self.cover.to_value()),
+            ("color", self.color.to_value()),
         ])
     }
 }
@@ -526,6 +553,7 @@ skin_api! {
         Library."folders-draft" => set_folders_draft, get_folders_draft;
         Library."album-options" => set_album_options, get_album_options;
         Library."playing-row" => set_playing_row, get_playing_row;
+        Library."album-page" => set_album_page, get_album_page;
         Library."album-sort" => set_album_sort, get_album_sort;
         Library."album-view" => set_album_view, get_album_view;
         Library."scanning" => set_scanning, get_scanning;
@@ -632,6 +660,8 @@ skin_api! {
         Radio."remove" => on_remove, invoke_remove(row: i32);
         Library."back" => on_back, invoke_back();
         Library."set-album-sort" => on_set_album_sort, invoke_set_album_sort(sort: SharedString);
+        Library."shuffle-all" => on_shuffle_all, invoke_shuffle_all();
+        Library."open-album-artist" => on_open_album_artist, invoke_open_album_artist();
         Library."set-album-view" => on_set_album_view, invoke_set_album_view(view: SharedString);
         Library."add-folder" => on_add_folder, invoke_add_folder();
         Library."remove-folder" => on_remove_folder, invoke_remove_folder(index: i32);

@@ -463,6 +463,28 @@ impl Library {
         Ok(())
     }
 
+    /// How often each played track of an album was played, by its file and where in the file
+    /// it starts (`None` for a whole file).
+    pub fn album_plays(
+        &self,
+        artist: Option<&str>,
+        album: Option<&str>,
+    ) -> Result<HashMap<(PathBuf, Option<Duration>), u32>> {
+        let mut query = self.db.prepare_cached(
+            "SELECT plays.path, plays.start_ms, count(*) FROM plays
+             JOIN tracks ON tracks.path = plays.path AND tracks.start_ms IS plays.start_ms
+             WHERE tracks.album_artist IS ?1 AND tracks.album IS ?2
+             GROUP BY plays.path, plays.start_ms",
+        )?;
+        query
+            .query_map(params![artist, album], |row| {
+                let path = PathBuf::from(row.get::<_, String>(0)?);
+                let start = row.get::<_, Option<i64>>(1)?.map(from_millis);
+                Ok(((path, start), row.get::<_, u32>(2)?))
+            })?
+            .collect()
+    }
+
     // ----- Changes, made by scans --------------------------------------------------------------
 
     /// Every file the library was read from, audio files and CUE sheets, with the stamp it

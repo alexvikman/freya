@@ -133,6 +133,23 @@ export struct LibraryRow {
     /// For tracks in Recently Played: when the track was played last, "3 days ago"; in Most
     /// Played: how often, "12 plays". Otherwise empty.
     played: string,
+    /// For tracks shown in their album: how often each was played, "1,204"; empty for none.
+    plays: string,
+}
+
+/// An album's own page, over its tracks: see `Library.album-page`.
+export struct AlbumPage {
+    /// True while an album's tracks are shown.
+    shown: bool,
+    title: string,
+    /// The album's artist, which `open-album-artist` opens.
+    artist: string,
+    /// "2026 · 10 tracks, 47 min 34 s".
+    detail: string,
+    /// What to pass to `Library.cover` for the album's cover.
+    cover: string,
+    /// A color from the cover for the page behind it, dark enough for white text.
+    color: color,
 }
 
 /// The media library: the music in the folders the user chose, browsed by artist and album,
@@ -149,6 +166,9 @@ export global Library {
     /// artist's albums with `album-view` "list": each album row followed by its tracks, numbered
     /// as in the album; activating a track plays its album from it).
     in property <string> layout: "list";
+    /// While an album's tracks are shown (layout "list"), what a page for the album shows
+    /// over them, for skins that make one.
+    in property <AlbumPage> album-page;
     /// The row of the track playing or paused, or -1 when it is not among the rows.
     in property <int> playing-row: -1;
     /// True while an artist's albums are shown, which `album-sort` and `album-view` apply to.
@@ -201,6 +221,10 @@ export global Library {
     /// Empty (zero width) while it is being made, and for albums without one. Covers are made
     /// as they are first asked for, so only call it for rows that are on screen.
     pure callback cover(string, int) -> image;
+    /// Play every row shown in shuffled order, from a random one, with shuffle turned on.
+    callback shuffle-all();
+    /// Open the artist of the album shown (`album-page.artist`).
+    callback open-album-artist();
     /// Change `album-sort` or `album-view`.
     callback set-album-sort(string);
     callback set-album-view(string);

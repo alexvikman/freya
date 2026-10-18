@@ -475,6 +475,28 @@ fn plays_of_a_cue_sheet_track_count_for_that_track_only() {
     let played = library.recently_played(10).unwrap();
     assert_eq!(played.len(), 1);
     assert_eq!(played[0].track.display_title(), "Part 2");
+
+    // Counted for the album, by where in the file the track starts.
+    for _ in 0..2 {
+        library
+            .record_play(Path::new("/m/disc.flac"), Some(second), at(2))
+            .unwrap();
+    }
+    let plays = library.album_plays(Some("A"), Some("Live")).unwrap();
+    assert_eq!(plays.len(), 1);
+    assert_eq!(
+        plays[&(
+            PathBuf::from("/m/disc.flac"),
+            Some(Duration::from_secs(300))
+        )],
+        3
+    );
+    assert!(
+        library
+            .album_plays(Some("A"), Some("Other"))
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]

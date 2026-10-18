@@ -203,6 +203,20 @@ pub struct LibraryPanel {
     /// The track playing, by its file and where in it it starts, and its row, or -1.
     playing: Option<(PathBuf, Duration)>,
     playing_row: i32,
+    /// While an album's tracks are shown: how often each was played, and its page.
+    play_counts: HashMap<(PathBuf, Option<Duration>), u32>,
+    album_page: Option<AlbumPage>,
+}
+
+/// What an album's own page shows over its tracks.
+#[derive(Clone, Debug, PartialEq)]
+struct AlbumPage {
+    title: String,
+    artist: String,
+    detail: String,
+    cover: String,
+    /// From the cover, once its thumbnail is made.
+    color: Option<[u8; 3]>,
 }
 
 /// The covers shown last, so scrolling back does not decode them again.
@@ -261,6 +275,8 @@ impl LibraryPanel {
             album_list: false,
             playing: None,
             playing_row: -1,
+            play_counts: HashMap::new(),
+            album_page: None,
         }
     }
 
@@ -311,6 +327,7 @@ impl LibraryPanel {
     pub fn poll(&mut self) -> bool {
         if self.thumbnails.as_mut().is_some_and(Thumbnails::poll) {
             self.covers_ready += 1;
+            self.color_album_page();
         }
         // Asked before the events are read: a scan that had ended by then has sent them all.
         let ended = !self.scanner.is_running();
@@ -474,6 +491,92 @@ impl LibraryPanel {
             .map_or(-1, |row| row as i32);
     }
 
+    /// The page of the album shown, and how often its tracks were played; for anything else,
+    /// none.
+    fn load_album_page(&mut self) {
+        self.play_counts.clear();
+        self.album_page = None;
+        let (Some(db), Level::AlbumTracks { artist, album }) = (&self.db, self.level().clone())
+        else {
+            return;
+        };
+        if self.searching() {
+            return;
+        }
+        self.play_counts = db
+            .album_plays(artist.as_deref(), album.as_deref())
+            .unwrap_or_else(|e| {
+                log::warn!("library: {e}");
+                HashMap::new()
+            });
+        let tracks: Vec<&Track> = self.items.iter().filter_map(Item::track).collect();
+        let Some(first) = tracks.first() else {
+            return;
+        };
+        let cover_album = Album {
+            artist: artist.clone(),
+            name: album.clone(),
+            year: None,
+            tracks: 0,
+            track: first.path.clone(),
+        };
+        let cover = cover_key(&cover_album);
+        self.cover_tracks.insert(cover.clone(), first.path.clone());
+        let mut detail = Vec::new();
+        if let Some(year) = tracks.iter().filter_map(|t| t.year).min() {
+            detail.push(year.to_string());
+        }
+        let total: Duration = tracks.iter().filter_map(|t| t.duration).sum();
+        let mut size = count(tracks.len(), "track");
+        if !total.is_zero() {
+            size = format!("{size}, {}", long_time(total));
+        }
+        detail.push(size);
+        self.album_page = Some(AlbumPage {
+            title: album_name(album.as_deref()),
+            artist: artist_name(artist.as_deref()),
+            detail: detail.join(" · "),
+            cover,
+            color: None,
+        });
+        self.color_album_page();
+    }
+
+    /// Takes the album page's color from its cover, once the cover's thumbnail is made.
+    fn color_album_page(&mut self) {
+        let Some(page) = &self.album_page else {
+            return;
+        };
+        if page.color.is_some() {
+            return;
+        }
+        let (Some(thumbnails), Some(track)) =
+            (&mut self.thumbnails, self.cover_tracks.get(&page.cover))
+        else {
+            return;
+        };
+        let color = match thumbnails.get(&page.cover, track) {
+            Thumbnail::Ready(file) => image::open(&file)
+                .map(|image| freya_library::cover::page_color(image.to_rgb8().as_raw()))
+                .ok(),
+            // No cover: the page is grey, as for a cover of grey.
+            Thumbnail::None => Some(freya_library::cover::page_color(&[])),
+            Thumbnail::Pending => None,
+        };
+        if let Some(page) = &mut self.album_page {
+            page.color = color;
+        }
+    }
+
+    /// Opens the artist of the album shown.
+    pub fn open_album_artist(&mut self) {
+        if let Level::AlbumTracks { artist, .. } = self.level().clone() {
+            self.opened.push(Level::ArtistAlbums { artist });
+            self.query.clear();
+            self.reload();
+        }
+    }
+
     /// What is open now.
     pub fn place(&self) -> LibraryPlace {
         LibraryPlace {
@@ -620,6 +723,7 @@ impl LibraryPanel {
                     .insert(cover_key(album), album.track.clone());
             }
         }
+        self.load_album_page();
         let mut album_artist = match self.level() {
             Level::AlbumTracks { artist, .. } if !self.searching() => Some(artist.as_deref()),
             _ => None,
@@ -632,12 +736,20 @@ impl LibraryPanel {
             // In a discography, each album's tracks follow it, numbered as in the album.
             if discography && let Item::Album(album) = item {
                 album_artist = Some(album.artist.as_deref());
-                rows.push(row_value(item, None, |_| String::new()));
+                rows.push(row_value(item, None, |_| String::new(), None));
                 continue;
             }
-            rows.push(row_value(item, album_artist, |played| {
-                played_text(played, by_count, now)
-            }));
+            let plays = item.track().and_then(|t| {
+                self.play_counts
+                    .get(&(t.path.clone(), t.part.map(|p| p.start)))
+                    .copied()
+            });
+            rows.push(row_value(
+                item,
+                album_artist,
+                |played| played_text(played, by_count, now),
+                plays,
+            ));
         }
         self.rows.sync(rows);
         self.find_playing_row();
@@ -804,6 +916,7 @@ impl LibraryPanel {
                 ),
             ),
             ("playing-row", Value::Number(f64::from(self.playing_row))),
+            ("album-page", self.album_page_value()),
             ("album-sort", string(self.album_sort.name())),
             (
                 "album-view",
@@ -835,6 +948,45 @@ impl LibraryPanel {
     }
 }
 
+impl LibraryPanel {
+    fn album_page_value(&self) -> Value {
+        let page = self.album_page.clone().filter(|_| !self.searching());
+        let [r, g, b] = page
+            .as_ref()
+            .and_then(|p| p.color)
+            .unwrap_or(freya_library::cover::page_color(&[]));
+        let page = page.unwrap_or(AlbumPage {
+            title: String::new(),
+            artist: String::new(),
+            detail: String::new(),
+            cover: String::new(),
+            color: None,
+        });
+        Value::Struct(Struct::from_iter([
+            ("shown".to_owned(), Value::Bool(!page.title.is_empty())),
+            ("title".to_owned(), string(page.title)),
+            ("artist".to_owned(), string(page.artist)),
+            ("detail".to_owned(), string(page.detail)),
+            ("cover".to_owned(), string(page.cover)),
+            (
+                "color".to_owned(),
+                Value::Brush(slint::Brush::SolidColor(slint::Color::from_rgb_u8(r, g, b))),
+            ),
+        ]))
+    }
+}
+
+/// "47 min 34 s", or "1 h 5 min" from an hour on, as an album's length reads.
+fn long_time(total: Duration) -> String {
+    let seconds = total.as_secs();
+    let (hours, minutes, seconds) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
+    if hours > 0 {
+        format!("{hours} h {minutes} min")
+    } else {
+        format!("{minutes} min {seconds} s")
+    }
+}
+
 /// A playlist entry for a library track, with its tags already known.
 pub fn entry(track: &Track) -> Entry {
     Entry::with_tags(&track.path, track.part, &track.tags())
@@ -847,6 +999,7 @@ fn row_value(
     item: &Item,
     album_artist: Option<Option<&str>>,
     played: impl Fn(&Played) -> String,
+    plays: Option<u32>,
 ) -> Value {
     let in_album = album_artist.is_some();
     let mut played_text = String::new();
@@ -922,6 +1075,15 @@ fn row_value(
         ("number".to_owned(), string(number)),
         ("duration".to_owned(), string(duration)),
         ("played".to_owned(), string(played_text)),
+        (
+            "plays".to_owned(),
+            string(
+                plays
+                    .filter(|&n| n > 0)
+                    .map(|n| thousands(n as usize))
+                    .unwrap_or_default(),
+            ),
+        ),
     ]))
 }
 
@@ -1167,6 +1329,92 @@ mod tests {
         assert_eq!(playing_row(&panel), 0.0);
         panel.set_playing(None);
         assert_eq!(playing_row(&panel), -1.0);
+    }
+
+    #[test]
+    fn an_albums_page_has_its_heading_and_each_tracks_plays() {
+        let dir = std::env::temp_dir().join(format!("freya-album-page-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fixtures =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-audio/tests/fixtures");
+        for name in ["sine.flac", "sine.ogg"] {
+            std::fs::copy(fixtures.join(name), dir.join(name)).unwrap();
+        }
+        let mut db = Library::open_in_memory().unwrap();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        freya_library::library::scan(&mut db, std::slice::from_ref(&dir), &cancel, |_| {}).unwrap();
+        for _ in 0..1203 {
+            db.record_play(&dir.join("sine.flac"), None, SystemTime::now())
+                .unwrap();
+        }
+        let album = db
+            .all_albums()
+            .unwrap()
+            .into_iter()
+            .next()
+            .expect("an album");
+
+        let mut panel = LibraryPanel::new(None, None);
+        panel.db = Some(db);
+        panel.opened = vec![
+            Level::Albums,
+            Level::AlbumTracks {
+                artist: album.artist.clone(),
+                album: album.name.clone(),
+            },
+        ];
+        panel.reload();
+        let Value::Struct(page) = panel.album_page_value() else {
+            panic!("a struct");
+        };
+        let text = |name: &str| match page.get_field(name) {
+            Some(Value::String(s)) => s.to_string(),
+            other => panic!("{name}: {other:?}"),
+        };
+        assert_eq!(page.get_field("shown"), Some(&Value::Bool(true)));
+        assert_eq!(text("title"), album_name(album.name.as_deref()));
+        assert_eq!(text("artist"), artist_name(album.artist.as_deref()));
+        assert!(text("detail").contains("2 tracks"), "{}", text("detail"));
+        assert!(!text("cover").is_empty());
+
+        use slint::Model;
+        let Value::Model(rows) = panel.rows.model_value() else {
+            panic!("rows are a model");
+        };
+        let plays: Vec<String> = rows
+            .iter()
+            .map(|row| match row {
+                Value::Struct(row) => match row.get_field("plays") {
+                    Some(Value::String(s)) => s.to_string(),
+                    _ => String::new(),
+                },
+                _ => String::new(),
+            })
+            .collect();
+        let mut sorted = plays.clone();
+        sorted.sort();
+        assert_eq!(sorted, ["", "1,203"], "{plays:?}");
+
+        // Searching, or anywhere else, has no page.
+        panel.search("sine");
+        assert_eq!(
+            match panel.album_page_value() {
+                Value::Struct(page) => page.get_field("shown").cloned(),
+                _ => None,
+            },
+            Some(Value::Bool(false))
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn albums_are_as_long_as_their_tracks_in_words() {
+        assert_eq!(long_time(Duration::from_secs(47 * 60 + 34)), "47 min 34 s");
+        assert_eq!(
+            long_time(Duration::from_secs(3600 + 5 * 60 + 27)),
+            "1 h 5 min"
+        );
     }
 
     #[test]

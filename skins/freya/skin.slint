@@ -4,7 +4,7 @@
 // contrast against the background it is drawn on (WCAG AA), light and dark mode follow the
 // system.
 
-import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, LastFm, PlaybackState, Shortcuts, TrackRow, LibraryRow, PlaylistRow, StationRow, NativeSpectrum, NativeOscilloscope, NativeHologram } from "@freya/v1.slint";
+import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, LastFm, PlaybackState, Shortcuts, TrackRow, LibraryRow, AlbumPage, PlaylistRow, StationRow, NativeSpectrum, NativeOscilloscope, NativeHologram } from "@freya/v1.slint";
 import { AboutSlint, ListView, Palette, ScrollView } from "std-widgets.slint";
 
 // Every skin re-exports the API globals so the app can reach them.
@@ -1689,6 +1689,310 @@ component AlbumTile inherits Rectangle {
 
 /// The library and its search results, as `Library.layout` says: a list, a table of tracks,
 /// or a grid of albums. The title, back button and search field are in the toolbar.
+/// The top of an album's page, as in Spotify: the cover and the album's name large, in a
+/// color from the cover; play, shuffle and add; and the heading of the track table.
+component AlbumPageHead inherits Rectangle {
+    in property <AlbumPage> page;
+
+    property <image> cover-image: page.cover == "" ? @image-url("") : Library.cover(page.cover, Library.covers-ready);
+    property <length> pad: 24px;
+
+    accessible-role: groupbox;
+    accessible-label: "Album " + page.title + " by " + page.artist + ", " + page.detail;
+
+    VerticalLayout {
+        // The cover's color behind the header, darker towards its foot.
+        Rectangle {
+            height: 300px;
+            background: @linear-gradient(180deg, root.page.color.brighter(15%) 0%, root.page.color 100%);
+
+            HorizontalLayout {
+                padding: root.pad;
+                padding-top: 40px;
+                spacing: 24px;
+
+                Rectangle {
+                    width: 232px;
+                    height: 232px;
+                    y: parent.height - root.pad - self.height;
+                    border-radius: 6px;
+                    clip: true;
+                    background: #ffffff1a;
+                    drop-shadow-blur: 24px;
+                    drop-shadow-offset-y: 8px;
+                    drop-shadow-color: #00000066;
+
+                    if root.cover-image.width > 0: Image {
+                        width: parent.width;
+                        height: parent.height;
+                        source: root.cover-image;
+                        image-fit: cover;
+                    }
+                    if root.cover-image.width == 0: Icon {
+                        width: 64px;
+                        height: 64px;
+                        data: Icons.note;
+                        stroked: true;
+                        color: #ffffffb3;
+                    }
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    min-width: 0;
+                    alignment: end;
+                    spacing: 8px;
+
+                    Text {
+                        text: "Album";
+                        font-size: 13px;
+                        font-weight: 600;
+                        color: #ffffff;
+                    }
+                    // Large, smaller for a long name, and cut short only when that is not
+                    // enough.
+                    Text {
+                        text: root.page.title;
+                        font-size: root.page.title.character-count <= 14 ? 72px
+                            : root.page.title.character-count <= 24 ? 56px
+                            : root.page.title.character-count <= 40 ? 40px
+                            : 30px;
+                        font-weight: 900;
+                        color: #ffffff;
+                        overflow: elide;
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+
+                        Text {
+                            text: root.page.artist;
+                            font-size: 14px;
+                            font-weight: 700;
+                            color: #ffffff;
+
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { Library.open-album-artist(); }
+                            }
+                        }
+                        Text {
+                            text: " · " + root.page.detail;
+                            font-size: 14px;
+                            color: #ffffffcc;
+                            overflow: elide;
+                        }
+                    }
+                }
+            }
+        }
+        // The color fades out under the buttons.
+        Rectangle {
+            height: 96px;
+            background: @linear-gradient(180deg, root.page.color.with-alpha(0.55) 0%, root.page.color.with-alpha(0) 100%);
+
+            HorizontalLayout {
+                padding-left: root.pad;
+                spacing: 12px;
+                alignment: start;
+
+                IconButton {
+                    y: (parent.height - self.height) / 2;
+                    icon: Icons.play;
+                    primary: true;
+                    size: 56px;
+                    label: "Play " + root.page.title;
+                    tooltip: "Play";
+                    clicked => { Library.play-all(); }
+                }
+                IconButton {
+                    y: (parent.height - self.height) / 2;
+                    icon: Icons.shuffle;
+                    stroked: true;
+                    size: 44px;
+                    label: "Shuffle " + root.page.title;
+                    tooltip: "Shuffle";
+                    clicked => { Library.shuffle-all(); }
+                }
+                IconButton {
+                    y: (parent.height - self.height) / 2;
+                    icon: Icons.plus;
+                    stroked: true;
+                    size: 44px;
+                    label: "Add " + root.page.title + " to Up Next";
+                    tooltip: "Add to Up Next";
+                    clicked => { Library.enqueue-all(); }
+                }
+            }
+        }
+        // The track table's heading.
+        HorizontalLayout {
+            height: 36px;
+            padding-left: root.pad + 12px;
+            padding-right: root.pad + 12px;
+            spacing: 16px;
+
+            Text {
+                width: 30px;
+                text: "#";
+                font-size: 13px;
+                color: Theme.text-secondary;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+            Text {
+                horizontal-stretch: 1;
+                text: "Title";
+                font-size: 13px;
+                color: Theme.text-secondary;
+                vertical-alignment: center;
+            }
+            Text {
+                width: 100px;
+                text: "Plays";
+                font-size: 13px;
+                color: Theme.text-secondary;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+            Rectangle {
+                width: 56px;
+
+                Icon {
+                    x: parent.width - self.width;
+                    width: 16px;
+                    height: 16px;
+                    data: Icons.clock;
+                    stroked: true;
+                    color: Theme.text-secondary;
+                }
+            }
+            // Over the add buttons.
+            Rectangle { width: 30px; }
+        }
+        Rectangle {
+            x: root.pad;
+            width: root.width - 2 * root.pad;
+            height: 1px;
+            background: Theme.divider;
+        }
+    }
+}
+
+/// A track on an album's page: its number (a play button under the pointer, bars while it
+/// plays), title and artist, plays and length.
+component AlbumTrackRow inherits Rectangle {
+    in property <LibraryRow> entry;
+    in property <int> index;
+    in property <bool> cursor;
+    in property <bool> playing;
+    callback pressed();
+    /// A right-click, at this point in the window.
+    callback context-menu(length, length);
+    callback activated();
+
+    accessible-role: list-item;
+    accessible-label: entry.title + ", " + entry.artist + (entry.duration == "" ? "" : ", " + entry.duration);
+    accessible-action-default => { root.activated(); }
+
+    Rectangle {
+        x: 24px;
+        width: parent.width - 48px;
+        border-radius: 6px;
+        background: root.cursor ? Theme.selection : (touch.has-hover ? Theme.hover : transparent);
+    }
+    // Around the row's buttons, so the row stays hovered while the pointer is on one.
+    touch := TouchArea {
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                root.pressed();
+                root.context-menu(root.absolute-position.x + self.mouse-x, root.absolute-position.y + self.mouse-y);
+            }
+        }
+        clicked => { root.pressed(); }
+        double-clicked => { root.activated(); }
+
+        HorizontalLayout {
+            padding-left: 36px;
+            padding-right: 36px;
+            spacing: 16px;
+
+            Rectangle {
+                width: 30px;
+
+                if root.playing: Icon {
+                    x: parent.width - self.width;
+                    width: 16px;
+                    height: 16px;
+                    data: Icons.spectrum;
+                    stroked: true;
+                    color: Theme.accent;
+                }
+                if !root.playing && touch.has-hover: IconButton {
+                    x: parent.width - self.width + 6px;
+                    y: (parent.height - self.height) / 2;
+                    icon: Icons.play;
+                    size: 28px;
+                    label: "Play " + root.entry.title;
+                    clicked => { root.activated(); }
+                }
+                if !root.playing && !touch.has-hover: Text {
+                    width: parent.width;
+                    height: parent.height;
+                    text: root.entry.number;
+                    font-size: 14px;
+                    color: Theme.text-secondary;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                min-width: 0;
+                alignment: center;
+                spacing: 2px;
+
+                Text {
+                    text: root.entry.title;
+                    font-size: 15px;
+                    color: root.playing ? Theme.accent : Theme.text;
+                    overflow: elide;
+                }
+                Text {
+                    text: root.entry.artist;
+                    font-size: 13px;
+                    color: Theme.text-secondary;
+                    overflow: elide;
+                }
+            }
+            Text {
+                width: 100px;
+                text: root.entry.plays;
+                font-size: 13px;
+                color: Theme.text-secondary;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+            Text {
+                width: 56px;
+                text: root.entry.duration;
+                font-size: 13px;
+                color: Theme.text-secondary;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+            IconButton {
+                y: (parent.height - self.height) / 2;
+                opacity: touch.has-hover ? 1 : 0;
+                icon: Icons.plus;
+                stroked: true;
+                size: 30px;
+                label: "Add " + root.entry.title + " to Up Next";
+                tooltip: "Add to Up Next";
+                clicked => { Library.enqueue(root.index); }
+            }
+        }
+    }
+}
+
 /// An album in an artist's discography, over its tracks: cover, title, year and tracks, and
 /// buttons to play it or add it to Up Next.
 component DiscographyAlbum inherits Rectangle {
@@ -1799,6 +2103,7 @@ component LibraryPanel inherits FocusScope {
         App.scroll = -(root.grid-shown ? grid.content-y
             : root.table-shown ? table.content-y
             : root.discography-shown ? discography.content-y
+            : root.album-shown ? album.content-y
             : list.content-y);
     }
 
@@ -1812,6 +2117,8 @@ component LibraryPanel inherits FocusScope {
             table.content-y = -App.restore-scroll;
         } else if (root.discography-shown) {
             discography.content-y = -App.restore-scroll;
+        } else if (root.album-shown) {
+            album.content-y = -App.restore-scroll;
         } else {
             list.content-y = -App.restore-scroll;
         }
@@ -1834,7 +2141,11 @@ component LibraryPanel inherits FocusScope {
     property <bool> grid-shown: Library.layout == "grid";
     property <bool> table-shown: Library.layout == "table";
     property <bool> discography-shown: Library.layout == "discography";
-    property <bool> list-shown: !grid-shown && !table-shown && !discography-shown;
+    /// An album's tracks, under the album's own page.
+    property <bool> album-shown: Library.album-page.shown && !grid-shown && !table-shown && !discography-shown;
+    property <bool> list-shown: !grid-shown && !table-shown && !discography-shown && !album-shown;
+    property <length> album-page-head-height: 300px + 96px + 37px;
+    property <length> album-row-height: 56px;
     /// Over an artist's albums: how they are ordered and shown.
     property <length> options-height: Library.album-options ? 44px : 0;
     property <length> album-head-height: 188px;
@@ -1880,6 +2191,8 @@ component LibraryPanel inherits FocusScope {
             table.content-y = root.scrolled-to(table.content-y, table.visible-height, row * root.table-row-height, root.table-row-height);
         } else if (root.discography-shown) {
             // Albums and tracks differ in height; the keyboard row is shown where it is.
+        } else if (root.album-shown) {
+            album.content-y = root.scrolled-to(album.content-y, album.visible-height, root.album-page-head-height + row * root.album-row-height, root.album-row-height);
         } else {
             list.content-y = root.scrolled-to(list.content-y, list.visible-height, row * root.list-row-height, root.list-row-height);
         }
@@ -1909,6 +2222,7 @@ component LibraryPanel inherits FocusScope {
         table.content-y = 0;
         grid.content-y = 0;
         discography.content-y = 0;
+        album.content-y = 0;
     }
 
     /// Opens an artist, album or genre, or plays a track.
@@ -2052,6 +2366,36 @@ component LibraryPanel inherits FocusScope {
                 }
                 activated => { root.activate(self.index); }
                 context-menu(x, y) => { root.open-menu(self.index, x, y); }
+            }
+        }
+    }
+
+    // An album's tracks under its page, which scrolls with them.
+    album := ListView {
+        visible: root.album-shown;
+        changed content-y => {
+            if (root.shown) {
+                root.report-scroll();
+            }
+        }
+
+        for index in root.album-shown ? Library.rows.length + 1 : 0: Rectangle {
+            height: index == 0 ? root.album-page-head-height : root.album-row-height;
+
+            if index == 0: AlbumPageHead {
+                page: Library.album-page;
+            }
+            if index > 0: AlbumTrackRow {
+                entry: Library.rows[index - 1];
+                index: index - 1;
+                cursor: index - 1 == root.cursor;
+                playing: index - 1 == Library.playing-row;
+                pressed => {
+                    root.cursor = index - 1;
+                    root.focus();
+                }
+                activated => { root.activate(index - 1); }
+                context-menu(x, y) => { root.open-menu(index - 1, x, y); }
             }
         }
     }
@@ -4134,6 +4478,8 @@ component AboutView inherits Rectangle {
 component Toolbar inherits HorizontalLayout {
     /// Room kept free at the left, for the window buttons.
     in property <length> inset;
+    /// An album's page shows its name and buttons itself: here only once they scrolled away.
+    property <bool> page-head-shown: root.view == "library" && Library.album-page.shown && App.scroll < 300px;
     /// Whether back and forward show here: while the navigation, their own place, is hidden.
     in property <bool> nav-buttons;
     in property <string> view;
@@ -4187,6 +4533,9 @@ component Toolbar inherits HorizontalLayout {
         padding-left: 6px;
         spacing: 3px;
 
+        opacity: root.page-head-shown ? 0 : 1;
+        animate opacity { duration: 150ms; }
+
         Text {
             text: root.title;
             font-size: 17px;
@@ -4233,7 +4582,7 @@ component Toolbar inherits HorizontalLayout {
         label: "Add a station";
         clicked => { root.add-station(); }
     }
-    if root.view == "library" && Library.can-go-back && Library.rows.length > 0: VerticalLayout {
+    if root.view == "library" && Library.can-go-back && Library.rows.length > 0 && !root.page-head-shown: VerticalLayout {
         alignment: center;
 
         TextButton {
@@ -4241,7 +4590,7 @@ component Toolbar inherits HorizontalLayout {
             clicked => { Library.play-all(); }
         }
     }
-    if root.view == "library" && Library.can-go-back && Library.rows.length > 0: VerticalLayout {
+    if root.view == "library" && Library.can-go-back && Library.rows.length > 0 && !root.page-head-shown: VerticalLayout {
         alignment: center;
 
         TextButton {

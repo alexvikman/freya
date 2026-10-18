@@ -715,6 +715,20 @@ impl App {
         self.play_entries(tracks.iter().map(library::entry).collect(), start);
     }
 
+    /// Up Next becomes `tracks`, with shuffle on, playing from a random one.
+    pub fn shuffle_tracks(&mut self, tracks: &[Track]) {
+        if tracks.is_empty() {
+            return;
+        }
+        if !self.settings.shuffle {
+            self.toggle_shuffle();
+        }
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0, |d| d.subsec_nanos() as usize);
+        self.play_tracks(tracks, nanos % tracks.len());
+    }
+
     pub fn enqueue_tracks(&mut self, tracks: &[Track]) {
         self.enqueue_entries(tracks.iter().map(library::entry).collect());
     }

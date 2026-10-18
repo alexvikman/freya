@@ -232,6 +232,19 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     );
     bind(
         "Library",
+        "shuffle-all",
+        Box::new(|app, _| {
+            let tracks = app.library.all_tracks();
+            app.shuffle_tracks(&tracks);
+        }),
+    );
+    bind(
+        "Library",
+        "open-album-artist",
+        Box::new(|app, _| app.library.open_album_artist()),
+    );
+    bind(
+        "Library",
         "enqueue-all",
         Box::new(|app, _| {
             let tracks = app.library.all_tracks();

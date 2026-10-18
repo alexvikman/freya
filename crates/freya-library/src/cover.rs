@@ -104,9 +104,101 @@ fn image_in(dir: &Path) -> Option<Vec<u8>> {
     std::fs::read(chosen).ok()
 }
 
+/// A color for an album's page, from its cover's pixels (RGB, 3 bytes each): the cover's
+/// colors averaged, the vivid ones counting most so a red cover on grey gives red, then made
+/// dark enough for white text and not garish. A grey cover gives grey.
+pub fn page_color(rgb: &[u8]) -> [u8; 3] {
+    let mut sum = [0.0f64; 3];
+    let mut weight = 0.0;
+    for pixel in rgb.as_chunks::<3>().0 {
+        let [r, g, b] = pixel.map(|c| f64::from(c) / 255.0);
+        let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+        // Vivid pixels count up to nine times as much as grey ones; near-black and near-white
+        // ones, as in a border or a background, hardly at all.
+        let vivid = 1.0 + 8.0 * (max - min);
+        let w = vivid * (max * (1.0 - min)).max(0.02);
+        sum[0] += r * w;
+        sum[1] += g * w;
+        sum[2] += b * w;
+        weight += w;
+    }
+    if weight == 0.0 {
+        return [83, 83, 83];
+    }
+    let [r, g, b] = sum.map(|c| c / weight);
+    let (hue, saturation, _) = hsl(r, g, b);
+    let mut rgb = from_hsl(hue, saturation.min(0.55), 0.32);
+    // Yellows and greens look lighter than blues at the same lightness: darker still, until
+    // white text reads on them as on the others.
+    let [r, g, b] = rgb;
+    let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    if luminance > MAX_LUMINANCE {
+        rgb = rgb.map(|c| c * MAX_LUMINANCE / luminance);
+    }
+    rgb.map(|c| (c * 255.0).round() as u8)
+}
+
+/// The most a page color's luminance may be, from 0 to 1.
+const MAX_LUMINANCE: f64 = 0.38;
+
+/// Hue (0 to 1), saturation and lightness of an RGB color with channels from 0 to 1.
+fn hsl(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    let lightness = (max + min) / 2.0;
+    let delta = max - min;
+    if delta < 1e-9 {
+        return (0.0, 0.0, lightness);
+    }
+    let saturation = delta / (1.0 - (2.0 * lightness - 1.0).abs());
+    let hue = if max == r {
+        ((g - b) / delta).rem_euclid(6.0)
+    } else if max == g {
+        (b - r) / delta + 2.0
+    } else {
+        (r - g) / delta + 4.0
+    } / 6.0;
+    (hue, saturation, lightness)
+}
+
+fn from_hsl(hue: f64, saturation: f64, lightness: f64) -> [f64; 3] {
+    let chroma = (1.0 - (2.0 * lightness - 1.0).abs()) * saturation;
+    let h = hue * 6.0;
+    let x = chroma * (1.0 - (h.rem_euclid(2.0) - 1.0).abs());
+    let (r, g, b) = match h as u32 {
+        0 => (chroma, x, 0.0),
+        1 => (x, chroma, 0.0),
+        2 => (0.0, chroma, x),
+        3 => (0.0, x, chroma),
+        4 => (x, 0.0, chroma),
+        _ => (chroma, 0.0, x),
+    };
+    let m = lightness - chroma / 2.0;
+    [r + m, g + m, b + m]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn page_colors_follow_the_cover_dark_enough_for_white_text() {
+        let image = |pixels: &[[u8; 3]]| -> Vec<u8> { pixels.concat() };
+        // Mostly grey with a red figure: red wins.
+        let mut pixels = vec![[128, 128, 128]; 90];
+        pixels.extend([[220, 30, 30]; 10]);
+        let [r, g, b] = page_color(&image(&pixels));
+        assert!(r > g + 40 && r > b + 40, "{r} {g} {b}");
+        // Dark enough for white text, whatever the cover.
+        for color in [[250, 240, 120], [20, 40, 200], [255, 255, 255], [0, 0, 0]] {
+            let [r, g, b] = page_color(&image(&[color; 4]));
+            let luminance = 0.2126 * f64::from(r) + 0.7152 * f64::from(g) + 0.0722 * f64::from(b);
+            assert!(luminance < 110.0, "{color:?} gave {r} {g} {b}");
+        }
+        // Grey stays grey; no pixels at all give Spotify's grey.
+        let [r, g, b] = page_color(&image(&[[100, 100, 100]; 4]));
+        assert!(r == g && g == b);
+        assert_eq!(page_color(&[]), [83, 83, 83]);
+    }
 
     #[test]
     fn finds_folder_image_and_scales_it_down() {
