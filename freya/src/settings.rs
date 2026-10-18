@@ -113,6 +113,12 @@ pub fn library_path() -> Option<PathBuf> {
     dirs().map(|d| d.data_dir().join("library.sqlite3"))
 }
 
+/// Pictures of artists downloaded from the internet, kept apart from the cache, which the
+/// system may empty: getting them again takes the internet.
+pub fn pictures_dir() -> Option<PathBuf> {
+    dirs().map(|d| d.data_dir().join("pictures"))
+}
+
 /// Where the playlist is kept between runs.
 pub fn playlist_path() -> Option<PathBuf> {
     dirs().map(|d| d.data_dir().join("playlist.m3u8"))

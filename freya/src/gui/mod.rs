@@ -133,6 +133,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             library: library::LibraryPanel::new(
                 crate::settings::library_path(),
                 crate::settings::cache_dir().map(|dir| dir.join("covers")),
+                crate::settings::pictures_dir(),
             ),
             stations: radio::Stations::load(crate::settings::stations_path()),
             playlists: playlists::Playlists::load(crate::settings::playlists_dir()),

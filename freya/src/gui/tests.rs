@@ -168,6 +168,7 @@ fn skin_callbacks_drive_the_app() {
             library: library::LibraryPanel::new(
                 Some(temp_dir("library").join("library.sqlite3")),
                 Some(temp_dir("covers")),
+                Some(temp_dir("pictures")),
             ),
             stations: radio::Stations::load(Some(temp_dir("radio").join("stations.m3u8"))),
             playlists: playlists::Playlists::load(Some(temp_dir("playlists"))),
@@ -597,7 +598,7 @@ fn silent_app(name: &str) -> Rc<RefCell<App>> {
         Settings::default(),
         WindowEvents::default(),
         app::Collections {
-            library: library::LibraryPanel::new(None, None),
+            library: library::LibraryPanel::new(None, None, None),
             stations: radio::Stations::load(Some(temp_dir(name).join("stations.m3u8"))),
             playlists: playlists::Playlists::load(Some(temp_dir(name).join("playlists"))),
         },
