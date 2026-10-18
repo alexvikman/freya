@@ -165,6 +165,8 @@ export struct ArtistPage {
     summary: string,
     biography: string,
     tags: string,
+    /// Whether `summary` and `biography` are the user's own text rather than Last.fm's.
+    own-biography: bool,
     /// Whether `Library.popular` shows all ten tracks rather than five, and how many there
     /// are in all.
     more: bool,

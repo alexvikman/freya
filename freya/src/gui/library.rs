@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use freya_library::cue::Part;
 use freya_library::library::{
-    Album, Artist, ArtistOrder, Genre, PictureKind, Played, ScanEvent, Scanner, Track,
+    Album, Artist, ArtistEdit, ArtistOrder, Genre, PictureKind, Played, ScanEvent, Scanner, Track,
 };
 use freya_library::pictures::Pictures;
 use freya_library::thumbnails::{
@@ -232,6 +232,8 @@ pub struct LibraryPanel {
     artist_page: Option<ArtistPage>,
     artist_infos: ArtistInfos,
     online_bios: bool,
+    /// What the user changed about artists, by the tags' name for them.
+    edits: HashMap<String, ArtistEdit>,
     /// The user's personal fanart.tv key, for wide pictures of artists.
     fanart_key: Option<String>,
     popular_rows: ModelRows,
@@ -243,6 +245,10 @@ pub struct LibraryPanel {
 /// What an artist's own page shows over their albums.
 struct ArtistPage {
     name: Option<String>,
+    /// The name shown: the one the user gave them, else the tags'.
+    shown_name: String,
+    /// Whether the biography is the user's own, rather than Last.fm's.
+    own_biography: bool,
     detail: String,
     genres: String,
     /// Their picture's key; a wide picture of them and their picture large, once made; and a
@@ -403,6 +409,7 @@ impl LibraryPanel {
             artist_keys: HashMap::new(),
             artist_page: None,
             artist_infos: ArtistInfos::new(),
+            edits: HashMap::new(),
             online_bios: true,
             fanart_key: None,
             popular_rows: ModelRows::new(),
@@ -668,10 +675,14 @@ impl LibraryPanel {
     /// now.
     fn backdrop_source(&self, page: &ArtistPage) -> BackdropSource {
         let name = page.name.as_deref();
-        let tagged = self
-            .db
-            .as_ref()
-            .and_then(|db| db.artist_mbid(name).ok().flatten());
+        // The user's, else the tags'.
+        let tagged = name
+            .and_then(|n| self.edits.get(n)?.mbid.clone())
+            .or_else(|| {
+                self.db
+                    .as_ref()
+                    .and_then(|db| db.artist_mbid(name).ok().flatten())
+            });
         let noted = self.fetched.iter().rev().find_map(|fetched| match fetched {
             Fetched::ArtistId { artist, mbid } if Some(artist.as_str()) == name => {
                 Some(mbid.clone())
@@ -878,7 +889,7 @@ impl LibraryPanel {
         detail.push(size);
         self.album_page = Some(AlbumPage {
             title: album_name(album.as_deref()),
-            artist: artist_name(artist.as_deref()),
+            artist: self.shown_artist(artist.as_deref()),
             detail: detail.join(" · "),
             cover,
             color: None,
@@ -917,6 +928,8 @@ impl LibraryPanel {
         let picture = Thumbnails::artist_key(artist.as_deref());
         self.artist_keys.insert(picture.clone(), artist.clone());
         self.artist_page = Some(ArtistPage {
+            shown_name: self.shown_artist(artist.as_deref()),
+            own_biography: false,
             name: artist,
             detail: detail.join(" · "),
             genres: summary.map(|s| s.genres.join(", ")).unwrap_or_default(),
@@ -1006,6 +1019,15 @@ impl LibraryPanel {
         let Some(name) = page.name.as_deref() else {
             return;
         };
+        // The user's own replaces Last.fm's, which is then not asked.
+        let own = self.edits.get(name).and_then(|e| e.biography.clone());
+        page.own_biography = own.is_some();
+        if let Some(own) = &own {
+            page.summary = own.split("\n\n").next().unwrap_or(own).trim().to_owned();
+            page.biography.clone_from(own);
+            page.tags.clear();
+            return;
+        }
         if let Some(info) = self
             .artist_infos
             .get(name, self.online_bios, self.db.as_ref())
@@ -1117,6 +1139,12 @@ impl LibraryPanel {
         if let Some(page) = &mut self.album_page {
             page.color = color;
         }
+    }
+
+    /// The name an artist is shown by: the one the user gave them, else the tags'.
+    fn shown_artist(&self, name: Option<&str>) -> String {
+        name.and_then(|n| self.edits.get(n)?.name.clone())
+            .unwrap_or_else(|| artist_name(name))
     }
 
     /// Opens the artist of the album shown.
@@ -1280,6 +1308,10 @@ impl LibraryPanel {
             return;
         };
         let started = Instant::now();
+        self.edits = db.artist_edits().unwrap_or_else(|e| {
+            log::warn!("could not read what was changed about artists: {e}");
+            HashMap::new()
+        });
         let result = self.load(db);
         match result {
             Ok(items) => self.items = items,
@@ -1430,11 +1462,13 @@ impl LibraryPanel {
             Level::RecentlyAdded => ("Recently Added".to_owned(), count(n, "album")),
             Level::RecentlyPlayed => ("Recently Played".to_owned(), count(n, "track")),
             Level::MostPlayed => ("Most Played".to_owned(), count(n, "track")),
-            Level::ArtistAlbums { artist } => (artist_name(artist.as_deref()), albums_and_tracks),
+            Level::ArtistAlbums { artist } => {
+                (self.shown_artist(artist.as_deref()), albums_and_tracks)
+            }
             Level::GenreAlbums { genre } => (genre_name(genre.as_deref()), albums_and_tracks),
             Level::AlbumTracks { artist, album } => {
                 let tracks: Vec<&Track> = self.items.iter().filter_map(Item::track).collect();
-                let mut parts = vec![artist_name(artist.as_deref())];
+                let mut parts = vec![self.shown_artist(artist.as_deref())];
                 if let Some(year) = tracks.iter().filter_map(|t| t.year).min() {
                     parts.push(year.to_string());
                 }
@@ -1603,7 +1637,11 @@ impl LibraryPanel {
         let text = |f: fn(&ArtistPage) -> String| string(page.map(f).unwrap_or_default());
         Value::Struct(Struct::from_iter([
             ("shown".to_owned(), Value::Bool(page.is_some())),
-            ("name".to_owned(), text(|p| artist_name(p.name.as_deref()))),
+            ("name".to_owned(), text(|p| p.shown_name.clone())),
+            (
+                "own-biography".to_owned(),
+                Value::Bool(page.is_some_and(|p| p.own_biography)),
+            ),
             ("detail".to_owned(), text(|p| p.detail.clone())),
             ("genres".to_owned(), text(|p| p.genres.clone())),
             ("picture".to_owned(), text(|p| p.picture.clone())),
@@ -1719,7 +1757,9 @@ fn row_value(
             "artist",
             {
                 cover = Thumbnails::artist_key(a.name.as_deref());
-                artist_name(a.name.as_deref())
+                a.shown_name
+                    .clone()
+                    .unwrap_or_else(|| artist_name(a.name.as_deref()))
             },
             format!(
                 "{} · {}",
@@ -1918,6 +1958,8 @@ mod tests {
         // MusicBrainz found no id lately, and fanart.tv was never asked.
         let page = ArtistPage {
             name: Some("Ghost".into()),
+            shown_name: "Ghost".into(),
+            own_biography: false,
             detail: String::new(),
             genres: String::new(),
             picture: String::new(),
@@ -1993,6 +2035,54 @@ mod tests {
         assert!(panel.open_playing(false));
         assert!(matches!(panel.level(), Level::ArtistAlbums { .. }));
         assert_eq!((panel.reveal_row, panel.reveals), (-1, 2));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shows_an_artist_by_what_the_user_changed() {
+        let dir = std::env::temp_dir().join(format!("freya-edited-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fixtures =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-audio/tests/fixtures");
+        std::fs::copy(fixtures.join("sine.mp3"), dir.join("sine.mp3")).unwrap();
+        let mut db = Library::open_in_memory().unwrap();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        freya_library::library::scan(&mut db, std::slice::from_ref(&dir), &cancel, |_| {}).unwrap();
+        let artist = db.artists().unwrap()[0].name.clone();
+        assert_eq!(artist.as_deref(), Some("Freya"));
+        let edit = ArtistEdit {
+            name: Some("Freya Herself".into()),
+            mbid: Some("0000-mbid".into()),
+            biography: Some("First part.\n\nSecond part.".into()),
+            ..ArtistEdit::default()
+        };
+        db.set_artist_edit(artist.as_deref().unwrap(), &edit)
+            .unwrap();
+
+        let mut panel = LibraryPanel::new(None, None, None);
+        panel.db = Some(db);
+        panel.online_bios = false;
+        panel.reload();
+        let Value::Model(rows) = panel.rows.model_value() else {
+            panic!("a model");
+        };
+        let Some(Value::Struct(row)) = slint::Model::row_data(&rows, 0) else {
+            panic!("an artist row");
+        };
+        assert_eq!(row.get_field("title"), Some(&string("Freya Herself")));
+
+        panel.opened.push(Level::ArtistAlbums { artist });
+        panel.reload();
+        assert_eq!(panel.title, "Freya Herself");
+        let page = panel.artist_page.as_ref().unwrap();
+        assert_eq!(page.shown_name, "Freya Herself");
+        assert!(page.own_biography);
+        assert_eq!(page.summary, "First part.");
+        assert_eq!(
+            panel.backdrop_source(page).mbid.as_deref(),
+            Some("0000-mbid")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

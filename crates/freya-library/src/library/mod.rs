@@ -5,6 +5,7 @@
 //! layout changes, they are rebuilt by the next scan. What the files cannot tell, when each
 //! track was played, is kept in a table of its own that a rebuild leaves alone.
 
+mod edits;
 mod online;
 mod scan;
 
@@ -17,6 +18,7 @@ use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 use crate::cue::Part;
 use crate::tags::TagInfo;
 
+pub use edits::ArtistEdit;
 pub use online::{ASK_AGAIN_AFTER, ArtistText, Asked, PictureKind};
 pub use rusqlite::Error;
 pub use scan::{ScanEvent, ScanSummary, Scanner, scan};
@@ -177,7 +179,10 @@ pub enum ArtistOrder {
 /// An artist the library has albums by. `name` is `None` for untagged tracks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Artist {
+    /// As the tags name them; how they are known.
     pub name: Option<String>,
+    /// The name the user gave them in Freya, when they did.
+    pub shown_name: Option<String>,
     pub albums: u32,
     pub tracks: u32,
 }
@@ -283,6 +288,7 @@ impl Library {
         }
         db.execute_batch(HISTORY)?;
         db.execute_batch(online::SCHEMA)?;
+        db.execute_batch(edits::SCHEMA)?;
         Ok(Self { db })
     }
 
@@ -317,18 +323,22 @@ impl Library {
             ArtistOrder::MostPlayed => "sum(coalesce(plays.n, 0)) DESC,",
             ArtistOrder::RecentlyAdded => "max(tracks.added) DESC,",
         };
+        // By the name the user sorts them by, else the name shown.
         let mut query = self.db.prepare_cached(&format!(
-            "SELECT album_artist, count(DISTINCT album), count(*)
+            "SELECT album_artist, count(DISTINCT album), count(*), edits.name
              FROM tracks
              LEFT JOIN (SELECT path, start_ms, count(*) AS n FROM plays GROUP BY path, start_ms)
                  AS plays ON plays.path = tracks.path AND plays.start_ms IS tracks.start_ms
+             LEFT JOIN artist_edits AS edits ON edits.artist = tracks.album_artist
              GROUP BY album_artist
-             ORDER BY album_artist IS NULL, {order} album_artist COLLATE NOCASE"
+             ORDER BY album_artist IS NULL, {order}
+                      coalesce(edits.sort_name, edits.name, album_artist) COLLATE NOCASE"
         ))?;
         query
             .query_map([], |row| {
                 Ok(Artist {
                     name: row.get(0)?,
+                    shown_name: row.get(3)?,
                     albums: row.get(1)?,
                     tracks: row.get(2)?,
                 })

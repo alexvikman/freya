@@ -323,6 +323,7 @@ impl Convert for ArtistPage {
             summary: field(&s, "summary"),
             biography: field(&s, "biography"),
             tags: field(&s, "tags"),
+            own_biography: field(&s, "own-biography"),
             more: field(&s, "more"),
             popular_count: field(&s, "popular-count"),
         })
@@ -342,6 +343,7 @@ impl Convert for ArtistPage {
             ("summary", self.summary.to_value()),
             ("biography", self.biography.to_value()),
             ("tags", self.tags.to_value()),
+            ("own-biography", self.own_biography.to_value()),
             ("more", self.more.to_value()),
             ("popular-count", self.popular_count.to_value()),
         ])

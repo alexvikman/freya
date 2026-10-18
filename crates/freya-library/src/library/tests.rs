@@ -710,3 +710,37 @@ fn ten_thousand_tracks_browse_and_search_quickly() {
 
 /// How many albums or tracks the Recents views show.
 const RECENT: usize = 200;
+
+#[test]
+fn artists_sort_and_show_by_what_the_user_changed() {
+    let mut library = Library::open_in_memory().unwrap();
+    for (i, artist) in ["The Beatles", "Abba", "Cardigans"].into_iter().enumerate() {
+        add(
+            &mut library,
+            &format!("/m/{i}.mp3"),
+            &tags(artist, "B", "C", 1),
+        );
+    }
+    let names = |library: &Library| -> Vec<String> {
+        library
+            .artists()
+            .unwrap()
+            .into_iter()
+            .map(|a| a.shown_name.or(a.name).unwrap_or_default())
+            .collect()
+    };
+    assert_eq!(names(&library), ["Abba", "Cardigans", "The Beatles"]);
+    let edit = |name: Option<&str>, sort_name: Option<&str>| ArtistEdit {
+        name: name.map(Into::into),
+        sort_name: sort_name.map(Into::into),
+        ..ArtistEdit::default()
+    };
+    library
+        .set_artist_edit("The Beatles", &edit(None, Some("Beatles, The")))
+        .unwrap();
+    library
+        .set_artist_edit("Cardigans", &edit(Some("The Cardigans"), None))
+        .unwrap();
+    // Sorted by the sort name, else the name shown.
+    assert_eq!(names(&library), ["Abba", "The Beatles", "The Cardigans"]);
+}
