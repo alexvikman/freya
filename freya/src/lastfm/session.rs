@@ -11,8 +11,10 @@ pub fn save(user: &str, key: &str) -> Result<(), String> {
     platform::save(user, key)
 }
 
-/// `user`'s session key, if one is kept.
-pub fn load(user: &str) -> Option<String> {
+/// `user`'s session key: `Ok(None)` when none is kept, and an error when the keychain (or its
+/// like) could not be read, as when it is locked or the user declined: the session may still
+/// be there, so the user is not forgotten for it.
+pub fn load(user: &str) -> Result<Option<String>, String> {
     platform::load(user)
 }
 
@@ -34,8 +36,9 @@ mod platform {
 
     use super::SERVICE;
 
-    /// `errSecSuccess`.
+    /// `errSecSuccess` and `errSecItemNotFound`.
     const SUCCESS: i32 = 0;
+    const NOT_FOUND: i32 = -25300;
 
     /// A query for the keychain item of `user`, with `extra` keys and values.
     #[allow(unsafe_code, reason = "reads constants the Security framework exports")]
@@ -88,7 +91,7 @@ mod platform {
         unsafe_code,
         reason = "calls the Security framework, and takes ownership of its result"
     )]
-    pub fn load(user: &str) -> Option<String> {
+    pub fn load(user: &str) -> Result<Option<String>, String> {
         // SAFETY: constants the Security framework always provides.
         let (return_data, limit, one) =
             unsafe { (kSecReturnData, kSecMatchLimit, kSecMatchLimitOne) };
@@ -97,13 +100,18 @@ mod platform {
         let mut result: *const CFType = ptr::null();
         // SAFETY: a valid query, and a pointer for the one item it returns.
         let status = unsafe { SecItemCopyMatching(search.as_ref(), &mut result) };
-        if status != SUCCESS {
-            return None;
+        if status == NOT_FOUND {
+            return Ok(None);
         }
+        if status != SUCCESS {
+            return Err(format!("the keychain could not be read ({status})"));
+        }
+        let Some(result) = NonNull::new(result.cast_mut()) else {
+            return Ok(None);
+        };
         // SAFETY: with kSecReturnData and one match, the result is a CFData the caller owns.
-        let data: CFRetained<CFData> =
-            unsafe { CFRetained::from_raw(NonNull::new(result.cast_mut())?.cast()) };
-        String::from_utf8(data.to_vec()).ok()
+        let data: CFRetained<CFData> = unsafe { CFRetained::from_raw(result.cast()) };
+        Ok(String::from_utf8(data.to_vec()).ok())
     }
 
     #[allow(
@@ -121,6 +129,7 @@ mod platform {
 mod platform {
     use std::ptr;
 
+    use windows_sys::Win32::Foundation::{ERROR_NOT_FOUND, GetLastError};
     use windows_sys::Win32::Security::Credentials::{
         CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC, CREDENTIALW, CredDeleteW, CredFree,
         CredReadW, CredWriteW,
@@ -164,12 +173,19 @@ mod platform {
         unsafe_code,
         reason = "calls the Credential Manager and frees what it returns"
     )]
-    pub fn load(user: &str) -> Option<String> {
+    pub fn load(user: &str) -> Result<Option<String>, String> {
         let target = target(user);
         let mut credential: *mut CREDENTIALW = ptr::null_mut();
         // SAFETY: a NUL-terminated target name, and a pointer for the result.
         if unsafe { CredReadW(target.as_ptr(), CRED_TYPE_GENERIC, 0, &mut credential) } == 0 {
-            return None;
+            // SAFETY: reads this thread's last error, set by CredReadW.
+            let error = unsafe { GetLastError() };
+            if error == ERROR_NOT_FOUND {
+                return Ok(None);
+            }
+            return Err(format!(
+                "the Credential Manager could not be read ({error})"
+            ));
         }
         // SAFETY: on success, `credential` points to a credential with a blob of the given
         // size, until it is freed below.
@@ -178,7 +194,7 @@ mod platform {
             let blob = std::slice::from_raw_parts(c.CredentialBlob, c.CredentialBlobSize as usize);
             let key = String::from_utf8(blob.to_vec()).ok();
             CredFree(credential.cast());
-            key
+            Ok(key)
         }
     }
 
@@ -226,9 +242,15 @@ mod platform {
         file.write_all(key.as_bytes()).map_err(|e| e.to_string())
     }
 
-    pub fn load(user: &str) -> Option<String> {
-        let key = std::fs::read_to_string(path(user)?).ok()?;
-        Some(key.trim().to_owned()).filter(|k| !k.is_empty())
+    pub fn load(user: &str) -> Result<Option<String>, String> {
+        let Some(path) = path(user) else {
+            return Ok(None);
+        };
+        match std::fs::read_to_string(path) {
+            Ok(key) => Ok(Some(key.trim().to_owned()).filter(|k| !k.is_empty())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("the Last.fm session could not be read: {e}")),
+        }
     }
 
     pub fn delete(user: &str) {

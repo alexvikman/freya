@@ -1,6 +1,6 @@
 //! Settings and the playlist, kept between runs.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +33,10 @@ pub struct Settings {
     pub last_update_check: Option<u64>,
     /// A version the user does not want offered again.
     pub skipped_update: Option<String>,
+    /// Set when settings.toml could not be read as a whole: the fields that could be are kept,
+    /// and the library is not brought in line with a folder list that may be missing.
+    #[serde(skip)]
+    pub damaged: bool,
     /// The Last.fm user Freya scrobbles for; their session key is in the system's keychain.
     pub lastfm_user: Option<String>,
     /// Whether plays are scrobbled while an account is connected.
@@ -58,6 +62,7 @@ impl Default for Settings {
             skipped_update: None,
             lastfm_user: None,
             lastfm_scrobbling: true,
+            damaged: false,
         }
     }
 }
@@ -105,12 +110,57 @@ impl Settings {
         let Some(path) = settings_path() else {
             return Self::default();
         };
-        match std::fs::read_to_string(&path) {
-            Ok(text) => toml::from_str(&text).unwrap_or_else(|e| {
-                log::warn!("ignoring invalid {}: {e}", path.display());
-                Self::default()
-            }),
-            Err(_) => Self::default(),
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Self::default(),
+            Err(e) => {
+                log::warn!("could not read {}: {e}", path.display());
+                return Self {
+                    damaged: true,
+                    ..Self::default()
+                };
+            }
+        };
+        let settings = Self::parse(&text);
+        if settings.damaged {
+            // Kept for the user, as the next save writes what could be read.
+            let copy = path.with_extension("invalid.toml");
+            log::warn!(
+                "{} could not be read in full; a copy is kept as {}",
+                path.display(),
+                copy.display()
+            );
+            let _ = std::fs::write(copy, &text);
+        }
+        settings
+    }
+
+    /// Reads settings.toml. A field that cannot be read, like `visualizer_fps = 60.0` typed
+    /// by hand, is left at its default rather than taking every other setting with it.
+    fn parse(text: &str) -> Self {
+        if let Ok(settings) = toml::from_str::<Self>(text) {
+            return settings;
+        }
+        let Ok(table) = text.parse::<toml::Table>() else {
+            return Self {
+                damaged: true,
+                ..Self::default()
+            };
+        };
+        let readable: toml::Table = table
+            .into_iter()
+            .filter(|(key, value)| {
+                let one = toml::Table::from_iter([(key.clone(), value.clone())]);
+                let ok = Self::deserialize(one).is_ok();
+                if !ok {
+                    log::warn!("ignoring the setting {key}, which cannot be read");
+                }
+                ok
+            })
+            .collect();
+        Self {
+            damaged: true,
+            ..Self::deserialize(readable).unwrap_or_default()
         }
     }
 
@@ -119,15 +169,59 @@ impl Settings {
             return;
         };
         let result = toml::to_string_pretty(self)
-            .map_err(|e| e.to_string())
-            .and_then(|text| {
-                if let Some(dir) = path.parent() {
-                    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-                }
-                std::fs::write(&path, text).map_err(|e| e.to_string())
-            });
+            .map_err(std::io::Error::other)
+            .and_then(|text| write_atomically(&path, text.as_bytes()));
         if let Err(e) = result {
             log::warn!("could not save settings to {}: {e}", path.display());
         }
+    }
+}
+
+/// Writes `bytes` to `path` through a new file renamed over it, so a crash, a full disk or a
+/// lost power supply leaves the old file or the new one, never half of one.
+pub fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let partial = path.with_extension("partial");
+    std::fs::write(&partial, bytes)?;
+    std::fs::File::open(&partial)?.sync_all()?;
+    std::fs::rename(&partial, path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_bad_field_costs_only_itself() {
+        let text = "volume = 0.5\nvisualizer_fps = 60.0\nlibrary_folders = [\"/music\"]\n";
+        let settings = Settings::parse(text);
+        assert!(settings.damaged);
+        assert_eq!(settings.volume, 0.5);
+        assert_eq!(
+            settings.visualizer_fps, 30,
+            "the bad field takes its default"
+        );
+        assert_eq!(settings.library_folders, [PathBuf::from("/music")]);
+    }
+
+    #[test]
+    fn a_broken_file_is_marked_damaged() {
+        let settings = Settings::parse("volume = 0.5\nlibrary_folders = [\"/mus");
+        assert!(settings.damaged);
+        assert!(settings.library_folders.is_empty());
+        assert!(!Settings::parse("volume = 0.5\n").damaged);
+    }
+
+    #[test]
+    fn writes_replace_the_file_whole() {
+        let dir = std::env::temp_dir().join(format!("freya-settings-{}", std::process::id()));
+        let path = dir.join("settings.toml");
+        write_atomically(&path, b"a = 1").unwrap();
+        write_atomically(&path, b"a = 2").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "a = 2");
+        assert!(!path.with_extension("partial").exists());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

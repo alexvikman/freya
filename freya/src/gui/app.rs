@@ -250,6 +250,10 @@ pub struct App {
     pub pending_skin: Option<SkinSource>,
     /// Why the last skin change failed, shown in the skin picker.
     pub skin_error: String,
+    /// The saved skin, while it could not be loaded and the built-in one stands in: kept in
+    /// the settings (a package on a drive that is not plugged in comes back), until the user
+    /// chooses a skin.
+    pub unloaded_skin: Option<PathBuf>,
     skin_files: Vec<(PathBuf, Option<SystemTime>)>,
     skin_checked: Instant,
 
@@ -326,6 +330,7 @@ impl App {
             skin,
             pending_skin: None,
             skin_error: String::new(),
+            unloaded_skin: None,
             skin_files: Vec::new(),
             skin_checked: Instant::now(),
             about: None,
@@ -561,8 +566,11 @@ impl App {
     /// Shows the library, if the skin has one.
     fn attach_library(&mut self) {
         if self.view.library_out.available {
-            self.library
-                .attach(&self.view.ui, &self.settings.library_folders);
+            self.library.attach(
+                &self.view.ui,
+                &self.settings.library_folders,
+                !self.settings.damaged,
+            );
         }
     }
 
@@ -686,6 +694,7 @@ impl App {
         (self.window_hidden, self.window_focused) = (false, true);
         self.skin = skin;
         self.skin_error.clear();
+        self.unloaded_skin = None;
         self.playlist_dirty = true;
         show_cover(&self.view.ui, self.cover.clone());
         self.watch_skin();
@@ -1086,7 +1095,8 @@ impl App {
         match lastfm.state {
             lastfm::State::Connected => self.settings.lastfm_user = Some(lastfm.user.clone()),
             lastfm::State::Disconnected => self.settings.lastfm_user = None,
-            lastfm::State::Unavailable | lastfm::State::Authorizing => {}
+            // Unreadable keeps the user: the session may be readable next time.
+            _ => {}
         }
         view.lastfm_out.write(
             ui,
@@ -1171,6 +1181,7 @@ impl App {
     }
 
     pub fn save(&mut self) {
+        self.lastfm.finish();
         self.settings.volume = self.player.volume();
         let window = self.view.ui.window();
         // In full screen the window has the screen's size, not its own.
@@ -1180,7 +1191,11 @@ impl App {
             let height = size.height - self.view.title_bar.added_height();
             self.settings.window_size = Some((size.width, height));
         }
-        self.settings.skin = self.skin.path().map(Path::to_owned);
+        self.settings.skin = self
+            .skin
+            .path()
+            .map(Path::to_owned)
+            .or_else(|| self.unloaded_skin.clone());
         self.settings.save();
         self.library.save();
         if let Some(path) = settings::playlist_path() {

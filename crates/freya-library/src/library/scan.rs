@@ -41,8 +41,19 @@ pub struct ScanSummary {
     pub unchanged: usize,
 }
 
-/// Brings the library in line with `folders`. Files under a folder that does not exist (an
-/// unplugged drive, say) are kept, so they need not be read again when it comes back. Files
+/// Whether `folder` looks like a drive that is not there, rather than one whose music is gone:
+/// missing, unreadable, or empty, as a mount point is while nothing is mounted on it. A folder
+/// emptied on purpose keeps its tracks until the user removes the folder from the library.
+fn is_offline(folder: &Path) -> bool {
+    match std::fs::read_dir(folder) {
+        Ok(mut entries) => entries.next().is_none(),
+        Err(_) => true,
+    }
+}
+
+/// Brings the library in line with `folders`. Files under a folder that is offline are kept,
+/// so they need not be read again when it comes back: one that does not exist (an unplugged
+/// drive), cannot be read, or is empty (a mount point with nothing mounted on it). Files
 /// outside all `folders` are removed. Returns early, with what was done so far, when `cancel`
 /// is set.
 pub fn scan(
@@ -59,7 +70,7 @@ pub fn scan(
     let now = epoch_millis(SystemTime::now());
     let mut summary = ScanSummary::default();
 
-    let offline: Vec<&PathBuf> = folders.iter().filter(|f| !f.is_dir()).collect();
+    let offline: Vec<&PathBuf> = folders.iter().filter(|f| is_offline(f)).collect();
     let gone: Vec<&PathBuf> = {
         let found: HashSet<&Path> = found.iter().map(|(f, _)| f.source()).collect();
         known

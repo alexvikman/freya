@@ -215,6 +215,21 @@ fn files_in_missing_folders_are_kept_and_others_dropped() {
 }
 
 #[test]
+fn files_in_empty_or_unreadable_folders_are_kept() {
+    // A mount point with nothing mounted on it is an empty folder: its tracks are kept, as for
+    // an unplugged drive, rather than all removed and read again later as new.
+    let mount = std::env::temp_dir().join(format!("freya-mount-{}", std::process::id()));
+    std::fs::create_dir_all(&mount).unwrap();
+    let mut library = Library::open_in_memory().unwrap();
+    let track = mount.join("a.mp3");
+    add(&mut library, track.to_str().unwrap(), &TagInfo::default());
+    let summary = scan_now(&mut library, std::slice::from_ref(&mount));
+    assert_eq!(summary.removed, 0);
+    assert!(library.sources().unwrap().contains_key(track.as_path()));
+    std::fs::remove_dir_all(&mount).unwrap();
+}
+
+#[test]
 fn browses_by_artist_and_album() {
     let mut library = Library::open_in_memory().unwrap();
     add(

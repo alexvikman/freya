@@ -34,6 +34,9 @@ pub enum State {
     #[default]
     Unavailable,
     Disconnected,
+    /// The session kept for the user could not be read (a locked keychain, say). Shown as
+    /// disconnected, but the user is not forgotten: the session may still be there next time.
+    Unreadable,
     /// Waiting for the user to allow Freya on Last.fm's page.
     Authorizing,
     Connected,
@@ -44,7 +47,7 @@ impl State {
     pub fn name(self) -> &'static str {
         match self {
             Self::Unavailable => "unavailable",
-            Self::Disconnected => "disconnected",
+            Self::Disconnected | Self::Unreadable => "disconnected",
             Self::Authorizing => "authorizing",
             Self::Connected => "connected",
         }
@@ -72,8 +75,11 @@ enum Command {
 }
 
 pub struct LastFm {
-    commands: Sender<Command>,
+    /// `None` once [`Self::finish`] has let the thread end.
+    commands: Option<Sender<Command>>,
     status: Arc<Mutex<Status>>,
+    /// Disconnected when the thread has ended.
+    ended: Receiver<()>,
 }
 
 impl LastFm {
@@ -91,13 +97,36 @@ impl LastFm {
             retry: None,
             retry_delay: FIRST_RETRY,
         };
+        let (ending, ended) = channel::<()>();
         let spawned = std::thread::Builder::new()
             .name("freya-lastfm".into())
-            .spawn(move || worker.run(user, &receiver));
+            .spawn(move || {
+                worker.run(user, &receiver);
+                drop(ending);
+            });
         if let Err(e) = spawned {
             log::warn!("could not start Last.fm scrobbling: {e}");
         }
-        Self { commands, status }
+        Self {
+            commands: Some(commands),
+            status,
+            ended,
+        }
+    }
+
+    /// As Freya quits: lets the thread handle what it was given, plays to scrobble first among
+    /// them (they are put in the queue on disk before anything is sent), and waits for it a
+    /// moment. Without this, plays counted just before quitting were lost.
+    pub fn finish(&mut self) {
+        if self.commands.take().is_some() {
+            let _ = self.ended.recv_timeout(Duration::from_secs(2));
+        }
+    }
+
+    fn send(&self, command: Command) {
+        if let Some(commands) = &self.commands {
+            let _ = commands.send(command);
+        }
     }
 
     pub fn status(&self) -> Status {
@@ -106,25 +135,25 @@ impl LastFm {
 
     /// Opens Last.fm's page in the browser, where the user lets Freya scrobble for them.
     pub fn connect(&self) {
-        let _ = self.commands.send(Command::Connect);
+        self.send(Command::Connect);
     }
 
     /// Stops waiting for the user to allow Freya.
     pub fn cancel(&self) {
-        let _ = self.commands.send(Command::Cancel);
+        self.send(Command::Cancel);
     }
 
     /// Forgets the session and the plays waiting.
     pub fn disconnect(&self) {
-        let _ = self.commands.send(Command::Disconnect);
+        self.send(Command::Disconnect);
     }
 
     pub fn now_playing(&self, track: Track) {
-        let _ = self.commands.send(Command::NowPlaying(track));
+        self.send(Command::NowPlaying(track));
     }
 
     pub fn scrobble(&self, scrobble: Scrobble) {
-        let _ = self.commands.send(Command::Scrobble(scrobble));
+        self.send(Command::Scrobble(scrobble));
     }
 }
 
@@ -199,9 +228,17 @@ struct Worker {
 impl Worker {
     fn run(mut self, user: Option<String>, commands: &Receiver<Command>) {
         if self.client.is_some() {
-            match user.and_then(|u| session::load(&u).map(|key| (u, key))) {
-                Some((user, key)) => self.connected(user, key),
-                None => self.set(|s| s.state = State::Disconnected),
+            match user.map(|u| (session::load(&u), u)) {
+                Some((Ok(Some(key)), user)) => self.connected(user, key),
+                Some((Err(e), user)) => {
+                    log::warn!("{e}");
+                    self.set(|s| {
+                        s.state = State::Unreadable;
+                        s.user = user;
+                        s.error = format!("{e}. Connect again to keep scrobbling.");
+                    });
+                }
+                Some((Ok(None), _)) | None => self.set(|s| s.state = State::Disconnected),
             }
         }
         loop {
@@ -369,31 +406,60 @@ impl Worker {
                     });
                 }
                 Err(e) if e.is_temporary() => {
-                    self.retry = Some(Instant::now() + self.retry_delay);
+                    let delay = self.retry_delay;
                     self.retry_delay = (self.retry_delay * 2).min(MAX_RETRY);
-                    let waiting = self.queue.len();
-                    self.set(|s| {
-                        s.waiting = waiting;
-                        s.error = e.to_string();
-                    });
+                    self.wait_to_retry(&e, delay);
                     return;
                 }
                 Err(e) if e.is_session_invalid() => {
                     self.session_lost(&e);
                     return;
                 }
-                Err(e) => {
-                    // Last.fm will never take these: sending them again would block the rest.
-                    log::warn!("Last.fm refused {} plays: {e}", batch.len());
-                    self.queue.remove_oldest(batch.len());
+                // Last.fm finds the one play itself invalid: it will never take it, and
+                // sending it again would block the rest.
+                Err(e) if e.is_invalid_play() && batch.len() == 1 => {
+                    log::warn!("Last.fm refused a play: {e}");
+                    self.queue.remove_oldest(1);
                     let waiting = self.queue.len();
                     self.set(|s| {
                         s.waiting = waiting;
                         s.error = e.to_string();
                     });
                 }
+                // Which play of the batch? Sent one at a time until it is found.
+                Err(e) if e.is_invalid_play() => {
+                    if let Err(e) = client.scrobble(key, &batch[..1]) {
+                        if e.is_invalid_play() {
+                            log::warn!("Last.fm refused a play: {e}");
+                            self.queue.remove_oldest(1);
+                        } else {
+                            self.wait_to_retry(&e, MAX_RETRY);
+                            return;
+                        }
+                    } else {
+                        self.queue.remove_oldest(1);
+                    }
+                }
+                // Anything else is kept, and sent again later: a refusal Freya does not
+                // understand must not cost the user their plays.
+                Err(e) => {
+                    log::warn!("Last.fm refused {} plays: {e}", batch.len());
+                    self.wait_to_retry(&e, MAX_RETRY);
+                    return;
+                }
             }
         }
+    }
+
+    /// Sends the waiting plays again after `delay`, and shows why they wait.
+    fn wait_to_retry(&mut self, error: &api::Error, delay: Duration) {
+        self.retry = Some(Instant::now() + delay);
+        let waiting = self.queue.len();
+        let error = error.to_string();
+        self.set(|s| {
+            s.waiting = waiting;
+            s.error = error;
+        });
     }
 
     /// Last.fm no longer takes the session: the user has to connect again. Their waiting

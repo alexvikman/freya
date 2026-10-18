@@ -77,6 +77,12 @@ impl Error {
         matches!(self, Self::Api(9 | 4 | 26, _))
     }
 
+    /// Whether Last.fm finds the call's parameters invalid: for a scrobble, a play it will
+    /// never take.
+    pub fn is_invalid_play(&self) -> bool {
+        matches!(self, Self::Api(6, _))
+    }
+
     /// Whether the user has not yet allowed Freya on Last.fm's page.
     pub fn is_unauthorized_token(&self) -> bool {
         matches!(self, Self::Api(14, _))
@@ -172,10 +178,12 @@ impl Client {
             .collect();
         params.push(("sk", session_key));
         let answer = self.call("track.scrobble", &params)?;
+        // Anything else, from a proxy say, is not Last.fm's answer: the plays may not have
+        // arrived, so they are kept and sent again.
         let accepted = answer
             .pointer("/scrobbles/@attr/accepted")
             .and_then(|v| v.as_u64().or_else(|| v.as_str()?.parse().ok()))
-            .unwrap_or(0);
+            .ok_or_else(|| Error::Network("the answer is not Last.fm's".into()))?;
         Ok(accepted as usize)
     }
 
@@ -278,6 +286,10 @@ mod tests {
         assert!(!Error::Api(9, "invalid session".into()).is_temporary());
         assert!(Error::Api(9, "invalid session".into()).is_session_invalid());
         assert!(Error::Api(14, "not authorized".into()).is_unauthorized_token());
+        assert!(Error::Api(6, "invalid parameters".into()).is_invalid_play());
+        // A refusal Freya does not know is neither dropped as invalid nor taken as temporary.
+        assert!(!Error::Api(13, "invalid signature".into()).is_invalid_play());
+        assert!(!Error::Api(13, "invalid signature".into()).is_temporary());
     }
 
     #[test]

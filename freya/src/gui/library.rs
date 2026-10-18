@@ -197,7 +197,10 @@ impl LibraryPanel {
 
     /// Shows the library in a skin window that has the `Library` global. The first time,
     /// opens the library and scans `folders` for changes.
-    pub fn attach(&mut self, ui: &SkinWindow, folders: &[PathBuf]) {
+    /// Opens the library for `ui`, the first time also bringing it in line with `folders`,
+    /// unless `scan` is false: when the settings were damaged, a missing folder list would
+    /// otherwise remove every track.
+    pub fn attach(&mut self, ui: &SkinWindow, folders: &[PathBuf], scan: bool) {
         let _ = ui.set_global_property("Library", "rows", self.rows.model_value());
         self.folders_shown = None;
         if self.db.is_some() {
@@ -214,7 +217,11 @@ impl LibraryPanel {
             }
         }
         self.reload();
-        self.rescan(folders);
+        if scan {
+            self.rescan(folders);
+        } else {
+            log::warn!("the library is not checked against its folders: the settings were damaged");
+        }
     }
 
     /// Until the scan's end has been taken in by `poll`, not only while its thread runs: a

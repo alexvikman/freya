@@ -78,7 +78,11 @@ pub fn save(path: &Path, entries: &[Entry]) -> io::Result<()> {
     } else {
         write_m3u(entries)
     };
-    std::fs::write(path, text)
+    // Through a new file renamed over the old, so a crash or a full disk never leaves half a
+    // playlist.
+    let partial = path.with_extension("partial");
+    std::fs::write(&partial, text)?;
+    std::fs::rename(&partial, path)
 }
 
 pub fn is_playlist(path: &Path) -> bool {

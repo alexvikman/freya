@@ -75,6 +75,11 @@ pub fn run(options: Options) -> anyhow::Result<()> {
 
     let settings = Settings::load();
     // Absolute, so the saved setting still works when Freya is started from elsewhere.
+    let saved_skin = options
+        .skin
+        .is_none()
+        .then(|| settings.skin.clone())
+        .flatten();
     let requested = options
         .skin
         .map(|p| std::fs::canonicalize(&p).unwrap_or(p))
@@ -126,6 +131,9 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             playlists: playlists::Playlists::load(crate::settings::playlists_dir()),
         },
     )));
+    if !skin_error.is_empty() {
+        app.borrow_mut().unloaded_skin = saved_skin;
+    }
     app.borrow_mut().skin_error = skin_error;
     if let Some(error) = audio_error {
         app.borrow_mut().error = error;
