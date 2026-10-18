@@ -25,6 +25,9 @@ const LARGE: u32 = 1400;
 /// screen.
 const BACKDROP: u32 = 3840;
 const BACKDROP_QUALITY: u8 = 90;
+/// How the cache is laid out, noted in it. Before, it held downloaded pictures and markers
+/// of what the internet said too, under names that did not tell them apart.
+const LAYOUT: &str = "2";
 
 /// What the library knows of a picture of an artist from the internet.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -166,6 +169,42 @@ impl Thumbnails {
             finished,
             fetched: Vec::new(),
         }
+    }
+
+    /// Clears a cache of an older layout of what it holds: thumbnails, pictures made for
+    /// artists, and markers. Returns how many files were taken away.
+    pub fn clear_older_layout(&self) -> std::io::Result<usize> {
+        let marker = self.dir.join("layout");
+        if std::fs::read_to_string(&marker).is_ok_and(|layout| layout.trim() == LAYOUT) {
+            return Ok(0);
+        }
+        let mut removed = 0;
+        let entries = match std::fs::read_dir(&self.dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                create_private_dir(&self.dir)?;
+                std::fs::write(&marker, LAYOUT)?;
+                return Ok(0);
+            }
+            Err(e) => return Err(e),
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let ours = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| ["jpg", "collage", "nobackdrop", "partial"].contains(&e));
+            if ours && entry.file_type().is_ok_and(|t| t.is_file()) {
+                std::fs::remove_file(&path)?;
+                removed += 1;
+            }
+        }
+        std::fs::write(&marker, LAYOUT)?;
+        Ok(removed)
+    }
+
+    pub fn dir(&self) -> &Path {
+        &self.dir
     }
 
     pub fn pictures(&self) -> &Pictures {
@@ -915,6 +954,37 @@ mod tests {
         };
         let made = image::open(&file).unwrap();
         assert_eq!((made.width(), made.height()), (BACKDROP, 1920));
+    }
+
+    #[test]
+    fn clears_a_cache_of_the_older_layout_once() {
+        let cache = temp_dir("layout");
+        let covers = cache.join("covers");
+        std::fs::create_dir_all(&covers).unwrap();
+        for name in [
+            "a.jpg",
+            "a-large.jpg",
+            "a.collage",
+            "b.nobackdrop",
+            "notes.txt",
+        ] {
+            std::fs::write(covers.join(name), b"x").unwrap();
+        }
+        let thumbnails = thumbnails(&cache);
+        assert_eq!(thumbnails.clear_older_layout().unwrap(), 4);
+        assert!(covers.join("notes.txt").exists(), "not ours");
+        std::fs::write(covers.join("c.jpg"), b"x").unwrap();
+        assert_eq!(thumbnails.clear_older_layout().unwrap(), 0, "once");
+        assert!(covers.join("c.jpg").exists());
+        // And a new cache is marked as of this layout.
+        let fresh = temp_dir("layout-new");
+        assert_eq!(
+            super::tests::thumbnails(&fresh)
+                .clear_older_layout()
+                .unwrap(),
+            0
+        );
+        assert!(fresh.join("covers").join("layout").exists());
     }
 
     #[test]

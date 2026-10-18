@@ -402,12 +402,51 @@ impl LibraryPanel {
                 return;
             }
         }
+        self.clear_older_cache();
         self.reload();
         if scan {
             self.rescan(folders);
         } else {
             log::warn!("the library is not checked against its folders: the settings were damaged");
         }
+    }
+
+    /// Takes away what an older Freya kept in the cache and keeps elsewhere now: pictures it
+    /// downloaded, mixed with the thumbnails, and what Last.fm said, as files beside them.
+    fn clear_older_cache(&self) {
+        let Some(thumbnails) = &self.thumbnails else {
+            return;
+        };
+        match thumbnails.clear_older_layout() {
+            Ok(0) => {}
+            Ok(n) => log::info!("cleared {n} files of an older layout from the cache"),
+            Err(e) => log::warn!("could not clear the older cache: {e}"),
+        }
+        let Some(artists) = self
+            .covers_dir()
+            .and_then(Path::parent)
+            .map(|c| c.join("artists"))
+        else {
+            return;
+        };
+        let Ok(entries) = std::fs::read_dir(&artists) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path
+                .extension()
+                .is_some_and(|e| e == "json" || e == "partial")
+            {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+        // Gone when empty.
+        let _ = std::fs::remove_dir(&artists);
+    }
+
+    fn covers_dir(&self) -> Option<&Path> {
+        self.thumbnails.as_ref().map(Thumbnails::dir)
     }
 
     /// Until the scan's end has been taken in by `poll`, not only while its thread runs: a
