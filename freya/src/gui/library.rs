@@ -130,8 +130,9 @@ pub struct LibraryPanel {
     /// Rows need reloading, e.g. because a scan wrote more tracks.
     stale: bool,
     reloaded: Instant,
-    /// Folders last given to the skin.
+    /// Folders last given to the skin, in use and being edited.
     folders_shown: Option<Vec<PathBuf>>,
+    draft_shown: Option<Vec<PathBuf>>,
     /// Album covers for grids; `None` without a cache folder.
     thumbnails: Option<Thumbnails>,
     /// For each album shown, by its cover's key, a track to take the cover from.
@@ -190,6 +191,7 @@ impl LibraryPanel {
             stale: false,
             reloaded: Instant::now(),
             folders_shown: None,
+            draft_shown: None,
             thumbnails: covers.map(Thumbnails::new),
             cover_tracks: HashMap::new(),
             recent_covers: RecentCovers::default(),
@@ -207,6 +209,7 @@ impl LibraryPanel {
     pub fn attach(&mut self, ui: &SkinWindow, folders: &[PathBuf], scan: bool) {
         let _ = ui.set_global_property("Library", "rows", self.rows.model_value());
         self.folders_shown = None;
+        self.draft_shown = None;
         if self.db.is_some() {
             return;
         }
@@ -615,18 +618,26 @@ impl LibraryPanel {
         ]
     }
 
-    /// Gives the skin the folder list, when it changed.
-    pub fn show_folders(&mut self, ui: &SkinWindow, folders: &[PathBuf]) {
-        if self.folders_shown.as_deref() == Some(folders) {
-            return;
+    /// Gives the skin the folders in use, and those being edited, when they changed.
+    pub fn show_folders(
+        &mut self,
+        ui: &SkinWindow,
+        folders: &[PathBuf],
+        draft: Option<&[PathBuf]>,
+    ) {
+        let list = |folders: &[PathBuf]| {
+            let values: Vec<Value> = folders.iter().map(|f| string(display_path(f))).collect();
+            Value::Model(ModelRc::new(VecModel::from(values)))
+        };
+        if self.folders_shown.as_deref() != Some(folders) {
+            let _ = ui.set_global_property("Library", "folders", list(folders));
+            self.folders_shown = Some(folders.to_vec());
         }
-        let values: Vec<Value> = folders.iter().map(|f| string(display_path(f))).collect();
-        let _ = ui.set_global_property(
-            "Library",
-            "folders",
-            Value::Model(ModelRc::new(VecModel::from(values))),
-        );
-        self.folders_shown = Some(folders.to_vec());
+        let draft = draft.unwrap_or_default();
+        if self.draft_shown.as_deref() != Some(draft) {
+            let _ = ui.set_global_property("Library", "folders-draft", list(draft));
+            self.draft_shown = Some(draft.to_vec());
+        }
     }
 }
 

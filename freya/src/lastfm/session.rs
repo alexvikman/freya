@@ -1,7 +1,12 @@
-//! Where the Last.fm session key is kept between runs: the login keychain on macOS, the
-//! Credential Manager on Windows, and elsewhere a file in Freya's settings folder that only
-//! the user can read. The key lets Freya scrobble for the user until they disconnect, so it
-//! never goes in `settings.toml`.
+//! Where the Last.fm session key is kept between runs: the Credential Manager on Windows, and
+//! elsewhere a file in Freya's settings folder that only the user can read. The key lets Freya
+//! scrobble for the user until they disconnect, so it never goes in `settings.toml`.
+//!
+//! Not the keychain on macOS: it lets an app read its items without asking only while the app
+//! keeps the signature it had when it saved them, and an app signed ad hoc, as Freya is
+//! without a Developer ID, gets a new one with every build. Every update, and every start of
+//! a development build, asked for the user's permission. The key is worth little: it can only
+//! scrobble, and the user can revoke it on last.fm.
 
 /// The name the key is kept under, with the user's Last.fm name as the account.
 const SERVICE: &str = "Freya Last.fm";
@@ -11,9 +16,9 @@ pub fn save(user: &str, key: &str) -> Result<(), String> {
     platform::save(user, key)
 }
 
-/// `user`'s session key: `Ok(None)` when none is kept, and an error when the keychain (or its
-/// like) could not be read, as when it is locked or the user declined: the session may still
-/// be there, so the user is not forgotten for it.
+/// `user`'s session key: `Ok(None)` when none is kept, and an error when it could not be read,
+/// as when the Credential Manager is not available: the session may still be there, so the
+/// user is not forgotten for it.
 pub fn load(user: &str) -> Result<Option<String>, String> {
     platform::load(user)
 }
@@ -21,108 +26,6 @@ pub fn load(user: &str) -> Result<Option<String>, String> {
 /// Forgets `user`'s session key.
 pub fn delete(user: &str) {
     platform::delete(user);
-}
-
-#[cfg(target_os = "macos")]
-mod platform {
-    use std::ptr::{self, NonNull};
-
-    use objc2_core_foundation::{CFBoolean, CFData, CFDictionary, CFRetained, CFString, CFType};
-    use objc2_security::{
-        SecItemAdd, SecItemCopyMatching, SecItemDelete, kSecAttrAccount, kSecAttrService,
-        kSecClass, kSecClassGenericPassword, kSecMatchLimit, kSecMatchLimitOne, kSecReturnData,
-        kSecValueData,
-    };
-
-    use super::SERVICE;
-
-    /// `errSecSuccess` and `errSecItemNotFound`.
-    const SUCCESS: i32 = 0;
-    const NOT_FOUND: i32 = -25300;
-
-    /// A query for the keychain item of `user`, with `extra` keys and values.
-    #[allow(unsafe_code, reason = "reads constants the Security framework exports")]
-    fn query(
-        user: &str,
-        extra: &[(&CFString, &CFType)],
-    ) -> CFRetained<CFDictionary<CFString, CFType>> {
-        let service = CFString::from_str(SERVICE);
-        let account = CFString::from_str(user);
-        // SAFETY: the keys are immutable strings the Security framework always provides.
-        let (class, generic, service_key, account_key) = unsafe {
-            (
-                kSecClass,
-                kSecClassGenericPassword,
-                kSecAttrService,
-                kSecAttrAccount,
-            )
-        };
-        let mut keys: Vec<&CFString> = vec![class, service_key, account_key];
-        let mut values: Vec<&CFType> = vec![generic.as_ref(), service.as_ref(), account.as_ref()];
-        for (key, value) in extra {
-            keys.push(key);
-            values.push(value);
-        }
-        CFDictionary::from_slices(&keys, &values)
-    }
-
-    #[allow(
-        unsafe_code,
-        reason = "calls the Security framework with dictionaries it accepts"
-    )]
-    pub fn save(user: &str, key: &str) -> Result<(), String> {
-        delete(user);
-        let data = CFData::from_bytes(key.as_bytes());
-        // SAFETY: a constant the Security framework always provides.
-        let value_key = unsafe { kSecValueData };
-        let item = query(user, &[(value_key, data.as_ref())]);
-        // SAFETY: the dictionary holds a generic password's attributes; no result is asked for.
-        let status = unsafe { SecItemAdd(item.as_ref(), ptr::null_mut()) };
-        if status == SUCCESS {
-            Ok(())
-        } else {
-            Err(format!(
-                "the keychain refused the Last.fm session ({status})"
-            ))
-        }
-    }
-
-    #[allow(
-        unsafe_code,
-        reason = "calls the Security framework, and takes ownership of its result"
-    )]
-    pub fn load(user: &str) -> Result<Option<String>, String> {
-        // SAFETY: constants the Security framework always provides.
-        let (return_data, limit, one) =
-            unsafe { (kSecReturnData, kSecMatchLimit, kSecMatchLimitOne) };
-        let yes = CFBoolean::new(true);
-        let search = query(user, &[(return_data, yes.as_ref()), (limit, one.as_ref())]);
-        let mut result: *const CFType = ptr::null();
-        // SAFETY: a valid query, and a pointer for the one item it returns.
-        let status = unsafe { SecItemCopyMatching(search.as_ref(), &mut result) };
-        if status == NOT_FOUND {
-            return Ok(None);
-        }
-        if status != SUCCESS {
-            return Err(format!("the keychain could not be read ({status})"));
-        }
-        let Some(result) = NonNull::new(result.cast_mut()) else {
-            return Ok(None);
-        };
-        // SAFETY: with kSecReturnData and one match, the result is a CFData the caller owns.
-        let data: CFRetained<CFData> = unsafe { CFRetained::from_raw(result.cast()) };
-        Ok(String::from_utf8(data.to_vec()).ok())
-    }
-
-    #[allow(
-        unsafe_code,
-        reason = "calls the Security framework with a query it accepts"
-    )]
-    pub fn delete(user: &str) {
-        let item = query(user, &[]);
-        // SAFETY: a valid query for a generic password.
-        unsafe { SecItemDelete(item.as_ref()) };
-    }
 }
 
 #[cfg(windows)]
@@ -209,10 +112,10 @@ mod platform {
     }
 }
 
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(not(windows))]
 mod platform {
     use std::io::Write;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use super::SERVICE;
 
@@ -226,7 +129,10 @@ mod platform {
     }
 
     pub fn save(user: &str, key: &str) -> Result<(), String> {
-        let path = path(user).ok_or("no settings folder")?;
+        save_at(&path(user).ok_or("no settings folder")?, key)
+    }
+
+    pub fn save_at(path: &Path, key: &str) -> Result<(), String> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
@@ -238,7 +144,14 @@ mod platform {
             // Readable and writable by the user only.
             options.mode(0o600);
         }
-        let mut file = options.open(&path).map_err(|e| e.to_string())?;
+        let mut file = options.open(path).map_err(|e| e.to_string())?;
+        // The mode above is only for a new file: one there already keeps its own otherwise.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| e.to_string())?;
+        }
         file.write_all(key.as_bytes()).map_err(|e| e.to_string())
     }
 
@@ -246,6 +159,10 @@ mod platform {
         let Some(path) = path(user) else {
             return Ok(None);
         };
+        load_at(&path)
+    }
+
+    pub fn load_at(path: &Path) -> Result<Option<String>, String> {
         match std::fs::read_to_string(path) {
             Ok(key) => Ok(Some(key.trim().to_owned()).filter(|k| !k.is_empty())),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -257,5 +174,29 @@ mod platform {
         if let Some(path) = path(user) {
             let _ = std::fs::remove_file(path);
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::platform::{load_at, save_at};
+
+    #[test]
+    fn the_session_file_is_the_users_alone() {
+        let dir = std::env::temp_dir().join(format!("freya-session-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("Freya Last.fm someone.key");
+        assert_eq!(load_at(&path), Ok(None));
+        // A file there already, readable by others, is made the user's alone.
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        save_at(&path, "session-key").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        assert_eq!(load_at(&path), Ok(Some("session-key".to_owned())));
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

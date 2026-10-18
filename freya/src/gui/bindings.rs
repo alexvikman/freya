@@ -372,6 +372,31 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     );
     bind(
         "Library",
+        "edit-folders",
+        Box::new(|app, _| app.edit_folders()),
+    );
+    bind_dialog(
+        "Library",
+        "add-draft-folder",
+        pick_music_folder,
+        |app, paths| {
+            for path in paths {
+                app.add_draft_folder(path);
+            }
+        },
+    );
+    bind(
+        "Library",
+        "remove-draft-folder",
+        Box::new(|app, args| app.remove_draft_folder(index(args, 0))),
+    );
+    bind(
+        "Library",
+        "save-folders",
+        Box::new(|app, _| app.save_folders()),
+    );
+    bind(
+        "Library",
         "rescan",
         Box::new(|app, _| {
             let folders = app.settings.library_folders.clone();

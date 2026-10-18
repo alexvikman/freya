@@ -54,6 +54,7 @@ global Icons {
     out property <string> shuffle: "M16 3 H21 V8 M4 20 L21 3 M21 16 V21 H16 M15 15 L21 21 M4 4 L9 9";
     out property <string> repeat: "M17 2 L21 6 L17 10 M3 12 V10 C3 7.8 4.8 6 7 6 H21 M7 22 L3 18 L7 14 M21 12 V14 C21 16.2 19.2 18 17 18 H3";
     out property <string> plus: "M12 5 V19 M5 12 H19";
+    out property <string> folder: "M22 19 C22 20.1 21.1 21 20 21 H4 C2.9 21 2 20.1 2 19 V5 C2 3.9 2.9 3 4 3 H9 L11 6 H20 C21.1 6 22 6.9 22 8 Z";
     out property <string> folder-plus: "M22 19 C22 20.1 21.1 21 20 21 H4 C2.9 21 2 20.1 2 19 V5 C2 3.9 2.9 3 4 3 H9 L11 6 H20 C21.1 6 22 6.9 22 8 Z M12 10 V17 M8.5 13.5 H15.5";
     out property <string> trash: "M3 6 H21 M8 6 V4 C8 2.9 8.9 2 10 2 H14 C15.1 2 16 2.9 16 4 V6 M19 6 L18 20 C18 21.1 17.1 22 16 22 H8 C6.9 22 6 21.1 6 20 L5 6";
     out property <string> note: "M9 18 V5 L21 3 V16 M9 18 A3 3 0 1 1 3 18 A3 3 0 1 1 9 18 Z M21 16 A3 3 0 1 1 15 16 A3 3 0 1 1 21 16 Z";
@@ -556,9 +557,12 @@ component MenuItem inherits Rectangle {
             }
         }
         Text {
+            horizontal-stretch: 1;
             text: root.text;
             color: Theme.text;
             vertical-alignment: center;
+            // A long name, like a folder's, is cut short inside the menu.
+            overflow: elide;
         }
     }
 
@@ -2394,6 +2398,126 @@ component SidebarItem inherits Rectangle {
 
 /// The navigation down the left side.
 /// Looking for, and installing, an update to Freya.
+/// The library's folders, edited as in a dialog: nothing changes until Save, and then the
+/// library is read once.
+component FoldersForm inherits MenuSurface {
+    callback closed();
+
+    VerticalLayout {
+        padding: 20px;
+        spacing: 14px;
+
+        VerticalLayout {
+            spacing: 4px;
+
+            Text {
+                text: "Library folders";
+                font-size: 17px;
+                font-weight: 600;
+                color: Theme.text;
+            }
+            Text {
+                text: "Freya lists the music in these folders by artist and album, and checks them for changes each time it starts. A folder taken out takes its tracks out of the library; what you played is remembered.";
+                font-size: 13px;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+        }
+
+        if Library.folders-draft.length == 0: Rectangle {
+            height: 56px;
+            border-radius: 6px;
+            border-width: 1px;
+            border-color: Theme.divider;
+
+            Text {
+                text: "No folders. Add the folder your music is in.";
+                font-size: 13px;
+                color: Theme.text-secondary;
+            }
+        }
+        if Library.folders-draft.length > 0: Rectangle {
+            height: min(Library.folders-draft.length, 6) * 44px;
+            border-radius: 6px;
+            border-width: 1px;
+            border-color: Theme.divider;
+            clip: true;
+
+            ScrollView {
+                VerticalLayout {
+                    for folder[i] in Library.folders-draft: Rectangle {
+                        height: 44px;
+                        background: Theme.surface;
+
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 6px;
+                            spacing: 10px;
+
+                            Icon {
+                                width: 18px;
+                                height: 18px;
+                                y: (parent.height - self.height) / 2;
+                                data: Icons.folder;
+                                stroked: true;
+                                color: Theme.text-secondary;
+                            }
+                            Text {
+                                horizontal-stretch: 1;
+                                text: folder;
+                                color: Theme.text;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                            IconButton {
+                                y: (parent.height - self.height) / 2;
+                                icon: Icons.close;
+                                stroked: true;
+                                size: 30px;
+                                label: "Take " + folder + " out of the library";
+                                tooltip: "Remove";
+                                clicked => { Library.remove-draft-folder(i); }
+                            }
+                        }
+                        if i < Library.folders-draft.length - 1: Rectangle {
+                            y: parent.height - 1px;
+                            height: 1px;
+                            background: Theme.divider;
+                        }
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            alignment: start;
+
+            TextButton {
+                text: "Add Folder…";
+                clicked => { Library.add-draft-folder(); }
+            }
+        }
+
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+
+            TextButton {
+                text: "Cancel";
+                clicked => { root.closed(); }
+            }
+            TextButton {
+                text: "Save Changes";
+                primary: true;
+                clicked => {
+                    Library.save-folders();
+                    root.closed();
+                }
+            }
+        }
+    }
+}
+
 component UpdateForm inherits MenuSurface {
     callback closed();
 
@@ -3258,6 +3382,9 @@ component SettingsPage inherits ScrollView {
 
 /// Settings: appearance, the music folders, the visualization and the skin.
 component SettingsView inherits Rectangle {
+    /// Open the dialog for the library's folders.
+    callback manage-folders();
+
     SettingsPage {
         width: 100%;
         height: 100%;
@@ -3315,17 +3442,8 @@ component SettingsView inherits Rectangle {
             if Library.folders.length == 0: SettingsRow {
                 label: "No music folders yet. Freya lists the music in them by artist and album.";
             }
-            for folder[i] in Library.folders: SettingsRow {
+            for folder in Library.folders: SettingsRow {
                 label: folder;
-
-                VerticalLayout {
-                    alignment: center;
-
-                    TextButton {
-                        text: "Remove";
-                        clicked => { Library.remove-folder(i); }
-                    }
-                }
             }
             SettingsRow {
                 label: Library.scanning ? Library.status : "Freya checks the folders for changes each time it starts.";
@@ -3341,8 +3459,8 @@ component SettingsView inherits Rectangle {
                             clicked => { Library.rescan(); }
                         }
                         TextButton {
-                            text: "Add Folder…";
-                            clicked => { Library.add-folder(); }
+                            text: "Manage Folders…";
+                            clicked => { root.manage-folders(); }
                         }
                     }
                 }
@@ -3644,6 +3762,8 @@ component Toolbar inherits HorizontalLayout {
     callback check-updates();
     /// Show the visualizer full screen.
     callback full-screen();
+    /// "Library Folders…" in the menu.
+    callback manage-folders();
 
     /// What the name form is for: keeping Up Next as a playlist, or renaming one.
     property <string> naming: "save-queue";
@@ -3870,14 +3990,8 @@ component Toolbar inherits HorizontalLayout {
                     activated => { delete-popup.show(); }
                 }
                 if root.view == "library": MenuItem {
-                    text: "Add music folder…";
-                    activated => { Library.add-folder(); }
-                }
-                for folder[i] in Library.folders: MenuItem {
-                    visible: root.view == "library";
-                    height: root.view == "library" ? 32px : 0;
-                    text: "Remove " + folder;
-                    activated => { Library.remove-folder(i); }
+                    text: "Library Folders…";
+                    activated => { root.manage-folders(); }
                 }
                 if root.view == "library": MenuItem {
                     text: "Check folders for changes";
@@ -4035,6 +4149,12 @@ export component FreyaSkin inherits Window {
         }
     }
 
+    /// Opens the dialog for the library's folders, starting from those in use.
+    function manage-folders() {
+        Library.edit-folders();
+        folders-popup.show();
+    }
+
     function toggle-view(view: string) {
         if (root.view == view) {
             root.show(root.music-view);
@@ -4119,6 +4239,7 @@ export component FreyaSkin inherits Window {
                                     library.focus();
                                 }
                                 show-view(view) => { root.show(view); }
+                                manage-folders => { root.manage-folders(); }
                                 check-updates => {
                                     Updates.check();
                                     update-popup.show();
@@ -4169,6 +4290,7 @@ export component FreyaSkin inherits Window {
                             if root.view == "settings": SettingsView {
                                 width: 100%;
                                 height: 100%;
+                                manage-folders => { root.manage-folders(); }
                             }
                             if root.view == "about": AboutView {
                                 width: 100%;
@@ -4188,6 +4310,39 @@ export component FreyaSkin inherits Window {
                     view: root.view;
                     toggle-view(view) => { root.toggle-view(view); }
                     full-screen => { root.enter-stage(); }
+                }
+            }
+        }
+    }
+
+    // Over the whole window, dimmed, as a dialog: it closes with Cancel, Save or Esc only.
+    folders-popup := PopupWindow {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        close-policy: no-auto-close;
+
+        FocusScope {
+            init => { self.focus(); }
+            key-pressed(event) => {
+                if (event.text == Key.Escape) {
+                    folders-popup.close();
+                    return accept;
+                }
+                reject
+            }
+
+            Rectangle {
+                background: #00000059;
+
+                FoldersForm {
+                    width: min(560px, parent.width - 48px);
+                    // As tall as what it holds: it would fill the window otherwise.
+                    height: self.preferred-height;
+                    x: (parent.width - self.width) / 2;
+                    y: max(24px, (parent.height - self.preferred-height) / 3);
+                    closed => { folders-popup.close(); }
                 }
             }
         }

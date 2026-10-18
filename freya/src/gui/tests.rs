@@ -816,3 +816,56 @@ fn a_cue_sheet_opened_on_its_own_adds_its_tracks() {
         .collect();
     assert_eq!(titles, [Some("One"), Some("Two")]);
 }
+
+/// A global's list of strings.
+fn string_list(ui: &SkinWindow, global_name: &str, name: &str) -> Vec<String> {
+    let Value::Model(model) = global(ui, global_name, name) else {
+        panic!("{global_name}.{name} is a model");
+    };
+    model
+        .iter()
+        .map(|v| match v {
+            Value::String(s) => s.to_string(),
+            other => panic!("not a string: {other:?}"),
+        })
+        .collect()
+}
+
+#[test]
+fn library_folders_change_only_when_saved() {
+    let app = silent_app("folders-draft");
+    let ui = current_ui(&app);
+    let music = temp_dir("folders-draft-music");
+    let (a, b) = (music.join("a"), music.join("b"));
+    for dir in [&a, &b] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    app.borrow_mut().settings.library_folders = vec![a.clone()];
+    app.borrow_mut().refresh();
+
+    // Edited and cancelled: nothing changes, and the next edit starts from what is in use.
+    call(&ui, "Library", "edit-folders", &[]);
+    app.borrow_mut().add_draft_folder(b.clone());
+    call(&ui, "Library", "remove-draft-folder", &[num(0.0)]);
+    app.borrow_mut().refresh();
+    assert_eq!(string_list(&ui, "Library", "folders-draft").len(), 1);
+    assert_eq!(
+        app.borrow().settings.library_folders,
+        std::slice::from_ref(&a)
+    );
+    call(&ui, "Library", "edit-folders", &[]);
+    app.borrow_mut().refresh();
+    assert_eq!(
+        app.borrow().folders_draft.as_deref(),
+        Some(std::slice::from_ref(&a))
+    );
+
+    // A folder inside one already there adds nothing; saved, the edit is in use.
+    app.borrow_mut().add_draft_folder(a.join("inside"));
+    app.borrow_mut().add_draft_folder(b.clone());
+    call(&ui, "Library", "save-folders", &[]);
+    app.borrow_mut().refresh();
+    assert_eq!(app.borrow().settings.library_folders, [a, b]);
+    assert_eq!(string_list(&ui, "Library", "folders").len(), 2);
+    assert!(app.borrow().folders_draft.is_none());
+}

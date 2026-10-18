@@ -33,6 +33,18 @@ Measured with the release build while playing, at the same window size: the queu
 from about 5 % to 1.9 % of a core, the full-screen visualizer with the spectrum from 6.2 % to
 3.3 %.
 
+## `i-slint-renderer-software` 1.18.1
+
+Slint's software renderer, which draws Freya's window on macOS. With softbuffer keeping the
+pixels between frames, Slint redraws only the regions that changed. Every item is drawn only
+within those regions, except paths: the renderer clipped them to the item, not to the regions,
+so an icon under a redrawn region was drawn whole, over what lay on top of it and was not
+redrawn. Hovering a row of a menu drew the album icons under the menu over its other rows.
+
+The patch, in `lib.rs` (marked "Freya:"), draws a path once for each redrawn region it
+crosses, clipped to it, as the renderer does for rectangles. `crates/freya-skin/tests/
+partial_rendering.rs` shows the fault without it. Drop the copy once Slint clips paths too.
+
 For cargo vet, these copies are Freya's own code (`audit-as-crates-io = false` in
 `supply-chain/config.toml`): they are reviewed with Freya's changes, not audited as releases.
 

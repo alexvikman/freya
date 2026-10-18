@@ -46,6 +46,18 @@ fn absolute(path: &Path) -> PathBuf {
     std::path::absolute(path).unwrap_or_else(|_| path.to_owned())
 }
 
+/// Adds `folder` to `folders`, kept sorted. A folder inside one already there adds nothing;
+/// one that holds folders already there replaces them. Returns whether `folders` changed.
+fn add_folder(folders: &mut Vec<PathBuf>, folder: PathBuf) -> bool {
+    if folders.iter().any(|f| folder.starts_with(f)) {
+        return false;
+    }
+    folders.retain(|f| !f.starts_with(&folder));
+    folders.push(folder);
+    folders.sort();
+    true
+}
+
 /// A station list downloaded, by its address: the streams it lists, or why it could not be read.
 type StationList = (String, Result<Vec<Entry>, String>);
 
@@ -287,6 +299,8 @@ pub struct App {
     /// the settings (a package on a drive that is not plugged in comes back), until the user
     /// chooses a skin.
     pub unloaded_skin: Option<PathBuf>,
+    /// The library folders while the user edits them; only saving puts them in use.
+    pub folders_draft: Option<Vec<PathBuf>>,
     skin_files: Vec<(PathBuf, Option<SystemTime>)>,
     skin_checked: Instant,
 
@@ -376,6 +390,7 @@ impl App {
             pending_skin: None,
             skin_error: String::new(),
             unloaded_skin: None,
+            folders_draft: None,
             skin_files: Vec::new(),
             skin_checked: Instant::now(),
             about: None,
@@ -734,20 +749,44 @@ impl App {
     }
 
     pub fn add_library_folder(&mut self, folder: PathBuf) {
-        let folders = &mut self.settings.library_folders;
-        if folders.iter().any(|f| folder.starts_with(f)) {
-            return;
+        if add_folder(&mut self.settings.library_folders, folder) {
+            self.library.rescan(&self.settings.library_folders);
         }
-        // A folder that holds folders already in the library replaces them.
-        folders.retain(|f| !f.starts_with(&folder));
-        folders.push(folder);
-        folders.sort();
-        self.library.rescan(&self.settings.library_folders);
     }
 
     pub fn remove_library_folder(&mut self, index: usize) {
         if index < self.settings.library_folders.len() {
             self.settings.library_folders.remove(index);
+            self.library.rescan(&self.settings.library_folders);
+        }
+    }
+
+    /// Starts editing the library folders, from those in use.
+    pub fn edit_folders(&mut self) {
+        self.folders_draft = Some(self.settings.library_folders.clone());
+    }
+
+    pub fn add_draft_folder(&mut self, folder: PathBuf) {
+        if let Some(draft) = &mut self.folders_draft {
+            add_folder(draft, folder);
+        }
+    }
+
+    pub fn remove_draft_folder(&mut self, index: usize) {
+        if let Some(draft) = &mut self.folders_draft
+            && index < draft.len()
+        {
+            draft.remove(index);
+        }
+    }
+
+    /// Puts the edited folders in use and reads them, once, when they changed.
+    pub fn save_folders(&mut self) {
+        let Some(draft) = self.folders_draft.take() else {
+            return;
+        };
+        if draft != self.settings.library_folders {
+            self.settings.library_folders = draft;
             self.library.rescan(&self.settings.library_folders);
         }
     }
@@ -1186,8 +1225,11 @@ impl App {
             );
         }
         if view.library_out.available {
-            self.library
-                .show_folders(ui, &self.settings.library_folders);
+            self.library.show_folders(
+                ui,
+                &self.settings.library_folders,
+                self.folders_draft.as_deref(),
+            );
             view.library_out.write(ui, self.library.values());
         }
         if view.playlists_out.available {

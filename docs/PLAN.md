@@ -188,7 +188,7 @@ features (playback, Last.fm) come as steps of their own.
 | **L1** | **Last.fm's API**: signed calls (MD5 of Freya's own, tested against RFC 1321), signing in through the browser; Freya's API key from the build's environment or the checkout's `.env`, never the repository | Done |
 | **L2** | **Scrobbling**: now playing on start and resume; a play once heard for half its length or four minutes, if tagged with artist and title, longer than 30 seconds, not a placeholder, not radio | Done |
 | **L3** | **Queue and retries**: plays kept on disk for one account, sent 50 at a time, again after 30 s doubling to 30 min while Last.fm cannot be reached | Done |
-| **L4** | **Settings**: connect (Freya connects by itself once the user allows it), disconnect, scrobbling on or off, plays waiting, the last error. The session key in the login keychain on macOS, the Credential Manager on Windows, an owner-only file elsewhere | Done; tried against Last.fm on 2026-10-17: connected through the browser, the session kept in the keychain, "now playing" shown and the play scrobbled with its start time |
+| **L4** | **Settings**: connect (Freya connects by itself once the user allows it), disconnect, scrobbling on or off, plays waiting, the last error. The session key in the Credential Manager on Windows and an owner-only file elsewhere (on macOS first in the login keychain, which asked for permission after every build of an app signed ad hoc) | Done; tried against Last.fm on 2026-10-17: connected through the browser, the session kept in the keychain, "now playing" shown and the play scrobbled with its start time |
 
 ## Results from M7
 

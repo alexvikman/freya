@@ -513,6 +513,7 @@ skin_api! {
         Library."can-go-back" => set_can_go_back, get_can_go_back;
         Library."query" => set_query, get_query;
         Library."folders" => set_folders, get_folders;
+        Library."folders-draft" => set_folders_draft, get_folders_draft;
         Library."scanning" => set_scanning, get_scanning;
         Library."status" => set_status, get_status;
 
@@ -611,6 +612,10 @@ skin_api! {
         Library."back" => on_back, invoke_back();
         Library."add-folder" => on_add_folder, invoke_add_folder();
         Library."remove-folder" => on_remove_folder, invoke_remove_folder(index: i32);
+        Library."edit-folders" => on_edit_folders, invoke_edit_folders();
+        Library."add-draft-folder" => on_add_draft_folder, invoke_add_draft_folder();
+        Library."remove-draft-folder" => on_remove_draft_folder, invoke_remove_draft_folder(index: i32);
+        Library."save-folders" => on_save_folders, invoke_save_folders();
         Library."rescan" => on_rescan, invoke_rescan();
 
         Equalizer."curve" => on_curve, invoke_curve(width: f32, height: f32, bands: ModelRc<f32>) -> SharedString;

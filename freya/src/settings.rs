@@ -37,7 +37,8 @@ pub struct Settings {
     /// and the library is not brought in line with a folder list that may be missing.
     #[serde(skip)]
     pub damaged: bool,
-    /// The Last.fm user Freya scrobbles for; their session key is in the system's keychain.
+    /// The Last.fm user Freya scrobbles for; their session key is kept apart (see
+    /// lastfm/session.rs).
     pub lastfm_user: Option<String>,
     /// Whether plays are scrobbled while an account is connected.
     pub lastfm_scrobbling: bool,

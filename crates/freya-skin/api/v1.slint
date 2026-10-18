@@ -196,6 +196,15 @@ export global Library {
     callback add-folder();
     /// Stop using a folder; its tracks leave the library.
     callback remove-folder(int);
+    /// The folders while the user edits them, for a dialog with Cancel and Save: `edit-folders`
+    /// starts them from `folders`, `add-draft-folder` and `remove-draft-folder` change them,
+    /// and only `save-folders` puts them in use and reads them. Cancelling is not saving.
+    in property <[string]> folders-draft;
+    callback edit-folders();
+    /// Ask the user for a music folder to add to `folders-draft`.
+    callback add-draft-folder();
+    callback remove-draft-folder(int);
+    callback save-folders();
     /// Read the folders again, for changes made while Freya was running.
     callback rescan();
 }

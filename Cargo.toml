@@ -31,3 +31,4 @@ codegen-units = 1
 # between frames and shows them through IOSurfaces (see vendor/README.md).
 [patch.crates-io]
 softbuffer = { path = "vendor/softbuffer" }
+i-slint-renderer-software = { path = "vendor/i-slint-renderer-software" }

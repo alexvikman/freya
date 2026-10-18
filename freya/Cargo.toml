@@ -127,8 +127,6 @@ objc2-core-foundation = { version = "0.3.2", default-features = false, features 
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGColor", "CGPath"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSBundle", "NSData", "NSDictionary", "NSProcessInfo", "NSString", "NSUserDefaults", "NSValue"] }
 objc2-media-player = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "MPMediaItem", "MPNowPlayingInfoCenter", "MPRemoteCommand", "MPRemoteCommandCenter", "MPRemoteCommandEvent"] }
-# The Last.fm session key, kept in the login keychain (see lastfm/session.rs).
-objc2-security = { version = "0.3.2", default-features = false, features = ["std", "SecBase", "SecItem"] }
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CALayer", "CAMetalLayer", "CAShapeLayer", "CATransaction", "objc2-core-foundation", "objc2-core-graphics", "objc2-metal"] }
 # The hologram's drawing thread measures its own CPU time (see gui/hologram/metal.rs).
 libc = "0.2.190"
