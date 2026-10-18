@@ -14,7 +14,8 @@ pub(super) const SCHEMA: &str = "
         artist TEXT NOT NULL,
         -- 'portrait' or 'backdrop'.
         kind TEXT NOT NULL,
-        -- Where it was asked for: 'deezer' or 'fanart.tv'.
+        -- Where it was asked for: 'deezer' or 'fanart.tv'; or 'user' when the user chose it,
+        -- which the internet's answers never replace.
         source TEXT NOT NULL,
         -- The picture's SHA-256 among the downloaded pictures; NULL when the source had none.
         picture TEXT,
@@ -61,6 +62,31 @@ impl PictureKind {
     }
 }
 
+/// The source of a picture the user chose themselves.
+pub const CHOSEN: &str = "user";
+
+/// Which downloaded picture is an artist's, where from, and when it was asked for.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PictureRow {
+    /// Its SHA-256 among the downloaded pictures; none when the source had none, or the user
+    /// chose none.
+    pub picture: Option<String>,
+    pub source: String,
+    pub asked: SystemTime,
+}
+
+impl PictureRow {
+    /// Whether the user chose it.
+    pub fn chosen(&self) -> bool {
+        self.source == CHOSEN
+    }
+
+    /// Whether it is recent enough not to ask again.
+    pub fn recent(&self) -> bool {
+        self.asked.elapsed().is_ok_and(|age| age < ASK_AGAIN_AFTER)
+    }
+}
+
 /// An answer from the internet, and when it was given.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Asked<T> {
@@ -85,27 +111,26 @@ pub struct ArtistText {
 }
 
 impl Library {
-    /// Which downloaded picture is the artist's, if one; asked of their source when.
-    pub fn artist_picture(
-        &self,
-        artist: &str,
-        kind: PictureKind,
-    ) -> Result<Option<Asked<Option<String>>>> {
+    /// Which downloaded picture is the artist's, if one; where from, and when.
+    pub fn artist_picture(&self, artist: &str, kind: PictureKind) -> Result<Option<PictureRow>> {
         self.db
             .prepare_cached(
-                "SELECT picture, asked FROM artist_pictures WHERE artist = ?1 AND kind = ?2",
+                "SELECT picture, source, asked FROM artist_pictures
+                 WHERE artist = ?1 AND kind = ?2",
             )?
             .query_row(params![artist, kind.name()], |row| {
-                Ok(Asked {
-                    answer: row.get(0)?,
-                    asked: from_epoch_millis(row.get(1)?),
+                Ok(PictureRow {
+                    picture: row.get(0)?,
+                    source: row.get(1)?,
+                    asked: from_epoch_millis(row.get(2)?),
                 })
             })
             .optional()
     }
 
     /// Notes that `source` was asked for the artist's picture at `asked`, and what it gave:
-    /// the downloaded picture's SHA-256, or none.
+    /// the downloaded picture's SHA-256, or none. A picture the user chose stays, unless
+    /// `source` is [`CHOSEN`] too.
     pub fn set_artist_picture(
         &self,
         artist: &str,
@@ -116,8 +141,11 @@ impl Library {
     ) -> Result<()> {
         self.db
             .prepare_cached(
-                "INSERT OR REPLACE INTO artist_pictures (artist, kind, source, picture, asked)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO artist_pictures (artist, kind, source, picture, asked)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT (artist, kind) DO UPDATE
+                 SET source = ?3, picture = ?4, asked = ?5
+                 WHERE artist_pictures.source != 'user' OR ?3 = 'user'",
             )?
             .execute(params![
                 artist,
@@ -244,14 +272,14 @@ mod tests {
             .unwrap();
         let opeth = library.artist_picture("Opeth", portrait).unwrap().unwrap();
         assert_eq!(
-            (opeth.answer.as_deref(), opeth.asked),
+            (opeth.picture.as_deref(), opeth.asked),
             (Some("aaa"), at(10))
         );
         assert!(!opeth.recent(), "asked in 1970");
         let backdrop = library
             .artist_picture("Opeth", PictureKind::Backdrop)
             .unwrap();
-        assert_eq!(backdrop.unwrap().answer, None);
+        assert_eq!(backdrop.unwrap().picture, None);
         assert_eq!(
             library.artist_picture_checksums().unwrap(),
             HashSet::from(["aaa".to_owned()])
@@ -263,8 +291,24 @@ mod tests {
             .set_artist_picture("Opeth", portrait, "deezer", Some("bbb"), now)
             .unwrap();
         let opeth = library.artist_picture("Opeth", portrait).unwrap().unwrap();
-        assert_eq!(opeth.answer.as_deref(), Some("bbb"));
+        assert_eq!(opeth.picture.as_deref(), Some("bbb"));
         assert!(opeth.recent());
+
+        // The user's choice stays when Deezer answers again, and gives way to another of theirs.
+        library
+            .set_artist_picture("Opeth", portrait, CHOSEN, None, now)
+            .unwrap();
+        library
+            .set_artist_picture("Opeth", portrait, "deezer", Some("ccc"), now)
+            .unwrap();
+        let opeth = library.artist_picture("Opeth", portrait).unwrap().unwrap();
+        assert!(opeth.chosen());
+        assert_eq!(opeth.picture, None);
+        library
+            .set_artist_picture("Opeth", portrait, CHOSEN, Some("ddd"), now)
+            .unwrap();
+        let opeth = library.artist_picture("Opeth", portrait).unwrap().unwrap();
+        assert_eq!(opeth.picture.as_deref(), Some("ddd"));
     }
 
     #[test]

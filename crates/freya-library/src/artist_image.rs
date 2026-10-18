@@ -35,9 +35,8 @@ const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10);
 /// A search answer is at most this large, and a picture this large, to keep a broken answer
 /// from filling memory.
 const MAX_ANSWER_BYTES: u64 = 256 * 1024;
-const MAX_PICTURE_BYTES: u64 = 4 * 1024 * 1024;
 /// fanart.tv's wide pictures can be 3840 pixels wide.
-const MAX_BACKDROP_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_PICTURE_BYTES: u64 = 16 * 1024 * 1024;
 
 /// A wide picture of the artist in their own folder, the parent of their albums' folders.
 pub fn local_backdrop(album_tracks: &[PathBuf]) -> Option<PathBuf> {
@@ -114,8 +113,16 @@ pub enum Online {
 /// artist of the same name counts, not the nearest match. An error means Deezer could not
 /// be asked, and may be asked again later.
 pub fn deezer(name: &str) -> Result<Online, String> {
-    let agent = agent();
-    let text = agent
+    match deezer_picture_urls(name)?.first() {
+        Some(url) => Ok(Online::Picture(download(url)?)),
+        None => Ok(Online::NoPicture),
+    }
+}
+
+/// The addresses of Deezer's pictures of artists named `name`: several share a name now and
+/// then. Best matches first.
+pub fn deezer_picture_urls(name: &str) -> Result<Vec<String>, String> {
+    let text = agent()
         .get(DEEZER_SEARCH)
         .query("q", name)
         .query("limit", "5")
@@ -127,19 +134,20 @@ pub fn deezer(name: &str) -> Result<Online, String> {
         .read_to_string()
         .map_err(|e| e.to_string())?;
     let answer: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-    let Some(url) = picture_url(&answer, name) else {
-        return Ok(Online::NoPicture);
-    };
-    let bytes = agent
-        .get(&url)
+    Ok(picture_urls(&answer, name))
+}
+
+/// Downloads a picture at `url`.
+pub fn download(url: &str) -> Result<Vec<u8>, String> {
+    agent()
+        .get(url)
         .call()
         .map_err(|e| e.to_string())?
         .body_mut()
         .with_config()
         .limit(MAX_PICTURE_BYTES)
         .read_to_vec()
-        .map_err(|e| e.to_string())?;
-    Ok(Online::Picture(bytes))
+        .map_err(|e| e.to_string())
 }
 
 /// MusicBrainz's id of the artist named `name`: only an artist of that very name counts, the
@@ -185,6 +193,45 @@ fn artist_id(answer: &serde_json::Value, name: &str) -> Option<String> {
 /// the user's personal key: the one its users like best. An error means fanart.tv could not
 /// be asked, or did not take the key.
 pub fn fanart_backdrop(mbid: &str, key: &str) -> Result<Online, String> {
+    let Some(answer) = fanart_answer(mbid, key)? else {
+        return Ok(Online::NoPicture);
+    };
+    match backdrop_url(&answer) {
+        Some(url) => Ok(Online::Picture(download(&url)?)),
+        None => Ok(Online::NoPicture),
+    }
+}
+
+/// The addresses of every picture fanart.tv has of the artist with the MusicBrainz id
+/// `mbid`: portraits, and wide ones, 4K first. Best liked first.
+#[derive(Debug, Default, PartialEq)]
+pub struct FanartUrls {
+    pub portraits: Vec<String>,
+    pub backdrops: Vec<String>,
+}
+
+pub fn fanart_urls(mbid: &str, key: &str) -> Result<FanartUrls, String> {
+    Ok(fanart_answer(mbid, key)?
+        .map(|answer| urls_of(&answer))
+        .unwrap_or_default())
+}
+
+fn urls_of(answer: &serde_json::Value) -> FanartUrls {
+    let list = |kinds: &[&str]| -> Vec<String> {
+        kinds
+            .iter()
+            .filter_map(|kind| answer.get(kind))
+            .flat_map(by_likes)
+            .collect()
+    };
+    FanartUrls {
+        portraits: list(&["artistthumb"]),
+        backdrops: list(&["artist4kbackground", "artistbackground"]),
+    }
+}
+
+/// What fanart.tv has of the artist `mbid`; none when it knows nothing of them.
+fn fanart_answer(mbid: &str, key: &str) -> Result<Option<serde_json::Value>, String> {
     let agent = agent();
     let response = call_patiently(|| {
         agent
@@ -200,26 +247,15 @@ pub fn fanart_backdrop(mbid: &str, key: &str) -> Result<Online, String> {
             .read_to_string()
             .map_err(|e| e.to_string())?,
         // fanart.tv has nothing of this artist.
-        Err(ureq::Error::StatusCode(404)) => return Ok(Online::NoPicture),
+        Err(ureq::Error::StatusCode(404)) => return Ok(None),
         Err(ureq::Error::StatusCode(401 | 403)) => {
             return Err("fanart.tv did not take the API key".to_owned());
         }
         Err(e) => return Err(e.to_string()),
     };
-    let answer: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-    let Some(url) = backdrop_url(&answer) else {
-        return Ok(Online::NoPicture);
-    };
-    let bytes = agent
-        .get(&url)
-        .call()
-        .map_err(|e| e.to_string())?
-        .body_mut()
-        .with_config()
-        .limit(MAX_BACKDROP_BYTES)
-        .read_to_vec()
-        .map_err(|e| e.to_string())?;
-    Ok(Online::Picture(bytes))
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|e| e.to_string())
 }
 
 /// The address of the best liked wide picture in a fanart.tv answer, in 4K when there is one.
@@ -231,6 +267,12 @@ fn backdrop_url(answer: &serde_json::Value) -> Option<String> {
 
 /// The address of the best liked of a list of fanart.tv pictures.
 fn best_liked(pictures: &serde_json::Value) -> Option<String> {
+    by_likes(pictures).into_iter().next()
+}
+
+/// The addresses in a list of fanart.tv pictures, best liked first; those liked as much as
+/// fanart.tv lists them, as its users ranked them.
+fn by_likes(pictures: &serde_json::Value) -> Vec<String> {
     let likes = |picture: &serde_json::Value| {
         let likes = picture.get("likes");
         likes
@@ -238,30 +280,35 @@ fn best_liked(pictures: &serde_json::Value) -> Option<String> {
             .or_else(|| likes?.as_str()?.parse().ok())
             .unwrap_or(0)
     };
-    pictures
-        .as_array()?
-        .iter()
-        .filter(|p| p.get("url").and_then(|u| u.as_str()).is_some())
-        // The first of those liked as much: fanart.tv lists them as its users ranked them.
-        .rev()
-        .max_by_key(|p| likes(p))?
-        .get("url")?
-        .as_str()
-        .map(str::to_owned)
+    let mut pictures: Vec<(u64, String)> = pictures
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|p| Some((likes(p), p.get("url")?.as_str()?.to_owned())))
+        .collect();
+    // Stable: equals keep their order.
+    pictures.sort_by_key(|(likes, _)| std::cmp::Reverse(*likes));
+    pictures.into_iter().map(|(_, url)| url).collect()
 }
 
-/// The address of the largest picture of the artist named `name` in a Deezer search answer.
-fn picture_url(answer: &serde_json::Value, name: &str) -> Option<String> {
+/// The addresses of the largest pictures of artists named `name` in a Deezer search answer.
+fn picture_urls(answer: &serde_json::Value, name: &str) -> Vec<String> {
     let wanted = comparable(name);
-    let artist =
-        answer.get("data")?.as_array()?.iter().find(|a| {
-            a.get("name").and_then(|n| n.as_str()).map(comparable) == Some(wanted.clone())
-        })?;
-    let url = ["picture_xl", "picture_big"]
-        .iter()
-        .find_map(|key| artist.get(key)?.as_str())?;
-    // Artists without a picture have one whose name in the address is empty.
-    (!url.contains("/artist//")).then(|| url.to_owned())
+    answer
+        .get("data")
+        .and_then(|d| d.as_array())
+        .into_iter()
+        .flatten()
+        .filter(|a| a.get("name").and_then(|n| n.as_str()).map(comparable) == Some(wanted.clone()))
+        .filter_map(|artist| {
+            ["picture_xl", "picture_big"]
+                .iter()
+                .find_map(|key| artist.get(key)?.as_str())
+        })
+        // Artists without a picture have one whose name in the address is empty.
+        .filter(|url| !url.contains("/artist//"))
+        .map(str::to_owned)
+        .collect()
 }
 
 /// A name with only its letters and digits, in lower case: "AC/DC" and "ac dc" are one.
@@ -342,14 +389,17 @@ mod tests {
             { "name": "Shores Of Null", "picture_xl": "https://x/artist/bbb/1000.jpg" },
         ]});
         assert_eq!(
-            picture_url(&answer, "shores of null").as_deref(),
-            Some("https://x/artist/bbb/1000.jpg")
+            picture_urls(&answer, "shores of null"),
+            ["https://x/artist/bbb/1000.jpg"]
         );
-        assert_eq!(picture_url(&answer, "Opeth"), None);
+        assert!(picture_urls(&answer, "Opeth").is_empty());
         let blank = serde_json::json!({ "data": [
             { "name": "Opeth", "picture_xl": "https://x/images/artist//1000x1000.jpg" },
         ]});
-        assert_eq!(picture_url(&blank, "Opeth"), None, "Deezer's empty picture");
+        assert!(
+            picture_urls(&blank, "Opeth").is_empty(),
+            "Deezer's empty picture"
+        );
         assert_eq!(comparable("AC/DC"), comparable("ac dc"));
     }
 
@@ -401,6 +451,17 @@ mod tests {
         with_4k["artist4kbackground"] =
             serde_json::json!([{ "url": "https://x/4k.jpg", "likes": "0" }]);
         assert_eq!(backdrop_url(&with_4k).as_deref(), Some("https://x/4k.jpg"));
+        let urls = urls_of(&with_4k);
+        assert_eq!(urls.portraits, ["https://x/thumb.jpg"]);
+        assert_eq!(
+            urls.backdrops,
+            [
+                "https://x/4k.jpg",
+                "https://x/b.jpg",
+                "https://x/c.jpg",
+                "https://x/a.jpg"
+            ]
+        );
         assert_eq!(
             backdrop_url(&serde_json::json!({ "artistthumb": [] })),
             None

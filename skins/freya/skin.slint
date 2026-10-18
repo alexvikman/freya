@@ -4,7 +4,7 @@
 // contrast against the background it is drawn on (WCAG AA), light and dark mode follow the
 // system.
 
-import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, LastFm, PlaybackState, Shortcuts, TrackRow, LibraryRow, AlbumPage, ArtistPage, ArtistDraft, PlaylistRow, StationRow, NativeSpectrum, NativeOscilloscope, NativeHologram } from "@freya/v1.slint";
+import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, LastFm, PlaybackState, Shortcuts, TrackRow, LibraryRow, AlbumPage, ArtistPage, ArtistDraft, PictureChoice, PlaylistRow, StationRow, NativeSpectrum, NativeOscilloscope, NativeHologram } from "@freya/v1.slint";
 import { AboutSlint, ListView, Palette, ScrollView } from "std-widgets.slint";
 
 // Every skin re-exports the API globals so the app can reach them.
@@ -80,6 +80,7 @@ global Icons {
     out property <string> star: "M12 3 L14.8 8.8 L21 9.6 L16.5 14 L17.6 20.3 L12 17.3 L6.4 20.3 L7.5 14 L3 9.6 L9.2 8.8 Z";
     out property <string> genre: "M3 4 V11 L13 21 L21 13 L11 3 H4 C3.4 3 3 3.4 3 4 Z M7.5 7.5 H7.6";
     out property <string> expand: "M4 9 V4 H9 M15 4 H20 V9 M20 15 V20 H15 M9 20 H4 V15";
+    out property <string> picture: "M3.5 5 H20.5 V19 H3.5 Z M3.5 16 L8.5 11 L12.5 15 L15 12.5 L20.5 18 M15.5 7.5 A1.5 1.5 0 1 0 15.5 10.5 A1.5 1.5 0 1 0 15.5 7.5 Z";
     out property <string> pencil: "M4 20 H8 L19.5 8.5 L15.5 4.5 L4 16 Z M13.5 6.5 L17.5 10.5";
     // A pulse in a ring: what Freya is doing.
     out property <string> activity: "M12 2.5 A9.5 9.5 0 1 0 12 21.5 A9.5 9.5 0 1 0 12 2.5 Z M6.5 12 H9 L10.75 8.5 L13.25 15.5 L15 12 H17.5";
@@ -139,13 +140,15 @@ component LinkText inherits Text {
 component TooltipBox inherits Rectangle {
     in property <string> text;
 
-    background: Theme.surface;
+    // In the dark, set apart by a lighter fill: a thin rounded edge is drawn with light
+    // corners there.
+    background: Theme.dark ? #2d3137 : Theme.surface;
     border-radius: 6px;
-    border-width: 1px;
+    border-width: Theme.dark ? 0 : 1px;
     border-color: Theme.divider;
     drop-shadow-blur: 8px;
     drop-shadow-offset-y: 2px;
-    drop-shadow-color: #00000030;
+    drop-shadow-color: Theme.dark ? #00000066 : #00000030;
 
     HorizontalLayout {
         padding-left: 8px;
@@ -3199,6 +3202,15 @@ component LibraryPanel inherits FocusScope {
                     text: "Add to " + playlist.name;
                     activated => { Playlists.add-library-row(i, root.menu-row); }
                 }
+                // An artist is changed on their page, which opens first.
+                if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "artist": MenuDivider { }
+                if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "artist": MenuItem {
+                    text: "Edit Artist…";
+                    activated => {
+                        root.activate(root.menu-row);
+                        root.edit-artist();
+                    }
+                }
             }
         }
     }
@@ -3928,6 +3940,192 @@ component FormTab inherits Rectangle {
     }
 }
 
+/// A picture to choose, with where it is from and its size; ringed in the accent color when
+/// chosen.
+component PictureTile inherits VerticalLayout {
+    in property <PictureChoice> choice;
+    in property <length> tile-width;
+    in property <bool> wide;
+    callback clicked;
+
+    alignment: start;
+    spacing: 4px;
+    accessible-role: button;
+    accessible-label: choice.source + (choice.size == "" ? "" : ", " + choice.size);
+    accessible-checkable: true;
+    accessible-checked: choice.chosen;
+    accessible-action-default => { root.clicked(); }
+
+    Rectangle {
+        width: root.tile-width;
+        height: root.wide ? root.tile-width * 9 / 16 : root.tile-width;
+        border-radius: 6px;
+        clip: true;
+        background: touch.has-hover ? Theme.hover : Theme.background;
+
+        if root.choice.picture.width > 0: Image {
+            width: parent.width;
+            height: parent.height;
+            source: root.choice.picture;
+            image-fit: cover;
+            image-rendering: smooth;
+        }
+        if root.choice.picture.width == 0: Icon {
+            width: 32px;
+            height: 32px;
+            data: Icons.close;
+            stroked: true;
+            color: Theme.text-secondary;
+        }
+        // Over the picture, so it shows on dark ones too.
+        if root.choice.chosen: Rectangle {
+            border-radius: 6px;
+            border-width: 3px;
+            border-color: Theme.accent;
+        }
+        if root.choice.chosen: Rectangle {
+            x: parent.width - self.width - 8px;
+            y: 8px;
+            width: 24px;
+            height: 24px;
+            border-radius: 12px;
+            background: Theme.accent;
+
+            Icon {
+                width: 16px;
+                height: 16px;
+                data: Icons.check;
+                stroked: true;
+                color: Theme.on-accent;
+            }
+        }
+        touch := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.clicked(); }
+        }
+    }
+    Text {
+        width: root.tile-width;
+        text: root.choice.source;
+        font-size: 13px;
+        font-weight: root.choice.chosen ? 600 : 400;
+        color: Theme.text;
+        overflow: elide;
+    }
+    Text {
+        width: root.tile-width;
+        // Kept when empty, so the tiles of a row line up.
+        text: root.choice.size == "" ? " " : root.choice.size;
+        font-size: 12px;
+        color: Theme.text-secondary;
+        overflow: elide;
+    }
+}
+
+/// The pictures of one kind to choose from, "portrait" or "backdrop", with ways to give one.
+component PicturePage inherits VerticalLayout {
+    in property <string> kind;
+    in property <[PictureChoice]> choices;
+    in property <bool> wide;
+
+    property <bool> url-shown;
+    property <length> pad: 20px;
+    property <length> gap: 16px;
+    property <int> columns: root.wide ? 2 : max(2, floor((scroll.visible-width - 2 * root.pad + root.gap) / (150px + root.gap)));
+    property <length> tile-width: (scroll.visible-width - 2 * root.pad - (root.columns - 1) * root.gap) / root.columns;
+
+    HorizontalLayout {
+        padding: 14px;
+        padding-left: root.pad;
+        padding-right: root.pad;
+        spacing: 8px;
+        alignment: start;
+
+        LinkText {
+            text: "Choose an image…";
+            font-size: 13px;
+            font-weight: 600;
+            color: Theme.accent-text;
+            label: "Choose an image file";
+            clicked => { Library.pick-picture-file(root.kind); }
+        }
+        Text {
+            text: "·";
+            font-size: 13px;
+            color: Theme.text-secondary;
+        }
+        LinkText {
+            text: "Enter a URL";
+            font-size: 13px;
+            font-weight: 600;
+            color: Theme.accent-text;
+            label: "Enter the address of a picture";
+            clicked => { root.url-shown = !root.url-shown; }
+        }
+    }
+    if Library.finding-pictures: Text {
+        x: root.pad;
+        text: "Looking for more pictures on the internet…";
+        font-size: 12px;
+        color: Theme.text-secondary;
+    }
+    if root.url-shown: HorizontalLayout {
+        padding-left: root.pad;
+        padding-right: root.pad;
+        padding-bottom: 12px;
+        spacing: 8px;
+
+        url := FormField {
+            horizontal-stretch: 1;
+            placeholder: "https://…";
+            accepted => { Library.picture-from-url(root.kind, self.text); }
+        }
+        VerticalLayout {
+            alignment: end;
+
+            TextButton {
+                text: "Use";
+                clicked => { Library.picture-from-url(root.kind, url.text); }
+            }
+        }
+    }
+    if Library.picture-error != "": Text {
+        x: root.pad;
+        text: Library.picture-error;
+        font-size: 12px;
+        color: Theme.danger;
+        wrap: word-wrap;
+    }
+    Rectangle {
+        height: 1px;
+        background: Theme.divider;
+    }
+    scroll := ScrollView {
+        vertical-stretch: 1;
+
+        VerticalLayout {
+            padding: root.pad;
+            spacing: 22px;
+            alignment: start;
+
+            for line in ceil(root.choices.length / root.columns): HorizontalLayout {
+                spacing: root.gap;
+                alignment: start;
+
+                for column in root.columns: PictureTile {
+                    property <int> index: line * root.columns + column;
+
+                    visible: self.index < root.choices.length;
+                    tile-width: root.tile-width;
+                    wide: root.wide;
+                    choice: root.choices[self.index];
+                    clicked => { Library.choose-picture(root.kind, self.index); }
+                }
+            }
+        }
+    }
+}
+
 /// Changing an artist: the name shown and sorted by, their MusicBrainz id and biography. What
 /// is left empty goes back to the tags' and the internet's.
 component ArtistEditForm inherits MenuSurface {
@@ -3942,6 +4140,11 @@ component ArtistEditForm inherits MenuSurface {
 
     function save() {
         Library.save-artist(root.name, root.sort-name, root.mbid, root.biography);
+        root.closed();
+    }
+
+    public function cancel() {
+        Library.cancel-artist();
         root.closed();
     }
 
@@ -3973,7 +4176,7 @@ component ArtistEditForm inherits MenuSurface {
                 stroked: true;
                 size: 32px;
                 label: "Close";
-                clicked => { root.closed(); }
+                clicked => { root.cancel(); }
             }
         }
         Rectangle {
@@ -3995,10 +4198,33 @@ component ArtistEditForm inherits MenuSurface {
                     selected: root.tab == "general";
                     clicked => { root.tab = "general"; }
                 }
+                FormTab {
+                    text: "Picture";
+                    icon: Icons.artist;
+                    selected: root.tab == "picture";
+                    clicked => { root.tab = "picture"; }
+                }
+                FormTab {
+                    text: "Background";
+                    icon: Icons.picture;
+                    selected: root.tab == "background";
+                    clicked => { root.tab = "background"; }
+                }
             }
             Rectangle {
                 width: 1px;
                 background: Theme.divider;
+            }
+            if root.tab == "picture": PicturePage {
+                horizontal-stretch: 1;
+                kind: "portrait";
+                choices: Library.portrait-choices;
+            }
+            if root.tab == "background": PicturePage {
+                horizontal-stretch: 1;
+                kind: "backdrop";
+                choices: Library.backdrop-choices;
+                wide: true;
             }
             if root.tab == "general": ScrollView {
                 horizontal-stretch: 1;
@@ -4050,7 +4276,7 @@ component ArtistEditForm inherits MenuSurface {
                             if biography-input.text == "": Text {
                                 x: 10px;
                                 y: 9px;
-                                text: "What Last.fm says";
+                                text: "No biography";
                                 font-size: 13px;
                                 color: Theme.text-secondary;
                             }
@@ -4075,7 +4301,9 @@ component ArtistEditForm inherits MenuSurface {
                             }
                         }
                         Text {
-                            text: "Shown in place of what Last.fm says, which is then not asked.";
+                            text: root.draft.biography-from-lastfm
+                                ? "From Last.fm. Change it to make it yours: it is then shown in place of Last.fm's, which is not asked again. Empty, Last.fm's is shown."
+                                : "Yours, shown in place of Last.fm's. Empty, Last.fm's is shown again.";
                             font-size: 12px;
                             color: Theme.text-secondary;
                             wrap: word-wrap;
@@ -4097,7 +4325,7 @@ component ArtistEditForm inherits MenuSurface {
 
             TextButton {
                 text: "Cancel";
-                clicked => { root.closed(); }
+                clicked => { root.cancel(); }
             }
             TextButton {
                 text: "Save Changes";
@@ -6189,9 +6417,11 @@ export component FreyaSkin inherits Window {
         close-policy: no-auto-close;
 
         FocusScope {
+            // So Esc closes it at once.
+            init => { self.focus(); }
             key-pressed(event) => {
                 if (event.text == Key.Escape) {
-                    artist-popup.close();
+                    artist-form.cancel();
                     return accept;
                 }
                 reject
@@ -6200,7 +6430,7 @@ export component FreyaSkin inherits Window {
             Rectangle {
                 background: #00000059;
 
-                ArtistEditForm {
+                artist-form := ArtistEditForm {
                     width: min(780px, parent.width - 48px);
                     height: min(600px, parent.height - 48px);
                     x: (parent.width - self.width) / 2;

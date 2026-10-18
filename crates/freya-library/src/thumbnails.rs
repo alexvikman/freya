@@ -50,6 +50,9 @@ pub struct ArtistSource {
     pub online: bool,
     /// What Deezer gave before.
     pub deezer: Downloaded,
+    /// The picture the user chose, or that they chose none (their album covers); before
+    /// all else.
+    pub chosen: Option<Downloaded>,
 }
 
 /// Where a wide picture of an artist can come from: see [`crate::artist_image`].
@@ -66,6 +69,8 @@ pub struct BackdropSource {
     pub fanart_key: Option<String>,
     /// What fanart.tv gave before.
     pub fanart: Downloaded,
+    /// The wide picture the user chose, or that they chose none; before all else.
+    pub chosen: Option<Downloaded>,
 }
 
 /// What a thread learned from the internet, for the library to keep.
@@ -98,6 +103,8 @@ enum Job {
 enum ArtistJob {
     /// Their picture in their folder.
     Local(PathBuf),
+    /// One kept among the downloaded pictures: the user's choice.
+    Kept(String),
     /// Deezer's: the one kept when there is one, else asked for.
     Deezer { name: String, kept: Option<String> },
     /// Their album covers.
@@ -107,6 +114,8 @@ enum ArtistJob {
 /// Where a wide picture of an artist is made from.
 enum BackdropJob {
     Local(PathBuf),
+    /// One kept among the downloaded pictures: the user's choice.
+    Kept(String),
     /// fanart.tv's: the one kept when there is one, else asked for.
     Fanart {
         name: String,
@@ -223,8 +232,13 @@ impl Thumbnails {
         if let Some(known) = self.known.get(key) {
             return known.clone();
         }
-        let local = artist_image::local(&source.album_tracks);
+        let chosen = source
+            .chosen
+            .clone()
+            .filter(|chosen| *chosen != Downloaded::Unknown);
+        let local = artist_image::local(&source.album_tracks).filter(|_| chosen.is_none());
         let deezer = match (&source.name, &source.deezer) {
+            _ if chosen.is_some() => None,
             (Some(name), Downloaded::Kept(checksum)) if source.online => {
                 Some((name.clone(), Some(checksum.clone())))
             }
@@ -233,8 +247,27 @@ impl Thumbnails {
             }
             _ => None,
         };
-        let (thumbnail, large, job) = match (local, deezer) {
-            (Some(file), _) => {
+        let (thumbnail, large, job) = match (chosen, local, deezer) {
+            (Some(Downloaded::Kept(checksum)), ..) => {
+                let thumbnail = self.file(&format!("{checksum}-{SIZE}"));
+                let large = self.file(&format!("{checksum}-large"));
+                let made = thumbnail.exists() && large.exists();
+                (
+                    thumbnail,
+                    Some(large),
+                    (!made).then_some(ArtistJob::Kept(checksum)),
+                )
+            }
+            (Some(_), ..) | (None, None, None) => {
+                let collage = self.file(&format!("{key}-collage"));
+                let fresh = source
+                    .album_tracks
+                    .first()
+                    .is_none_or(|track| !outdated(&collage, track));
+                let job = (!(collage.exists() && fresh)).then_some(ArtistJob::Collage);
+                (collage, None, job)
+            }
+            (None, Some(file), _) => {
                 let thumbnail = self.file(&format!("{key}-local"));
                 let large = self.file(&format!("{key}-local-large"));
                 let fresh = [&thumbnail, &large].iter().all(|made| !older(made, &file));
@@ -244,7 +277,7 @@ impl Thumbnails {
                     (!fresh).then_some(ArtistJob::Local(file)),
                 )
             }
-            (None, Some((name, Some(checksum)))) => {
+            (None, None, Some((name, Some(checksum)))) => {
                 let thumbnail = self.file(&format!("{checksum}-{SIZE}"));
                 let large = self.file(&format!("{checksum}-large"));
                 let made = thumbnail.exists() && large.exists();
@@ -254,20 +287,11 @@ impl Thumbnails {
                 };
                 (thumbnail, Some(large), (!made).then_some(job))
             }
-            (None, Some((name, None))) => {
+            (None, None, Some((name, None))) => {
                 self.asked.insert(key.to_owned());
                 let job = ArtistJob::Deezer { name, kept: None };
                 // Its name is known once Deezer answered.
                 (PathBuf::new(), None, Some(job))
-            }
-            (None, None) => {
-                let collage = self.file(&format!("{key}-collage"));
-                let fresh = source
-                    .album_tracks
-                    .first()
-                    .is_none_or(|track| !outdated(&collage, track));
-                let job = (!(collage.exists() && fresh)).then_some(ArtistJob::Collage);
-                (collage, None, job)
             }
         };
         match large {
@@ -300,8 +324,13 @@ impl Thumbnails {
         if let Some(known) = self.known.get(&known_key) {
             return known.clone();
         }
-        let local = artist_image::local_backdrop(&source.album_tracks);
+        let chosen = source
+            .chosen
+            .clone()
+            .filter(|chosen| *chosen != Downloaded::Unknown);
+        let local = artist_image::local_backdrop(&source.album_tracks).filter(|_| chosen.is_none());
         let fanart = match (&source.name, &source.fanart_key, &source.fanart) {
+            _ if chosen.is_some() => None,
             (Some(name), Some(fanart_key), Downloaded::Kept(checksum)) => {
                 Some((name, fanart_key, Some(checksum.clone())))
             }
@@ -312,13 +341,19 @@ impl Thumbnails {
             }
             _ => None,
         };
-        let (file, job) = match (local, fanart) {
-            (Some(local), _) => {
+        let (file, job) = match (chosen, local, fanart) {
+            (Some(Downloaded::Kept(checksum)), ..) => {
+                let file = self.file(&format!("{checksum}-wide"));
+                let made = file.exists();
+                (Some(file), (!made).then_some(BackdropJob::Kept(checksum)))
+            }
+            (Some(_), ..) => (None, None),
+            (None, Some(local), _) => {
                 let file = self.file(&format!("{key}-local-wide"));
                 let fresh = !older(&file, &local);
                 (Some(file), (!fresh).then_some(BackdropJob::Local(local)))
             }
-            (None, Some((name, fanart_key, kept))) => {
+            (None, None, Some((name, fanart_key, kept))) => {
                 let file = kept
                     .as_ref()
                     .map(|checksum| self.file(&format!("{checksum}-wide")));
@@ -335,7 +370,7 @@ impl Thumbnails {
                 let made = file.as_ref().is_some_and(|file| file.exists());
                 (file, (!made).then_some(job))
             }
-            (None, None) => (None, None),
+            (None, None, None) => (None, None),
         };
         let state = match (file, job) {
             (_, Some(job)) => {
@@ -347,6 +382,14 @@ impl Thumbnails {
         };
         self.known.insert(known_key, state.clone());
         state
+    }
+
+    /// Forgets the pictures of the artist `key`, to make them again from what the library
+    /// says now: after the user chose others.
+    pub fn forget_artist(&mut self, key: &str) {
+        self.known.remove(key);
+        self.portraits.remove(key);
+        self.forget_backdrop(key);
     }
 
     /// Forgets the wide picture of the artist `key`, to look for it again.
@@ -519,6 +562,14 @@ fn make_artist(
             Some(image::open(file).map_err(|e| e.to_string())?),
             format!("{key}-local"),
         ),
+        ArtistJob::Kept(checksum) => match pictures.read(checksum) {
+            Some(bytes) => (
+                Some(image::load_from_memory(&bytes).map_err(|e| e.to_string())?),
+                checksum.clone(),
+            ),
+            // Gone: their covers stand in.
+            None => (None, String::new()),
+        },
         ArtistJob::Deezer { name, kept } => {
             match deezer_picture(pictures, name, kept.as_deref(), fetched) {
                 Ok(Some((checksum, picture))) => (Some(picture), checksum),
@@ -611,6 +662,15 @@ fn make_backdrop(
             image::open(file).map_err(|e| e.to_string())?,
             format!("{key}-local-wide"),
         ),
+        BackdropJob::Kept(checksum) => {
+            let Some(bytes) = pictures.read(checksum) else {
+                return Ok(false);
+            };
+            (
+                image::load_from_memory(&bytes).map_err(|e| e.to_string())?,
+                format!("{checksum}-wide"),
+            )
+        }
         BackdropJob::Fanart {
             name,
             mbid,
@@ -818,6 +878,7 @@ mod tests {
             album_tracks: vec![track],
             online: false,
             deezer: Downloaded::Unknown,
+            chosen: None,
         };
         let cache = temp_dir("artist-cache");
 
@@ -870,6 +931,7 @@ mod tests {
             album_tracks: vec![track],
             online: true,
             deezer: Downloaded::Kept(checksum.clone()),
+            chosen: None,
         };
         let mut thumbnails = thumbnails(&cache);
         let key = Thumbnails::artist_key(source.name.as_deref());
@@ -907,6 +969,46 @@ mod tests {
     }
 
     #[test]
+    fn the_users_choice_comes_before_the_artists_folder() {
+        let (artist, track) = artist_with_album("chosen-music", [0, 0, 200]);
+        image::RgbImage::from_pixel(300, 300, image::Rgb([220, 0, 0]))
+            .save(artist.join("artist.jpg"))
+            .unwrap();
+        let cache = temp_dir("chosen-cache");
+        let mut bytes = Vec::new();
+        image::RgbImage::from_pixel(800, 800, image::Rgb([0, 200, 0]))
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Jpeg,
+            )
+            .unwrap();
+        let checksum = Pictures::new(cache.join("pictures")).put(&bytes).unwrap();
+        let mut source = ArtistSource {
+            name: Some("Ghost".into()),
+            album_tracks: vec![track],
+            online: false,
+            deezer: Downloaded::Unknown,
+            chosen: Some(Downloaded::Kept(checksum)),
+        };
+        let key = Thumbnails::artist_key(source.name.as_deref());
+        let green = |thumbnails: &mut Thumbnails, source: &ArtistSource| {
+            assert_eq!(thumbnails.get_artist(&key, source), Thumbnail::Pending);
+            wait(thumbnails);
+            let Thumbnail::Ready(file) = thumbnails.get_artist(&key, source) else {
+                panic!("made");
+            };
+            image::open(&file).unwrap().to_rgb8().get_pixel(150, 150).0
+        };
+        let [r, g, _] = green(&mut thumbnails(&cache), &source);
+        assert!(g > 150 && r < 100, "the chosen one, not the folder's");
+
+        // None chosen: their covers, though their folder has a picture.
+        source.chosen = Some(Downloaded::Missing);
+        let [_, _, b] = green(&mut thumbnails(&cache), &source);
+        assert!(b > 150, "the album's blue cover");
+    }
+
+    #[test]
     fn makes_wide_pictures_from_the_artists_folder_or_the_downloaded_one() {
         let (artist, track) = artist_with_album("backdrop-music", [0, 0, 200]);
         let mut source = BackdropSource {
@@ -916,6 +1018,7 @@ mod tests {
             search: true,
             fanart_key: None,
             fanart: Downloaded::Unknown,
+            chosen: None,
         };
         let cache = temp_dir("backdrop-cache");
         let key = Thumbnails::artist_key(source.name.as_deref());

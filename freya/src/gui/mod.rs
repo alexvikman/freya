@@ -12,6 +12,7 @@ mod library;
 mod listening;
 mod native_oscilloscope;
 mod native_spectrum;
+mod picture_finder;
 mod playlists;
 mod radio;
 mod skin_state;

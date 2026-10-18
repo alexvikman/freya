@@ -19,7 +19,7 @@ use crate::cue::Part;
 use crate::tags::TagInfo;
 
 pub use edits::ArtistEdit;
-pub use online::{ASK_AGAIN_AFTER, ArtistText, Asked, PictureKind};
+pub use online::{ASK_AGAIN_AFTER, ArtistText, Asked, CHOSEN, PictureKind, PictureRow};
 pub use rusqlite::Error;
 pub use scan::{ScanEvent, ScanSummary, Scanner, scan};
 

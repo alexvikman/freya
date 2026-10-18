@@ -149,8 +149,22 @@ export struct ArtistDraft {
     /// Their MusicBrainz id, and the one Freya has without it, from the tags or a search.
     mbid: string,
     found-mbid: string,
-    /// Their biography, in place of what Last.fm says.
+    /// Their biography: theirs, in place of what Last.fm says, else Last.fm's, to start
+    /// from. Saved unchanged, Last.fm's stays Last.fm's.
     biography: string,
+    biography-from-lastfm: bool,
+}
+
+/// A picture to choose for an artist: see `Library.portrait-choices`.
+export struct PictureChoice {
+    /// Empty for the choice of none.
+    picture: image,
+    /// Where it is from: "Folder", "Deezer", "fanart.tv", "Your picture"; or what none
+    /// means: "Album covers", "None".
+    source: string,
+    /// "1000 × 1000"; empty for none.
+    size: string,
+    chosen: bool,
 }
 
 /// An artist's own page, over their albums: see `Library.artist-page`.
@@ -325,6 +339,21 @@ export global Library {
     in property <ArtistDraft> artist-draft;
     callback edit-artist();
     callback save-artist(string, string, string, string);
+    /// Leave the artist as they were.
+    callback cancel-artist();
+    /// While the artist is changed: pictures to choose from, square and wide, the first of
+    /// each meaning none; more come while `finding-pictures`. `choose-picture` chooses one of
+    /// a kind, "portrait" or "backdrop", by its index; the choice is kept by `save-artist`.
+    in property <[PictureChoice]> portrait-choices;
+    in property <[PictureChoice]> backdrop-choices;
+    in property <bool> finding-pictures;
+    /// Why the last picture given could not be used; empty when it could.
+    in property <string> picture-error;
+    callback choose-picture(string, int);
+    /// Add a picture of the kind from a file the user picks, or from an address on the web,
+    /// and choose it.
+    callback pick-picture-file(string);
+    callback picture-from-url(string, string);
     /// Change `artist-sort`, `artist-view` or `artist-pictures-online`.
     callback set-artist-sort(string);
     callback set-artist-view(string);

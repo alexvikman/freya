@@ -7,7 +7,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use freya_library::cue::Part;
 use freya_library::library::{
-    Album, Artist, ArtistEdit, ArtistOrder, Genre, PictureKind, Played, ScanEvent, Scanner, Track,
+    Album, Artist, ArtistEdit, ArtistOrder, CHOSEN, Genre, PictureKind, PictureRow, Played,
+    ScanEvent, Scanner, Track,
 };
 use freya_library::pictures::Pictures;
 use freya_library::thumbnails::{
@@ -18,6 +19,7 @@ use slint::{Image, ModelRc, VecModel};
 use slint_interpreter::{Struct, Value};
 
 use super::artist_info::ArtistInfos;
+use super::picture_finder::{Found, Pick, PictureFinder, Request};
 use super::skin_state::{ModelRows, format_time, string};
 use super::skin_window::SkinWindow;
 
@@ -234,8 +236,21 @@ pub struct LibraryPanel {
     online_bios: bool,
     /// What the user changed about artists, by the tags' name for them.
     edits: HashMap<String, ArtistEdit>,
-    /// While the user changes an artist: who, by the tags' name.
+    /// While the user changes an artist: who, by the tags' name, and what Last.fm says of
+    /// them, which their biography starts from.
     draft: Option<Option<String>>,
+    lastfm_biography: String,
+    /// And the pictures they can choose from, what was chosen when they began, and what is
+    /// chosen now.
+    finder: PictureFinder,
+    choices: Vec<Choice>,
+    /// What none looks like: their album covers, for a square picture.
+    none_shown: HashMap<PictureKind, Image>,
+    picked_before: HashMap<PictureKind, Pick>,
+    picked: HashMap<PictureKind, Pick>,
+    picture_error: String,
+    portrait_rows: ModelRows,
+    backdrop_rows: ModelRows,
     /// The user's personal fanart.tv key, for wide pictures of artists.
     fanart_key: Option<String>,
     popular_rows: ModelRows,
@@ -271,6 +286,26 @@ struct ArtistPage {
     /// Their most played tracks, and whether all ten show rather than five.
     popular: Vec<Played>,
     more: bool,
+}
+
+/// A picture the user can choose for an artist.
+struct Choice {
+    kind: PictureKind,
+    pick: Pick,
+    source: String,
+    size: String,
+    image: Image,
+    /// Where it goes among those found.
+    order: usize,
+}
+
+/// A kind of picture by its name in the skin API.
+fn picture_kind(name: &str) -> Option<PictureKind> {
+    match name {
+        "portrait" => Some(PictureKind::Portrait),
+        "backdrop" => Some(PictureKind::Backdrop),
+        _ => None,
+    }
 }
 
 /// A folder as the scan shows it: its parent and its own name, "Peter Gabriel / So", which is
@@ -355,6 +390,11 @@ impl RecentCovers {
         Some(image)
     }
 
+    fn remove(&mut self, key: &str) {
+        self.order.retain(|k| k != key);
+        self.images.remove(key);
+    }
+
     fn put(&mut self, key: &str, image: Image) {
         if self.order.len() >= RECENT_COVERS
             && let Some(oldest) = self.order.pop_front()
@@ -387,7 +427,7 @@ impl LibraryPanel {
             folders_shown: None,
             draft_shown: None,
             thumbnails: covers
-                .zip(pictures)
+                .zip(pictures.clone())
                 .map(|(covers, pictures)| Thumbnails::new(covers, Pictures::new(pictures))),
             fetched: Vec::new(),
             cover_tracks: HashMap::new(),
@@ -413,6 +453,15 @@ impl LibraryPanel {
             artist_infos: ArtistInfos::new(),
             edits: HashMap::new(),
             draft: None,
+            lastfm_biography: String::new(),
+            finder: PictureFinder::new(pictures.clone().map(Pictures::new)),
+            choices: Vec::new(),
+            none_shown: HashMap::new(),
+            picked_before: HashMap::new(),
+            picked: HashMap::new(),
+            picture_error: String::new(),
+            portrait_rows: ModelRows::new(),
+            backdrop_rows: ModelRows::new(),
             online_bios: true,
             fanart_key: None,
             popular_rows: ModelRows::new(),
@@ -427,6 +476,16 @@ impl LibraryPanel {
     pub fn attach(&mut self, ui: &SkinWindow, folders: &[PathBuf], scan: bool) {
         let _ = ui.set_global_property("Library", "rows", self.rows.model_value());
         let _ = ui.set_global_property("Library", "popular", self.popular_rows.model_value());
+        let _ = ui.set_global_property(
+            "Library",
+            "portrait-choices",
+            self.portrait_rows.model_value(),
+        );
+        let _ = ui.set_global_property(
+            "Library",
+            "backdrop-choices",
+            self.backdrop_rows.model_value(),
+        );
         self.folders_shown = None;
         self.draft_shown = None;
         if self.db.is_some() {
@@ -515,6 +574,18 @@ impl LibraryPanel {
             self.covers_ready += 1;
             self.color_album_page();
             self.show_artist_picture();
+        }
+        if self.draft.is_some() {
+            let (found, failed) = self.finder.poll();
+            if let Some(failed) = failed {
+                self.picture_error = failed;
+            }
+            if !found.is_empty() {
+                for found in found {
+                    self.add_choice(found);
+                }
+                self.show_choices();
+            }
         }
         if self.artist_infos.poll() {
             if !self.scanning {
@@ -660,10 +731,12 @@ impl LibraryPanel {
             _ => None,
         });
         let kept = || {
-            let asked = self.db.as_ref()?.artist_picture(artist, kind).ok()??;
-            match asked.answer {
+            let row = self.db.as_ref()?.artist_picture(artist, kind).ok()??;
+            match row.picture {
+                // The user chose one, or none: the internet is not asked.
+                _ if row.chosen() => Some(None),
                 Some(checksum) => Some(Some(checksum)),
-                None if asked.recent() => Some(None),
+                None if row.recent() => Some(None),
                 None => None,
             }
         };
@@ -672,6 +745,18 @@ impl LibraryPanel {
             Some(None) => Downloaded::Missing,
             None => Downloaded::Unknown,
         }
+    }
+
+    /// The picture the user chose for the artist, or that they chose none.
+    fn chosen(&self, artist: Option<&str>, kind: PictureKind) -> Option<Downloaded> {
+        let row = self.db.as_ref()?.artist_picture(artist?, kind).ok()??;
+        if !row.chosen() {
+            return None;
+        }
+        Some(match row.picture {
+            Some(checksum) => Downloaded::Kept(checksum),
+            None => Downloaded::Missing,
+        })
     }
 
     /// Where the wide picture of the artist on the page can come from, as the library knows it
@@ -690,6 +775,7 @@ impl LibraryPanel {
             search,
             fanart_key: self.fanart_key.clone(),
             fanart: self.downloaded(name, PictureKind::Backdrop),
+            chosen: self.chosen(name, PictureKind::Backdrop),
         }
     }
 
@@ -1154,6 +1240,257 @@ impl LibraryPanel {
     /// Starts changing the artist whose page is shown: the form gets what was changed before.
     pub fn edit_artist(&mut self) {
         self.draft = self.artist_page.as_ref().map(|page| page.name.clone());
+        let name = self.draft.clone().flatten();
+        self.lastfm_biography = name
+            .and_then(|name| {
+                let info = self.artist_infos.get(&name, false, self.db.as_ref())?;
+                Some(info.biography.clone())
+            })
+            .unwrap_or_default();
+        self.choices.clear();
+        self.none_shown.clear();
+        self.picked.clear();
+        self.picked_before.clear();
+        self.picture_error.clear();
+        self.finder.stop();
+        if let Some(page) = &self.artist_page
+            && let Some(name) = page.name.clone()
+        {
+            let (request, picked) = self.picture_request(page, &name);
+            self.picked_before.clone_from(&picked);
+            self.picked = picked;
+            self.finder.find(request);
+        }
+        self.show_choices();
+    }
+
+    /// What to look for to choose an artist's pictures from, and what is chosen now.
+    fn picture_request(
+        &self,
+        page: &ArtistPage,
+        name: &str,
+    ) -> (Request, HashMap<PictureKind, Pick>) {
+        let mut picked = HashMap::new();
+        let mut folder = Vec::new();
+        if let Some(file) = freya_library::artist_image::local(&page.album_tracks) {
+            folder.push((PictureKind::Portrait, file));
+        }
+        if let Some(file) = freya_library::artist_image::local_backdrop(&page.album_tracks) {
+            folder.push((PictureKind::Backdrop, file));
+        }
+        let mut kept = Vec::new();
+        for kind in [PictureKind::Portrait, PictureKind::Backdrop] {
+            let row = self
+                .db
+                .as_ref()
+                .and_then(|db| db.artist_picture(name, kind).ok().flatten());
+            let in_folder = folder.iter().any(|(k, _)| *k == kind);
+            // As the pictures are made: the user's choice, else the folder's, else the
+            // internet's.
+            let pick = match &row {
+                Some(row) if row.chosen() => match &row.picture {
+                    Some(checksum) => Pick::Kept(checksum.clone()),
+                    None => Pick::Nothing,
+                },
+                _ if in_folder => Pick::Folder,
+                Some(PictureRow {
+                    picture: Some(checksum),
+                    ..
+                }) => Pick::Kept(checksum.clone()),
+                _ => Pick::Nothing,
+            };
+            if let Some(PictureRow {
+                picture: Some(checksum),
+                source,
+                ..
+            }) = row
+            {
+                let source = match source.as_str() {
+                    "deezer" => "Deezer",
+                    "fanart.tv" => "fanart.tv",
+                    _ => "Chosen before",
+                };
+                kept.push((kind, checksum, source.to_owned()));
+            }
+            picked.insert(kind, pick);
+        }
+        let backdrop = self.backdrop_source(page);
+        let request = Request {
+            name: name.to_owned(),
+            deezer: self.online_pictures,
+            mbid: backdrop.mbid,
+            search: backdrop.search,
+            fanart_key: self.fanart_key.clone(),
+            folder,
+            kept,
+            album_tracks: page.album_tracks.clone(),
+        };
+        (request, picked)
+    }
+
+    /// Leaves the artist being changed as they were.
+    pub fn cancel_artist(&mut self) {
+        self.draft = None;
+        self.finder.stop();
+        self.choices.clear();
+        self.show_choices();
+    }
+
+    /// Chooses the `index`th picture of `kind` ("portrait" or "backdrop"); the first is none.
+    pub fn choose_picture(&mut self, kind: &str, index: usize) {
+        let Some(kind) = picture_kind(kind) else {
+            return;
+        };
+        let pick = match index {
+            0 => Some(Pick::Nothing),
+            i => self
+                .choices
+                .iter()
+                .filter(|c| c.kind == kind)
+                .nth(i - 1)
+                .map(|c| c.pick.clone()),
+        };
+        if let Some(pick) = pick {
+            self.picked.insert(kind, pick);
+            self.show_choices();
+        }
+    }
+
+    /// Adds the picture in `file` as one of `kind` to choose, and chooses it.
+    pub fn add_picture_file(&mut self, kind: &str, file: &Path) {
+        let Some(kind) = picture_kind(kind) else {
+            return;
+        };
+        let added = std::fs::read(file)
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| self.finder.add(kind, &bytes));
+        match added {
+            Ok(found) => {
+                self.picture_error.clear();
+                self.add_choice(found);
+            }
+            Err(e) => self.picture_error = format!("Could not use that file: {e}"),
+        }
+        self.show_choices();
+    }
+
+    /// Downloads the picture at `url` as one of `kind` to choose; it is chosen when it comes.
+    pub fn picture_from_url(&mut self, kind: &str, url: &str) {
+        let (Some(kind), url) = (picture_kind(kind), url.trim()) else {
+            return;
+        };
+        if !(url.starts_with("https://") || url.starts_with("http://")) {
+            self.picture_error = "An address starts with https://".to_owned();
+            return;
+        }
+        self.picture_error.clear();
+        self.finder.download(kind, url.to_owned());
+    }
+
+    fn add_choice(&mut self, found: Found) {
+        if found.choose {
+            self.picked.insert(found.kind, found.pick.clone());
+        }
+        if found.pick == Pick::Nothing {
+            self.none_shown
+                .insert(found.kind, Image::from_rgba8(found.preview));
+            return;
+        }
+        // The same picture once, as it was found first.
+        if self
+            .choices
+            .iter()
+            .any(|c| c.kind == found.kind && c.pick == found.pick)
+        {
+            return;
+        }
+        let at = self.choices.partition_point(|c| c.order <= found.order);
+        self.choices.insert(
+            at,
+            Choice {
+                kind: found.kind,
+                pick: found.pick,
+                source: found.source,
+                size: format!("{} × {}", found.width, found.height),
+                image: Image::from_rgba8(found.preview),
+                order: found.order,
+            },
+        );
+    }
+
+    /// Gives the skin the pictures to choose from.
+    fn show_choices(&mut self) {
+        let rows = |kind: PictureKind| -> Vec<Value> {
+            let picked = self.picked.get(&kind);
+            let row = |image: Image, source: &str, size: &str, chosen: bool| {
+                Value::Struct(Struct::from_iter([
+                    ("picture".to_owned(), Value::Image(image)),
+                    ("source".to_owned(), string(source)),
+                    ("size".to_owned(), string(size)),
+                    ("chosen".to_owned(), Value::Bool(chosen)),
+                ]))
+            };
+            if self.draft.is_none() {
+                return Vec::new();
+            }
+            // None, shown as what it means: their album covers, when there are any.
+            let none = self.none_shown.get(&kind).cloned();
+            let label = if none.is_some() {
+                "Album covers"
+            } else {
+                "None"
+            };
+            std::iter::once(row(
+                none.unwrap_or_default(),
+                label,
+                "",
+                picked == Some(&Pick::Nothing),
+            ))
+            .chain(
+                self.choices
+                    .iter()
+                    .filter(|c| c.kind == kind)
+                    .map(|c| row(c.image.clone(), &c.source, &c.size, picked == Some(&c.pick))),
+            )
+            .collect()
+        };
+        let portraits = rows(PictureKind::Portrait);
+        let backdrops = rows(PictureKind::Backdrop);
+        self.portrait_rows.sync(portraits);
+        self.backdrop_rows.sync(backdrops);
+    }
+
+    /// Keeps the pictures the user chose for `artist`. Returns whether any changed.
+    fn keep_picked(&mut self, artist: &str) -> bool {
+        let Some(db) = &self.db else {
+            return false;
+        };
+        let mut changed = false;
+        for kind in [PictureKind::Portrait, PictureKind::Backdrop] {
+            let (Some(picked), Some(before)) =
+                (self.picked.get(&kind), self.picked_before.get(&kind))
+            else {
+                continue;
+            };
+            if picked == before {
+                continue;
+            }
+            let kept = match picked {
+                // No choice of theirs: the folder's comes first then.
+                Pick::Folder => db.forget_artist_picture(artist, kind),
+                Pick::Nothing => {
+                    db.set_artist_picture(artist, kind, CHOSEN, None, SystemTime::now())
+                }
+                Pick::Kept(checksum) => {
+                    db.set_artist_picture(artist, kind, CHOSEN, Some(checksum), SystemTime::now())
+                }
+            };
+            match kept {
+                Ok(()) => changed = true,
+                Err(e) => log::warn!("could not keep the picture chosen for {artist}: {e}"),
+            }
+        }
+        changed
     }
 
     /// The form for changing an artist, as `artist-draft` gives it.
@@ -1170,13 +1507,20 @@ impl LibraryPanel {
         // Without the user's: the tags', else what MusicBrainz's search found.
         let found_mbid = self.found_mbid(artist.as_deref()).0.unwrap_or_default();
         let text = |value: Option<String>| string(value.unwrap_or_default());
+        // Theirs, else Last.fm's to start from.
+        let from_lastfm = edit.biography.is_none() && !self.lastfm_biography.is_empty();
+        let biography = edit
+            .biography
+            .clone()
+            .unwrap_or_else(|| self.lastfm_biography.clone());
         Value::Struct(Struct::from_iter([
             ("artist".to_owned(), text(artist)),
             ("name".to_owned(), text(edit.name)),
             ("sort-name".to_owned(), text(edit.sort_name)),
             ("mbid".to_owned(), text(edit.mbid)),
             ("found-mbid".to_owned(), string(found_mbid)),
-            ("biography".to_owned(), text(edit.biography)),
+            ("biography".to_owned(), string(biography)),
+            ("biography-from-lastfm".to_owned(), Value::Bool(from_lastfm)),
         ]))
     }
 
@@ -1187,11 +1531,30 @@ impl LibraryPanel {
             return;
         };
         let before = self.edits.get(&artist).cloned().unwrap_or_default();
-        if let Err(e) = db.set_artist_edit(&artist, edit) {
+        // Last.fm's, saved unchanged, stays Last.fm's: it is not the user's own.
+        let mut edit = edit.clone();
+        if edit.biography.as_deref().map(str::trim) == Some(self.lastfm_biography.trim()) {
+            edit.biography = None;
+        }
+        if let Err(e) = db.set_artist_edit(&artist, &edit) {
             log::warn!("could not keep what was changed about {artist}: {e}");
             return;
         }
         let kept = db.artist_edit(&artist).unwrap_or_default();
+        self.finder.stop();
+        if self.keep_picked(&artist) {
+            let key = Thumbnails::artist_key(Some(&artist));
+            if let Some(thumbnails) = &mut self.thumbnails {
+                thumbnails.forget_artist(&key);
+            }
+            self.recent_covers.remove(&key);
+            self.covers_ready += 1;
+        }
+        self.choices.clear();
+        self.show_choices();
+        let Some(db) = &self.db else {
+            return;
+        };
         if kept.mbid != before.mbid {
             if let Err(e) = db.forget_artist_picture(&artist, PictureKind::Backdrop) {
                 log::warn!("could not forget the wide picture of {artist}: {e}");
@@ -1562,6 +1925,7 @@ impl LibraryPanel {
                     album_tracks,
                     online: self.online_pictures,
                     deezer: self.downloaded(name.as_deref(), PictureKind::Portrait),
+                    chosen: self.chosen(name.as_deref(), PictureKind::Portrait),
                 };
                 match &mut self.thumbnails {
                     Some(thumbnails) => thumbnails.get_artist(key, &source),
@@ -1650,6 +2014,8 @@ impl LibraryPanel {
                 string(self.fanart_key.clone().unwrap_or_default()),
             ),
             ("artist-draft", self.draft_value()),
+            ("finding-pictures", Value::Bool(self.finder.searching())),
+            ("picture-error", string(&self.picture_error)),
             (
                 "artist-options",
                 Value::Bool(!self.searching() && *self.level() == Level::Artists),
@@ -2206,6 +2572,104 @@ mod tests {
         );
         let page = panel.artist_page.as_ref().unwrap();
         assert_eq!(panel.backdrop_source(page).mbid.as_deref(), Some("own-id"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn chooses_and_keeps_an_artists_pictures() {
+        let dir = std::env::temp_dir().join(format!("freya-choose-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let album = dir.join("music").join("Freya").join("Sines");
+        std::fs::create_dir_all(&album).unwrap();
+        let fixtures =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-audio/tests/fixtures");
+        std::fs::copy(fixtures.join("sine.mp3"), album.join("sine.mp3")).unwrap();
+        image::RgbImage::from_pixel(1920, 1080, image::Rgb([0, 0, 200]))
+            .save(dir.join("music").join("Freya").join("fanart.jpg"))
+            .unwrap();
+        let mut db = Library::open_in_memory().unwrap();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        freya_library::library::scan(&mut db, &[dir.join("music")], &cancel, |_| {}).unwrap();
+        let mut panel = LibraryPanel::new(None, None, Some(dir.join("pictures")));
+        panel.db = Some(db);
+        panel.online_pictures = false;
+        panel.online_bios = false;
+        panel.opened = vec![
+            Level::Artists,
+            Level::ArtistAlbums {
+                artist: Some("Freya".into()),
+            },
+        ];
+        panel.reload();
+
+        let finish = |panel: &mut LibraryPanel| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while panel.finder.searching() {
+                assert!(Instant::now() < deadline, "the pictures were not found");
+                panel.poll();
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        panel.edit_artist();
+        finish(&mut panel);
+        // The folder's wide picture, chosen as Freya takes it first; none square.
+        assert_eq!(panel.picked[&PictureKind::Backdrop], Pick::Folder);
+        assert_eq!(panel.picked[&PictureKind::Portrait], Pick::Nothing);
+        let chosen = |rows: &ModelRows| -> Vec<bool> {
+            let Value::Model(model) = rows.model_value() else {
+                panic!("a model");
+            };
+            (0..slint::Model::row_count(&model))
+                .map(|i| match slint::Model::row_data(&model, i) {
+                    Some(Value::Struct(row)) => row.get_field("chosen") == Some(&Value::Bool(true)),
+                    _ => false,
+                })
+                .collect()
+        };
+        assert_eq!(
+            chosen(&panel.backdrop_rows),
+            [false, true],
+            "None, then the folder's"
+        );
+
+        // None wide, and a picture of the user's own square.
+        panel.choose_picture("backdrop", 0);
+        let own = dir.join("own.png");
+        image::RgbImage::from_pixel(500, 500, image::Rgb([0, 200, 0]))
+            .save(&own)
+            .unwrap();
+        panel.add_picture_file("portrait", &own);
+        assert!(matches!(
+            panel.picked[&PictureKind::Portrait],
+            Pick::Kept(_)
+        ));
+        assert_eq!(chosen(&panel.portrait_rows), [false, true]);
+        panel.save_artist(&ArtistEdit::default());
+
+        let db = panel.db.as_ref().unwrap();
+        let wide = db
+            .artist_picture("Freya", PictureKind::Backdrop)
+            .unwrap()
+            .unwrap();
+        assert!(wide.chosen() && wide.picture.is_none());
+        let square = db
+            .artist_picture("Freya", PictureKind::Portrait)
+            .unwrap()
+            .unwrap();
+        assert!(square.chosen() && square.picture.is_some());
+        assert!(panel.choices.is_empty(), "the dialog is done");
+
+        // The folder's again: no choice of the user's.
+        panel.edit_artist();
+        finish(&mut panel);
+        assert_eq!(panel.picked[&PictureKind::Backdrop], Pick::Nothing);
+        panel.choose_picture("backdrop", 1);
+        panel.save_artist(&ArtistEdit::default());
+        let db = panel.db.as_ref().unwrap();
+        assert_eq!(
+            db.artist_picture("Freya", PictureKind::Backdrop).unwrap(),
+            None
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

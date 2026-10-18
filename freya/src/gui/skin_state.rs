@@ -93,7 +93,7 @@ impl ModelRows {
     pub fn sync(&mut self, rows: Vec<Value>) {
         if rows.len() == self.shown.len() {
             for (i, (new, old)) in rows.iter().zip(&self.shown).enumerate() {
-                if new != old {
+                if !same(new, old) {
                     self.model.set_row_data(i, new.clone());
                 }
             }

@@ -338,6 +338,50 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     );
     bind(
         "Library",
+        "cancel-artist",
+        Box::new(|app, _| app.library.cancel_artist()),
+    );
+    bind(
+        "Library",
+        "choose-picture",
+        Box::new(|app, args| {
+            if let (Some(Value::String(kind)), Some(Value::Number(index))) =
+                (args.first(), args.get(1))
+            {
+                app.library.choose_picture(kind, *index as usize);
+            }
+        }),
+    );
+    bind(
+        "Library",
+        "picture-from-url",
+        Box::new(|app, args| {
+            if let (Some(Value::String(kind)), Some(Value::String(url))) =
+                (args.first(), args.get(1))
+            {
+                app.library.picture_from_url(kind, url);
+            }
+        }),
+    );
+    // The file is picked before the app is borrowed: the dialog runs the event loop.
+    {
+        let app = weak.clone();
+        let _ = ui.set_global_callback("Library", "pick-picture-file", move |args| {
+            let Some(Value::String(kind)) = args.first() else {
+                return Value::Void;
+            };
+            if let Some(file) = pick_picture()
+                && let Some(app) = app.upgrade()
+                && let Ok(mut app) = app.try_borrow_mut()
+            {
+                app.library.add_picture_file(kind, &file);
+                app.refresh();
+            }
+            Value::Void
+        });
+    }
+    bind(
+        "Library",
         "save-artist",
         Box::new(|app, args| {
             let text = |i: usize| match args.get(i) {
@@ -848,6 +892,13 @@ fn pick_eqf() -> Option<Vec<PathBuf>> {
         .add_filter("Winamp EQ presets", &["eqf"])
         .pick_file()
         .map(|p| vec![p])
+}
+
+fn pick_picture() -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .set_title("Choose a picture")
+        .add_filter("Pictures", &["jpg", "jpeg", "png"])
+        .pick_file()
 }
 
 fn save_eqf_target() -> Option<Vec<PathBuf>> {

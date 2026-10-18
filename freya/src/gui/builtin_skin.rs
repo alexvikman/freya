@@ -307,6 +307,27 @@ impl Convert for LibraryRow {
     }
 }
 
+impl Convert for PictureChoice {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            picture: field(&s, "picture"),
+            source: field(&s, "source"),
+            size: field(&s, "size"),
+            chosen: field(&s, "chosen"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("picture", self.picture.to_value()),
+            ("source", self.source.to_value()),
+            ("size", self.size.to_value()),
+            ("chosen", self.chosen.to_value()),
+        ])
+    }
+}
+
 impl Convert for ArtistDraft {
     fn from_value(value: Value) -> Option<Self> {
         let Value::Struct(s) = value else { return None };
@@ -317,6 +338,7 @@ impl Convert for ArtistDraft {
             mbid: field(&s, "mbid"),
             found_mbid: field(&s, "found-mbid"),
             biography: field(&s, "biography"),
+            biography_from_lastfm: field(&s, "biography-from-lastfm"),
         })
     }
 
@@ -328,6 +350,10 @@ impl Convert for ArtistDraft {
             ("mbid", self.mbid.to_value()),
             ("found-mbid", self.found_mbid.to_value()),
             ("biography", self.biography.to_value()),
+            (
+                "biography-from-lastfm",
+                self.biography_from_lastfm.to_value(),
+            ),
         ])
     }
 }
@@ -631,6 +657,10 @@ skin_api! {
         Library."artist-bios-online" => set_artist_bios_online, get_artist_bios_online;
         Library."fanart-key" => set_fanart_key, get_fanart_key;
         Library."artist-draft" => set_artist_draft, get_artist_draft;
+        Library."portrait-choices" => set_portrait_choices, get_portrait_choices;
+        Library."backdrop-choices" => set_backdrop_choices, get_backdrop_choices;
+        Library."finding-pictures" => set_finding_pictures, get_finding_pictures;
+        Library."picture-error" => set_picture_error, get_picture_error;
         Library."artist-sort" => set_artist_sort, get_artist_sort;
         Library."artist-view" => set_artist_view, get_artist_view;
         Library."artist-pictures-online" => set_artist_pictures_online, get_artist_pictures_online;
@@ -748,6 +778,10 @@ skin_api! {
         Library."set-fanart-key" => on_set_fanart_key, invoke_set_fanart_key(key: SharedString);
         Library."edit-artist" => on_edit_artist, invoke_edit_artist();
         Library."save-artist" => on_save_artist, invoke_save_artist(name: SharedString, sort_name: SharedString, mbid: SharedString, biography: SharedString);
+        Library."cancel-artist" => on_cancel_artist, invoke_cancel_artist();
+        Library."choose-picture" => on_choose_picture, invoke_choose_picture(kind: SharedString, index: i32);
+        Library."pick-picture-file" => on_pick_picture_file, invoke_pick_picture_file(kind: SharedString);
+        Library."picture-from-url" => on_picture_from_url, invoke_picture_from_url(kind: SharedString, url: SharedString);
         Library."set-artist-sort" => on_set_artist_sort, invoke_set_artist_sort(sort: SharedString);
         Library."set-artist-view" => on_set_artist_view, invoke_set_artist_view(view: SharedString);
         Library."set-artist-pictures-online" => on_set_artist_pictures_online, invoke_set_artist_pictures_online(online: bool);
