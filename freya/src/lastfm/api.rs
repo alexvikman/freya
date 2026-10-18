@@ -49,7 +49,7 @@ pub struct Scrobble {
 
 /// What Last.fm says of an artist, in plain text: a short biography, the whole one, the tags
 /// listeners gave them, and their page. Empty for an artist Last.fm does not know.
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ArtistInfo {
     pub summary: String,
     pub biography: String,

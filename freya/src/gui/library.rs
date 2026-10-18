@@ -336,11 +336,6 @@ impl LibraryPanel {
     /// A library kept at `path`, with album covers made in `covers` and the pictures of
     /// artists downloaded kept in `pictures`.
     pub fn new(path: Option<PathBuf>, covers: Option<PathBuf>, pictures: Option<PathBuf>) -> Self {
-        // What Last.fm says of artists is kept beside the covers.
-        let artists = covers
-            .as_ref()
-            .and_then(|c| c.parent())
-            .map(|dir| dir.join("artists"));
         Self {
             path,
             db: None,
@@ -377,7 +372,7 @@ impl LibraryPanel {
             online_pictures: true,
             artist_keys: HashMap::new(),
             artist_page: None,
-            artist_infos: ArtistInfos::new(artists),
+            artist_infos: ArtistInfos::new(),
             online_bios: true,
             fanart_key: None,
             popular_rows: ModelRows::new(),
@@ -442,6 +437,9 @@ impl LibraryPanel {
             self.show_artist_picture();
         }
         if self.artist_infos.poll() {
+            if !self.scanning {
+                self.write_fetched();
+            }
             self.show_artist_info();
         }
         // Asked before the events are read: a scan that had ended by then has sent them all.
@@ -518,6 +516,7 @@ impl LibraryPanel {
         let Some(db) = &self.db else {
             return;
         };
+        self.artist_infos.save(db);
         let now = SystemTime::now();
         for fetched in self.fetched.drain(..) {
             let written = match &fetched {
@@ -891,7 +890,10 @@ impl LibraryPanel {
         let Some(name) = page.name.as_deref() else {
             return;
         };
-        if let Some(info) = self.artist_infos.get(name, self.online_bios) {
+        if let Some(info) = self
+            .artist_infos
+            .get(name, self.online_bios, self.db.as_ref())
+        {
             page.summary.clone_from(&info.summary);
             page.biography.clone_from(&info.biography);
             page.tags = info
