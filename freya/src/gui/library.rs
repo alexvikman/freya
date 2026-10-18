@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant, SystemTime};
 
 use freya_library::cue::Part;
@@ -254,6 +255,8 @@ pub struct LibraryPanel {
     /// While an artist's albums are shown, the page over them; and whether a scan may ask
     /// Last.fm and Wikipedia what they say of artists.
     artist_page: Option<ArtistPage>,
+    /// The artist page's pictures a thread made, by the page's picture's key.
+    page_pictures: (Sender<MadePage>, Receiver<MadePage>),
     online_bios: bool,
     online_wikipedia: bool,
     /// What the user changed about artists, by the tags' name for them.
@@ -318,6 +321,8 @@ struct ArtistPage {
     portrait_large: bool,
     /// Their picture large, uncut.
     picture_full: Option<Image>,
+    /// The files of their pictures a thread was last asked to make for the page.
+    asked: Option<PageFiles>,
     color: Option<[u8; 3]>,
     summary: String,
     biography: String,
@@ -390,11 +395,10 @@ fn folder_name(folder: &Path) -> String {
 /// The size of an artist's round picture: sharp at 232 points on a Retina screen.
 const ROUND_PICTURE: u32 = 480;
 
-/// The picture in `file`, square and cut round with a soft edge, for a skin to show as is:
-/// Slint's software renderer clips to rectangles only.
-fn round_picture(file: &Path) -> Option<Image> {
-    let square = image::open(file)
-        .ok()?
+/// The picture `picture`, square and cut round with a soft edge, premultiplied, for a skin to
+/// show as is: Slint's software renderer clips to rectangles only.
+fn round_picture(picture: &image::DynamicImage) -> slint::SharedPixelBuffer<slint::Rgba8Pixel> {
+    let square = picture
         .resize_to_fill(
             ROUND_PICTURE,
             ROUND_PICTURE,
@@ -419,7 +423,65 @@ fn round_picture(file: &Path) -> Option<Image> {
             (alpha * 255.0).round() as u8,
         );
     }
-    Some(Image::from_rgba8_premultiplied(pixels))
+    pixels
+}
+
+/// The files an artist's page shows: their wide picture, and their picture with whether it
+/// is the large one.
+type PageFiles = (Option<PathBuf>, Option<(PathBuf, bool)>);
+
+/// An artist's pictures as their page shows them, made on a thread: decoding them on the
+/// window's thread held up the page as it opened.
+#[derive(Default)]
+struct PagePictures {
+    /// Their wide picture, and its color.
+    banner: Option<(slint::SharedPixelBuffer<slint::Rgb8Pixel>, Option<[u8; 3]>)>,
+    portrait: Option<PagePortrait>,
+}
+
+/// An artist's picture as their page shows it.
+struct PagePortrait {
+    /// Cut round.
+    round: slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+    /// Whether it is their picture large, rather than the grid's; and then uncut.
+    large: bool,
+    full: Option<slint::SharedPixelBuffer<slint::Rgb8Pixel>>,
+    color: [u8; 3],
+}
+
+/// An artist page's pictures made, by the page's picture's key.
+type MadePage = (String, PagePictures);
+
+impl PagePictures {
+    fn make((banner, portrait): &PageFiles) -> Self {
+        let color = |picture: &image::DynamicImage| {
+            freya_library::cover::page_color(picture.thumbnail(64, 64).to_rgb8().as_raw())
+        };
+        let rgb = |picture: &image::DynamicImage| {
+            let rgb = picture.to_rgb8();
+            slint::SharedPixelBuffer::clone_from_slice(rgb.as_raw(), rgb.width(), rgb.height())
+        };
+        let open = |file: &Path| {
+            image::open(file)
+                .map_err(|e| log::debug!("could not read {}: {e}", file.display()))
+                .ok()
+        };
+        Self {
+            banner: banner
+                .as_deref()
+                .and_then(open)
+                .map(|picture| (rgb(&picture), Some(color(&picture)))),
+            portrait: portrait.as_ref().and_then(|(file, large)| {
+                let picture = open(file)?;
+                Some(PagePortrait {
+                    round: round_picture(&picture),
+                    large: *large,
+                    full: large.then(|| rgb(&picture)),
+                    color: color(&picture),
+                })
+            }),
+        }
+    }
 }
 
 /// Popular tracks shown on an artist's page, or all of them with "more".
@@ -526,6 +588,7 @@ impl LibraryPanel {
             online_pictures: true,
             artist_keys: HashMap::new(),
             artist_page: None,
+            page_pictures: std::sync::mpsc::channel(),
             online_wikipedia: true,
             edits: HashMap::new(),
             draft: None,
@@ -702,6 +765,7 @@ impl LibraryPanel {
         if self.decode_covers() {
             self.covers_ready += 1;
         }
+        self.take_page_pictures();
         if let Some(thumbnails) = &mut self.thumbnails
             && thumbnails.poll()
         {
@@ -1148,6 +1212,7 @@ impl LibraryPanel {
             portrait: None,
             portrait_large: false,
             picture_full: None,
+            asked: None,
             color: None,
             summary: String::new(),
             biography: String::new(),
@@ -1179,49 +1244,55 @@ impl LibraryPanel {
         let Some(thumbnails) = &mut self.thumbnails else {
             return;
         };
-        let color_of = |file: &Path| {
-            image::open(file)
-                .ok()
-                .map(|i| freya_library::cover::page_color(i.thumbnail(64, 64).to_rgb8().as_raw()))
-        };
         let banner = match needs_banner.then(|| thumbnails.get_backdrop(&key, backdrop.as_deref()))
         {
-            Some(Thumbnail::Ready(file)) => Image::load_from_path(&file)
-                .ok()
-                .map(|image| (image, color_of(&file))),
+            Some(Thumbnail::Ready(file)) => Some(file),
             _ => None,
         };
-        let portrait_file = thumbnails.artist_portrait(&key);
         // Their picture large, else the grid's while it is made, or of a collage.
-        let portrait = match (&portrait_file, needs_portrait) {
-            (Some(file), true) => round_picture(file).map(|image| (image, true)),
-            (None, true) => thumbnails
-                .ready(&key)
-                .and_then(round_picture)
-                .map(|image| (image, false)),
-            _ => None,
+        let portrait = match thumbnails.artist_portrait(&key) {
+            _ if !needs_portrait => None,
+            Some(file) => Some((file, true)),
+            None => thumbnails.ready(&key).map(|file| (file.to_owned(), false)),
         };
+        let files = (banner, portrait);
         let Some(page) = &mut self.artist_page else {
             return;
         };
-        if let Some((image, color)) = banner {
-            page.banner = Some(image);
-            page.color = color.or(page.color);
+        if files == (None, None) || page.asked.as_ref() == Some(&files) {
+            return;
         }
-        if let Some((image, large)) = portrait {
-            page.portrait = Some(image);
-            page.portrait_large = large;
-            page.picture_full = portrait_file
-                .as_deref()
-                .filter(|_| large)
-                .and_then(|file| Image::load_from_path(file).ok());
+        page.asked = Some(files.clone());
+        let made = self.page_pictures.0.clone();
+        let started = std::thread::Builder::new()
+            .name("freya-artist-page".into())
+            .spawn(move || {
+                let _ = made.send((key, PagePictures::make(&files)));
+            });
+        if let Err(e) = started {
+            log::warn!("could not make the artist page's pictures: {e}");
         }
-        if page.color.is_none() {
-            // Without a wide picture: the color of their picture, or of what the grid shows.
-            page.color = match portrait_file {
-                Some(file) => color_of(&file),
-                None => thumbnails.ready(&key).and_then(color_of),
+    }
+
+    /// Shows the page's pictures a thread made, if they are of the artist shown still.
+    fn take_page_pictures(&mut self) {
+        while let Ok((key, made)) = self.page_pictures.1.try_recv() {
+            let Some(page) = self.artist_page.as_mut().filter(|page| page.picture == key) else {
+                continue;
             };
+            if let Some((banner, color)) = made.banner {
+                page.banner = Some(Image::from_rgb8(banner));
+                page.color = color.or(page.color);
+            }
+            if let Some(portrait) = made.portrait {
+                page.portrait = Some(Image::from_rgba8_premultiplied(portrait.round));
+                page.portrait_large = portrait.large;
+                page.picture_full = portrait.full.map(Image::from_rgb8);
+                // Without a wide picture: the color of their picture.
+                if page.banner.is_none() {
+                    page.color = Some(portrait.color);
+                }
+            }
         }
     }
 
@@ -2571,6 +2642,7 @@ impl LibraryPanel {
                 page.banner = None;
                 page.portrait_large = false;
                 page.color = None;
+                page.asked = None;
             }
         }
         self.covers_ready += 1;
