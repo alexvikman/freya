@@ -30,6 +30,7 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
                 && let Ok(mut app) = app.try_borrow_mut()
             {
                 action(&mut app, args);
+                app.note_place();
                 app.refresh();
             }
             Value::Void
@@ -430,6 +431,10 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     );
 
     bind("App", "show-about", Box::new(|app, _| app.show_about()));
+    bind("App", "go-back", Box::new(|app, _| app.go_back()));
+    bind("App", "go-forward", Box::new(|app, _| app.go_forward()));
+    // The skin changed its view; noted after every callback.
+    bind("App", "navigated", Box::new(|_, _| {}));
     bind("LastFm", "connect", Box::new(|app, _| app.lastfm.connect()));
     bind("LastFm", "cancel", Box::new(|app, _| app.lastfm.cancel()));
     bind(

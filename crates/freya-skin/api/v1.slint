@@ -550,6 +550,26 @@ export global App {
     /// edge: 0 when the system draws its own title bar, and in full screen.
     in property <length> window-buttons-width;
 
+    /// Back and forward, as in a web browser, for skins with views (pages): bind the window's
+    /// view to `view` (`in-out property <string> view <=> App.view;`) and call `navigated`
+    /// after changing it. Freya keeps where the user has been: each view, the library opened
+    /// to an artist or album or searched, the playlist shown, and how far down each was
+    /// scrolled. Skins without views can leave all of this out.
+    in-out property <string> view;
+    /// How far down the view shown is scrolled. Set it as its list scrolls, and when the list
+    /// first shows.
+    in-out property <length> scroll;
+    /// Going back or forward sets `view`, then `restore-view` to that view and
+    /// `restore-scroll` to where it was, and counts `restores` up: scroll the view's list there
+    /// when `restores` changes or the list first shows with `restore-view` its view.
+    /// `restore-view` is empty once the user goes elsewhere, so lists made then start at the
+    /// top.
+    in property <string> restore-view;
+    in property <length> restore-scroll;
+    in property <int> restores;
+    in property <bool> can-go-back;
+    in property <bool> can-go-forward;
+
     /// Open the About window, which credits Freya's licences and Slint.
     callback show-about();
     /// Open Freya's skin picker.
@@ -561,6 +581,10 @@ export global App {
     /// title bar: the window follows the mouse, and a double click zooms or minimizes it, as
     /// the system's settings say.
     callback drag-window();
+    /// The skin changed `view`.
+    callback navigated();
+    callback go-back();
+    callback go-forward();
     /// Open one of Freya's own pages in the browser: "github", "releases", "issues" or
     /// "license". Other names are ignored; skins cannot open other addresses.
     callback open-link(string);

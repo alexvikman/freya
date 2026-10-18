@@ -139,11 +139,15 @@ component IconButton inherits Rectangle {
     /// For on/off buttons: drawn in the accent color while on.
     in property <bool> checkable;
     in property <bool> checked;
+    /// Faint and without effect when false.
+    in property <bool> enabled: true;
     callback clicked;
 
     width: size;
     min-height: size;
+    opacity: enabled ? 1 : 0.35;
     accessible-role: button;
+    accessible-enabled: enabled;
     accessible-label: label;
     accessible-checkable: checkable;
     accessible-checked: checked;
@@ -155,6 +159,7 @@ component IconButton inherits Rectangle {
         border-radius: root.size / 2;
         background: root.primary
             ? (touch.pressed ? Theme.accent.darker(15%) : Theme.accent)
+            : !root.enabled ? transparent
             : (touch.pressed ? Theme.pressed : (touch.has-hover ? Theme.hover : transparent));
 
         Icon {
@@ -166,6 +171,7 @@ component IconButton inherits Rectangle {
         }
 
         touch := TouchArea {
+            enabled: root.enabled;
             clicked => { root.clicked(); }
         }
     }
@@ -1132,6 +1138,22 @@ component TrackRowView inherits Rectangle {
 }
 
 component TrackList inherits FocusScope {
+    /// The view this is the list of, for back and forward: it says how far it is scrolled
+    /// while shown, and scrolls back there. Empty for a list beside another view.
+    in property <string> place;
+    property <bool> shown: place != "" && App.view == place;
+    property <int> restores: App.restores;
+    changed shown => {
+        if (root.shown) {
+            App.scroll = -list.content-y;
+        }
+    }
+    changed restores => {
+        if (root.place != "" && App.restore-view == root.place) {
+            list.content-y = -App.restore-scroll;
+        }
+    }
+
     property <length> row-height: 34px;
     // Where a right-click opened the menu, in this component.
     property <length> menu-x;
@@ -1185,6 +1207,12 @@ component TrackList inherits FocusScope {
     }
 
     list := ListView {
+        changed content-y => {
+            if (root.shown) {
+                App.scroll = -self.content-y;
+            }
+        }
+
         for track[i] in Playlist.rows: TrackRowView {
             height: root.row-height;
             entry: track;
@@ -1757,10 +1785,37 @@ component LibraryPanel inherits FocusScope {
     /// Ctrl/Cmd+F: move to the search field.
     callback find();
 
-    /// New results start from the top, so Enter in the search plays the first of them and
-    /// not the row the keyboard was on in the old ones.
-    property <string> query: Library.query;
-    changed query => { root.start-over(); }
+    /// Back and forward: how far down the list shown is scrolled, and scrolling it back there.
+    property <bool> shown: App.view == "library";
+    property <int> restores: App.restores;
+    changed shown => {
+        if (root.shown) {
+            root.report-scroll();
+        }
+    }
+    changed restores => { root.restore-scroll(); }
+
+    function report-scroll() {
+        App.scroll = -(root.grid-shown ? grid.content-y
+            : root.table-shown ? table.content-y
+            : root.discography-shown ? discography.content-y
+            : list.content-y);
+    }
+
+    function restore-scroll() {
+        if (App.restore-view != "library") {
+            return;
+        }
+        if (root.grid-shown) {
+            grid.content-y = -App.restore-scroll;
+        } else if (root.table-shown) {
+            table.content-y = -App.restore-scroll;
+        } else if (root.discography-shown) {
+            discography.content-y = -App.restore-scroll;
+        } else {
+            list.content-y = -App.restore-scroll;
+        }
+    }
 
     /// The row a right-click opened the menu for, and where, in this component.
     property <int> menu-row: -1;
@@ -1846,8 +1901,9 @@ component LibraryPanel inherits FocusScope {
         content-y
     }
 
-    /// A new list: shown from the top, without a keyboard row.
-    function start-over() {
+    /// A new list: shown from the top, without a keyboard row. New search results too, so
+    /// Enter plays the first of them and not the row the keyboard was on in the old ones.
+    public function start-over() {
         root.cursor = -1;
         list.content-y = 0;
         table.content-y = 0;
@@ -1899,7 +1955,7 @@ component LibraryPanel inherits FocusScope {
             root.move(root.page);
         } else if (event.text == Key.Return) {
             root.activate(root.cursor);
-        } else if (event.text == Key.Escape || (event.text == Key.LeftArrow && event.modifiers.alt)) {
+        } else if (event.text == Key.Escape) {
             root.back();
         } else if ((event.modifiers.control || event.modifiers.meta) && (event.text == "f" || event.text == "F")) {
             root.find();
@@ -1915,6 +1971,11 @@ component LibraryPanel inherits FocusScope {
         visible: root.list-shown;
         y: root.options-height;
         height: root.height - root.options-height;
+        changed content-y => {
+            if (root.shown) {
+                root.report-scroll();
+            }
+        }
 
         for row[i] in root.list-shown ? Library.rows : []: LibraryRowView {
             height: root.list-row-height;
@@ -1938,6 +1999,12 @@ component LibraryPanel inherits FocusScope {
             played-label: !root.played-column ? "" : Library.section == "most-played" ? "Plays" : "Last played";
         }
         table := ListView {
+            changed content-y => {
+                if (root.shown) {
+                    root.report-scroll();
+                }
+            }
+
             for row[i] in root.table-shown ? Library.rows : []: TrackTableRow {
                 height: root.table-row-height;
                 played-column: root.played-column;
@@ -1959,6 +2026,11 @@ component LibraryPanel inherits FocusScope {
         visible: root.grid-shown;
         y: root.options-height;
         height: root.height - root.options-height;
+        changed content-y => {
+            if (root.shown) {
+                root.report-scroll();
+            }
+        }
 
         for line in root.grid-shown ? root.grid-lines : 0: HorizontalLayout {
             height: root.grid-line-height;
@@ -1989,6 +2061,11 @@ component LibraryPanel inherits FocusScope {
         visible: root.discography-shown;
         y: root.options-height;
         height: root.height - root.options-height;
+        changed content-y => {
+            if (root.shown) {
+                root.report-scroll();
+            }
+        }
 
         for row[i] in root.discography-shown ? Library.rows : []: Rectangle {
             height: row.kind == "album" ? root.album-head-height : root.list-row-height;
@@ -2226,7 +2303,21 @@ component StationRowView inherits Rectangle {
 component RadioView inherits Rectangle {
     callback add-station();
 
-    ListView {
+    property <int> restores: App.restores;
+    init => { root.restore-scroll(); }
+    changed restores => { root.restore-scroll(); }
+
+    // Back and forward: how far down it is scrolled, and scrolling it back there.
+    function restore-scroll() {
+        if (App.restore-view == "radio") {
+            stations.content-y = -App.restore-scroll;
+        }
+        App.scroll = -stations.content-y;
+    }
+
+    stations := ListView {
+        changed content-y => { App.scroll = -self.content-y; }
+
         for station[i] in Radio.stations: StationRowView {
             entry: station;
             index: i;
@@ -2526,7 +2617,21 @@ component PlaylistTrackRow inherits Rectangle {
 
 /// The tracks of the playlist shown; a double-click plays from one.
 component PlaylistView inherits Rectangle {
-    ListView {
+    property <int> restores: App.restores;
+    init => { root.restore-scroll(); }
+    changed restores => { root.restore-scroll(); }
+
+    // Back and forward: how far down it is scrolled, and scrolling it back there.
+    function restore-scroll() {
+        if (App.restore-view == "playlist") {
+            tracks.content-y = -App.restore-scroll;
+        }
+        App.scroll = -tracks.content-y;
+    }
+
+    tracks := ListView {
+        changed content-y => { App.scroll = -self.content-y; }
+
         for track[i] in Playlists.tracks: PlaylistTrackRow {
             entry: track;
             index: i;
@@ -2876,6 +2981,33 @@ component TitleBarArea inherits TouchArea {
     }
 }
 
+/// Back and forward through where the window has been, as in a web browser: at the top left,
+/// after the window buttons.
+component NavButtons inherits HorizontalLayout {
+    spacing: 2px;
+
+    IconButton {
+        y: (parent.height - self.height) / 2;
+        icon: Icons.back;
+        stroked: true;
+        size: 32px;
+        label: "Back";
+        tooltip: Platform.os == OperatingSystemType.macos ? "Back (⌘[)" : "Back (Alt+←)";
+        enabled: App.can-go-back;
+        clicked => { App.go-back(); }
+    }
+    IconButton {
+        y: (parent.height - self.height) / 2;
+        icon: Icons.chevron;
+        stroked: true;
+        size: 32px;
+        label: "Forward";
+        tooltip: Platform.os == OperatingSystemType.macos ? "Forward (⌘])" : "Forward (Alt+→)";
+        enabled: App.can-go-forward;
+        clicked => { App.go-forward(); }
+    }
+}
+
 component Sidebar inherits Rectangle {
     in property <string> view;
     /// A view chosen: "radio", "queue", "playlist", "visualizer" or "equalizer".
@@ -2889,10 +3021,19 @@ component Sidebar inherits Rectangle {
     background: Theme.sidebar;
 
     VerticalLayout {
-        // The window buttons, when the skin draws into the title bar; empty room there moves
-        // the window, as a title bar would.
-        if App.window-buttons-width > 0: TitleBarArea {
-            height: App.title-bar-height;
+        // The window buttons, when the skin draws into the title bar, then back and forward;
+        // empty room there moves the window, as a title bar would. Under the system's own
+        // title bar, back and forward have a row of their own.
+        Rectangle {
+            height: App.window-buttons-width > 0 ? App.title-bar-height : 48px;
+
+            if App.window-buttons-width > 0: TitleBarArea { }
+            HorizontalLayout {
+                padding-left: App.window-buttons-width > 0 ? App.window-buttons-width : 10px;
+                alignment: start;
+
+                NavButtons { }
+            }
         }
         // All of it scrolls when the window is too low for everything, playlists included.
         ScrollView {
@@ -3993,6 +4134,8 @@ component AboutView inherits Rectangle {
 component Toolbar inherits HorizontalLayout {
     /// Room kept free at the left, for the window buttons.
     in property <length> inset;
+    /// Whether back and forward show here: while the navigation, their own place, is hidden.
+    in property <bool> nav-buttons;
     in property <string> view;
     in property <string> title;
     in property <string> subtitle;
@@ -4027,6 +4170,8 @@ component Toolbar inherits HorizontalLayout {
     padding-right: 12px;
     spacing: 6px;
 
+    // Back and forward live in the navigation; with it hidden, here in its place.
+    if root.nav-buttons: NavButtons { }
     IconButton {
         icon: Icons.sidebar;
         stroked: true;
@@ -4034,14 +4179,6 @@ component Toolbar inherits HorizontalLayout {
         label: "Navigation";
         tooltip: "Show or hide the navigation";
         clicked => { root.toggle-sidebar(); }
-    }
-    if root.can-go-back: IconButton {
-        icon: Icons.back;
-        stroked: true;
-        size: 36px;
-        label: "Back";
-        tooltip: "Back (Esc)";
-        clicked => { root.back(); }
     }
     VerticalLayout {
         horizontal-stretch: 1;
@@ -4330,7 +4467,7 @@ export component FreyaSkin inherits Window {
 
     /// The view in the content area: "queue", "library", "radio", "playlist", "visualizer",
     /// "equalizer", "settings" or "about".
-    in-out property <string> view: "queue";
+    in-out property <string> view <=> App.view;
     /// The view the visualizer and equalizer buttons go back to.
     property <string> music-view: "queue";
     /// Whether the navigation shows; the toolbar's first button toggles it.
@@ -4349,7 +4486,13 @@ export component FreyaSkin inherits Window {
     }
 
     // On macOS, the window buttons go in the toolbar's row, at the top of the navigation.
-    init => { App.title-bar-height = 56px; }
+    init => {
+        App.title-bar-height = 56px;
+        if (root.view == "") {
+            root.view = "queue";
+        }
+        App.navigated();
+    }
 
     function show(view: string) {
         root.open(view);
@@ -4364,6 +4507,7 @@ export component FreyaSkin inherits Window {
             root.music-view = view;
         }
         root.view = view;
+        App.navigated();
     }
 
     function enter-stage() {
@@ -4416,6 +4560,17 @@ export component FreyaSkin inherits Window {
                 root.show("settings");
                 return accept;
             }
+            // Back and forward: Cmd+[ and Cmd+] on macOS, Alt+Left and Alt+Right elsewhere.
+            if ((event.text == "[" && (event.modifiers.meta || event.modifiers.control))
+                || (event.text == Key.LeftArrow && event.modifiers.alt)) {
+                App.go-back();
+                return accept;
+            }
+            if ((event.text == "]" && (event.modifiers.meta || event.modifiers.control))
+                || (event.text == Key.RightArrow && event.modifiers.alt)) {
+                App.go-forward();
+                return accept;
+            }
             if (event.modifiers.control || event.modifiers.meta || event.modifiers.alt) {
                 return reject;
             }
@@ -4460,6 +4615,7 @@ export component FreyaSkin inherits Window {
                             TitleBarArea { }
                             toolbar := Toolbar {
                                 inset: root.sidebar-shown ? 0 : App.window-buttons-width;
+                                nav-buttons: !root.sidebar-shown;
                                 view: root.view;
                                 title: root.view == "queue" ? "Up Next"
                                     : root.view == "library" ? Library.title
@@ -4476,7 +4632,10 @@ export component FreyaSkin inherits Window {
                                 can-go-back: root.view == "library" && Library.can-go-back;
                                 toggle-sidebar => { root.sidebar-shown = !root.sidebar-shown; }
                                 back => { library.back(); }
-                                search-edited => { root.open("library"); }
+                                search-edited => {
+                                    root.open("library");
+                                    library.start-over();
+                                }
                                 // The keyboard goes to the results, so Space plays again
                                 // instead of typing into the search.
                                 search-accepted => {
@@ -4505,6 +4664,7 @@ export component FreyaSkin inherits Window {
                                 width: 100%;
                                 height: 100%;
                                 visible: root.view == "queue";
+                                place: "queue";
                             }
                             library := LibraryPanel {
                                 width: 100%;

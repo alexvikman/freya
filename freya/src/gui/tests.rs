@@ -885,3 +885,64 @@ fn album_sort_and_view_are_kept_in_the_settings() {
     assert_eq!(global(&ui, "Library", "album-view"), text("list"));
     assert_eq!(global(&ui, "Library", "album-sort"), text("name"));
 }
+
+#[test]
+fn back_and_forward_retrace_the_views_and_their_scroll() {
+    let app = silent_app("history");
+    let ui = current_ui(&app);
+    let go = |view: &str, scrolled_to: f64| {
+        // Scrolled where the skin says, then somewhere else.
+        ui.set_global_property("App", "scroll", num(scrolled_to))
+            .unwrap();
+        ui.set_global_property("App", "view", text(view)).unwrap();
+        call(&ui, "App", "navigated", &[]);
+    };
+    call(&ui, "App", "navigated", &[]);
+    assert_eq!(global(&ui, "App", "view"), text("queue"));
+    assert_eq!(global(&ui, "App", "can-go-back"), Value::Bool(false));
+    go("radio", 300.0);
+    go("settings", 120.0);
+    assert_eq!(global(&ui, "App", "can-go-back"), Value::Bool(true));
+
+    ui.set_global_property("App", "scroll", num(40.0)).unwrap();
+    call(&ui, "App", "go-back", &[]);
+    assert_eq!(global(&ui, "App", "view"), text("radio"));
+    assert_eq!(global(&ui, "App", "restore-view"), text("radio"));
+    assert_eq!(global(&ui, "App", "restore-scroll"), num(120.0));
+    call(&ui, "App", "go-back", &[]);
+    assert_eq!(global(&ui, "App", "view"), text("queue"));
+    assert_eq!(global(&ui, "App", "restore-scroll"), num(300.0));
+    assert_eq!(global(&ui, "App", "can-go-back"), Value::Bool(false));
+    assert_eq!(global(&ui, "App", "can-go-forward"), Value::Bool(true));
+
+    call(&ui, "App", "go-forward", &[]);
+    call(&ui, "App", "go-forward", &[]);
+    assert_eq!(global(&ui, "App", "view"), text("settings"));
+    assert_eq!(global(&ui, "App", "restore-scroll"), num(40.0));
+    assert_eq!(global(&ui, "App", "can-go-forward"), Value::Bool(false));
+
+    // Going somewhere new after going back leaves nothing ahead, and starts it at the top.
+    call(&ui, "App", "go-back", &[]);
+    go("about", 0.0);
+    assert_eq!(global(&ui, "App", "can-go-forward"), Value::Bool(false));
+    assert_eq!(global(&ui, "App", "restore-view"), text(""));
+}
+
+#[test]
+fn back_reopens_a_playlist_that_was_shown() {
+    let app = silent_app("history-playlists");
+    let ui = current_ui(&app);
+    call(&ui, "App", "navigated", &[]);
+    call(&ui, "Playlists", "create", &[text("First")]);
+    call(&ui, "Playlists", "create", &[text("Second")]);
+    for index in [0.0, 1.0] {
+        call(&ui, "Playlists", "show", &[num(index)]);
+        ui.set_global_property("App", "view", text("playlist"))
+            .unwrap();
+        call(&ui, "App", "navigated", &[]);
+    }
+    assert_eq!(global(&ui, "Playlists", "shown"), num(1.0));
+    call(&ui, "App", "go-back", &[]);
+    assert_eq!(global(&ui, "App", "view"), text("playlist"));
+    assert_eq!(global(&ui, "Playlists", "shown"), num(0.0));
+}

@@ -5,6 +5,7 @@ mod app_icon;
 mod bindings;
 mod builtin_skin;
 pub mod equalizer;
+mod history;
 mod hologram;
 mod library;
 mod listening;
@@ -150,6 +151,16 @@ pub fn run(options: Options) -> anyhow::Result<()> {
     {
         let app = Rc::downgrade(&app);
         system_media::on_request(move || {
+            if let Some(app) = app.upgrade()
+                && let Ok(mut app) = app.try_borrow_mut()
+            {
+                app.tick();
+            }
+        });
+    }
+    {
+        let app = Rc::downgrade(&app);
+        window_events.on_wake(move || {
             if let Some(app) = app.upgrade()
                 && let Ok(mut app) = app.try_borrow_mut()
             {

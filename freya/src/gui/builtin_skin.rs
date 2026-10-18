@@ -558,6 +558,13 @@ skin_api! {
         App."equalizer-visible" => set_equalizer_visible, get_equalizer_visible;
         App."title-bar-height" => set_title_bar_height, get_title_bar_height;
         App."window-buttons-width" => set_window_buttons_width, get_window_buttons_width;
+        App."view" => set_view, get_view;
+        App."scroll" => set_scroll, get_scroll;
+        App."restore-view" => set_restore_view, get_restore_view;
+        App."restore-scroll" => set_restore_scroll, get_restore_scroll;
+        App."restores" => set_restores, get_restores;
+        App."can-go-back" => set_can_go_back, get_can_go_back;
+        App."can-go-forward" => set_can_go_forward, get_can_go_forward;
         Updates."state" => set_state, get_state;
         Updates."current-version" => set_current_version, get_current_version;
         Updates."version" => set_version, get_version;
@@ -656,6 +663,9 @@ skin_api! {
         App."toggle-equalizer" => on_toggle_equalizer, invoke_toggle_equalizer();
         App."drag-window" => on_drag_window, invoke_drag_window();
         App."open-link" => on_open_link, invoke_open_link(name: SharedString);
+        App."navigated" => on_navigated, invoke_navigated();
+        App."go-back" => on_go_back, invoke_go_back();
+        App."go-forward" => on_go_forward, invoke_go_forward();
         Updates."check" => on_check, invoke_check();
         Updates."install" => on_install, invoke_install();
         Updates."later" => on_later, invoke_later();

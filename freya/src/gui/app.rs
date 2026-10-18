@@ -18,6 +18,7 @@ use slint_interpreter::{ComponentHandle, ComponentInstance, Value};
 
 use super::app_icon;
 use super::equalizer::{self, EqualizerSettings};
+use super::history::{History, Place};
 use super::library::{self, AlbumSort, LibraryPanel};
 use super::listening::Listening;
 use super::playlists::Playlists;
@@ -316,6 +317,10 @@ pub struct App {
     pub playlists: Playlists,
     /// The playlist shown in the skin.
     pub shown_playlist: Option<usize>,
+    /// Where the window has been, to go back and forward; and how many times a place was
+    /// gone back or forward to, which tells the skin to scroll it as it was.
+    history: History,
+    restores: u32,
     /// Why the last playlist could not be made or renamed.
     pub playlists_error: String,
     /// The stream each station list (`.pls`, `.m3u`) led to, by the list's address.
@@ -420,6 +425,8 @@ impl App {
             library,
             stations,
             playlists,
+            history: History::default(),
+            restores: 0,
             shown_playlist: None,
             playlists_error: String::new(),
             station_streams: HashMap::new(),
@@ -787,6 +794,82 @@ impl App {
         }
     }
 
+    // ----- Back and forward ----------------------------------------------------------------------
+
+    /// The place the window shows, by the skin's `App.view` and what the app has open; `None`
+    /// for skins without views.
+    fn place(&self) -> Option<Place> {
+        let Ok(Value::String(view)) = self.view.ui.get_global_property("App", "view") else {
+            return None;
+        };
+        let view = view.to_string();
+        if view.is_empty() {
+            return None;
+        }
+        Some(Place {
+            library: (view == "library").then(|| self.library.place()),
+            playlist: self.shown_playlist.filter(|_| view == "playlist"),
+            view,
+            scroll: 0.0,
+        })
+    }
+
+    /// How far down the skin says the place shown is scrolled.
+    fn shown_scroll(&self) -> f32 {
+        match self.view.ui.get_global_property("App", "scroll") {
+            Ok(Value::Number(scroll)) => scroll as f32,
+            _ => 0.0,
+        }
+    }
+
+    /// Notes the place shown in the history, after anything the skin asked for.
+    pub fn note_place(&mut self) {
+        let Some(place) = self.place() else {
+            return;
+        };
+        let scroll = self.shown_scroll();
+        if self.history.visit(place, scroll) {
+            // A place reached anew starts at its top, not where a restored one was.
+            let _ = self
+                .view
+                .ui
+                .set_global_property("App", "restore-view", skin_state::string(""));
+        }
+    }
+
+    pub fn go_back(&mut self) {
+        let scroll = self.shown_scroll();
+        if let Some(place) = self.history.back(scroll).cloned() {
+            self.show_place(&place);
+        }
+    }
+
+    pub fn go_forward(&mut self) {
+        let scroll = self.shown_scroll();
+        if let Some(place) = self.history.forward(scroll).cloned() {
+            self.show_place(&place);
+        }
+    }
+
+    /// Shows `place` again: the library or playlist as it was, the skin's view, and how far
+    /// down it was scrolled.
+    fn show_place(&mut self, place: &Place) {
+        if let Some(library) = &place.library {
+            self.library.go_to(library);
+        }
+        if place.view == "playlist" {
+            self.shown_playlist = place.playlist;
+        }
+        self.restores += 1;
+        let ui = &self.view.ui;
+        let scroll = Value::Number(f64::from(place.scroll));
+        let _ = ui.set_global_property("App", "view", skin_state::string(&place.view));
+        let _ = ui.set_global_property("App", "scroll", scroll.clone());
+        let _ = ui.set_global_property("App", "restore-scroll", scroll);
+        let _ = ui.set_global_property("App", "restore-view", skin_state::string(&place.view));
+        let _ = ui.set_global_property("App", "restores", Value::Number(f64::from(self.restores)));
+    }
+
     pub fn add_library_folder(&mut self, folder: PathBuf) {
         if add_folder(&mut self.settings.library_folders, folder) {
             self.library.rescan(&self.settings.library_folders);
@@ -991,6 +1074,14 @@ impl App {
                 WindowEvent::Focused(id, focused) if Some(id) == main_window => {
                     log::debug!("window focused: {focused}");
                     self.window_focused = focused;
+                }
+                WindowEvent::Navigate(false) => {
+                    self.go_back();
+                    self.note_place();
+                }
+                WindowEvent::Navigate(true) => {
+                    self.go_forward();
+                    self.note_place();
                 }
                 WindowEvent::Occluded(..) | WindowEvent::Focused(..) => {}
             }
@@ -1351,6 +1442,8 @@ impl App {
                     "equalizer-visible",
                     Value::Bool(self.settings.equalizer_visible),
                 ),
+                ("can-go-back", Value::Bool(self.history.can_go_back())),
+                ("can-go-forward", Value::Bool(self.history.can_go_forward())),
             ],
         );
     }

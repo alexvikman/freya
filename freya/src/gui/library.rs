@@ -90,6 +90,21 @@ impl Level {
     }
 }
 
+/// What of the library is open: the lists opened from a section, and a search; a place to go
+/// back to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LibraryPlace {
+    opened: Vec<Level>,
+    query: String,
+}
+
+impl LibraryPlace {
+    /// Whether `next` is this search typed on: the same lists, searching still.
+    pub fn continued_by(&self, next: &Self) -> bool {
+        !self.query.trim().is_empty() && !next.query.trim().is_empty() && self.opened == next.opened
+    }
+}
+
 /// How an artist's albums are ordered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AlbumSort {
@@ -457,6 +472,23 @@ impl LibraryPanel {
                 })
             })
             .map_or(-1, |row| row as i32);
+    }
+
+    /// What is open now.
+    pub fn place(&self) -> LibraryPlace {
+        LibraryPlace {
+            opened: self.opened.clone(),
+            query: self.query.clone(),
+        }
+    }
+
+    /// Opens what was open at `place`.
+    pub fn go_to(&mut self, place: &LibraryPlace) {
+        if self.place() != *place {
+            self.opened = place.opened.clone();
+            self.query = place.query.clone();
+            self.reload();
+        }
     }
 
     /// Orders an artist's albums by `sort`.
@@ -1135,6 +1167,29 @@ mod tests {
         assert_eq!(playing_row(&panel), 0.0);
         panel.set_playing(None);
         assert_eq!(playing_row(&panel), -1.0);
+    }
+
+    #[test]
+    fn typing_a_search_is_one_place() {
+        let mut panel = LibraryPanel::new(None, None);
+        let browsing = panel.place();
+        panel.search("sho");
+        let searching = panel.place();
+        panel.search("shores");
+        let typed_on = panel.place();
+        assert!(
+            !browsing.continued_by(&searching),
+            "a search starts a place"
+        );
+        assert!(searching.continued_by(&typed_on));
+        panel.search("");
+        assert!(
+            !typed_on.continued_by(&panel.place()),
+            "ending it is another"
+        );
+        // Back where the search was.
+        panel.go_to(&typed_on);
+        assert_eq!(panel.place(), typed_on);
     }
 
     #[test]
