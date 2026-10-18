@@ -296,6 +296,8 @@ pub struct LibraryPanel {
     /// The user's personal fanart.tv key, for wide pictures of artists.
     fanart_key: Option<String>,
     popular_rows: ModelRows,
+    /// The letters to jump to in the artists or albums shown, for `Library.letters`.
+    letter_rows: ModelRows,
     /// While an album's tracks are shown: how often each was played, and its page.
     play_counts: HashMap<(PathBuf, Option<Duration>), u32>,
     album_page: Option<AlbumPage>,
@@ -617,6 +619,7 @@ impl LibraryPanel {
             online_bios: true,
             fanart_key: None,
             popular_rows: ModelRows::new(),
+            letter_rows: ModelRows::new(),
         }
     }
 
@@ -628,6 +631,7 @@ impl LibraryPanel {
     pub fn attach(&mut self, ui: &SkinWindow, folders: &[PathBuf], scan: bool) {
         let _ = ui.set_global_property("Library", "rows", self.rows.model_value());
         let _ = ui.set_global_property("Library", "popular", self.popular_rows.model_value());
+        let _ = ui.set_global_property("Library", "letters", self.letter_rows.model_value());
         let _ = ui.set_global_property(
             "Library",
             "portrait-choices",
@@ -1233,12 +1237,13 @@ impl LibraryPanel {
         };
         let key = page.picture.clone();
         let needs_banner = page.banner.is_none();
-        let needs_portrait = !page.portrait_large;
         let backdrop = page
             .name
             .as_ref()
             .and_then(|name| self.backdrops.get(name))
             .cloned();
+        // Their picture shows only without a wide one.
+        let needs_portrait = !page.portrait_large && backdrop.is_none();
         // Made, or asked to be made, as for the grid.
         self.cover(&key);
         let Some(thumbnails) = &mut self.thumbnails else {
@@ -1289,7 +1294,11 @@ impl LibraryPanel {
                 page.portrait_large = portrait.large;
                 page.picture_full = portrait.full.map(Image::from_rgb8);
                 // Without a wide picture: the color of their picture.
-                if page.banner.is_none() {
+                let wide = page
+                    .name
+                    .as_ref()
+                    .is_some_and(|name| self.backdrops.contains_key(name));
+                if !wide {
                     page.color = Some(portrait.color);
                 }
             }
@@ -2376,8 +2385,47 @@ impl LibraryPanel {
             ));
         }
         self.rows.sync(rows);
+        self.letter_rows.sync(self.letters());
         self.find_playing_row();
         log::debug!("library rows loaded in {:?}", started.elapsed());
+    }
+
+    /// The letters to jump to in the list shown, when it is in the order of its names: each
+    /// with the first row it starts, or the next letter's when none does.
+    fn letters(&self) -> Vec<Value> {
+        let alphabetical = !self.searching()
+            && match self.level() {
+                Level::Artists => self.artist_order == ArtistOrder::Name,
+                Level::Albums => true,
+                _ => false,
+            };
+        if !alphabetical {
+            return Vec::new();
+        }
+        let names = self.items.iter().map(|item| match item {
+            // As the library sorts them: by the name the user sorts them by, else the one shown.
+            Item::Artist(artist) => artist
+                .name
+                .as_deref()
+                .and_then(|n| {
+                    let edit = self.edits.get(n)?;
+                    edit.sort_name.as_deref().or(edit.name.as_deref())
+                })
+                .or(artist.name.as_deref())
+                .map(plain_name),
+            Item::Album(album) => album.name.as_deref(),
+            _ => None,
+        });
+        letter_jumps(names)
+            .into_iter()
+            .map(|(letter, row, present)| {
+                Value::Struct(Struct::from_iter([
+                    ("letter".to_owned(), string(letter)),
+                    ("row".to_owned(), Value::Number(row as f64)),
+                    ("present".to_owned(), Value::Bool(present)),
+                ]))
+            })
+            .collect()
     }
 
     fn load(&self, db: &Library) -> freya_library::library::Result<Vec<Item>> {
@@ -2917,6 +2965,15 @@ impl LibraryPanel {
                 Value::Image(page.and_then(|p| p.banner.clone()).unwrap_or_default()),
             ),
             (
+                "has-banner".to_owned(),
+                Value::Bool(page.is_some_and(|p| {
+                    p.banner.is_some()
+                        || p.name
+                            .as_ref()
+                            .is_some_and(|n| self.backdrops.contains_key(n))
+                })),
+            ),
+            (
                 "portrait".to_owned(),
                 Value::Image(page.and_then(|p| p.portrait.clone()).unwrap_or_default()),
             ),
@@ -3104,6 +3161,54 @@ fn row_value(
 }
 
 /// "12 plays", or when the track was played last: "3 days ago".
+/// The letter a name is jumped to by: its first letter, A to Z, or another one as it is, such
+/// as Å; "#" for one that starts with a digit or a sign.
+fn letter_of(name: &str) -> String {
+    match name.chars().find(|c| !c.is_whitespace()) {
+        Some(c) if c.is_alphabetic() => c.to_uppercase().collect(),
+        _ => "#".to_owned(),
+    }
+}
+
+/// The letters to jump to in a list of `names` in order: "#" and A to Z always, then other
+/// letters the names start with, in the order they come. Each with the first row it starts,
+/// else the next letter's (the last row after the last), and whether any name starts with it.
+fn letter_jumps<'a>(names: impl Iterator<Item = Option<&'a str>>) -> Vec<(String, usize, bool)> {
+    let mut first: Vec<(String, usize)> = Vec::new();
+    let mut count = 0;
+    for (row, name) in names.enumerate() {
+        count = row + 1;
+        let letter = letter_of(name.unwrap_or(""));
+        if !first.iter().any(|(l, _)| *l == letter) {
+            first.push((letter, row));
+        }
+    }
+    if count == 0 {
+        return Vec::new();
+    }
+    let mut letters: Vec<String> = std::iter::once("#".to_owned())
+        .chain(('A'..='Z').map(String::from))
+        .collect();
+    for (letter, _) in &first {
+        if !letters.contains(letter) {
+            letters.push(letter.clone());
+        }
+    }
+    let row_of = |letter: &str| first.iter().find(|(l, _)| l == letter).map(|(_, r)| *r);
+    let mut jumps: Vec<(String, usize, bool)> = Vec::new();
+    // From the last: an absent letter jumps where the next present one starts.
+    let mut next = count - 1;
+    for letter in letters.into_iter().rev() {
+        let row = row_of(&letter);
+        if let Some(row) = row {
+            next = row;
+        }
+        jumps.push((letter, next, row.is_some()));
+    }
+    jumps.reverse();
+    jumps
+}
+
 fn played_text(played: &Played, by_count: bool, now: SystemTime) -> String {
     if by_count {
         count(played.plays as usize, "play")
@@ -3652,6 +3757,25 @@ mod tests {
         assert_eq!(thousands(999), "999");
         assert_eq!(thousands(1_000), "1,000");
         assert_eq!(thousands(1_234_567), "1,234,567");
+    }
+
+    #[test]
+    fn jumps_to_the_first_row_of_each_letter() {
+        let names = ["2Pac", "ABBA", "Air", "Cream", "Ólafur Arnalds", "Åsa"];
+        let jumps = letter_jumps(names.iter().map(|n| Some(*n)));
+        let at = |letter: &str| {
+            let (_, row, present) = jumps.iter().find(|(l, ..)| l == letter).unwrap();
+            (*row, *present)
+        };
+        assert_eq!(at("#"), (0, true));
+        assert_eq!(at("A"), (1, true));
+        assert_eq!(at("B"), (3, false), "absent: where C starts");
+        assert_eq!(at("C"), (3, true));
+        assert_eq!(at("Z"), (4, false), "absent: where the next letter starts");
+        assert_eq!(at("Ó"), (4, true));
+        assert_eq!(at("Å"), (5, true));
+        assert_eq!(jumps.len(), 29);
+        assert!(letter_jumps(std::iter::empty()).is_empty());
     }
 
     #[test]

@@ -324,6 +324,25 @@ impl Convert for Activity {
     }
 }
 
+impl Convert for LetterJump {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            letter: field(&s, "letter"),
+            row: field(&s, "row"),
+            present: field(&s, "present"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("letter", self.letter.to_value()),
+            ("row", self.row.to_value()),
+            ("present", self.present.to_value()),
+        ])
+    }
+}
+
 impl Convert for LogEntry {
     fn from_value(value: Value) -> Option<Self> {
         let Value::Struct(s) = value else { return None };
@@ -489,6 +508,7 @@ impl Convert for ArtistPage {
             genres: field(&s, "genres"),
             picture: field(&s, "picture"),
             banner: field(&s, "banner"),
+            has_banner: field(&s, "has-banner"),
             portrait: field(&s, "portrait"),
             picture_full: field(&s, "picture-full"),
             color: field(&s, "color"),
@@ -511,6 +531,7 @@ impl Convert for ArtistPage {
             ("genres", self.genres.to_value()),
             ("picture", self.picture.to_value()),
             ("banner", self.banner.to_value()),
+            ("has-banner", self.has_banner.to_value()),
             ("portrait", self.portrait.to_value()),
             ("picture-full", self.picture_full.to_value()),
             ("color", self.color.to_value()),
@@ -801,6 +822,7 @@ skin_api! {
         Library."album-sort" => set_album_sort, get_album_sort;
         Library."album-view" => set_album_view, get_album_view;
         Library."scanning" => set_scanning, get_scanning;
+        Library."letters" => set_letters, get_letters;
         Library."status" => set_status, get_status;
         Library."scan-folder" => set_scan_folder, get_scan_folder;
 

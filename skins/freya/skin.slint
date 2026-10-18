@@ -1938,7 +1938,7 @@ component ArtistPageHead inherits Rectangle {
                 spacing: 24px;
 
                 // At the foot, beside their name; cut round by Freya.
-                if root.page.banner.width == 0: VerticalLayout {
+                if !root.page.has-banner: VerticalLayout {
                     alignment: end;
 
                     Rectangle {
@@ -2618,6 +2618,56 @@ component DiscographyAlbum inherits Rectangle {
     }
 }
 
+/// Letters down the side of a list, to jump to the first row each starts: clicked, or swept
+/// over with the mouse held down.
+component LetterBar inherits Rectangle {
+    callback jump(int);
+
+    property <length> letter-height: min(20px, (root.height - 16px) / max(1, Library.letters.length));
+    property <length> top: (root.height - self.letter-height * Library.letters.length) / 2;
+    property <int> hovered: touch.has-hover ? floor((touch.mouse-y - self.top) / self.letter-height) : -1;
+
+    accessible-role: AccessibleRole.list;
+    accessible-label: "Jump to a letter";
+
+    for jump[i] in Library.letters: Text {
+        x: 0;
+        y: root.top + i * root.letter-height;
+        width: root.width;
+        height: root.letter-height;
+        text: jump.letter;
+        font-size: 11px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        color: !jump.present ? Theme.text-secondary.with-alpha(0.35)
+            : i == root.hovered ? Theme.accent-text : Theme.text-secondary;
+        accessible-role: AccessibleRole.button;
+        accessible-label: "Jump to " + jump.letter;
+        accessible-action-default => { root.jump(jump.row); }
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                root.jump-at(self.mouse-y);
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                root.jump-at(self.mouse-y);
+            }
+        }
+    }
+
+    function jump-at(y: length) {
+        let i = floor((y - root.top) / root.letter-height);
+        if (i >= 0 && i < Library.letters.length) {
+            root.jump(Library.letters[i].row);
+        }
+    }
+}
+
 component LibraryPanel inherits FocusScope {
     /// Ctrl/Cmd+F: move to the search field.
     callback find();
@@ -2712,6 +2762,8 @@ component LibraryPanel inherits FocusScope {
     property <bool> history-shown: Library.query == "" && (Library.section == "recently-played" || Library.section == "most-played");
 
     property <length> list-row-height: 42px;
+    /// The letters beside the artists or albums, when shown.
+    property <length> letters-width: Library.letters.length > 0 && (root.grid-shown || root.list-shown) ? 28px : 0;
     property <length> table-row-height: 34px;
     // The grid fits as many columns of at least `tile-min` as it can, and stretches them to fill
     // the width.
@@ -2736,6 +2788,20 @@ component LibraryPanel inherits FocusScope {
         root.cursor = max(0, min(Library.rows.length - 1, root.cursor + delta));
         root.focus();
         root.reveal(root.cursor);
+    }
+
+    /// Scrolls `row` to the top, and puts the keyboard on it.
+    function jump-to(row: int) {
+        if (row < 0 || row >= Library.rows.length) {
+            return;
+        }
+        root.cursor = row;
+        if (root.grid-shown) {
+            grid.content-y = -min(max(0, grid.content-height - grid.visible-height), root.head-lines * root.artist-head-height + floor(row / root.columns) * root.grid-line-height);
+        } else if (root.list-shown) {
+            list.content-y = -min(max(0, list.content-height - list.visible-height), row * root.list-row-height);
+        }
+        root.focus();
     }
 
     /// Scrolls just enough to show `row`.
@@ -2841,7 +2907,9 @@ component LibraryPanel inherits FocusScope {
     // shown get no rows.
     list := ListView {
         visible: root.list-shown;
+        x: 0;
         y: root.options-height;
+        width: root.width - root.letters-width;
         height: root.height - root.options-height;
         changed content-y => {
             if (root.shown) {
@@ -2896,7 +2964,9 @@ component LibraryPanel inherits FocusScope {
 
     grid := ListView {
         visible: root.grid-shown;
+        x: 0;
         y: root.options-height;
+        width: root.width - root.letters-width;
         height: root.height - root.options-height;
         changed content-y => {
             if (root.shown) {
@@ -2940,6 +3010,16 @@ component LibraryPanel inherits FocusScope {
                 }
             }
         }
+    }
+
+    // Beside the artists or albums, in the order of their names: a letter jumps to the first
+    // whose name starts with it.
+    if root.letters-width > 0: LetterBar {
+        x: root.width - root.letters-width;
+        y: root.options-height;
+        width: root.letters-width;
+        height: root.height - root.options-height;
+        jump(row) => { root.jump-to(row); }
     }
 
     // An album's tracks under its page, which scrolls with them.

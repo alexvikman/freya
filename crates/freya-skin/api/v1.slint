@@ -226,10 +226,13 @@ export struct ArtistPage {
     /// What to pass to `Library.cover` for their picture.
     picture: string,
     /// A wide picture of them across the top of the page, from their folder (fanart.jpg) or
-    /// fanart.tv; empty (zero width) when there is none, or before it is found.
+    /// fanart.tv; empty (zero width) when there is none, or before it is decoded.
     banner: image,
-    /// Their picture cut round, clear outside the circle, beside their name when there is no
-    /// banner; empty before the grid's picture of them is made.
+    /// Whether they have a wide picture, though `banner` may not be decoded yet: the page keeps
+    /// its place for it rather than showing `portrait` first.
+    has-banner: bool,
+    /// Their picture cut round, clear outside the circle, beside their name when they have no
+    /// wide picture; empty before the grid's picture of them is made.
     portrait: image,
     /// Their picture whole and large, uncut, to show on its own; empty when they have none
     /// but a collage of covers.
@@ -267,6 +270,16 @@ export struct AlbumPage {
     cover: string,
     /// A color from the cover for the page behind it, dark enough for white text.
     color: color,
+}
+
+/// A letter to jump to in the artists or albums shown: see `Library.letters`.
+export struct LetterJump {
+    /// "#", "A" to "Z", or another letter names start with, such as "Å".
+    letter: string,
+    /// The first row whose name starts with it; for a letter none does, the next one's.
+    row: int,
+    /// Whether any name starts with it.
+    present: bool,
 }
 
 /// The media library: the music in the folders the user chose, browsed by artist and album,
@@ -344,6 +357,9 @@ export global Library {
     in property <[string]> folders;
     /// True while Freya reads the folders.
     in property <bool> scanning;
+    /// The letters to jump to beside the artists or albums shown, when they are in the order
+    /// of their names; empty otherwise.
+    in property <[LetterJump]> letters;
     /// "10,412 tracks · 682 albums", or a scan's progress: "Reading 1,234 of 5,000 files".
     in property <string> status;
     /// While scanning, the folder looked through or read now, with the one it is in: "Peter
