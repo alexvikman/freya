@@ -1,5 +1,5 @@
 //! Pictures of artists, for the library's grid of artists: one in the artist's own folder,
-//! as Plex and Kodi read them; else a photo from Deezer, when the user allows it; else the
+//! under the names media players commonly use; else a photo from Deezer, when the user allows it; else the
 //! artist's album covers, four in a square or the first alone.
 //!
 //! And wide ones across the top of an artist's page: in their folder, else from fanart.tv
@@ -17,7 +17,7 @@ const ARTIST_FILES: &[&str] = &["artist", "poster", "folder"];
 /// And in an album's folder, where `folder` is the album's cover.
 const ALBUM_FOLDER_FILES: &[&str] = &["artist"];
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png"];
-/// Names of a wide picture in the artist's folder, as Kodi, Plex and Jellyfin read them.
+/// Names of a wide picture in the artist's folder, as media players commonly use them.
 const BACKDROP_FILES: &[&str] = &["fanart", "backdrop", "background"];
 
 const DEEZER_SEARCH: &str = "https://api.deezer.com/search/artist";

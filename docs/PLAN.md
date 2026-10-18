@@ -175,7 +175,7 @@ update feed, with a signed list of checksums as the trust anchor. Decided with t
 ### U8: Settings and About (from 2026-10-17)
 
 A settings view and an About view in the main window, with what Bird's have, opened from the
-"⋯" menu at the top right and laid out like Spotify's settings: a large title, bold section
+"⋯" menu at the top right and laid out as a page: a large title, bold section
 headings straight on the page, each setting's control at the far right, using the view's width. Settings that are their own
 features (playback, Last.fm) come as steps of their own.
 

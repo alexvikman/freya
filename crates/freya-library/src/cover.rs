@@ -194,7 +194,7 @@ mod tests {
             let luminance = 0.2126 * f64::from(r) + 0.7152 * f64::from(g) + 0.0722 * f64::from(b);
             assert!(luminance < 110.0, "{color:?} gave {r} {g} {b}");
         }
-        // Grey stays grey; no pixels at all give Spotify's grey.
+        // Grey stays grey; no pixels at all give a neutral grey.
         let [r, g, b] = page_color(&image(&[[100, 100, 100]; 4]));
         assert!(r == g && g == b);
         assert_eq!(page_color(&[]), [83, 83, 83]);

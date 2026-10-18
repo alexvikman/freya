@@ -80,7 +80,7 @@ global Icons {
     out property <string> star: "M12 3 L14.8 8.8 L21 9.6 L16.5 14 L17.6 20.3 L12 17.3 L6.4 20.3 L7.5 14 L3 9.6 L9.2 8.8 Z";
     out property <string> genre: "M3 4 V11 L13 21 L21 13 L11 3 H4 C3.4 3 3 3.4 3 4 Z M7.5 7.5 H7.6";
     out property <string> expand: "M4 9 V4 H9 M15 4 H20 V9 M20 15 V20 H15 M9 20 H4 V15";
-    // A pulse in a ring, as Plex shows what it is doing.
+    // A pulse in a ring: what Freya is doing.
     out property <string> activity: "M12 2.5 A9.5 9.5 0 1 0 12 21.5 A9.5 9.5 0 1 0 12 2.5 Z M6.5 12 H9 L10.75 8.5 L13.25 15.5 L15 12 H17.5";
     out property <string> external: "M7 17 L17 7 M9 7 H17 V15";
     out property <string> code: "M8 6 L2 12 L8 18 M16 6 L22 12 L16 18";
@@ -1839,9 +1839,9 @@ component PopularRow inherits Rectangle {
     }
 }
 
-/// The top of an artist's page, a mix of Spotify and Plex: their picture across the page with
-/// their name large on it, play, shuffle and add, what Last.fm says of them, their most played
-/// tracks, and the heading of their albums. As tall as `head-height` says.
+/// The top of an artist's page: their picture across the page with their name large on it,
+/// play, shuffle and add, what Last.fm says of them, their most played tracks, and the heading
+/// of their albums. As tall as `head-height` says.
 component ArtistPageHead inherits Rectangle {
     in property <ArtistPage> page;
     /// The sort and view of their albums.
@@ -1977,7 +1977,7 @@ component ArtistPageHead inherits Rectangle {
                 }
             }
         }
-        // What Last.fm says of them, as Plex shows it.
+        // What Last.fm says of them.
         if root.page.summary != "": VerticalLayout {
             height: 150px;
             padding-left: root.pad;
@@ -2102,7 +2102,7 @@ component ArtistPageHead inherits Rectangle {
     }
 }
 
-/// The top of an album's page, as in Spotify: the cover and the album's name large, in a
+/// The top of an album's page: the cover and the album's name large, in a
 /// color from the cover; play, shuffle and add; and the heading of the track table.
 component AlbumPageHead inherits Rectangle {
     in property <AlbumPage> page;
@@ -2884,7 +2884,7 @@ component LibraryPanel inherits FocusScope {
         spacing: 4px;
         alignment: end;
 
-        // Every artist's music, as in Plex.
+        // Every artist's music.
         if Library.artist-options: IconButton {
             y: (parent.height - self.height) / 2;
             icon: Icons.play;
@@ -5383,7 +5383,7 @@ component Toolbar inherits HorizontalLayout {
         clicked => { menu.show(); }
     }
 
-    // What Freya is doing, as Plex shows it.
+    // What Freya is doing.
     activity-popup := PopupWindow {
         x: activity.x + activity.width - 320px;
         y: activity.y + activity.height;
