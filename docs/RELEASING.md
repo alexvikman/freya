@@ -86,10 +86,11 @@ may ever be committed, so every commit is scanned:
   anything is built or published.
 
 `.gitleaks.toml` holds the configuration: gitleaks' own rules (private keys, cloud and GitHub
-tokens and many more), plus one for Apple app-specific passwords. Build output (`target/`) and
-agent worktrees (`.claude/`) are skipped when scanning a folder; they are never committed.
-`.gitignore` also keeps key and certificate files (`*.p12`, `*.p8`, `*.pem`, `*.key`, `*.cer`)
-and `.env` files out.
+tokens and many more), plus one for Apple app-specific passwords. No path is skipped: Freya
+only scans commits, and a skipped path would hide a secret committed there. `.gitignore`
+keeps build output (`target/`), agent worktrees and settings (`.claude/`), key and
+certificate files (`*.p12`, `*.p8`, `*.pem`, `*.key`, `*.cer`) and `.env` files out of
+commits.
 
 Local builds read Freya's Last.fm API key from `.env` in the checkout, which Git ignores:
 

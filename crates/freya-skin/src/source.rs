@@ -250,14 +250,14 @@ fn extract(package: &Path, out: &Path) -> Result<(), Error> {
         let mut entry = archive
             .by_index(i)
             .map_err(|e| Error::Package(e.to_string()))?;
-        // Rejects absolute paths and `..`, so nothing is written outside the folder.
-        let Some(relative) = entry.enclosed_name() else {
-            return Err(Error::Package(format!(
-                "unsafe path in package: {:?}",
-                entry.name()
-            )));
+        let name = entry.name().map(|n| n.into_owned()).unwrap_or_default();
+        // Checked by Freya's own rules as well as zip's, so a name cannot leave the folder on
+        // any system, whatever the zip crate lets through.
+        let relative = safe_relative_path(&name).filter(|_| entry.enclosed_name().is_some());
+        let path = relative.map(|r| out.join(r)).filter(|p| p.starts_with(out));
+        let Some(path) = path else {
+            return Err(Error::Package(format!("unsafe path in package: {name:?}")));
         };
-        let path = out.join(&relative);
         if entry.is_dir() {
             std::fs::create_dir_all(&path).map_err(|e| io(&path, e))?;
             continue;
@@ -282,6 +282,25 @@ fn extract(package: &Path, out: &Path) -> Result<(), Error> {
         )));
     }
     Ok(())
+}
+
+/// `name`, a path inside a package, as a relative path to put under the unpack folder: only
+/// plain names, separated by `/` or `\\`. `None` for anything else, the same on every system:
+/// empty names, `.` and `..`, and any `:`, which on Windows starts a drive (`D:`) or an
+/// alternate data stream anywhere in a path, so that joining it onto a folder could leave it.
+fn safe_relative_path(name: &str) -> Option<PathBuf> {
+    let mut path = PathBuf::new();
+    for part in name.split(['/', '\\']) {
+        match part {
+            // A folder entry ends in a separator.
+            "" if path.as_os_str().is_empty() => return None,
+            "" => continue,
+            "." | ".." => return None,
+            _ if part.contains([':', '\0']) => return None,
+            _ => path.push(part),
+        }
+    }
+    (!path.as_os_str().is_empty()).then_some(path)
 }
 
 fn read_package_file(package: &Path, name: &str) -> Result<Option<Vec<u8>>, Error> {
@@ -353,4 +372,37 @@ fn files_in(dir: &Path, deep: bool) -> Vec<PathBuf> {
 
 fn io(path: &Path, e: std::io::Error) -> Error {
     Error::Io(format!("{}: {e}", path.display()))
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::safe_relative_path;
+    use std::path::PathBuf;
+
+    #[test]
+    fn only_plain_names_are_unpacked() {
+        assert_eq!(
+            safe_relative_path("images/cover.png"),
+            Some(PathBuf::from("images").join("cover.png"))
+        );
+        assert_eq!(
+            safe_relative_path(r"images\cover.png"),
+            Some(PathBuf::from("images").join("cover.png"))
+        );
+        assert_eq!(safe_relative_path("images/"), Some(PathBuf::from("images")));
+        for unsafe_name in [
+            "",
+            "/etc/passwd",
+            r"\Windows\evil.dll",
+            "../x",
+            "a/../../x",
+            "./x",
+            "C:x",
+            "x/D:/Users/Public/evil.txt",
+            "skin.slint:stream",
+            "a\0b",
+        ] {
+            assert_eq!(safe_relative_path(unsafe_name), None, "{unsafe_name:?}");
+        }
+    }
 }

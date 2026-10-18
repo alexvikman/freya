@@ -12,6 +12,6 @@ regex = '''(?i)(?:apple|notar|app[-_ ]?specific|altool)[^\n]{0,60}?\b([a-z]{4}-[
 secretGroup = 1
 keywords = ["apple", "notar", "specific", "altool"]
 
-[[allowlists]]
-description = "Build output and agent worktrees, which are never committed"
-paths = ['''^target/''', '''^\.claude/''']
+# No paths are skipped. Freya only scans commits (`gitleaks git`), and a path skipped here
+# would be skipped there too: a token in a committed file under it would pass unseen.
+# `.gitignore` keeps build output and agent worktrees out of commits instead.

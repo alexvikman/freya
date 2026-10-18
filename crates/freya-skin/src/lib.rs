@@ -86,13 +86,22 @@ pub enum Error {
 
 fn compiler() -> Compiler {
     let mut compiler = Compiler::default();
-    let api_root = std::env::temp_dir().join(API_DIR);
-    compiler.set_library_paths(HashMap::from([("freya".to_owned(), api_root)]));
+    compiler.set_library_paths(HashMap::from([("freya".to_owned(), api_root())]));
     compiler.set_file_loader(|path: &Path| {
         let served = serve_api_file(path);
         Box::pin(async move { served })
     });
     compiler
+}
+
+/// Where `@freya` seems to live. Nothing is there: its files are served from memory. But Slint
+/// looks for the API's own imports (`std-widgets.slint`) in that folder on disk first, so it
+/// must be one only this user can write to: in the shared temporary folder on Linux, another
+/// user could plant one there and make every skin fail to compile.
+fn api_root() -> PathBuf {
+    directories::ProjectDirs::from("", "", "Freya")
+        .map(|dirs| dirs.cache_dir().join(API_DIR))
+        .unwrap_or_else(|| std::env::temp_dir().join(API_DIR))
 }
 
 /// Serves `@freya/vN.slint` from the binary. Returns `None` for every other file, so the
@@ -266,10 +275,17 @@ mod tests {
         let dir = temp_dir("zipslip");
         // `..`, and on Windows a verbatim path whose `/` only becomes a separator once it is
         // joined onto the folder (zip before 9.0.4 let that one through).
+        // Then names that are harmless on macOS and Linux but leave the folder on Windows: a
+        // drive after the first part (`x/D:/...` becomes the drive-relative `D:...`, which
+        // replaces the folder when joined onto it), and `\` as a separator.
         for name in [
             "../escaped.txt",
             r"\\?\C:\../escaped.txt",
             r"\\?\C:\a/../../escaped.txt",
+            "x/D:/Users/Public/escaped.txt",
+            "x/C:escaped.txt",
+            r"a\..\..\escaped.txt",
+            "skin.slint:stream",
         ] {
             let package = dir.join("evil.freyaskin");
             let mut zip = zip::ZipWriter::new(std::fs::File::create(&package).unwrap());

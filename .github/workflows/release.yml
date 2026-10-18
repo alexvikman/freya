@@ -155,6 +155,8 @@ jobs:
         run: rustup toolchain install
       - name: cargo-packager
         run: cargo install cargo-packager --locked --version "$CARGO_PACKAGER_VERSION"
+      - name: AppImage tools, pinned and checked
+        run: ci/appimage-tools.sh
       - name: Package
         # Freya's Last.fm API key, for scrobbling (see docs/RELEASING.md); only this step sees it.
         env:

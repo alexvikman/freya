@@ -10,6 +10,15 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 
+/// The AppImage this Freya runs from, if any. The AppImage runtime sets `APPIMAGE` to the
+/// image's path and `APPDIR` to where it mounted it; but both pass on to every program started
+/// from there, so another AppImage that starts Freya would make it replace that one. They are
+/// Freya's own only if this program runs from inside `APPDIR`.
+fn appimage(image: Option<PathBuf>, mounted: Option<PathBuf>, exe: &Path) -> Option<PathBuf> {
+    let (image, mounted) = (image?, mounted?);
+    (exe.starts_with(&mounted) && image.is_file()).then_some(image)
+}
+
 /// What this Freya can replace itself as.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Target {
@@ -31,9 +40,13 @@ impl Target {
             return bundled.then(|| Self::MacApp(app.to_owned()));
         }
         if cfg!(target_os = "linux") {
-            // Set by the AppImage runtime to the image's own path.
-            let image = std::env::var_os("APPIMAGE")?;
-            return Some(Self::AppImage(PathBuf::from(image)));
+            let exe = std::env::current_exe().ok()?;
+            return appimage(
+                std::env::var_os("APPIMAGE").map(PathBuf::from),
+                std::env::var_os("APPDIR").map(PathBuf::from),
+                &exe,
+            )
+            .map(Self::AppImage);
         }
         None
     }
@@ -214,6 +227,25 @@ mod tests {
             .arg(out))
         .unwrap();
         std::fs::read(out).unwrap()
+    }
+
+    #[test]
+    fn only_its_own_appimage_is_replaced() {
+        let dir = std::env::temp_dir().join(format!("freya-appimage-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let image = dir.join("Freya.AppImage");
+        std::fs::write(&image, b"").unwrap();
+        let mount = PathBuf::from("/tmp/.mount_FreyaAbC");
+        let inside = mount.join("usr/bin/freya");
+        assert_eq!(
+            appimage(Some(image.clone()), Some(mount.clone()), &inside),
+            Some(image.clone())
+        );
+        // Started from another AppImage, whose variables it inherited.
+        let elsewhere = Path::new("/usr/bin/freya");
+        assert_eq!(appimage(Some(image.clone()), Some(mount), elsewhere), None);
+        assert_eq!(appimage(Some(image), None, &inside), None);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

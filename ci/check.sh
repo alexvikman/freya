@@ -80,6 +80,7 @@ package='cargo install cargo-packager --locked --version 0.11.8 --root /target/t
          mkdir /tmp/freya && tar -C /src --exclude=./target -cf - . | tar -C /tmp/freya -xf -
          ln -s /target /tmp/freya/target && cd /tmp/freya
          rm -rf /target/packages
+         sh /src/ci/appimage-tools.sh
          APPIMAGE_EXTRACT_AND_RUN=1 /target/tools/bin/cargo-packager -p freya --release \
              --formats appimage,deb
          file /target/release/freya

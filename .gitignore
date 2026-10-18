@@ -1,4 +1,6 @@
 /target
+# Agent worktrees and local agent settings, which may hold tokens.
+/.claude/
 .DS_Store
 # Credentials never belong in the repository; see docs/RELEASING.md.
 *.p12

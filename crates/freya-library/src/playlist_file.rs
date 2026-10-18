@@ -223,11 +223,16 @@ fn seconds(time: Duration) -> String {
     format!("{:.3}", time.as_secs_f64())
 }
 
+/// One numbered entry of a PLS file: its File, Title and Length.
+type PlsSlot = (Option<String>, Option<String>, Option<Duration>);
+
 /// PLS has no way to say which part of a file to play, so a track of a CUE sheet is saved as
 /// its whole file.
 fn parse_pls(text: &str, base: &Path) -> Vec<Entry> {
-    // Keys are numbered: File1, Title1, Length1, ...
-    let mut slots: Vec<(Option<String>, Option<String>, Option<Duration>)> = Vec::new();
+    // Keys are numbered: File1, Title1, Length1, ... Kept by number rather than in a list as
+    // long as the highest one, which a file names freely: `File2000000000000=` would ask for
+    // terabytes.
+    let mut slots: std::collections::BTreeMap<usize, PlsSlot> = std::collections::BTreeMap::new();
     for line in text.lines().map(str::trim) {
         let Some((key, value)) = line.split_once('=') else {
             continue;
@@ -241,10 +246,7 @@ fn parse_pls(text: &str, base: &Path) -> Vec<Entry> {
         if n == 0 {
             continue;
         }
-        if slots.len() < n {
-            slots.resize(n, (None, None, None));
-        }
-        let slot = &mut slots[n - 1];
+        let slot = slots.entry(n).or_default();
         let value = value.trim().to_owned();
         match field {
             "file" => slot.0 = Some(value),
@@ -260,7 +262,7 @@ fn parse_pls(text: &str, base: &Path) -> Vec<Entry> {
         }
     }
     slots
-        .into_iter()
+        .into_values()
         .filter_map(|(file, title, duration)| {
             let mut entry = Entry::new(resolve(&file?, base));
             entry.duration = duration;
@@ -313,6 +315,18 @@ mod tests {
         assert_eq!(entries[0].path, Path::new("/x").join("a.mp3"));
         assert_eq!(entries[0].duration, Some(Duration::from_secs(10)));
         assert_eq!(entries[1].title.as_deref(), Some("Two"));
+    }
+
+    #[test]
+    fn huge_pls_numbers_take_no_memory() {
+        // These once asked for terabytes, or overflowed the list's size.
+        let text = "[playlist]\nFile2000000000000=http://x/a\nFile18446744073709551615=http://x/b\nFile3=http://x/c\n";
+        let entries = parse_pls(text, Path::new("/x"));
+        let paths: Vec<_> = entries.iter().map(|e| e.path.clone()).collect();
+        assert_eq!(
+            paths,
+            ["http://x/c", "http://x/a", "http://x/b"].map(std::path::PathBuf::from)
+        );
     }
 
     #[test]
