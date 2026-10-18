@@ -2015,13 +2015,9 @@ impl LibraryPanel {
         let kept = db.artist_edit(&artist).unwrap_or_default();
         self.finder.stop();
         self.forget_matches();
+        // Shown by `reload`, which reads the pictures the artist has now.
         if self.keep_picked(&artist) {
-            let key = Thumbnails::artist_key(Some(&artist));
-            if let Some(thumbnails) = &mut self.thumbnails {
-                thumbnails.forget_artist(&key);
-            }
-            self.recent_covers.remove(&key);
-            self.covers_ready += 1;
+            self.pictures_stale = true;
         }
         self.choices.clear();
         self.show_choices();
@@ -3349,6 +3345,9 @@ mod tests {
             .unwrap();
         assert!(square.chosen() && square.picture.is_some());
         assert!(panel.choices.is_empty(), "the dialog is done");
+        // Shown at once, not only after Freya starts again.
+        assert_eq!(panel.artist_source(Some("Freya")).picture, square.picture);
+        assert!(panel.backdrops.get("Freya").is_none());
 
         // Chosen: it stays.
         panel.edit_artist();
