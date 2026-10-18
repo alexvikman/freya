@@ -869,3 +869,19 @@ fn library_folders_change_only_when_saved() {
     assert_eq!(string_list(&ui, "Library", "folders").len(), 2);
     assert!(app.borrow().folders_draft.is_none());
 }
+
+#[test]
+fn album_sort_and_view_are_kept_in_the_settings() {
+    let app = silent_app("album-options");
+    let ui = current_ui(&app);
+    call(&ui, "Library", "set-album-view", &[text("list")]);
+    call(&ui, "Library", "set-album-sort", &[text("name")]);
+    // Values the API does not know change nothing.
+    call(&ui, "Library", "set-album-view", &[text("carousel")]);
+    call(&ui, "Library", "set-album-sort", &[text("year")]);
+    app.borrow_mut().refresh();
+    assert_eq!(app.borrow().settings.album_view, "list");
+    assert_eq!(app.borrow().settings.album_sort, "name");
+    assert_eq!(global(&ui, "Library", "album-view"), text("list"));
+    assert_eq!(global(&ui, "Library", "album-sort"), text("name"));
+}

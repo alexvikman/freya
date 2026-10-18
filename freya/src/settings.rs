@@ -42,6 +42,10 @@ pub struct Settings {
     pub lastfm_user: Option<String>,
     /// Whether plays are scrobbled while an account is connected.
     pub lastfm_scrobbling: bool,
+    /// How an artist's albums are ordered: "release-date" or "name".
+    pub album_sort: String,
+    /// How an artist's albums are shown: "grid" or "list" (each with its tracks).
+    pub album_view: String,
 }
 
 impl Default for Settings {
@@ -63,6 +67,8 @@ impl Default for Settings {
             skipped_update: None,
             lastfm_user: None,
             lastfm_scrobbling: true,
+            album_sort: "release-date".to_owned(),
+            album_view: "grid".to_owned(),
             damaged: false,
         }
     }

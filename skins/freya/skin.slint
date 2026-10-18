@@ -62,6 +62,8 @@ global Icons {
     out property <string> check: "M5 12.5 L10 17.5 L19 7";
     out property <string> back: "M15 5 L8 12 L15 19";
     out property <string> chevron: "M9 5 L16 12 L9 19";
+    out property <string> grid: "M4 4 H10 V10 H4 Z M14 4 H20 V10 H14 Z M4 14 H10 V20 H4 Z M14 14 H20 V20 H14 Z";
+    out property <string> list: "M9 6 H20 M9 12 H20 M9 18 H20 M4 6 H5 M4 12 H5 M4 18 H5";
     out property <string> search: "M10.5 4 A6.5 6.5 0 1 0 10.5 17 A6.5 6.5 0 1 0 10.5 4 Z M15.5 15.5 L20 20";
     out property <string> close: "M6 6 L18 18 M18 6 L6 18";
     out property <string> sidebar: "M4 4 H20 C21.1 4 22 4.9 22 6 V18 C22 19.1 21.1 20 20 20 H4 C2.9 20 2 19.1 2 18 V6 C2 4.9 2.9 4 4 4 Z M9 4 V20";
@@ -633,6 +635,22 @@ component Toggle inherits Rectangle {
 }
 
 /// The surface of pop-up menus.
+/// A heading over a group of menu items, like "Sort by".
+component MenuHeading inherits HorizontalLayout {
+    in property <string> text;
+
+    padding-left: 12px;
+    height: 28px;
+
+    Text {
+        text: root.text;
+        font-size: 12px;
+        font-weight: 600;
+        color: Theme.text-secondary;
+        vertical-alignment: center;
+    }
+}
+
 component MenuSurface inherits Rectangle {
     background: Theme.surface;
     border-radius: 8px;
@@ -1300,6 +1318,8 @@ component LibraryRowView inherits Rectangle {
     in property <LibraryRow> entry;
     in property <int> index;
     in property <bool> cursor;
+    /// The track playing, or paused: in the accent color, with bars for its number.
+    in property <bool> playing;
     callback pressed();
     /// A right-click, at this point in the window.
     callback context-menu(length, length);
@@ -1338,13 +1358,26 @@ component LibraryRowView inherits Rectangle {
         padding-right: 12px;
         spacing: 10px;
 
-        if entry.number != "": Text {
+        if entry.number != "" || root.playing: Rectangle {
             width: 30px;
-            text: entry.number;
-            font-size: 13px;
-            color: Theme.text-secondary;
-            horizontal-alignment: right;
-            vertical-alignment: center;
+
+            if !root.playing: Text {
+                width: parent.width;
+                height: parent.height;
+                text: root.entry.number;
+                font-size: 13px;
+                color: Theme.text-secondary;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+            if root.playing: Icon {
+                x: parent.width - self.width;
+                width: 16px;
+                height: 16px;
+                data: Icons.spectrum;
+                stroked: true;
+                color: Theme.accent;
+            }
         }
         VerticalLayout {
             horizontal-stretch: 1;
@@ -1353,7 +1386,7 @@ component LibraryRowView inherits Rectangle {
 
             Text {
                 text: entry.title;
-                color: Theme.text;
+                color: root.playing ? Theme.accent : Theme.text;
                 font-weight: entry.kind == "track" ? 400 : 600;
                 overflow: elide;
             }
@@ -1399,6 +1432,8 @@ component TrackTableRow inherits Rectangle {
     in property <int> index;
     in property <bool> cursor;
     in property <bool> played-column;
+    /// The track playing, or paused: in the accent color.
+    in property <bool> playing;
     callback pressed();
     /// A right-click, at this point in the window.
     callback context-menu(length, length);
@@ -1432,7 +1467,7 @@ component TrackTableRow inherits Rectangle {
             preferred-width: 0;
             horizontal-stretch: 3;
             text: entry.title;
-            color: Theme.text;
+            color: root.playing ? Theme.accent : Theme.text;
             vertical-alignment: center;
             overflow: elide;
         }
@@ -1626,6 +1661,98 @@ component AlbumTile inherits Rectangle {
 
 /// The library and its search results, as `Library.layout` says: a list, a table of tracks,
 /// or a grid of albums. The title, back button and search field are in the toolbar.
+/// An album in an artist's discography, over its tracks: cover, title, year and tracks, and
+/// buttons to play it or add it to Up Next.
+component DiscographyAlbum inherits Rectangle {
+    in property <LibraryRow> entry;
+    in property <int> index;
+    callback opened();
+
+    property <image> cover-image: entry.cover == "" ? @image-url("") : Library.cover(entry.cover, Library.covers-ready);
+
+    accessible-role: list-item;
+    accessible-label: entry.title + ", " + entry.detail;
+
+    HorizontalLayout {
+        padding-left: 20px;
+        padding-right: 20px;
+        padding-top: 32px;
+        padding-bottom: 16px;
+        spacing: 20px;
+
+        Rectangle {
+            width: 136px;
+            height: 136px;
+            border-radius: 6px;
+            clip: true;
+            background: Theme.surface;
+
+            if root.cover-image.width > 0: Image {
+                width: parent.width;
+                height: parent.height;
+                source: root.cover-image;
+                image-fit: cover;
+            }
+            if root.cover-image.width == 0: Icon {
+                width: 40px;
+                height: 40px;
+                data: Icons.note;
+                stroked: true;
+                color: Theme.text-secondary;
+            }
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.opened(); }
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 6px;
+
+            Text {
+                text: root.entry.title;
+                font-size: 26px;
+                font-weight: 700;
+                color: Theme.text;
+                overflow: elide;
+
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.opened(); }
+                }
+            }
+            Text {
+                text: "Album · " + root.entry.detail;
+                font-size: 13px;
+                color: Theme.text-secondary;
+            }
+            HorizontalLayout {
+                alignment: start;
+                spacing: 8px;
+                padding-top: 8px;
+
+                IconButton {
+                    icon: Icons.play;
+                    primary: true;
+                    size: 40px;
+                    label: "Play " + root.entry.title;
+                    tooltip: "Play";
+                    clicked => { Library.play(root.index); }
+                }
+                IconButton {
+                    icon: Icons.plus;
+                    stroked: true;
+                    size: 40px;
+                    label: "Add " + root.entry.title + " to Up Next";
+                    tooltip: "Add to Up Next";
+                    clicked => { Library.enqueue(root.index); }
+                }
+            }
+        }
+    }
+}
+
 component LibraryPanel inherits FocusScope {
     /// Ctrl/Cmd+F: move to the search field.
     callback find();
@@ -1651,7 +1778,11 @@ component LibraryPanel inherits FocusScope {
     property <int> cursor: -1;
     property <bool> grid-shown: Library.layout == "grid";
     property <bool> table-shown: Library.layout == "table";
-    property <bool> list-shown: !grid-shown && !table-shown;
+    property <bool> discography-shown: Library.layout == "discography";
+    property <bool> list-shown: !grid-shown && !table-shown && !discography-shown;
+    /// Over an artist's albums: how they are ordered and shown.
+    property <length> options-height: Library.album-options ? 44px : 0;
+    property <length> album-head-height: 188px;
     /// Recently Played and Most Played show when or how often each track was played.
     property <bool> played-column: Library.rows.length > 0 && Library.rows[0].played != "";
     property <bool> history-shown: Library.query == "" && (Library.section == "recently-played" || Library.section == "most-played");
@@ -1692,6 +1823,8 @@ component LibraryPanel inherits FocusScope {
             grid.content-y = root.scrolled-to(grid.content-y, grid.visible-height, floor(row / root.columns) * root.grid-line-height, root.grid-line-height);
         } else if (root.table-shown) {
             table.content-y = root.scrolled-to(table.content-y, table.visible-height, row * root.table-row-height, root.table-row-height);
+        } else if (root.discography-shown) {
+            // Albums and tracks differ in height; the keyboard row is shown where it is.
         } else {
             list.content-y = root.scrolled-to(list.content-y, list.visible-height, row * root.list-row-height, root.list-row-height);
         }
@@ -1719,6 +1852,7 @@ component LibraryPanel inherits FocusScope {
         list.content-y = 0;
         table.content-y = 0;
         grid.content-y = 0;
+        discography.content-y = 0;
     }
 
     /// Opens an artist, album or genre, or plays a track.
@@ -1779,12 +1913,15 @@ component LibraryPanel inherits FocusScope {
     // shown get no rows.
     list := ListView {
         visible: root.list-shown;
+        y: root.options-height;
+        height: root.height - root.options-height;
 
         for row[i] in root.list-shown ? Library.rows : []: LibraryRowView {
             height: root.list-row-height;
             entry: row;
             index: i;
             cursor: i == root.cursor;
+            playing: i == Library.playing-row;
             pressed => {
                 root.cursor = i;
                 root.focus();
@@ -1807,6 +1944,7 @@ component LibraryPanel inherits FocusScope {
                 entry: row;
                 index: i;
                 cursor: i == root.cursor;
+                playing: i == Library.playing-row;
                 pressed => {
                     root.cursor = i;
                     root.focus();
@@ -1819,6 +1957,8 @@ component LibraryPanel inherits FocusScope {
 
     grid := ListView {
         visible: root.grid-shown;
+        y: root.options-height;
+        height: root.height - root.options-height;
 
         for line in root.grid-shown ? root.grid-lines : 0: HorizontalLayout {
             height: root.grid-line-height;
@@ -1840,6 +1980,111 @@ component LibraryPanel inherits FocusScope {
                 }
                 activated => { root.activate(self.index); }
                 context-menu(x, y) => { root.open-menu(self.index, x, y); }
+            }
+        }
+    }
+
+    // An artist's albums, each followed by its tracks.
+    discography := ListView {
+        visible: root.discography-shown;
+        y: root.options-height;
+        height: root.height - root.options-height;
+
+        for row[i] in root.discography-shown ? Library.rows : []: Rectangle {
+            height: row.kind == "album" ? root.album-head-height : root.list-row-height;
+
+            if row.kind == "album": DiscographyAlbum {
+                entry: row;
+                index: i;
+                opened => { root.activate(i); }
+            }
+            if row.kind != "album": LibraryRowView {
+                entry: row;
+                index: i;
+                cursor: i == root.cursor;
+                playing: i == Library.playing-row;
+                pressed => {
+                    root.cursor = i;
+                    root.focus();
+                }
+                activated => { root.activate(i); }
+                context-menu(x, y) => { root.open-menu(i, x, y); }
+            }
+        }
+    }
+
+    if Library.album-options: HorizontalLayout {
+        y: 0;
+        height: root.options-height;
+        padding-right: 20px;
+        alignment: end;
+
+        Rectangle {
+            width: options-label.preferred-width;
+            border-radius: 6px;
+            background: options-touch.has-hover ? Theme.hover : transparent;
+            accessible-role: button;
+            accessible-label: "Sort and view";
+            accessible-action-default => { options-menu.show(); }
+
+            options-label := HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 8px;
+
+                Text {
+                    text: Library.album-sort == "name" ? "Name" : "Release date";
+                    font-size: 13px;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+                Icon {
+                    width: 16px;
+                    height: 16px;
+                    y: (parent.height - self.height) / 2;
+                    data: Library.album-view == "list" ? Icons.list : Icons.grid;
+                    stroked: true;
+                    color: Theme.text-secondary;
+                }
+            }
+            options-touch := TouchArea {
+                clicked => { options-menu.show(); }
+            }
+        }
+    }
+
+    options-menu := PopupWindow {
+        x: root.width - self.width - 20px;
+        y: root.options-height - 2px;
+        width: 220px;
+
+        MenuSurface {
+            VerticalLayout {
+                padding: 6px;
+
+                MenuHeading { text: "Sort by"; }
+                MenuItem {
+                    text: "Release date";
+                    checked: Library.album-sort == "release-date";
+                    activated => { Library.set-album-sort("release-date"); }
+                }
+                MenuItem {
+                    text: "Name";
+                    checked: Library.album-sort == "name";
+                    activated => { Library.set-album-sort("name"); }
+                }
+                MenuDivider { }
+                MenuHeading { text: "View as"; }
+                MenuItem {
+                    text: "List";
+                    checked: Library.album-view == "list";
+                    activated => { Library.set-album-view("list"); }
+                }
+                MenuItem {
+                    text: "Grid";
+                    checked: Library.album-view == "grid";
+                    activated => { Library.set-album-view("grid"); }
+                }
             }
         }
     }

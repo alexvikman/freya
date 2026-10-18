@@ -90,6 +90,43 @@ impl Level {
     }
 }
 
+/// How an artist's albums are ordered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlbumSort {
+    /// Newest first; albums without a year last.
+    ReleaseDate,
+    Name,
+}
+
+impl AlbumSort {
+    /// By its name in the skin API and settings: "release-date" or "name".
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "release-date" => Some(Self::ReleaseDate),
+            "name" => Some(Self::Name),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::ReleaseDate => "release-date",
+            Self::Name => "name",
+        }
+    }
+
+    fn sort(self, albums: &mut [Album]) {
+        let name = |a: &Album| a.name.as_deref().map(str::to_lowercase);
+        match self {
+            // `None` sorts first, so the newest-first order puts albums without a year last.
+            Self::ReleaseDate => {
+                albums.sort_by(|a, b| b.year.cmp(&a.year).then_with(|| name(a).cmp(&name(b))))
+            }
+            Self::Name => albums.sort_by_key(|a| (a.name.is_none(), name(a))),
+        }
+    }
+}
+
 /// What one row stands for.
 enum Item {
     Artist(Artist),
@@ -142,8 +179,15 @@ pub struct LibraryPanel {
     covers_ready: i32,
     /// Plays not yet written: a scan may be writing to the database.
     plays: Vec<(PathBuf, Option<Part>, SystemTime)>,
+    /// How an artist's albums are ordered, and whether they are shown as a list of albums
+    /// with their tracks rather than a grid of covers.
+    album_sort: AlbumSort,
+    album_list: bool,
     /// A scan was started and its end not yet taken in.
     scanning: bool,
+    /// The track playing, by its file and where in it it starts, and its row, or -1.
+    playing: Option<(PathBuf, Duration)>,
+    playing_row: i32,
 }
 
 /// The covers shown last, so scrolling back does not decode them again.
@@ -198,6 +242,10 @@ impl LibraryPanel {
             covers_ready: 0,
             plays: Vec::new(),
             scanning: false,
+            album_sort: AlbumSort::ReleaseDate,
+            album_list: false,
+            playing: None,
+            playing_row: -1,
         }
     }
 
@@ -364,10 +412,15 @@ impl LibraryPanel {
             Item::Genre(genre) => Level::GenreAlbums {
                 genre: genre.name.clone(),
             },
+            // The tracks shown, or in a discography the album's, playing from this one.
             Item::Track(_) | Item::Played(_) => {
-                let tracks: Vec<Track> =
-                    self.items.iter().filter_map(Item::track).cloned().collect();
-                let start = self.items[..row]
+                let section = self.section_of(row);
+                let tracks: Vec<Track> = self.items[section.clone()]
+                    .iter()
+                    .filter_map(Item::track)
+                    .cloned()
+                    .collect();
+                let start = self.items[section.start..row]
                     .iter()
                     .filter(|item| item.track().is_some())
                     .count();
@@ -378,6 +431,74 @@ impl LibraryPanel {
         self.query.clear();
         self.reload();
         None
+    }
+
+    /// The track playing or paused, by its file and where in the file it starts (a CUE
+    /// sheet's tracks share one), to mark its row.
+    pub fn set_playing(&mut self, track: Option<(&Path, Duration)>) {
+        let track = track.map(|(path, start)| (path.to_owned(), start));
+        if self.playing != track {
+            self.playing = track;
+            self.find_playing_row();
+        }
+    }
+
+    fn find_playing_row(&mut self) {
+        let Some((path, start)) = &self.playing else {
+            self.playing_row = -1;
+            return;
+        };
+        self.playing_row = self
+            .items
+            .iter()
+            .position(|item| {
+                item.track().is_some_and(|t| {
+                    t.path == *path && t.part.map_or(Duration::ZERO, |p| p.start) == *start
+                })
+            })
+            .map_or(-1, |row| row as i32);
+    }
+
+    /// Orders an artist's albums by `sort`.
+    pub fn set_album_sort(&mut self, sort: AlbumSort) {
+        if self.album_sort != sort {
+            self.album_sort = sort;
+            self.reload_albums();
+        }
+    }
+
+    /// Shows an artist's albums as a list, each with its tracks, or as a grid of covers.
+    pub fn set_album_list(&mut self, list: bool) {
+        if self.album_list != list {
+            self.album_list = list;
+            self.reload_albums();
+        }
+    }
+
+    fn reload_albums(&mut self) {
+        if matches!(self.level(), Level::ArtistAlbums { .. }) {
+            self.reload();
+        }
+    }
+
+    /// Whether an artist's albums are shown with their tracks, one album after another.
+    fn discography(&self) -> bool {
+        self.album_list && !self.searching() && matches!(self.level(), Level::ArtistAlbums { .. })
+    }
+
+    /// The rows of the album `row` is in, in a discography: from its album row to the next
+    /// album's. Elsewhere all rows.
+    fn section_of(&self, row: usize) -> std::ops::Range<usize> {
+        if !self.discography() {
+            return 0..self.items.len();
+        }
+        let is_album = |item: &Item| matches!(item, Item::Album(_));
+        let start = self.items[..=row].iter().rposition(is_album).unwrap_or(0);
+        let end = self.items[row + 1..]
+            .iter()
+            .position(is_album)
+            .map_or(self.items.len(), |next| row + 1 + next);
+        start..end
     }
 
     pub fn back(&mut self) {
@@ -424,9 +545,12 @@ impl LibraryPanel {
         })
     }
 
-    /// Every track of every row shown.
+    /// Every track of every row shown, each once: in a discography, the albums' tracks are
+    /// rows of their own too.
     pub fn all_tracks(&self) -> Vec<Track> {
+        let discography = self.discography();
         (0..self.items.len())
+            .filter(|&row| !discography || matches!(self.items[row], Item::Album(_)))
             .flat_map(|row| self.tracks_of(row))
             .collect()
     }
@@ -464,22 +588,27 @@ impl LibraryPanel {
                     .insert(cover_key(album), album.track.clone());
             }
         }
-        let album_artist = match self.level() {
+        let mut album_artist = match self.level() {
             Level::AlbumTracks { artist, .. } if !self.searching() => Some(artist.as_deref()),
             _ => None,
         };
+        let discography = self.discography();
         let by_count = *self.level() == Level::MostPlayed;
         let now = SystemTime::now();
-        let rows: Vec<Value> = self
-            .items
-            .iter()
-            .map(|item| {
-                row_value(item, album_artist, |played| {
-                    played_text(played, by_count, now)
-                })
-            })
-            .collect();
+        let mut rows = Vec::with_capacity(self.items.len());
+        for item in &self.items {
+            // In a discography, each album's tracks follow it, numbered as in the album.
+            if discography && let Item::Album(album) = item {
+                album_artist = Some(album.artist.as_deref());
+                rows.push(row_value(item, None, |_| String::new()));
+                continue;
+            }
+            rows.push(row_value(item, album_artist, |played| {
+                played_text(played, by_count, now)
+            }));
+        }
         self.rows.sync(rows);
+        self.find_playing_row();
         log::debug!("library rows loaded in {:?}", started.elapsed());
     }
 
@@ -506,7 +635,20 @@ impl LibraryPanel {
                 .into_iter()
                 .map(Item::Played)
                 .collect(),
-            Level::ArtistAlbums { artist } => albums(db.albums(artist.as_deref())?),
+            Level::ArtistAlbums { artist } => {
+                let mut list = db.albums(artist.as_deref())?;
+                self.album_sort.sort(&mut list);
+                if !self.album_list {
+                    return Ok(albums(list));
+                }
+                let mut items = Vec::new();
+                for album in list {
+                    let tracks = db.album_tracks(album.artist.as_deref(), album.name.as_deref())?;
+                    items.push(Item::Album(album));
+                    items.extend(tracks.into_iter().map(Item::Track));
+                }
+                items
+            }
             Level::GenreAlbums { genre } => albums(db.genre_albums(genre.as_deref())?),
             Level::AlbumTracks { artist, album } => {
                 tracks(db.album_tracks(artist.as_deref(), album.as_deref())?)
@@ -532,9 +674,15 @@ impl LibraryPanel {
                 _ => 0,
             })
             .sum();
+        // A discography's rows are its tracks as well as its albums.
+        let albums = self
+            .items
+            .iter()
+            .filter(|i| matches!(i, Item::Album(_)))
+            .count();
         let albums_and_tracks = format!(
             "{} · {}",
-            count(n, "album"),
+            count(albums, "album"),
             count(album_tracks as usize, "track")
         );
         match self.level() {
@@ -599,6 +747,8 @@ impl LibraryPanel {
         };
         let layout = if self.searching() {
             "table"
+        } else if self.discography() {
+            "discography"
         } else {
             self.level().layout()
         };
@@ -615,6 +765,18 @@ impl LibraryPanel {
             ("scanning", Value::Bool(self.scanning)),
             ("covers-ready", Value::Number(f64::from(self.covers_ready))),
             ("status", string(status)),
+            (
+                "album-options",
+                Value::Bool(
+                    !self.searching() && matches!(self.level(), Level::ArtistAlbums { .. }),
+                ),
+            ),
+            ("playing-row", Value::Number(f64::from(self.playing_row))),
+            ("album-sort", string(self.album_sort.name())),
+            (
+                "album-view",
+                string(if self.album_list { "list" } else { "grid" }),
+            ),
         ]
     }
 
@@ -837,6 +999,142 @@ mod tests {
         assert_eq!(ago(20 * 86_400), "2 weeks ago");
         assert_eq!(ago(100 * 86_400), "3 months ago");
         assert_eq!(ago(800 * 86_400), "2 years ago");
+    }
+
+    fn album(name: Option<&str>, year: Option<u32>) -> Album {
+        Album {
+            artist: Some("Shores of Null".into()),
+            name: name.map(Into::into),
+            year,
+            tracks: 2,
+            track: PathBuf::from("/music/x.flac"),
+        }
+    }
+
+    fn track(album: &str, number: u32) -> Track {
+        Track {
+            id: 0,
+            path: PathBuf::from(format!("/music/{album}/{number}.flac")),
+            part: None,
+            title: Some(format!("{album} {number}")),
+            artist: Some("Shores of Null".into()),
+            album: Some(album.into()),
+            album_artist: Some("Shores of Null".into()),
+            year: None,
+            track: Some(number),
+            disc: None,
+            duration: None,
+        }
+    }
+
+    #[test]
+    fn albums_sort_by_release_date_or_name() {
+        let names = |albums: &[Album]| -> Vec<Option<String>> {
+            albums.iter().map(|a| a.name.clone()).collect()
+        };
+        let mut albums = vec![
+            album(Some("quiescence"), Some(2014)),
+            album(None, Some(2030)),
+            album(Some("Homesick"), Some(2026)),
+            album(Some("Undated"), None),
+            album(Some("Beyond the Shores"), Some(2020)),
+        ];
+        // Newest first; without a year last.
+        AlbumSort::ReleaseDate.sort(&mut albums);
+        assert_eq!(
+            names(&albums),
+            [
+                None,
+                Some("Homesick".into()),
+                Some("Beyond the Shores".into()),
+                Some("quiescence".into()),
+                Some("Undated".into()),
+            ]
+        );
+        // By name whatever the case; without a name last.
+        AlbumSort::Name.sort(&mut albums);
+        assert_eq!(
+            names(&albums),
+            [
+                Some("Beyond the Shores".into()),
+                Some("Homesick".into()),
+                Some("quiescence".into()),
+                Some("Undated".into()),
+                None,
+            ]
+        );
+        assert_eq!(AlbumSort::from_name("name"), Some(AlbumSort::Name));
+        assert_eq!(
+            AlbumSort::from_name(AlbumSort::ReleaseDate.name()),
+            Some(AlbumSort::ReleaseDate)
+        );
+        assert_eq!(AlbumSort::from_name("year"), None);
+    }
+
+    #[test]
+    fn a_track_in_a_discography_plays_its_own_album() {
+        let mut panel = LibraryPanel::new(None, None);
+        panel.opened = vec![Level::ArtistAlbums {
+            artist: Some("Shores of Null".into()),
+        }];
+        panel.album_list = true;
+        panel.items = vec![
+            Item::Album(album(Some("Homesick"), Some(2026))),
+            Item::Track(track("Homesick", 1)),
+            Item::Track(track("Homesick", 2)),
+            Item::Album(album(Some("Quiescence"), Some(2014))),
+            Item::Track(track("Quiescence", 1)),
+            Item::Track(track("Quiescence", 2)),
+        ];
+        assert_eq!(panel.values()[1].1, string("discography"));
+        let (tracks, start) = panel.activate(5).unwrap();
+        let titles: Vec<_> = tracks.iter().filter_map(|t| t.title.clone()).collect();
+        assert_eq!(titles, ["Quiescence 1", "Quiescence 2"]);
+        assert_eq!(start, 1);
+        let (tracks, start) = panel.activate(1).unwrap();
+        assert_eq!(tracks.len(), 2);
+        assert_eq!(start, 0);
+
+        // As a grid, the same level is covers.
+        panel.album_list = false;
+        assert_eq!(panel.values()[1].1, string("grid"));
+    }
+
+    #[test]
+    fn the_track_playing_is_marked_by_its_file_and_part() {
+        let mut panel = LibraryPanel::new(None, None);
+        let disc = |n: u64| Track {
+            path: PathBuf::from("/music/disc.flac"),
+            part: Some(Part {
+                start: Duration::from_secs(n * 200),
+                end: None,
+            }),
+            ..track("Disc", n as u32)
+        };
+        panel.items = vec![
+            Item::Track(track("Homesick", 1)),
+            Item::Track(disc(0)),
+            Item::Track(disc(1)),
+        ];
+        let playing_row = |panel: &LibraryPanel| match panel
+            .values()
+            .into_iter()
+            .find(|(name, _)| *name == "playing-row")
+        {
+            Some((_, Value::Number(row))) => row,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(playing_row(&panel), -1.0);
+        // The second track of a disc ripped as one file: the same file, a later start.
+        panel.set_playing(Some((
+            Path::new("/music/disc.flac"),
+            Duration::from_secs(200),
+        )));
+        assert_eq!(playing_row(&panel), 2.0);
+        panel.set_playing(Some((Path::new("/music/Homesick/1.flac"), Duration::ZERO)));
+        assert_eq!(playing_row(&panel), 0.0);
+        panel.set_playing(None);
+        assert_eq!(playing_row(&panel), -1.0);
     }
 
     #[test]

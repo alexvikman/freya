@@ -18,7 +18,7 @@ use slint_interpreter::{ComponentHandle, ComponentInstance, Value};
 
 use super::app_icon;
 use super::equalizer::{self, EqualizerSettings};
-use super::library::{self, LibraryPanel};
+use super::library::{self, AlbumSort, LibraryPanel};
 use super::listening::Listening;
 use super::playlists::Playlists;
 use super::radio::{self, Stations};
@@ -390,10 +390,14 @@ impl App {
         collections: Collections,
     ) -> Self {
         let Collections {
-            library,
+            mut library,
             stations,
             playlists,
         } = collections;
+        if let Some(sort) = AlbumSort::from_name(&settings.album_sort) {
+            library.set_album_sort(sort);
+        }
+        library.set_album_list(settings.album_view == "list");
         let lastfm = LastFm::start(settings.lastfm_user.clone());
         let mut app = Self {
             player,
@@ -1260,6 +1264,12 @@ impl App {
             );
         }
         if view.library_out.available {
+            let playing = status
+                .track
+                .as_ref()
+                .filter(|_| status.state != PlaybackState::Stopped)
+                .map(|track| (track.path.as_path(), track.start));
+            self.library.set_playing(playing);
             self.library.show_folders(
                 ui,
                 &self.settings.library_folders,

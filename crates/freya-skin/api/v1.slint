@@ -144,9 +144,21 @@ export global Library {
     /// "recently-played" or "most-played". Change it with `show`.
     in property <string> section: "artists";
     /// How the rows are best shown: "list" (artists, genres, an album's tracks), "grid"
-    /// (albums, as covers) or "table" (tracks from many albums, with artist and album columns,
-    /// and in Recently Played and Most Played the rows' `played`).
+    /// (albums, as covers), "table" (tracks from many albums, with artist and album columns,
+    /// and in Recently Played and Most Played the rows' `played`) or "discography" (an
+    /// artist's albums with `album-view` "list": each album row followed by its tracks, numbered
+    /// as in the album; activating a track plays its album from it).
     in property <string> layout: "list";
+    /// The row of the track playing or paused, or -1 when it is not among the rows.
+    in property <int> playing-row: -1;
+    /// True while an artist's albums are shown, which `album-sort` and `album-view` apply to.
+    in property <bool> album-options;
+    /// How an artist's albums are ordered: "release-date" (newest first) or "name". Kept
+    /// between runs.
+    in property <string> album-sort: "release-date";
+    /// How an artist's albums are shown: "grid" (covers) or "list" (layout "discography").
+    /// Kept between runs.
+    in property <string> album-view: "grid";
     /// Heading for the rows: "Artists", "Albums", "Songs", "Genres", "Recently Added",
     /// "Recently Played", "Most Played", an artist, a genre, an album, or "Search".
     in property <string> title;
@@ -189,6 +201,9 @@ export global Library {
     /// Empty (zero width) while it is being made, and for albums without one. Covers are made
     /// as they are first asked for, so only call it for rows that are on screen.
     pure callback cover(string, int) -> image;
+    /// Change `album-sort` or `album-view`.
+    callback set-album-sort(string);
+    callback set-album-view(string);
     /// Back to the list shown before: from an album to the artist or genre it was opened from,
     /// and so on up to the section's own list. Ends a search first.
     callback back();

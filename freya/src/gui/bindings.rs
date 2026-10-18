@@ -11,6 +11,7 @@ use slint_interpreter::Value;
 
 use super::app::App;
 use super::equalizer::{self, EqualizerSettings};
+use super::library::AlbumSort;
 use super::skin_window::SkinWindow;
 use super::{library, skin_state, skins, title_bar, visualizer};
 use crate::update;
@@ -246,6 +247,30 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
         }),
     );
     bind("Library", "back", Box::new(|app, _| app.library.back()));
+    bind(
+        "Library",
+        "set-album-sort",
+        Box::new(|app, args| {
+            if let Some(Value::String(name)) = args.first()
+                && let Some(sort) = AlbumSort::from_name(name)
+            {
+                app.settings.album_sort = sort.name().to_owned();
+                app.library.set_album_sort(sort);
+            }
+        }),
+    );
+    bind(
+        "Library",
+        "set-album-view",
+        Box::new(|app, args| {
+            if let Some(Value::String(view)) = args.first()
+                && (view == "grid" || view == "list")
+            {
+                app.settings.album_view = view.to_string();
+                app.library.set_album_list(view == "list");
+            }
+        }),
+    );
 
     bind(
         "Playlists",

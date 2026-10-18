@@ -524,6 +524,10 @@ skin_api! {
         Library."query" => set_query, get_query;
         Library."folders" => set_folders, get_folders;
         Library."folders-draft" => set_folders_draft, get_folders_draft;
+        Library."album-options" => set_album_options, get_album_options;
+        Library."playing-row" => set_playing_row, get_playing_row;
+        Library."album-sort" => set_album_sort, get_album_sort;
+        Library."album-view" => set_album_view, get_album_view;
         Library."scanning" => set_scanning, get_scanning;
         Library."status" => set_status, get_status;
 
@@ -620,6 +624,8 @@ skin_api! {
         Radio."add" => on_add, invoke_add(name: SharedString, url: SharedString);
         Radio."remove" => on_remove, invoke_remove(row: i32);
         Library."back" => on_back, invoke_back();
+        Library."set-album-sort" => on_set_album_sort, invoke_set_album_sort(sort: SharedString);
+        Library."set-album-view" => on_set_album_view, invoke_set_album_view(view: SharedString);
         Library."add-folder" => on_add_folder, invoke_add_folder();
         Library."remove-folder" => on_remove_folder, invoke_remove_folder(index: i32);
         Library."edit-folders" => on_edit_folders, invoke_edit_folders();
