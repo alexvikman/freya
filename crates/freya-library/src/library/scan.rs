@@ -128,6 +128,13 @@ pub fn scan_with(
             .filter(|p| !offline.iter().any(|f| p.starts_with(f)))
             .collect()
     };
+    // What the files that are gone were, to know them again if they were only moved.
+    let mut moved = Moved::default();
+    if !cancel.load(Ordering::Relaxed) {
+        for path in &gone {
+            moved.note(library, path)?;
+        }
+    }
     if !gone.is_empty() && !cancel.load(Ordering::Relaxed) {
         let tx = library.transaction()?;
         for path in &gone {
@@ -183,8 +190,12 @@ pub fn scan_with(
             let source = found.source();
             let added = match added(&tx, source)? {
                 Some(added) => added,
-                None if first => file_time(source).unwrap_or(now).min(now),
-                None => now,
+                None => match moved.take(&tx, &tracks)? {
+                    // Moved or renamed: it came in when it first did.
+                    Some(added) => added,
+                    None if first => file_time(source).unwrap_or(now).min(now),
+                    None => now,
+                },
             };
             remove(&tx, source)?;
             for track in &tracks {
@@ -235,6 +246,59 @@ pub fn scan_with(
         }
     }
     Ok(summary)
+}
+
+/// Files gone from where they were, by their fingerprints, to know them again where they were
+/// moved to.
+#[derive(Default)]
+struct Moved {
+    /// Each audio file's path, and when its tracks came in; none for a fingerprint two files
+    /// that are gone shared, which tells neither apart.
+    by_fingerprint: HashMap<String, Option<(String, i64)>>,
+}
+
+impl Moved {
+    /// Notes the audio files read from `source`, which is gone.
+    fn note(&mut self, library: &Library, source: &Path) -> Result<()> {
+        let mut statement = library.db.prepare_cached(
+            "SELECT fingerprint, path, min(added) FROM tracks
+             WHERE source = ?1 AND fingerprint IS NOT NULL GROUP BY path",
+        )?;
+        let rows = statement.query_map([source.to_string_lossy()], |row| {
+            Ok((row.get::<_, String>(0)?, row.get(1)?, row.get(2)?))
+        })?;
+        for row in rows {
+            let (fingerprint, path, added) = row?;
+            self.by_fingerprint
+                .entry(fingerprint)
+                .and_modify(|known| *known = None)
+                .or_insert(Some((path, added)));
+        }
+        Ok(())
+    }
+
+    /// When `tracks`, new in the library, first came in, if their files were moved from
+    /// where they were; their plays then follow them.
+    fn take(&mut self, db: &rusqlite::Connection, tracks: &[NewTrack]) -> Result<Option<i64>> {
+        let mut first = None;
+        let mut paths = HashSet::new();
+        for track in tracks {
+            let Some(fingerprint) = &track.fingerprint else {
+                continue;
+            };
+            if !paths.insert(&track.path) {
+                continue;
+            }
+            let Some(Some((before, added))) = self.by_fingerprint.remove(fingerprint) else {
+                continue;
+            };
+            db.prepare_cached("UPDATE plays SET path = ?1 WHERE path = ?2")?
+                .execute(rusqlite::params![track.path.to_string_lossy(), before])?;
+            log::info!("{before} was moved to {}", track.path.display());
+            first = Some(first.map_or(added, |first: i64| first.min(added)));
+        }
+        Ok(first)
+    }
 }
 
 /// Gives artists without a picture the one in their folder (artist.jpg, fanart.jpg), found
@@ -533,25 +597,40 @@ fn file_time(path: &Path) -> Option<i64> {
 
 /// Reads the tracks of what was found: an audio file is one, a disc has its sheet's.
 fn read_tracks(found: &Found) -> Vec<NewTrack> {
+    let fingerprint = |path: &Path| match files::fingerprint(path) {
+        Ok(fingerprint) => Some(fingerprint),
+        Err(e) => {
+            log::debug!("no fingerprint of {}: {e}", path.display());
+            None
+        }
+    };
     match found {
         // Unreadable files are still listed, under their file name.
         Found::File(path) => vec![NewTrack {
             path: path.clone(),
             part: None,
             tags: read_tags(path).unwrap_or_default(),
+            fingerprint: fingerprint(path),
         }],
         Found::Disc(disc) => {
-            let files: HashMap<&Path, TagInfo> = disc
+            let files: HashMap<&Path, (TagInfo, Option<String>)> = disc
                 .files
                 .iter()
-                .map(|file| (file.as_path(), read_tags(file).unwrap_or_default()))
+                .map(|file| {
+                    let tags = read_tags(file).unwrap_or_default();
+                    (file.as_path(), (tags, fingerprint(file)))
+                })
                 .collect();
             disc.tracks
                 .iter()
-                .map(|track| NewTrack {
-                    path: track.path.clone(),
-                    part: Some(track.part),
-                    tags: track.tags_with(&files[track.path.as_path()]),
+                .map(|track| {
+                    let (tags, fingerprint) = &files[track.path.as_path()];
+                    NewTrack {
+                        path: track.path.clone(),
+                        part: Some(track.part),
+                        tags: track.tags_with(tags),
+                        fingerprint: fingerprint.clone(),
+                    }
                 })
                 .collect()
         }

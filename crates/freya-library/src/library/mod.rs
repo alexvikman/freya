@@ -32,7 +32,7 @@ pub use scan::{ScanEvent, ScanOptions, ScanSummary, Scanner, scan, scan_with};
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Bumped whenever the tracks' tables change; they are then rebuilt.
-const SCHEMA_VERSION: i32 = 4;
+const SCHEMA_VERSION: i32 = 5;
 
 const SCHEMA: &str = "
     CREATE TABLE tracks (
@@ -48,6 +48,9 @@ const SCHEMA: &str = "
         source TEXT NOT NULL,
         size INTEGER NOT NULL,
         modified INTEGER NOT NULL,
+        -- The audio file's fingerprint (see `files::fingerprint`), by which its plays follow
+        -- it when it is moved or renamed.
+        fingerprint TEXT,
         title TEXT,
         artist TEXT,
         album TEXT,
@@ -66,6 +69,7 @@ const SCHEMA: &str = "
     CREATE INDEX tracks_by_album ON tracks (album_artist, album);
     CREATE INDEX tracks_by_source ON tracks (source);
     CREATE INDEX tracks_by_path ON tracks (path, start_ms);
+    CREATE INDEX tracks_by_fingerprint ON tracks (fingerprint);
 
     -- Words to search in, one row per track with the track's id as rowid. Diacritics are
     -- ignored, so \"beyonce\" finds \"Beyoncé\".
@@ -272,16 +276,28 @@ impl Library {
         // WAL lets the window read while a scan writes on another connection.
         db.pragma_update(None, "journal_mode", "WAL")?;
         db.pragma_update(None, "synchronous", "NORMAL")?;
-        let version: i32 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        let mut version: i32 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        // Each file is read again on the next scan, which keeps when its tracks came in.
         if version == 3 {
-            // Each file is read again on the next scan, which keeps when its tracks came in.
             log::info!("adding artists' MusicBrainz ids to the library");
             db.execute_batch(
                 "ALTER TABLE tracks ADD COLUMN artist_mbid TEXT;
                  UPDATE tracks SET modified = -1;",
             )?;
-            db.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-        } else if version != SCHEMA_VERSION {
+            version = 4;
+            db.pragma_update(None, "user_version", version)?;
+        }
+        if version == 4 {
+            log::info!("adding files' fingerprints to the library");
+            db.execute_batch(
+                "ALTER TABLE tracks ADD COLUMN fingerprint TEXT;
+                 CREATE INDEX tracks_by_fingerprint ON tracks (fingerprint);
+                 UPDATE tracks SET modified = -1;",
+            )?;
+            version = 5;
+            db.pragma_update(None, "user_version", version)?;
+        }
+        if version != SCHEMA_VERSION {
             if version != 0 {
                 log::info!("rebuilding the library (layout {version} → {SCHEMA_VERSION})");
             }
@@ -653,6 +669,8 @@ struct NewTrack {
     path: PathBuf,
     part: Option<Part>,
     tags: TagInfo,
+    /// The audio file's fingerprint, when it could be read.
+    fingerprint: Option<String>,
 }
 
 /// Adds a track read from `source`, which had `stamp` then. `added` is when the track came into
@@ -681,8 +699,9 @@ fn put(
         .prepare_cached(
             "INSERT INTO tracks (path, start_ms, end_ms, source, size, modified, title, artist,
                                  album, album_artist, artist_mbid, genre, year, track, disc,
-                                 duration_ms, added)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+                                 duration_ms, added, fingerprint)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+                     ?18)
              RETURNING id",
         )?
         .query_row(
@@ -704,6 +723,7 @@ fn put(
                 tags.disc,
                 tags.duration.map(millis),
                 added,
+                track.fingerprint,
             ],
             |row| row.get(0),
         )?;

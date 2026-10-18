@@ -171,3 +171,59 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// How much of each end of a file its fingerprint reads.
+const FINGERPRINT_CHUNK: u64 = 64 * 1024;
+
+/// A fingerprint of the file at `path` that stays the same when the file is moved or renamed:
+/// its size and the sum of its first and last 64 KiB as 64-bit words, in 16 hex digits. Quick
+/// to take, as only those are read.
+pub fn fingerprint(path: &Path) -> std::io::Result<String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = std::fs::File::open(path)?;
+    let size = file.metadata()?.len();
+    let mut sum = size;
+    let mut add = |file: &mut std::fs::File, length: u64| -> std::io::Result<()> {
+        let mut chunk = vec![0; length as usize];
+        file.read_exact(&mut chunk)?;
+        for word in chunk.chunks(8) {
+            let mut bytes = [0; 8];
+            bytes[..word.len()].copy_from_slice(word);
+            sum = sum.wrapping_add(u64::from_le_bytes(bytes));
+        }
+        Ok(())
+    };
+    let head = size.min(FINGERPRINT_CHUNK);
+    add(&mut file, head)?;
+    let tail = size.saturating_sub(FINGERPRINT_CHUNK).max(head);
+    file.seek(SeekFrom::Start(tail))?;
+    add(&mut file, size - tail)?;
+    Ok(format!("{sum:016x}"))
+}
+
+#[cfg(test)]
+mod fingerprint_tests {
+    use super::*;
+
+    #[test]
+    fn a_fingerprint_follows_the_content_not_the_name() {
+        let dir = std::env::temp_dir().join(format!("freya-fingerprint-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let content: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+        std::fs::write(dir.join("a.flac"), &content).unwrap();
+        std::fs::write(dir.join("b.flac"), &content).unwrap();
+        let mut other = content.clone();
+        other[10] ^= 1;
+        std::fs::write(dir.join("c.flac"), &other).unwrap();
+        std::fs::write(dir.join("small.flac"), b"tiny").unwrap();
+
+        let a = fingerprint(&dir.join("a.flac")).unwrap();
+        assert_eq!(a.len(), 16);
+        assert_eq!(a, fingerprint(&dir.join("b.flac")).unwrap());
+        assert_ne!(a, fingerprint(&dir.join("c.flac")).unwrap());
+        assert!(fingerprint(&dir.join("small.flac")).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

@@ -39,6 +39,7 @@ fn whole_file(path: &str, tags: &TagInfo) -> NewTrack {
         path: path.into(),
         part: None,
         tags: tags.clone(),
+        fingerprint: None,
     }
 }
 
@@ -501,6 +502,7 @@ fn plays_of_a_cue_sheet_track_count_for_that_track_only() {
                 end: None,
             }),
             tags: tags("A", "Live", &format!("Part {n}"), n),
+            fingerprint: None,
         };
         put(&tx, Path::new("/m/disc.cue"), STAMP, 0, &track).unwrap();
     }
@@ -575,11 +577,22 @@ fn adds_artist_ids_to_a_library_and_reads_every_file_again() {
     add_at(&mut library, "/m/1.mp3", &tags("A", "B", "C", 1), 5);
     library
         .db
-        .execute_batch("ALTER TABLE tracks DROP COLUMN artist_mbid; PRAGMA user_version = 3;")
+        .execute_batch(
+            "DROP INDEX tracks_by_fingerprint;
+             ALTER TABLE tracks DROP COLUMN fingerprint;
+             ALTER TABLE tracks DROP COLUMN artist_mbid;
+             PRAGMA user_version = 3;",
+        )
         .unwrap();
     drop(library);
 
+    // Both the ids and, after them, the files' fingerprints.
     let mut library = Library::open(&path).unwrap();
+    let fingerprint: Option<String> = library
+        .db
+        .query_row("SELECT fingerprint FROM tracks", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(fingerprint, None, "taken at the next scan");
     // Changed as far as a scan can tell, so it reads the tags again.
     let stamp = library.sources().unwrap()[Path::new("/m/1.mp3")];
     assert_eq!(stamp.modified, -1);
@@ -1038,5 +1051,42 @@ fn a_scan_of_one_folder_leaves_the_others_alone() {
         "a was not looked through"
     );
     assert!(paths.contains(&b.join("other.mp3")));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn plays_follow_a_file_moved_or_renamed() {
+    let dir = temp_dir("moved");
+    let music = dir.join("music");
+    let before = music.join("Artist").join("Album");
+    std::fs::create_dir_all(&before).unwrap();
+    std::fs::copy(fixtures().join("sine.mp3"), before.join("01.mp3")).unwrap();
+    let mut library = Library::open_in_memory().unwrap();
+    scan_now(&mut library, std::slice::from_ref(&music));
+    let at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+    library
+        .record_play(&before.join("01.mp3"), None, at)
+        .unwrap();
+    library
+        .record_play(&before.join("01.mp3"), None, at)
+        .unwrap();
+    let added = |library: &Library| -> i64 {
+        library
+            .db
+            .query_row("SELECT added FROM tracks", [], |row| row.get(0))
+            .unwrap()
+    };
+    let first = added(&library);
+
+    let after = music.join("Artist").join("Album (Remaster)");
+    std::fs::create_dir_all(&after).unwrap();
+    std::fs::rename(before.join("01.mp3"), after.join("01 Sine.mp3")).unwrap();
+    let summary = scan_now(&mut library, std::slice::from_ref(&music));
+    assert_eq!((summary.added, summary.removed), (1, 1));
+    let played = library.most_played(10).unwrap();
+    assert_eq!(played.len(), 1);
+    assert_eq!(played[0].track.path, after.join("01 Sine.mp3"));
+    assert_eq!(played[0].plays, 2);
+    assert_eq!(added(&library), first, "it came in when it first did");
     let _ = std::fs::remove_dir_all(&dir);
 }
