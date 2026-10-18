@@ -996,3 +996,47 @@ fn a_scan_asks_the_internet_only_for_what_artists_lack() {
     assert!(library.artist_text("Unknown").unwrap().is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_scan_of_one_folder_leaves_the_others_alone() {
+    let dir = temp_dir("one-folder");
+    let (a, b) = (dir.join("a"), dir.join("b"));
+    for folder in [&a, &b] {
+        std::fs::create_dir_all(folder).unwrap();
+        std::fs::copy(fixtures().join("sine.mp3"), folder.join("sine.mp3")).unwrap();
+    }
+    let folders = [a.clone(), b.clone()];
+    let mut library = Library::open_in_memory().unwrap();
+    scan_now(&mut library, &folders);
+    assert_eq!(library.all_tracks().unwrap().len(), 2);
+
+    // Gone from both; only the folder scanned notices.
+    std::fs::remove_file(a.join("sine.mp3")).unwrap();
+    std::fs::remove_file(b.join("sine.mp3")).unwrap();
+    std::fs::copy(fixtures().join("sine.mp3"), b.join("other.mp3")).unwrap();
+    let options = ScanOptions {
+        only: Some(b.clone()),
+        ..ScanOptions::default()
+    };
+    let summary = scan_with(
+        &mut library,
+        &folders,
+        &options,
+        &AtomicBool::new(false),
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!((summary.added, summary.removed), (1, 1));
+    let paths: Vec<PathBuf> = library
+        .all_tracks()
+        .unwrap()
+        .into_iter()
+        .map(|t| t.path)
+        .collect();
+    assert!(
+        paths.contains(&a.join("sine.mp3")),
+        "a was not looked through"
+    );
+    assert!(paths.contains(&b.join("other.mp3")));
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -5972,8 +5972,63 @@ component SettingsView inherits Rectangle {
             if Library.folders.length == 0: SettingsRow {
                 label: "No music folders yet. Freya lists the music in them by artist and album.";
             }
-            for folder in Library.folders: SettingsRow {
+            for folder[i] in Library.folders: SettingsRow {
                 label: folder;
+
+                if !Library.scanning: VerticalLayout {
+                    alignment: center;
+
+                    TextButton {
+                        text: "Scan";
+                        clicked => { Library.scan-one-folder(i); }
+                    }
+                }
+            }
+            SettingsRow {
+                label: Library.scanning ? Library.status
+                    : "Freya scans the folders each time it starts: it reads new and changed files, makes their albums' covers, takes in the pictures in artists' folders, and asks the internet for what artists lack, as allowed below.";
+
+                VerticalLayout {
+                    alignment: center;
+
+                    HorizontalLayout {
+                        spacing: 8px;
+
+                        if Library.scanning: TextButton {
+                            text: "Stop";
+                            clicked => { Library.stop-scan(); }
+                        }
+                        if !Library.scanning: TextButton {
+                            text: "Scan";
+                            clicked => { Library.rescan(); }
+                        }
+                        TextButton {
+                            text: "Manage Folders…";
+                            clicked => { root.manage-folders(); }
+                        }
+                    }
+                }
+            }
+            SettingsRow {
+                label: "Rescan files";
+                detail: "Reads every file and makes every album cover again, changed or not. Takes longer; for tags or covers that changed without the files' dates. Pictures and what the internet said of artists stay as they are.";
+
+                if !Library.scanning: VerticalLayout {
+                    alignment: center;
+
+                    TextButton {
+                        text: "Rescan";
+                        clicked => { Library.rescan-files(); }
+                    }
+                }
+            }
+        }
+
+        SettingsSection {
+            title: "Artists";
+
+            SettingsRow {
+                label: "A scan asks the internet only about artists who lack something. A picture an artist has stays theirs until you change it.";
             }
             SettingsRow {
                 label: "Artist biographies from Last.fm";
@@ -6005,7 +6060,7 @@ component SettingsView inherits Rectangle {
             }
             SettingsRow {
                 label: "Artist pictures from Deezer";
-                detail: "For artists without a picture of their own in their folder (artist.jpg). Deezer is told the artists' names. Without it, their album covers stand in.";
+                detail: "For artists without a picture in their folder (artist.jpg) or from fanart.tv. Deezer is told the artists' names. Without one, their album covers stand in.";
 
                 VerticalLayout {
                     alignment: center;
@@ -6018,9 +6073,9 @@ component SettingsView inherits Rectangle {
                 }
             }
             SettingsRow {
-                label: "Wide artist pictures from fanart.tv";
-                detail: Library.fanart-key == "" ? "Add your personal fanart.tv API key to show a wide picture across the top of an artist's page. A picture in the artist's folder (fanart.jpg) comes first."
-                    : "Your personal API key is saved. A picture in the artist's folder (fanart.jpg) comes first.";
+                label: "Artist pictures from fanart.tv";
+                detail: Library.fanart-key == "" ? "Add your personal fanart.tv API key for pictures of artists, and a wide one across the top of their page. Pictures in the artist's folder (artist.jpg, fanart.jpg) come first."
+                    : "Your personal API key is saved. Pictures in the artist's folder (artist.jpg, fanart.jpg) come first.";
 
                 VerticalLayout {
                     alignment: center;
@@ -6028,26 +6083,6 @@ component SettingsView inherits Rectangle {
                     TextButton {
                         text: Library.fanart-key == "" ? "Add Key…" : "Change Key…";
                         clicked => { root.edit-fanart-key(); }
-                    }
-                }
-            }
-            SettingsRow {
-                label: Library.scanning ? Library.status : "Freya checks the folders for changes each time it starts.";
-
-                VerticalLayout {
-                    alignment: center;
-
-                    HorizontalLayout {
-                        spacing: 8px;
-
-                        TextButton {
-                            text: "Check for Changes";
-                            clicked => { Library.rescan(); }
-                        }
-                        TextButton {
-                            text: "Manage Folders…";
-                            clicked => { root.manage-folders(); }
-                        }
                     }
                 }
             }
@@ -6618,8 +6653,14 @@ component Toolbar inherits HorizontalLayout {
                     activated => { root.manage-folders(); }
                 }
                 if root.view == "library": MenuItem {
-                    text: "Check folders for changes";
-                    activated => { Library.rescan(); }
+                    text: Library.scanning ? "Stop scanning" : "Scan library";
+                    activated => {
+                        if Library.scanning {
+                            Library.stop-scan();
+                        } else {
+                            Library.rescan();
+                        }
+                    }
                 }
                 if root.view == "queue" || root.view == "library" || root.view == "playlist": MenuDivider { }
                 MenuItem {

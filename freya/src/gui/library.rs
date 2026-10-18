@@ -628,11 +628,37 @@ impl LibraryPanel {
         self.scanning
     }
 
+    /// Brings the library in line with `folders`: reads what changed, and asks the internet
+    /// for what artists lack.
     pub fn rescan(&mut self, folders: &[PathBuf]) {
+        self.scan(folders, None, false);
+    }
+
+    /// Reads every file in `folders` again and makes every cover again, changed or not.
+    pub fn rescan_files(&mut self, folders: &[PathBuf]) {
+        self.scan(folders, None, true);
+    }
+
+    /// Looks through the `index`th of `folders` only.
+    pub fn scan_folder(&mut self, folders: &[PathBuf], index: usize) {
+        if let Some(folder) = folders.get(index) {
+            self.scan(folders, Some(folder.clone()), false);
+        }
+    }
+
+    /// Stops the scan running; what it did so far is kept.
+    pub fn stop_scan(&mut self) {
+        self.fetch_later.clear();
+        self.fetch_all_later = false;
+        self.scanner.stop();
+    }
+
+    fn scan(&mut self, folders: &[PathBuf], only: Option<PathBuf>, rescan: bool) {
         if let (Some(path), Some(_)) = (&self.path, &self.db) {
             let options = ScanOptions {
                 pictures: self.thumbnails.as_ref().map(|t| t.pictures().clone()),
-                rescan: false,
+                rescan,
+                only,
                 online: self.online(),
             };
             self.scanner.start(path.clone(), folders.to_vec(), options);
@@ -2538,11 +2564,13 @@ impl LibraryPanel {
         }
     }
 
-    /// What the library is doing in the background, for the user to see: what, and of what.
-    pub fn activities(&self) -> Vec<(String, String)> {
-        let mut activities = Vec::new();
-        if self.scanning {
-            let what = match (self.artists_progress, self.covers_progress, self.progress) {
+    /// What the scan running is doing, and how far it is.
+    fn scan_phase(&self) -> Option<String> {
+        if !self.scanning {
+            return None;
+        }
+        Some(
+            match (self.artists_progress, self.covers_progress, self.progress) {
                 (Some((done, total)), ..) => format!(
                     "Asking the internet about artists: {} of {}",
                     thousands(done),
@@ -2557,7 +2585,14 @@ impl LibraryPanel {
                     format!("Reading {} of {} files", thousands(done), thousands(total))
                 }
                 (None, None, None) => "Checking the music folders for changes".to_owned(),
-            };
+            },
+        )
+    }
+
+    /// What the library is doing in the background, for the user to see: what, and of what.
+    pub fn activities(&self) -> Vec<(String, String)> {
+        let mut activities = Vec::new();
+        if let Some(what) = self.scan_phase() {
             let folder = self.scan_folder.as_deref().map(folder_name);
             activities.push((what, folder.unwrap_or_default()));
         }
@@ -2593,13 +2628,9 @@ impl LibraryPanel {
 
     /// Values for the `Library` global, except the rows and folders.
     pub fn values(&self) -> Vec<(&'static str, Value)> {
-        let status = match self.progress {
-            Some((done, total)) => {
-                format!("Reading {} of {} files", thousands(done), thousands(total))
-            }
-            None if self.scanning => "Checking for changes…".to_owned(),
-            None => self.stats.clone().unwrap_or_default(),
-        };
+        let status = self
+            .scan_phase()
+            .unwrap_or_else(|| self.stats.clone().unwrap_or_default());
         let layout = if self.searching() {
             "table"
         } else if self.discography() {

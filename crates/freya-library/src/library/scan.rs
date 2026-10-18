@@ -90,6 +90,8 @@ pub struct ScanOptions {
     pub pictures: Option<Pictures>,
     /// Read every file and make every cover again, changed or not.
     pub rescan: bool,
+    /// Look through this one of the folders only, leaving the others' tracks as they are.
+    pub only: Option<PathBuf>,
     /// What may be asked of the internet about artists who lack something, once the tracks
     /// and covers are in.
     pub online: Online,
@@ -104,7 +106,11 @@ pub fn scan_with(
     cancel: &AtomicBool,
     mut progress: impl FnMut(ScanEvent),
 ) -> Result<ScanSummary> {
-    let (found, images) = find(folders, cancel, &mut progress);
+    let walked = match &options.only {
+        Some(folder) => std::slice::from_ref(folder),
+        None => folders,
+    };
+    let (found, images) = find(walked, cancel, &mut progress);
     let known = library.sources()?;
     // Tracks found from now on came into the library now, except on the library's first scan:
     // everything comes in at once then, and the files' own dates say more.
@@ -112,11 +118,12 @@ pub fn scan_with(
     let now = epoch_millis(SystemTime::now());
     let mut summary = ScanSummary::default();
 
-    let offline: Vec<&PathBuf> = folders.iter().filter(|f| is_offline(f)).collect();
+    let offline: Vec<&PathBuf> = walked.iter().filter(|f| is_offline(f)).collect();
     let gone: Vec<&PathBuf> = {
         let found: HashSet<&Path> = found.iter().map(|(f, _)| f.source()).collect();
         known
             .keys()
+            .filter(|p| options.only.as_ref().is_none_or(|only| p.starts_with(only)))
             .filter(|p| !found.contains(p.as_path()))
             .filter(|p| !offline.iter().any(|f| p.starts_with(f)))
             .collect()

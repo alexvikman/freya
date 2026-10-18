@@ -462,8 +462,16 @@ export global Library {
     callback add-draft-folder();
     callback remove-draft-folder(int);
     callback save-folders();
-    /// Read the folders again, for changes made while Freya was running.
+    /// Scan the folders: read the files that changed, make the covers of albums that changed,
+    /// take in the pictures in artists' folders, and ask the internet for what artists lack,
+    /// as allowed. `status` and `scan-folder` tell how far it is.
     callback rescan();
+    /// Scan as `rescan` does, reading every file and making every cover again, changed or not.
+    callback rescan-files();
+    /// Scan only the `index`th of `folders`, leaving the others' tracks as they are.
+    callback scan-one-folder(int);
+    /// Stop the scan running; what it did so far is kept.
+    callback stop-scan();
 }
 
 /// One of the playlists the user keeps, as the navigation lists them.

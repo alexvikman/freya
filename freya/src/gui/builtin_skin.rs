@@ -921,6 +921,9 @@ skin_api! {
         Library."remove-draft-folder" => on_remove_draft_folder, invoke_remove_draft_folder(index: i32);
         Library."save-folders" => on_save_folders, invoke_save_folders();
         Library."rescan" => on_rescan, invoke_rescan();
+        Library."rescan-files" => on_rescan_files, invoke_rescan_files();
+        Library."scan-one-folder" => on_scan_one_folder, invoke_scan_one_folder(index: i32);
+        Library."stop-scan" => on_stop_scan, invoke_stop_scan();
 
         Equalizer."curve" => on_curve, invoke_curve(width: f32, height: f32, bands: ModelRc<f32>) -> SharedString;
         Equalizer."toggle" => on_toggle, invoke_toggle();

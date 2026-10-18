@@ -657,6 +657,27 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
             app.library.rescan(&folders);
         }),
     );
+    bind(
+        "Library",
+        "rescan-files",
+        Box::new(|app, _| {
+            let folders = app.settings.library_folders.clone();
+            app.library.rescan_files(&folders);
+        }),
+    );
+    bind(
+        "Library",
+        "scan-one-folder",
+        Box::new(|app, args| {
+            let folders = app.settings.library_folders.clone();
+            app.library.scan_folder(&folders, index(args, 0));
+        }),
+    );
+    bind(
+        "Library",
+        "stop-scan",
+        Box::new(|app, _| app.library.stop_scan()),
+    );
 
     bind("App", "show-about", Box::new(|app, _| app.show_about()));
     bind("App", "go-back", Box::new(|app, _| app.go_back()));
