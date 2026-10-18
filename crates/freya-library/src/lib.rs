@@ -1,4 +1,5 @@
-//! Playlists, playlist files, tag reading, the media library and its album covers.
+//! Playlists, playlist files, tag reading, the media library, its album covers and the
+//! pictures of artists downloaded for it.
 
 pub mod artist_image;
 pub mod cover;
@@ -6,6 +7,7 @@ pub mod cue;
 pub mod eq_presets;
 pub mod files;
 pub mod library;
+pub mod pictures;
 pub mod playlist;
 pub mod playlist_file;
 pub mod tags;
