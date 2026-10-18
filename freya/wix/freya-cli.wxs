@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- freya-cli.exe, Freya for a terminal (see freya/src/cli_launcher.rs), installed next to
+     freya.exe, and Freya's folder on the PATH, so `freya-cli play song.mp3` works in any
+     terminal. SourceDir is freya.exe itself, as cargo-packager defines it. -->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="FreyaCli" Guid="*">
+        <File Id="FreyaCliExe" Source="$(var.SourceDir)\..\freya-cli.exe" KeyPath="yes" Checksum="yes"/>
+        <Environment Id="FreyaPath" Name="PATH" Value="[INSTALLDIR]" Action="set" Part="last"
+                     Permanent="no" System="yes"/>
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+</Wix>

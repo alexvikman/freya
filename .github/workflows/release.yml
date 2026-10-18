@@ -213,6 +213,8 @@ jobs:
           powershell -NoProfile -Command \
             "(Get-Item target/release/freya.exe).VersionInfo.ProductVersion" |
             tr -d '\r' | grep -qx "$VERSION"
+          # The terminal launcher, a console program, prints it and passes the exit code on.
+          target/release/freya-cli.exe --version | tr -d '\r' | grep -qx "freya $VERSION"
           mkdir -p dist
           mv target/packages/*.msi "dist/Freya-$VERSION-windows-x86_64.msi"
       # Signing goes here, once there is a certificate or a signing service (e.g. Azure Trusted

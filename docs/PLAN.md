@@ -291,7 +291,7 @@ Measured on an Apple Silicon MacBook, release build, built-in skin at 560×680, 
 - Built and started from the bundle on macOS. Linux and Windows are checked locally in Docker with `ci/check.sh` (no GitHub until release): on Linux all tests pass and the `.deb` and AppImage install and run on a clean Ubuntu 22.04; for Windows, a MinGW cross-build passes clippy and links. The MSVC build, the `.msi` and x86-64 Linux packages still need a run on those systems.
 - Found by the local checks: the `.deb` declared no dependencies (it now needs ALSA, fontconfig, xkbcommon, EGL and GL), the Windows-only console code broke the `unsafe` lint, and libopus needs `libssp` when cross-built with MinGW.
 - Found while testing the bundle: quitting from the system (Cmd+Q, the Dock) ended the process without returning from the event loop, so settings and the playlist were not saved. Freya now also saves in winit's `exiting` hook.
-- Windows release builds are window apps (no console window); started from a terminal, they attach to it so `freya play` and `freya skin` still print.
+- Windows release builds are window apps (no console window); started from a terminal, they attach to it so `freya play` and `freya skin` still print. A terminal does not wait for a window app, though, so the installer also puts `freya-cli.exe` next to it, a console program that runs Freya in the terminal, waits for it and passes on its exit code, and adds Freya's folder to the PATH: `freya-cli play song.mp3`.
 - Not done: signing and notarization (they need the owner's certificates), and the bundle identifier `app.freya.player` is a placeholder.
 
 ## Results after M14: CPU and memory

@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+# `cargo run -p freya` runs Freya, not its terminal launcher.
+default-run = "freya"
 
 description = "A skinnable music player"
 
@@ -35,6 +37,11 @@ icons = [
     "../assets/icons/icon.ico",
 ]
 
+# Windows: freya-cli.exe, for terminals, and Freya's folder on the PATH (see wix/freya-cli.wxs).
+[package.metadata.packager.wix]
+fragment-paths = ["wix/freya-cli.wxs"]
+component-refs = ["FreyaCli"]
+
 [package.metadata.packager.macos]
 minimum-system-version = "11.0"
 
@@ -61,6 +68,11 @@ depends = [
 [package.metadata.packager.appimage]
 # For audio output.
 libs = ["libasound.so.2"]
+
+# Freya for a terminal on Windows, where Freya itself is a window app (see src/cli_launcher.rs).
+[[bin]]
+name = "freya-cli"
+path = "src/cli_launcher.rs"
 
 [dependencies]
 freya-audio = { path = "../crates/freya-audio" }

@@ -36,7 +36,7 @@ Drop files, folders or playlists (M3U, M3U8, PLS) on the window to add them. In 
 
 The **Library** tab lists the music in the folders you choose ("Add music folder…"), by artist and album, and searches it as you type: every word you type must start a word of the artist, album, title, genre or file name, and accents are ignored. Click an artist or album to open it, double-click a track to play it with the tracks around it, or use **+** to add anything to the playlist. Freya reads new and changed files each time it starts, in the background; files on a drive that is not plugged in stay in the library. A disc ripped as one file with a CUE sheet next to it (`Album.flac` or `Album.ape`, and `Album.cue`) shows as an album of its tracks, here and when its folder or sheet is dropped on the playlist, and its tracks play one after the other without a gap.
 
-**Internet radio:** choose "Play stream URL…" in the playlist's "more" menu and paste the address of a stream (like `https://ice1.somafm.com/groovesalad-128-mp3`) or of a station's `.pls` or `.m3u` file from a radio directory (like `https://somafm.com/groovesalad.pls`). The song title updates as the station announces each song, at the moment it starts playing. MP3, AAC, Ogg Vorbis and Ogg Opus streams over HTTP and HTTPS work; `freya play <url>` plays a stream in the terminal.
+**Internet radio:** choose "Play stream URL…" in the playlist's "more" menu and paste the address of a stream (like `https://ice1.somafm.com/groovesalad-128-mp3`) or of a station's `.pls` or `.m3u` file from a radio directory (like `https://somafm.com/groovesalad.pls`). The song title updates as the station announces each song, at the moment it starts playing. MP3, AAC, Ogg Vorbis and Ogg Opus streams over HTTP and HTTPS work; `freya play <url>` plays a stream in the terminal (on Windows, `freya-cli play <url>`).
 
 Freya shows what plays in the system's media controls (Now Playing on macOS, the media overlay on Windows, MPRIS on Linux), with cover art, and the keyboard's media keys control it.
 
@@ -49,6 +49,8 @@ There is also a terminal player, without a window:
 ```sh
 cargo run --release -- play ~/Music/some-album
 ```
+
+Installed, that is `freya play ~/Music/some-album`. On Windows, where Freya is a window app the terminal does not wait for, use `freya-cli` instead: the installer puts it next to Freya and adds Freya's folder to the PATH, and it works for every command, `freya-cli skin pack` too.
 
 Supported formats: MP3, FLAC, Monkey's Audio (APE, from version 3.95), WAV, AIFF, Ogg Vorbis, Opus, AAC and ALAC (M4A/MP4), CAF, MKV/WebM audio, and Shoutcast/Icecast radio streams, plus CUE sheets for discs ripped as one file. Playback is gapless.
 
