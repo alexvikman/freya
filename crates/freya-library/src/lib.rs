@@ -1,5 +1,6 @@
 //! Playlists, playlist files, tag reading, the media library and its album covers.
 
+pub mod artist_image;
 pub mod cover;
 pub mod cue;
 pub mod eq_presets;

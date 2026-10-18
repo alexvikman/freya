@@ -123,7 +123,8 @@ export struct LibraryRow {
     artist: string,
     /// The album of a track; otherwise empty.
     album: string,
-    /// For albums: what to pass to `Library.cover` for the album's cover. Otherwise empty.
+    /// For albums and artists: what to pass to `Library.cover` for the album's cover or the
+    /// artist's picture. Otherwise empty.
     cover: string,
     /// Track number for tracks shown in their album ("3", or "2.03" on the second disc);
     /// otherwise empty.
@@ -171,6 +172,17 @@ export global Library {
     in property <AlbumPage> album-page;
     /// The row of the track playing or paused, or -1 when it is not among the rows.
     in property <int> playing-row: -1;
+    /// True while the artists are shown, which `artist-sort` and `artist-view` apply to.
+    in property <bool> artist-options;
+    /// How the artists are ordered: "name", "most-played" or "recently-added". Kept between
+    /// runs.
+    in property <string> artist-sort: "name";
+    /// How the artists are shown: "grid" (layout "grid": a picture of each, from `cover`) or
+    /// "list". Kept between runs.
+    in property <string> artist-view: "grid";
+    /// Whether pictures of artists without one of their own may come from Deezer, which is
+    /// then told the artists' names. Kept between runs.
+    in property <bool> artist-pictures-online: true;
     /// True while an artist's albums are shown, which `album-sort` and `album-view` apply to.
     in property <bool> album-options;
     /// How an artist's albums are ordered: "release-date" (newest first) or "name". Kept
@@ -225,6 +237,10 @@ export global Library {
     callback shuffle-all();
     /// Open the artist of the album shown (`album-page.artist`).
     callback open-album-artist();
+    /// Change `artist-sort`, `artist-view` or `artist-pictures-online`.
+    callback set-artist-sort(string);
+    callback set-artist-view(string);
+    callback set-artist-pictures-online(bool);
     /// Change `album-sort` or `album-view`.
     callback set-album-sort(string);
     callback set-album-view(string);

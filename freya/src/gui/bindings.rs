@@ -275,6 +275,40 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     );
     bind(
         "Library",
+        "set-artist-sort",
+        Box::new(|app, args| {
+            if let Some(Value::String(name)) = args.first()
+                && let Some(order) = library::artist_order(name)
+            {
+                app.settings.artist_sort = name.to_string();
+                app.library.set_artist_order(order);
+            }
+        }),
+    );
+    bind(
+        "Library",
+        "set-artist-view",
+        Box::new(|app, args| {
+            if let Some(Value::String(view)) = args.first()
+                && (view == "grid" || view == "list")
+            {
+                app.settings.artist_view = view.to_string();
+                app.library.set_artist_list(view == "list");
+            }
+        }),
+    );
+    bind(
+        "Library",
+        "set-artist-pictures-online",
+        Box::new(|app, args| {
+            if let Some(Value::Bool(online)) = args.first() {
+                app.settings.artist_pictures_online = *online;
+                app.library.set_online_pictures(*online);
+            }
+        }),
+    );
+    bind(
+        "Library",
         "set-album-view",
         Box::new(|app, args| {
             if let Some(Value::String(view)) = args.first()

@@ -62,8 +62,10 @@ global Icons {
     out property <string> check: "M5 12.5 L10 17.5 L19 7";
     out property <string> back: "M15 5 L8 12 L15 19";
     out property <string> chevron: "M9 5 L16 12 L9 19";
-    out property <string> grid: "M4 4 H10 V10 H4 Z M14 4 H20 V10 H14 Z M4 14 H10 V20 H4 Z M14 14 H20 V20 H14 Z";
-    out property <string> list: "M9 6 H20 M9 12 H20 M9 18 H20 M4 6 H5 M4 12 H5 M4 18 H5";
+    // Filled, for 16 pixels: every edge falls on a whole pixel (1.5 units each), so they stay
+    // sharp where an outline at that size blurs.
+    out property <string> grid: "M1.5 1.5 H10.5 V10.5 H1.5 Z M13.5 1.5 H22.5 V10.5 H13.5 Z M1.5 13.5 H10.5 V22.5 H1.5 Z M13.5 13.5 H22.5 V22.5 H13.5 Z";
+    out property <string> list: "M1.5 4.5 H4.5 V7.5 H1.5 Z M7.5 4.5 H22.5 V7.5 H7.5 Z M1.5 10.5 H4.5 V13.5 H1.5 Z M7.5 10.5 H22.5 V13.5 H7.5 Z M1.5 16.5 H4.5 V19.5 H1.5 Z M7.5 16.5 H22.5 V19.5 H7.5 Z";
     out property <string> search: "M10.5 4 A6.5 6.5 0 1 0 10.5 17 A6.5 6.5 0 1 0 10.5 4 Z M15.5 15.5 L20 20";
     out property <string> close: "M6 6 L18 18 M18 6 L6 18";
     out property <string> sidebar: "M4 4 H20 C21.1 4 22 4.9 22 6 V18 C22 19.1 21.1 20 20 20 H4 C2.9 20 2 19.1 2 18 V6 C2 4.9 2.9 4 4 4 Z M9 4 V20";
@@ -1645,7 +1647,7 @@ component AlbumTile inherits Rectangle {
             if root.cover-image.width == 0: Icon {
                 width: root.size * 0.3;
                 height: self.width;
-                data: Icons.note;
+                data: root.entry.kind == "artist" ? Icons.artist : Icons.note;
                 stroked: true;
                 color: Theme.text-secondary;
             }
@@ -2146,8 +2148,9 @@ component LibraryPanel inherits FocusScope {
     property <bool> list-shown: !grid-shown && !table-shown && !discography-shown && !album-shown;
     property <length> album-page-head-height: 300px + 96px + 37px;
     property <length> album-row-height: 56px;
-    /// Over an artist's albums: how they are ordered and shown.
-    property <length> options-height: Library.album-options ? 44px : 0;
+    /// Over the artists, and an artist's albums: how they are ordered and shown.
+    property <bool> options-shown: Library.album-options || Library.artist-options;
+    property <length> options-height: options-shown ? 44px : 0;
     property <length> album-head-height: 188px;
     /// Recently Played and Most Played show when or how often each track was played.
     property <bool> played-column: Library.rows.length > 0 && Library.rows[0].played != "";
@@ -2434,12 +2437,40 @@ component LibraryPanel inherits FocusScope {
         }
     }
 
-    if Library.album-options: HorizontalLayout {
+    if root.options-shown: HorizontalLayout {
         y: 0;
         height: root.options-height;
         padding-right: 20px;
+        spacing: 4px;
         alignment: end;
 
+        // Every artist's music, as in Plex.
+        if Library.artist-options: IconButton {
+            y: (parent.height - self.height) / 2;
+            icon: Icons.play;
+            size: 34px;
+            label: "Play all artists";
+            tooltip: "Play";
+            clicked => { Library.play-all(); }
+        }
+        if Library.artist-options: IconButton {
+            y: (parent.height - self.height) / 2;
+            icon: Icons.shuffle;
+            stroked: true;
+            size: 34px;
+            label: "Shuffle all artists";
+            tooltip: "Shuffle";
+            clicked => { Library.shuffle-all(); }
+        }
+        if Library.artist-options: IconButton {
+            y: (parent.height - self.height) / 2;
+            icon: Icons.plus;
+            stroked: true;
+            size: 34px;
+            label: "Add all artists to Up Next";
+            tooltip: "Add to Up Next";
+            clicked => { Library.enqueue-all(); }
+        }
         Rectangle {
             width: options-label.preferred-width;
             border-radius: 6px;
@@ -2454,7 +2485,13 @@ component LibraryPanel inherits FocusScope {
                 spacing: 8px;
 
                 Text {
-                    text: Library.album-sort == "name" ? "Name" : "Release date";
+                    text: Library.artist-options
+                        ? (Library.artist-sort == "most-played" ? "Most played"
+                            : Library.artist-sort == "recently-added" ? "Recently added"
+                            : "Name")
+                        : (Library.album-sort == "name" ? "Name" : "Release date");
+                    // A whole number of pixels, so the icon after it falls on a pixel.
+                    width: ceil(self.preferred-width / 1px) * 1px;
                     font-size: 13px;
                     color: Theme.text-secondary;
                     vertical-alignment: center;
@@ -2463,8 +2500,7 @@ component LibraryPanel inherits FocusScope {
                     width: 16px;
                     height: 16px;
                     y: (parent.height - self.height) / 2;
-                    data: Library.album-view == "list" ? Icons.list : Icons.grid;
-                    stroked: true;
+                    data: (Library.artist-options ? Library.artist-view : Library.album-view) == "list" ? Icons.list : Icons.grid;
                     color: Theme.text-secondary;
                 }
             }
@@ -2484,27 +2520,54 @@ component LibraryPanel inherits FocusScope {
                 padding: 6px;
 
                 MenuHeading { text: "Sort by"; }
-                MenuItem {
+                if !Library.artist-options: MenuItem {
                     text: "Release date";
                     checked: Library.album-sort == "release-date";
                     activated => { Library.set-album-sort("release-date"); }
                 }
-                MenuItem {
+                if !Library.artist-options: MenuItem {
                     text: "Name";
                     checked: Library.album-sort == "name";
                     activated => { Library.set-album-sort("name"); }
+                }
+                if Library.artist-options: MenuItem {
+                    text: "Name";
+                    checked: Library.artist-sort == "name";
+                    activated => { Library.set-artist-sort("name"); }
+                }
+                if Library.artist-options: MenuItem {
+                    text: "Most played";
+                    checked: Library.artist-sort == "most-played";
+                    activated => { Library.set-artist-sort("most-played"); }
+                }
+                if Library.artist-options: MenuItem {
+                    text: "Recently added";
+                    checked: Library.artist-sort == "recently-added";
+                    activated => { Library.set-artist-sort("recently-added"); }
                 }
                 MenuDivider { }
                 MenuHeading { text: "View as"; }
                 MenuItem {
                     text: "List";
-                    checked: Library.album-view == "list";
-                    activated => { Library.set-album-view("list"); }
+                    checked: (Library.artist-options ? Library.artist-view : Library.album-view) == "list";
+                    activated => {
+                        if (Library.artist-options) {
+                            Library.set-artist-view("list");
+                        } else {
+                            Library.set-album-view("list");
+                        }
+                    }
                 }
                 MenuItem {
                     text: "Grid";
-                    checked: Library.album-view == "grid";
-                    activated => { Library.set-album-view("grid"); }
+                    checked: (Library.artist-options ? Library.artist-view : Library.album-view) == "grid";
+                    activated => {
+                        if (Library.artist-options) {
+                            Library.set-artist-view("grid");
+                        } else {
+                            Library.set-album-view("grid");
+                        }
+                    }
                 }
             }
         }
@@ -4174,6 +4237,20 @@ component SettingsView inherits Rectangle {
             }
             for folder in Library.folders: SettingsRow {
                 label: folder;
+            }
+            SettingsRow {
+                label: "Artist pictures from Deezer";
+                detail: "For artists without a picture of their own in their folder (artist.jpg). Deezer is told the artists' names. Without it, their album covers stand in.";
+
+                VerticalLayout {
+                    alignment: center;
+
+                    Toggle {
+                        label: "Artist pictures from Deezer";
+                        checked: Library.artist-pictures-online;
+                        toggled => { Library.set-artist-pictures-online(!Library.artist-pictures-online); }
+                    }
+                }
             }
             SettingsRow {
                 label: Library.scanning ? Library.status : "Freya checks the folders for changes each time it starts.";

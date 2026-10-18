@@ -946,3 +946,30 @@ fn back_reopens_a_playlist_that_was_shown() {
     assert_eq!(global(&ui, "App", "view"), text("playlist"));
     assert_eq!(global(&ui, "Playlists", "shown"), num(0.0));
 }
+
+#[test]
+fn artist_order_view_and_pictures_are_kept_in_the_settings() {
+    let app = silent_app("artist-options");
+    let ui = current_ui(&app);
+    assert_eq!(global(&ui, "Library", "artist-view"), text("grid"));
+    call(&ui, "Library", "set-artist-sort", &[text("most-played")]);
+    call(&ui, "Library", "set-artist-view", &[text("list")]);
+    call(
+        &ui,
+        "Library",
+        "set-artist-pictures-online",
+        &[Value::Bool(false)],
+    );
+    // Orders the API does not know change nothing.
+    call(&ui, "Library", "set-artist-sort", &[text("loudest")]);
+    app.borrow_mut().refresh();
+    let settings = &app.borrow().settings;
+    assert_eq!(settings.artist_sort, "most-played");
+    assert_eq!(settings.artist_view, "list");
+    assert!(!settings.artist_pictures_online);
+    assert_eq!(global(&ui, "Library", "artist-sort"), text("most-played"));
+    assert_eq!(
+        global(&ui, "Library", "artist-pictures-online"),
+        Value::Bool(false)
+    );
+}

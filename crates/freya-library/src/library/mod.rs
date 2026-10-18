@@ -149,6 +149,16 @@ impl Track {
     }
 }
 
+/// How artists are listed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArtistOrder {
+    Name,
+    /// Most played first, counting every play of every one of their tracks.
+    MostPlayed,
+    /// The one whose music came last first.
+    RecentlyAdded,
+}
+
 /// An artist the library has albums by. `name` is `None` for untagged tracks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Artist {
@@ -273,12 +283,24 @@ impl Library {
 
     /// Every album artist, alphabetically, with untagged tracks last.
     pub fn artists(&self) -> Result<Vec<Artist>> {
-        let mut query = self.db.prepare_cached(
+        self.artists_by(ArtistOrder::Name)
+    }
+
+    /// Every artist, in `order`; without a name last whatever the order.
+    pub fn artists_by(&self, order: ArtistOrder) -> Result<Vec<Artist>> {
+        let order = match order {
+            ArtistOrder::Name => "",
+            ArtistOrder::MostPlayed => "sum(coalesce(plays.n, 0)) DESC,",
+            ArtistOrder::RecentlyAdded => "max(tracks.added) DESC,",
+        };
+        let mut query = self.db.prepare_cached(&format!(
             "SELECT album_artist, count(DISTINCT album), count(*)
              FROM tracks
+             LEFT JOIN (SELECT path, start_ms, count(*) AS n FROM plays GROUP BY path, start_ms)
+                 AS plays ON plays.path = tracks.path AND plays.start_ms IS tracks.start_ms
              GROUP BY album_artist
-             ORDER BY album_artist IS NULL, album_artist COLLATE NOCASE",
-        )?;
+             ORDER BY album_artist IS NULL, {order} album_artist COLLATE NOCASE"
+        ))?;
         query
             .query_map([], |row| {
                 Ok(Artist {

@@ -403,6 +403,11 @@ impl App {
             library.set_album_sort(sort);
         }
         library.set_album_list(settings.album_view == "list");
+        if let Some(order) = library::artist_order(&settings.artist_sort) {
+            library.set_artist_order(order);
+        }
+        library.set_artist_list(settings.artist_view == "list");
+        library.set_online_pictures(settings.artist_pictures_online);
         let lastfm = LastFm::start(settings.lastfm_user.clone());
         let mut app = Self {
             player,

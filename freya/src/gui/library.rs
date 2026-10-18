@@ -6,8 +6,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
 use freya_library::cue::Part;
-use freya_library::library::{Album, Artist, Genre, Played, ScanEvent, Scanner, Track};
-use freya_library::thumbnails::{Thumbnail, Thumbnails};
+use freya_library::library::{
+    Album, Artist, ArtistOrder, Genre, Played, ScanEvent, Scanner, Track,
+};
+use freya_library::thumbnails::{ArtistSource, Thumbnail, Thumbnails};
 use freya_library::{Entry, Library};
 use slint::{Image, ModelRc, VecModel};
 use slint_interpreter::{Struct, Value};
@@ -203,6 +205,13 @@ pub struct LibraryPanel {
     /// The track playing, by its file and where in it it starts, and its row, or -1.
     playing: Option<(PathBuf, Duration)>,
     playing_row: i32,
+    /// How artists are ordered, whether they show as a list rather than a grid of pictures,
+    /// and whether pictures of them may come from Deezer.
+    artist_order: ArtistOrder,
+    artist_list: bool,
+    online_pictures: bool,
+    /// The artists shown, by their picture's key.
+    artist_keys: HashMap<String, Option<String>>,
     /// While an album's tracks are shown: how often each was played, and its page.
     play_counts: HashMap<(PathBuf, Option<Duration>), u32>,
     album_page: Option<AlbumPage>,
@@ -277,6 +286,10 @@ impl LibraryPanel {
             playing_row: -1,
             play_counts: HashMap::new(),
             album_page: None,
+            artist_order: ArtistOrder::Name,
+            artist_list: false,
+            online_pictures: true,
+            artist_keys: HashMap::new(),
         }
     }
 
@@ -594,6 +607,33 @@ impl LibraryPanel {
         }
     }
 
+    /// Orders the artists by `order`.
+    pub fn set_artist_order(&mut self, order: ArtistOrder) {
+        if self.artist_order != order {
+            self.artist_order = order;
+            self.reload_artists();
+        }
+    }
+
+    /// Shows the artists as a list, or as a grid of their pictures.
+    pub fn set_artist_list(&mut self, list: bool) {
+        if self.artist_list != list {
+            self.artist_list = list;
+            self.reload_artists();
+        }
+    }
+
+    /// Whether pictures of artists may come from Deezer, when they have none of their own.
+    pub fn set_online_pictures(&mut self, online: bool) {
+        self.online_pictures = online;
+    }
+
+    fn reload_artists(&mut self) {
+        if *self.level() == Level::Artists {
+            self.reload();
+        }
+    }
+
     /// Orders an artist's albums by `sort`.
     pub fn set_album_sort(&mut self, sort: AlbumSort) {
         if self.album_sort != sort {
@@ -717,10 +757,20 @@ impl LibraryPanel {
         self.title = title;
         self.subtitle = subtitle;
         self.cover_tracks.clear();
+        self.artist_keys.clear();
         for item in &self.items {
-            if let Item::Album(album) = item {
-                self.cover_tracks
-                    .insert(cover_key(album), album.track.clone());
+            match item {
+                Item::Album(album) => {
+                    self.cover_tracks
+                        .insert(cover_key(album), album.track.clone());
+                }
+                Item::Artist(artist) => {
+                    self.artist_keys.insert(
+                        Thumbnails::artist_key(artist.name.as_deref()),
+                        artist.name.clone(),
+                    );
+                }
+                _ => {}
             }
         }
         self.load_album_page();
@@ -764,7 +814,11 @@ impl LibraryPanel {
         let albums = |albums: Vec<Album>| albums.into_iter().map(Item::Album).collect();
         let tracks = |tracks: Vec<Track>| tracks.into_iter().map(Item::Track).collect();
         Ok(match self.level() {
-            Level::Artists => db.artists()?.into_iter().map(Item::Artist).collect(),
+            Level::Artists => db
+                .artists_by(self.artist_order)?
+                .into_iter()
+                .map(Item::Artist)
+                .collect(),
             Level::Albums => albums(db.all_albums()?),
             Level::Songs => tracks(db.all_tracks()?),
             Level::Genres => db.genres()?.into_iter().map(Item::Genre).collect(),
@@ -861,11 +915,33 @@ impl LibraryPanel {
         if let Some(image) = self.recent_covers.get(key) {
             return image;
         }
-        let (Some(thumbnails), Some(track)) = (&mut self.thumbnails, self.cover_tracks.get(key))
-        else {
-            return Image::default();
+        let state = match (&self.db, self.artist_keys.get(key)) {
+            // An artist's picture, from a track of each of their albums.
+            (Some(db), Some(name)) => {
+                let album_tracks = db
+                    .albums(name.as_deref())
+                    .map(|albums| albums.into_iter().map(|a| a.track).collect())
+                    .unwrap_or_default();
+                let source = ArtistSource {
+                    name: name.clone(),
+                    album_tracks,
+                    online: self.online_pictures,
+                };
+                match &mut self.thumbnails {
+                    Some(thumbnails) => thumbnails.get_artist(key, &source),
+                    None => return Image::default(),
+                }
+            }
+            _ => {
+                let (Some(thumbnails), Some(track)) =
+                    (&mut self.thumbnails, self.cover_tracks.get(key))
+                else {
+                    return Image::default();
+                };
+                thumbnails.get(key, track)
+            }
         };
-        let Thumbnail::Ready(file) = thumbnails.get(key, track) else {
+        let Thumbnail::Ready(file) = state else {
             return Image::default();
         };
         match Image::load_from_path(&file) {
@@ -893,6 +969,8 @@ impl LibraryPanel {
             "table"
         } else if self.discography() {
             "discography"
+        } else if *self.level() == Level::Artists && !self.artist_list {
+            "grid"
         } else {
             self.level().layout()
         };
@@ -917,6 +995,16 @@ impl LibraryPanel {
             ),
             ("playing-row", Value::Number(f64::from(self.playing_row))),
             ("album-page", self.album_page_value()),
+            (
+                "artist-options",
+                Value::Bool(!self.searching() && *self.level() == Level::Artists),
+            ),
+            ("artist-sort", string(artist_order_name(self.artist_order))),
+            (
+                "artist-view",
+                string(if self.artist_list { "list" } else { "grid" }),
+            ),
+            ("artist-pictures-online", Value::Bool(self.online_pictures)),
             ("album-sort", string(self.album_sort.name())),
             (
                 "album-view",
@@ -976,6 +1064,24 @@ impl LibraryPanel {
     }
 }
 
+/// An artist order by its name in the skin API and settings.
+pub fn artist_order(name: &str) -> Option<ArtistOrder> {
+    match name {
+        "name" => Some(ArtistOrder::Name),
+        "most-played" => Some(ArtistOrder::MostPlayed),
+        "recently-added" => Some(ArtistOrder::RecentlyAdded),
+        _ => None,
+    }
+}
+
+fn artist_order_name(order: ArtistOrder) -> &'static str {
+    match order {
+        ArtistOrder::Name => "name",
+        ArtistOrder::MostPlayed => "most-played",
+        ArtistOrder::RecentlyAdded => "recently-added",
+    }
+}
+
 /// "47 min 34 s", or "1 h 5 min" from an hour on, as an album's length reads.
 fn long_time(total: Duration) -> String {
     let seconds = total.as_secs();
@@ -1011,7 +1117,10 @@ fn row_value(
     let (kind, title, detail) = match item {
         Item::Artist(a) => (
             "artist",
-            artist_name(a.name.as_deref()),
+            {
+                cover = Thumbnails::artist_key(a.name.as_deref());
+                artist_name(a.name.as_deref())
+            },
             format!(
                 "{} · {}",
                 count(a.albums as usize, "album"),

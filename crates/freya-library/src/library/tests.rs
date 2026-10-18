@@ -447,6 +447,34 @@ fn lists_albums_by_when_they_came_and_tracks_by_plays() {
     assert_eq!(recent[1].last, at(30));
     let most = library.most_played(2).unwrap();
     assert_eq!(titles_of(&most), ["One", "Four"]);
+
+    // Artists by how often their music was played, and by what came last.
+    let names = |artists: Vec<Artist>| -> Vec<String> {
+        artists.into_iter().filter_map(|a| a.name).collect()
+    };
+    assert_eq!(
+        names(library.artists_by(ArtistOrder::Name).unwrap()),
+        ["A", "B", "C"]
+    );
+    assert_eq!(
+        names(library.artists_by(ArtistOrder::MostPlayed).unwrap()),
+        ["A", "B", "C"]
+    );
+    library
+        .record_play(Path::new("/m/c1.mp3"), None, at(60))
+        .unwrap();
+    library
+        .record_play(Path::new("/m/c1.mp3"), None, at(70))
+        .unwrap();
+    assert_eq!(
+        names(library.artists_by(ArtistOrder::MostPlayed).unwrap()),
+        ["C", "A", "B"]
+    );
+    // B's "New" came last, then C's "Middle".
+    assert_eq!(
+        names(library.artists_by(ArtistOrder::RecentlyAdded).unwrap()),
+        ["B", "C", "A"]
+    );
 }
 
 #[test]

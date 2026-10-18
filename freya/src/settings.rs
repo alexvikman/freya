@@ -46,6 +46,13 @@ pub struct Settings {
     pub album_sort: String,
     /// How an artist's albums are shown: "grid" or "list" (each with its tracks).
     pub album_view: String,
+    /// How the artists are ordered: "name", "most-played" or "recently-added".
+    pub artist_sort: String,
+    /// How the artists are shown: "grid" (pictures) or "list".
+    pub artist_view: String,
+    /// Whether pictures of artists without one of their own come from Deezer, which is told
+    /// the artists' names.
+    pub artist_pictures_online: bool,
 }
 
 impl Default for Settings {
@@ -69,6 +76,9 @@ impl Default for Settings {
             lastfm_scrobbling: true,
             album_sort: "release-date".to_owned(),
             album_view: "grid".to_owned(),
+            artist_sort: "name".to_owned(),
+            artist_view: "grid".to_owned(),
+            artist_pictures_online: true,
             damaged: false,
         }
     }

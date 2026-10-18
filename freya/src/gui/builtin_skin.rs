@@ -554,6 +554,10 @@ skin_api! {
         Library."album-options" => set_album_options, get_album_options;
         Library."playing-row" => set_playing_row, get_playing_row;
         Library."album-page" => set_album_page, get_album_page;
+        Library."artist-options" => set_artist_options, get_artist_options;
+        Library."artist-sort" => set_artist_sort, get_artist_sort;
+        Library."artist-view" => set_artist_view, get_artist_view;
+        Library."artist-pictures-online" => set_artist_pictures_online, get_artist_pictures_online;
         Library."album-sort" => set_album_sort, get_album_sort;
         Library."album-view" => set_album_view, get_album_view;
         Library."scanning" => set_scanning, get_scanning;
@@ -661,6 +665,9 @@ skin_api! {
         Library."back" => on_back, invoke_back();
         Library."set-album-sort" => on_set_album_sort, invoke_set_album_sort(sort: SharedString);
         Library."shuffle-all" => on_shuffle_all, invoke_shuffle_all();
+        Library."set-artist-sort" => on_set_artist_sort, invoke_set_artist_sort(sort: SharedString);
+        Library."set-artist-view" => on_set_artist_view, invoke_set_artist_view(view: SharedString);
+        Library."set-artist-pictures-online" => on_set_artist_pictures_online, invoke_set_artist_pictures_online(online: bool);
         Library."open-album-artist" => on_open_album_artist, invoke_open_album_artist();
         Library."set-album-view" => on_set_album_view, invoke_set_album_view(view: SharedString);
         Library."add-folder" => on_add_folder, invoke_add_folder();

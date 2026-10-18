@@ -13,6 +13,22 @@ use crate::cover::read_cover;
 pub const SIZE: u32 = 300;
 const JPEG_QUALITY: u8 = 85;
 
+/// Where an artist's picture can come from: see [`crate::artist_image`].
+#[derive(Clone, Debug)]
+pub struct ArtistSource {
+    pub name: Option<String>,
+    /// A track of each of the artist's albums.
+    pub album_tracks: Vec<PathBuf>,
+    /// Whether Deezer may be asked.
+    pub online: bool,
+}
+
+/// A thumbnail to make: an album's cover from one of its tracks, or an artist's picture.
+enum Job {
+    Album(PathBuf),
+    Artist(ArtistSource),
+}
+
 /// What is known about one album's thumbnail.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Thumbnail {
@@ -29,7 +45,7 @@ pub struct Thumbnails {
     /// Albums asked for, with what is known about them.
     known: HashMap<String, Thumbnail>,
     /// Started with the first request.
-    jobs: Option<Sender<(String, PathBuf)>>,
+    jobs: Option<Sender<(String, Job)>>,
     /// Albums whose covers were looked for, and whether a thumbnail was made.
     finished_tx: Sender<(String, bool)>,
     finished: Receiver<(String, bool)>,
@@ -46,6 +62,36 @@ impl Thumbnails {
             finished_tx,
             finished,
         }
+    }
+
+    /// A name for an artist's picture that stays the same between runs, apart from any
+    /// album's.
+    pub fn artist_key(artist: Option<&str>) -> String {
+        Self::key(Some("\u{1}artist"), artist)
+    }
+
+    /// The picture for the artist `key`. When it is not made yet, it is made from `source`.
+    pub fn get_artist(&mut self, key: &str, source: &ArtistSource) -> Thumbnail {
+        if let Some(known) = self.known.get(key) {
+            return known.clone();
+        }
+        let file = self.file(key);
+        // Also older than the artist's folder, where a picture of them may have been put.
+        let artist_dir_newer = |track: &PathBuf| {
+            let modified = |path: &Path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
+            let artist_dir = track.parent().and_then(Path::parent);
+            matches!((artist_dir.and_then(modified), modified(&file)), (Some(dir), Some(made)) if dir > made)
+        };
+        let first = source.album_tracks.first();
+        let fresh = first.is_none_or(|track| !outdated(&file, track) && !artist_dir_newer(track));
+        let state = if file.exists() && fresh {
+            Thumbnail::Ready(file)
+        } else {
+            self.send(key, Job::Artist(source.clone()));
+            Thumbnail::Pending
+        };
+        self.known.insert(key.to_owned(), state.clone());
+        state
     }
 
     /// A name for an album's thumbnail that stays the same between runs: 16 hex digits.
@@ -97,18 +143,26 @@ impl Thumbnails {
     }
 
     fn request(&mut self, key: &str, track: &Path) {
+        self.send(key, Job::Album(track.to_owned()));
+    }
+
+    fn send(&mut self, key: &str, job: Job) {
         let jobs = self.jobs.get_or_insert_with(|| {
-            let (jobs, queue) = channel::<(String, PathBuf)>();
+            let (jobs, queue) = channel::<(String, Job)>();
             let dir = self.dir.clone();
             let finished = self.finished_tx.clone();
             let started = std::thread::Builder::new()
                 .name("freya-covers".into())
                 .spawn(move || {
-                    for (key, track) in queue {
-                        let made = match make(&dir, &key, &track) {
+                    for (key, job) in queue {
+                        let made = match &job {
+                            Job::Album(track) => make(&dir, &key, track),
+                            Job::Artist(source) => make_artist(&dir, &key, source),
+                        };
+                        let made = match made {
                             Ok(made) => made,
                             Err(e) => {
-                                log::debug!("no thumbnail for {}: {e}", track.display());
+                                log::debug!("no thumbnail for {key}: {e}");
                                 false
                             }
                         };
@@ -122,8 +176,56 @@ impl Thumbnails {
             }
             jobs
         });
-        let _ = jobs.send((key.to_owned(), track.to_owned()));
+        let _ = jobs.send((key.to_owned(), job));
     }
+}
+
+/// Makes the picture for the artist `key`: their own picture next to their music, else
+/// Deezer's when allowed, else their album covers. Returns false when there is none, or when
+/// Deezer could not be asked, so the next run asks again.
+fn make_artist(dir: &Path, key: &str, source: &ArtistSource) -> Result<bool, String> {
+    use crate::artist_image::{self, Online};
+
+    let picture = match artist_image::local(&source.album_tracks) {
+        Some(file) => image::open(&file).ok(),
+        None => None,
+    };
+    let picture = match (picture, &source.name) {
+        (Some(picture), _) => Some(picture),
+        (None, Some(name)) if source.online => {
+            let online = artist_image::deezer(name);
+            // Deezer allows 50 requests in 5 seconds; this stays well below.
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            match online? {
+                Online::Picture(bytes) => image::load_from_memory(&bytes).ok(),
+                Online::NoPicture => None,
+            }
+        }
+        _ => None,
+    };
+    let picture = match picture {
+        Some(picture) => picture
+            .resize_to_fill(SIZE, SIZE, image::imageops::FilterType::Triangle)
+            .to_rgb8(),
+        None => match artist_image::collage(&source.album_tracks, SIZE) {
+            Some(collage) => collage,
+            None => return Ok(false),
+        },
+    };
+    save_jpeg(dir, key, &picture)?;
+    Ok(true)
+}
+
+/// Writes `picture` as `key`'s thumbnail, under another name first and then renamed, so a
+/// half-written file is never shown.
+fn save_jpeg(dir: &Path, key: &str, picture: &image::RgbImage) -> Result<(), String> {
+    create_private_dir(dir).map_err(|e| e.to_string())?;
+    let partial = dir.join(format!("{key}.partial"));
+    let file = std::fs::File::create(&partial).map_err(|e| e.to_string())?;
+    image::codecs::jpeg::JpegEncoder::new_with_quality(std::io::BufWriter::new(file), JPEG_QUALITY)
+        .encode_image(picture)
+        .map_err(|e| e.to_string())?;
+    std::fs::rename(&partial, dir.join(format!("{key}.jpg"))).map_err(|e| e.to_string())
 }
 
 /// Whether the thumbnail `file` is older than where its cover may come from: the track, with
@@ -159,17 +261,10 @@ fn make(dir: &Path, key: &str, track: &Path) -> Result<bool, String> {
         let _ = std::fs::remove_file(dir.join(format!("{key}.jpg")));
         return Ok(false);
     };
-    create_private_dir(dir).map_err(|e| e.to_string())?;
     let rgba = image::RgbaImage::from_raw(cover.width, cover.height, cover.rgba)
         .ok_or("the cover's size does not match its pixels")?;
     let rgb = image::DynamicImage::ImageRgba8(rgba).to_rgb8();
-    // Written under another name and then renamed, so a half-written file is never shown.
-    let partial = dir.join(format!("{key}.partial"));
-    let file = std::fs::File::create(&partial).map_err(|e| e.to_string())?;
-    image::codecs::jpeg::JpegEncoder::new_with_quality(std::io::BufWriter::new(file), JPEG_QUALITY)
-        .encode_image(&rgb)
-        .map_err(|e| e.to_string())?;
-    std::fs::rename(&partial, dir.join(format!("{key}.jpg"))).map_err(|e| e.to_string())?;
+    save_jpeg(dir, key, &rgb)?;
     Ok(true)
 }
 
@@ -219,6 +314,50 @@ mod tests {
             Thumbnails::key(Some("ab"), Some("c")),
             Thumbnails::key(Some("a"), Some("bc"))
         );
+    }
+
+    #[test]
+    fn makes_artist_pictures_from_their_folder_or_their_covers() {
+        let artist = temp_dir("artist-music");
+        let album = artist.join("Homesick");
+        std::fs::create_dir_all(&album).unwrap();
+        image::RgbImage::from_pixel(600, 400, image::Rgb([0, 0, 200]))
+            .save(album.join("cover.jpg"))
+            .unwrap();
+        let track = album.join("01.flac");
+        std::fs::write(&track, b"").unwrap();
+        let source = ArtistSource {
+            name: Some("Shores Of Null".into()),
+            album_tracks: vec![track],
+            online: false,
+        };
+        let cache = temp_dir("artist-cache").join("covers");
+
+        // Without a picture of their own, and offline: their album's cover, square.
+        let mut thumbnails = Thumbnails::new(cache.clone());
+        let key = Thumbnails::artist_key(source.name.as_deref());
+        assert_ne!(key, Thumbnails::key(source.name.as_deref(), None));
+        assert_eq!(thumbnails.get_artist(&key, &source), Thumbnail::Pending);
+        wait(&mut thumbnails);
+        let Thumbnail::Ready(file) = thumbnails.get_artist(&key, &source) else {
+            panic!("made from the cover");
+        };
+        let made = image::open(&file).unwrap().to_rgb8();
+        assert_eq!(made.dimensions(), (SIZE, SIZE));
+        assert!(made.get_pixel(150, 150)[2] > 150, "blue, as the cover");
+
+        // A picture in their folder, added later, is taken next run.
+        std::thread::sleep(Duration::from_millis(20));
+        image::RgbImage::from_pixel(300, 300, image::Rgb([220, 0, 0]))
+            .save(artist.join("artist.jpg"))
+            .unwrap();
+        let mut later = Thumbnails::new(cache);
+        assert_eq!(later.get_artist(&key, &source), Thumbnail::Pending);
+        wait(&mut later);
+        let Thumbnail::Ready(file) = later.get_artist(&key, &source) else {
+            panic!("made from the artist's picture");
+        };
+        assert!(image::open(&file).unwrap().to_rgb8().get_pixel(150, 150)[0] > 150);
     }
 
     #[test]
