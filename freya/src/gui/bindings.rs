@@ -243,6 +243,17 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
         "open-album-artist",
         Box::new(|app, _| app.library.open_album_artist()),
     );
+    for (callback, album) in [("open-playing-artist", false), ("open-playing-album", true)] {
+        bind(
+            "Library",
+            callback,
+            Box::new(move |app, _| {
+                if app.library.open_playing(album) {
+                    app.show_view("library");
+                }
+            }),
+        );
+    }
     bind(
         "Library",
         "enqueue-all",

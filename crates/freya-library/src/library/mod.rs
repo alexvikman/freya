@@ -348,6 +348,20 @@ impl Library {
         query.query_map([artist], album_from_row)?.collect()
     }
 
+    /// The track in the file `path` that starts at `start` (zero for a whole file).
+    pub fn track_at(&self, path: &Path, start: Duration) -> Result<Option<Track>> {
+        let Some(path) = path.to_str() else {
+            return Ok(None);
+        };
+        self.db
+            .prepare_cached(&format!(
+                "SELECT {TRACK_COLUMNS} FROM tracks
+                 WHERE path = ?1 AND ifnull(start_ms, 0) = ?2 LIMIT 1"
+            ))?
+            .query_row(params![path, start.as_millis() as i64], Track::from_row)
+            .optional()
+    }
+
     /// The tracks of one album, in album order.
     pub fn album_tracks(&self, artist: Option<&str>, album: Option<&str>) -> Result<Vec<Track>> {
         let mut query = self.db.prepare_cached(&format!(

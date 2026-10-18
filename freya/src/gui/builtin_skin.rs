@@ -318,6 +318,7 @@ impl Convert for ArtistPage {
             picture: field(&s, "picture"),
             banner: field(&s, "banner"),
             portrait: field(&s, "portrait"),
+            picture_full: field(&s, "picture-full"),
             color: field(&s, "color"),
             summary: field(&s, "summary"),
             biography: field(&s, "biography"),
@@ -336,6 +337,7 @@ impl Convert for ArtistPage {
             ("picture", self.picture.to_value()),
             ("banner", self.banner.to_value()),
             ("portrait", self.portrait.to_value()),
+            ("picture-full", self.picture_full.to_value()),
             ("color", self.color.to_value()),
             ("summary", self.summary.to_value()),
             ("biography", self.biography.to_value()),
@@ -592,6 +594,9 @@ skin_api! {
         Library."folders-draft" => set_folders_draft, get_folders_draft;
         Library."album-options" => set_album_options, get_album_options;
         Library."playing-row" => set_playing_row, get_playing_row;
+        Library."playing-known" => set_playing_known, get_playing_known;
+        Library."reveal-row" => set_reveal_row, get_reveal_row;
+        Library."reveals" => set_reveals, get_reveals;
         Library."album-page" => set_album_page, get_album_page;
         Library."artist-options" => set_artist_options, get_artist_options;
         Library."artist-page" => set_artist_page, get_artist_page;
@@ -717,6 +722,8 @@ skin_api! {
         Library."set-artist-view" => on_set_artist_view, invoke_set_artist_view(view: SharedString);
         Library."set-artist-pictures-online" => on_set_artist_pictures_online, invoke_set_artist_pictures_online(online: bool);
         Library."open-album-artist" => on_open_album_artist, invoke_open_album_artist();
+        Library."open-playing-artist" => on_open_playing_artist, invoke_open_playing_artist();
+        Library."open-playing-album" => on_open_playing_album, invoke_open_playing_album();
         Library."set-album-view" => on_set_album_view, invoke_set_album_view(view: SharedString);
         Library."add-folder" => on_add_folder, invoke_add_folder();
         Library."remove-folder" => on_remove_folder, invoke_remove_folder(index: i32);

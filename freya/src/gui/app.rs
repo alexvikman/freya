@@ -874,6 +874,14 @@ impl App {
 
     /// Shows `place` again: the library or playlist as it was, the skin's view, and how far
     /// down it was scrolled.
+    /// Shows the skin's `view`, as the user would by choosing it.
+    pub fn show_view(&mut self, view: &str) {
+        let _ = self
+            .view
+            .ui
+            .set_global_property("App", "view", skin_state::string(view));
+    }
+
     fn show_place(&mut self, place: &Place) {
         if let Some(library) = &place.library {
             self.library.go_to(library);

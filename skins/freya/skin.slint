@@ -103,6 +103,37 @@ component Icon inherits Path {
     stroke-width: stroked ? 1.8px : 0;
 }
 
+/// Text that opens something when clicked, underlined while the pointer is on it. Plain text
+/// while it is not `enabled`.
+component LinkText inherits Text {
+    in property <bool> enabled: true;
+    /// Read by screen readers, for what a click does.
+    in property <string> label;
+    callback clicked;
+
+    overflow: elide;
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.enabled ? root.label : root.text;
+    accessible-action-default => {
+        if (root.enabled) {
+            root.clicked();
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { root.clicked(); }
+    }
+    if root.enabled && touch.has-hover: Rectangle {
+        x: 0;
+        y: root.height - 2px;
+        width: min(root.width, root.preferred-width);
+        height: 1px;
+        background: root.color;
+    }
+}
+
 /// The box shown when the pointer rests on a control.
 component TooltipBox inherits Rectangle {
     in property <string> text;
@@ -282,6 +313,15 @@ component PlayerBar inherits Rectangle {
     /// Fill the screen with the visualizer.
     callback full-screen();
 
+    /// The cover opens the track's album; for a track outside the library, the visualizer.
+    function open-cover() {
+        if (Library.playing-known) {
+            Library.open-playing-album();
+        } else {
+            root.toggle-view("visualizer");
+        }
+    }
+
     height: 88px;
     background: Theme.surface;
 
@@ -308,8 +348,8 @@ component PlayerBar inherits Rectangle {
                     clip: true;
                     background: Theme.background;
                     accessible-role: button;
-                    accessible-label: "Show the visualizer";
-                    accessible-action-default => { root.toggle-view("visualizer"); }
+                    accessible-label: Library.playing-known ? "Show the album" : "Show the visualizer";
+                    accessible-action-default => { root.open-cover(); }
 
                     if Player.has-cover: Image {
                         width: parent.width;
@@ -326,7 +366,8 @@ component PlayerBar inherits Rectangle {
                     }
 
                     TouchArea {
-                        clicked => { root.toggle-view("visualizer"); }
+                        mouse-cursor: Library.playing-known ? MouseCursor.pointer : MouseCursor.default;
+                        clicked => { root.open-cover(); }
                     }
                 }
             }
@@ -335,18 +376,23 @@ component PlayerBar inherits Rectangle {
                 spacing: 2px;
                 min-width: 0;
 
-                Text {
+                // The track's album, and its artist, open in the library.
+                LinkText {
                     text: Player.title == "" ? "Nothing playing" : Player.title;
                     font-size: 15px;
                     font-weight: Player.title == "" ? 400 : 600;
                     color: Player.title == "" ? Theme.text-secondary : Theme.text;
-                    overflow: elide;
+                    enabled: Library.playing-known && Player.title != "";
+                    label: "Show " + Player.title + " in its album";
+                    clicked => { Library.open-playing-album(); }
                 }
-                if Player.artist != "": Text {
+                if Player.artist != "": LinkText {
                     text: Player.artist;
                     font-size: 13px;
                     color: Theme.text-secondary;
-                    overflow: elide;
+                    enabled: Library.playing-known;
+                    label: "Show " + Player.artist;
+                    clicked => { Library.open-playing-artist(); }
                 }
                 // Kept while a track is loaded, even when empty, so the title does not jump
                 // when playback starts.
@@ -1848,6 +1894,8 @@ component ArtistPageHead inherits Rectangle {
     callback options();
     /// Read all of what Last.fm says.
     callback read-more();
+    /// Show their picture whole and large.
+    callback show-picture();
 
     property <length> pad: 24px;
 
@@ -1898,6 +1946,11 @@ component ArtistPageHead inherits Rectangle {
                             height: parent.height;
                             source: root.page.portrait;
                             image-rendering: smooth;
+                        }
+                        // Their picture whole and large.
+                        if root.page.picture-full.width > 0: TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.show-picture(); }
                         }
                         if root.page.portrait.width == 0: Icon {
                             width: 64px;
@@ -2511,6 +2564,16 @@ component LibraryPanel inherits FocusScope {
         }
     }
     changed restores => { root.restore-scroll(); }
+    // Opened from elsewhere, as the album of the track playing: from the top, or at its row.
+    property <int> reveals: Library.reveals;
+    changed reveals => {
+        root.start-over();
+        if (Library.reveal-row >= 0) {
+            root.cursor = Library.reveal-row;
+            root.reveal(Library.reveal-row);
+        }
+        root.focus();
+    }
 
     function report-scroll() {
         App.scroll = -(root.grid-shown ? grid.content-y
@@ -2778,6 +2841,7 @@ component LibraryPanel inherits FocusScope {
                 page: Library.artist-page;
                 options => { options-menu.show(); }
                 read-more => { bio-popup.show(); }
+                show-picture => { picture-popup.show(); }
             }
             if line >= root.head-lines: HorizontalLayout {
                 padding-left: root.grid-pad;
@@ -2856,6 +2920,7 @@ component LibraryPanel inherits FocusScope {
                 page: Library.artist-page;
                 options => { options-menu.show(); }
                 read-more => { bio-popup.show(); }
+                show-picture => { picture-popup.show(); }
             }
             if cell.album: DiscographyAlbum {
                 entry: Library.rows[cell.i];
@@ -3014,6 +3079,32 @@ component LibraryPanel inherits FocusScope {
     }
 
     // All of what Last.fm says of the artist, over the library, closed with Close or Esc.
+    // An artist's picture whole, large over the dimmed library; any click closes it.
+    picture-popup := PopupWindow {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+
+        Rectangle {
+            background: #000000b3;
+
+            Image {
+                property <float> aspect: Library.artist-page.picture-full.width / max(1, Library.artist-page.picture-full.height);
+
+                // As large as the library allows, up to the picture's own size.
+                width: min(parent.width - 96px, (parent.height - 96px) * self.aspect, Library.artist-page.picture-full.width * 1px);
+                height: self.width / self.aspect;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                source: Library.artist-page.picture-full;
+                image-rendering: smooth;
+                accessible-role: image;
+                accessible-label: Library.artist-page.name;
+            }
+        }
+    }
+
     bio-popup := PopupWindow {
         x: 0;
         y: 0;

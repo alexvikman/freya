@@ -214,6 +214,12 @@ pub struct LibraryPanel {
     /// The track playing, by its file and where in it it starts, and its row, or -1.
     playing: Option<(PathBuf, Duration)>,
     playing_row: i32,
+    /// The album artist and album of the track playing, when it is in the library.
+    playing_album: Option<(Option<String>, Option<String>)>,
+    /// A row for the skin to put the keyboard on and scroll to, each time `reveals` counts
+    /// up; -1 to show the list from the top.
+    reveal_row: i32,
+    reveals: i32,
     /// How artists are ordered, whether they show as a list rather than a grid of pictures,
     /// and whether pictures of them may come from Deezer.
     artist_order: ArtistOrder,
@@ -246,6 +252,8 @@ struct ArtistPage {
     portrait: Option<Image>,
     /// Whether `portrait` is made from their picture large, rather than the grid's.
     portrait_large: bool,
+    /// Their picture large, uncut.
+    picture_full: Option<Image>,
     color: Option<[u8; 3]>,
     /// A track of each of their albums, which their pictures can be made from.
     album_tracks: Vec<PathBuf>,
@@ -384,6 +392,9 @@ impl LibraryPanel {
             album_list: false,
             playing: None,
             playing_row: -1,
+            playing_album: None,
+            reveal_row: -1,
+            reveals: 0,
             play_counts: HashMap::new(),
             album_page: None,
             artist_order: ArtistOrder::Name,
@@ -421,6 +432,7 @@ impl LibraryPanel {
                 return;
             }
         }
+        self.find_playing_album();
         self.clear_older_cache();
         self.reload();
         if scan {
@@ -767,7 +779,44 @@ impl LibraryPanel {
         if self.playing != track {
             self.playing = track;
             self.find_playing_row();
+            self.find_playing_album();
         }
+    }
+
+    fn find_playing_album(&mut self) {
+        self.playing_album = match (&self.db, &self.playing) {
+            (Some(db), Some((path, start))) => db
+                .track_at(path, *start)
+                .ok()
+                .flatten()
+                .map(|track| (track.album_artist, track.album)),
+            _ => None,
+        };
+    }
+
+    /// Opens the artist of the track playing, or its album with its row marked. Returns
+    /// false when the track is not in the library.
+    pub fn open_playing(&mut self, album: bool) -> bool {
+        let Some((artist, name)) = self.playing_album.clone() else {
+            return false;
+        };
+        self.opened = vec![
+            Level::Artists,
+            Level::ArtistAlbums {
+                artist: artist.clone(),
+            },
+        ];
+        if album {
+            self.opened.push(Level::AlbumTracks {
+                artist,
+                album: name,
+            });
+        }
+        self.query.clear();
+        self.reload();
+        self.reveal_row = if album { self.playing_row } else { -1 };
+        self.reveals += 1;
+        true
     }
 
     fn find_playing_row(&mut self) {
@@ -875,6 +924,7 @@ impl LibraryPanel {
             banner: None,
             portrait: None,
             portrait_large: false,
+            picture_full: None,
             color: None,
             album_tracks,
             summary: String::new(),
@@ -934,6 +984,10 @@ impl LibraryPanel {
         if let Some((image, large)) = portrait {
             page.portrait = Some(image);
             page.portrait_large = large;
+            page.picture_full = portrait_file
+                .as_deref()
+                .filter(|_| large)
+                .and_then(|file| Image::load_from_path(file).ok());
         }
         if page.color.is_none() {
             // Without a wide picture: the color of their picture, or of what the grid shows.
@@ -1489,6 +1543,9 @@ impl LibraryPanel {
                 ),
             ),
             ("playing-row", Value::Number(f64::from(self.playing_row))),
+            ("playing-known", Value::Bool(self.playing_album.is_some())),
+            ("reveal-row", Value::Number(f64::from(self.reveal_row))),
+            ("reveals", Value::Number(f64::from(self.reveals))),
             ("album-page", self.album_page_value()),
             ("artist-page", self.artist_page_value()),
             ("artist-bios-online", Value::Bool(self.online_bios)),
@@ -1557,6 +1614,13 @@ impl LibraryPanel {
             (
                 "portrait".to_owned(),
                 Value::Image(page.and_then(|p| p.portrait.clone()).unwrap_or_default()),
+            ),
+            (
+                "picture-full".to_owned(),
+                Value::Image(
+                    page.and_then(|p| p.picture_full.clone())
+                        .unwrap_or_default(),
+                ),
             ),
             (
                 "color".to_owned(),
@@ -1860,6 +1924,7 @@ mod tests {
             banner: None,
             portrait: None,
             portrait_large: false,
+            picture_full: None,
             color: None,
             album_tracks: Vec::new(),
             summary: String::new(),
@@ -1890,6 +1955,45 @@ mod tests {
         )
         .unwrap();
         assert_eq!(panel.backdrop_source(&page).fanart, Downloaded::Missing);
+    }
+
+    #[test]
+    fn opens_the_album_of_the_track_playing_at_its_row() {
+        let dir = std::env::temp_dir().join(format!("freya-open-playing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fixtures =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-audio/tests/fixtures");
+        for name in ["sine.flac", "sine.ogg"] {
+            std::fs::copy(fixtures.join(name), dir.join(name)).unwrap();
+        }
+        let mut db = Library::open_in_memory().unwrap();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        freya_library::library::scan(&mut db, std::slice::from_ref(&dir), &cancel, |_| {}).unwrap();
+        let mut panel = LibraryPanel::new(None, None, None);
+        panel.db = Some(db);
+        panel.reload();
+
+        // Not in the library: nothing opens.
+        panel.set_playing(Some((Path::new("/elsewhere.mp3"), Duration::ZERO)));
+        assert!(!panel.open_playing(true));
+
+        let playing = dir.join("sine.ogg");
+        panel.set_playing(Some((&playing, Duration::ZERO)));
+        assert!(panel.open_playing(true));
+        assert!(matches!(panel.level(), Level::AlbumTracks { .. }));
+        assert_eq!(panel.opened.len(), 3, "back goes to the artist");
+        assert!(panel.playing_row >= 0);
+        assert_eq!((panel.reveal_row, panel.reveals), (panel.playing_row, 1));
+        let Item::Track(track) = &panel.items[panel.playing_row as usize] else {
+            panic!("a track row");
+        };
+        assert_eq!(track.path, playing);
+
+        assert!(panel.open_playing(false));
+        assert!(matches!(panel.level(), Level::ArtistAlbums { .. }));
+        assert_eq!((panel.reveal_row, panel.reveals), (-1, 2));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -155,6 +155,9 @@ export struct ArtistPage {
     /// Their picture cut round, clear outside the circle, beside their name when there is no
     /// banner; empty before the grid's picture of them is made.
     portrait: image,
+    /// Their picture whole and large, uncut, to show on its own; empty when they have none
+    /// but a collage of covers.
+    picture-full: image,
     /// A color from their picture, dark enough for white text.
     color: color,
     /// What Last.fm says of them, in plain text: a short biography, the whole one, and the
@@ -214,6 +217,14 @@ export global Library {
     in property <string> fanart-key;
     /// The row of the track playing or paused, or -1 when it is not among the rows.
     in property <int> playing-row: -1;
+    /// Whether the track playing is in the library, so `open-playing-artist` and
+    /// `open-playing-album` can open it.
+    in property <bool> playing-known;
+    /// Each time `reveals` counts up, the library opened something for the user: show its
+    /// list from the top, or, when `reveal-row` is a row, put the keyboard on it and scroll it
+    /// into view.
+    in property <int> reveal-row: -1;
+    in property <int> reveals;
     /// True while the artists are shown, which `artist-sort` and `artist-view` apply to.
     in property <bool> artist-options;
     /// How the artists are ordered: "name", "most-played" or "recently-added". Kept between
@@ -282,6 +293,10 @@ export global Library {
     callback shuffle-all();
     /// Open the artist of the album shown (`album-page.artist`).
     callback open-album-artist();
+    /// Show the library at the artist of the track playing, or at its album with its row
+    /// revealed (`reveal-row`). Freya sets `App.view` to "library".
+    callback open-playing-artist();
+    callback open-playing-album();
     /// Play the popular tracks shown, from the `index`th; show all ten or five again.
     callback play-popular(int);
     callback more-popular();
