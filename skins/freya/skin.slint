@@ -80,6 +80,8 @@ global Icons {
     out property <string> star: "M12 3 L14.8 8.8 L21 9.6 L16.5 14 L17.6 20.3 L12 17.3 L6.4 20.3 L7.5 14 L3 9.6 L9.2 8.8 Z";
     out property <string> genre: "M3 4 V11 L13 21 L21 13 L11 3 H4 C3.4 3 3 3.4 3 4 Z M7.5 7.5 H7.6";
     out property <string> expand: "M4 9 V4 H9 M15 4 H20 V9 M20 15 V20 H15 M9 20 H4 V15";
+    // A pulse in a ring, as Plex shows what it is doing.
+    out property <string> activity: "M12 2.5 A9.5 9.5 0 1 0 12 21.5 A9.5 9.5 0 1 0 12 2.5 Z M6.5 12 H9 L10.75 8.5 L13.25 15.5 L15 12 H17.5";
     out property <string> external: "M7 17 L17 7 M9 7 H17 V15";
     out property <string> code: "M8 6 L2 12 L8 18 M16 6 L22 12 L16 18";
     out property <string> document: "M6 3 H14 L19 8 V21 H6 Z M14 3 V8 H19 M9 13 H16 M9 17 H16";
@@ -578,6 +580,50 @@ component MenuItem inherits Rectangle {
 
     touch := TouchArea {
         clicked => { root.activated(); }
+    }
+}
+
+/// One thing Freya is doing, in the activity menu: what, where, and a dot while it goes on.
+component ActivityRow inherits HorizontalLayout {
+    in property <string> text;
+    in property <string> detail;
+    in property <bool> busy;
+
+    padding-left: 12px;
+    padding-right: 12px;
+    padding-top: 4px;
+    padding-bottom: 8px;
+    spacing: 10px;
+    accessible-role: AccessibleRole.text;
+    accessible-label: detail == "" ? text : text + ", " + detail;
+
+    VerticalLayout {
+        horizontal-stretch: 1;
+        min-width: 0;
+        spacing: 2px;
+
+        Text {
+            text: root.text;
+            font-size: 13px;
+            color: Theme.text;
+            overflow: elide;
+        }
+        if root.detail != "": Text {
+            text: root.detail;
+            font-size: 12px;
+            color: Theme.text-secondary;
+            overflow: elide;
+        }
+    }
+    if root.busy: VerticalLayout {
+        alignment: center;
+
+        Rectangle {
+            width: 7px;
+            height: 7px;
+            border-radius: 3.5px;
+            background: Theme.accent;
+        }
     }
 }
 
@@ -4126,17 +4172,6 @@ component Sidebar inherits Rectangle {
                 }
             }
         }
-        if Library.scanning: VerticalLayout {
-            padding: 10px;
-            padding-top: 4px;
-
-            Text {
-                text: Library.status;
-                font-size: 12px;
-                color: Theme.text-secondary;
-                overflow: elide;
-            }
-        }
     }
 
     new-playlist := PopupWindow {
@@ -5330,12 +5365,53 @@ component Toolbar inherits HorizontalLayout {
             accepted => { root.search-accepted(); }
         }
     }
+    activity := IconButton {
+        icon: Icons.activity;
+        stroked: true;
+        size: 36px;
+        // In the accent color while Freya is busy.
+        checked: Library.scanning || Updates.state == "downloading";
+        label: "Activity";
+        tooltip: self.checked ? "Activity: " + (Library.scanning ? Library.status : "downloading an update") : "Activity";
+        clicked => { activity-popup.show(); }
+    }
     more := IconButton {
         icon: Icons.more;
         size: 36px;
         label: "More";
         tooltip: "More options";
         clicked => { menu.show(); }
+    }
+
+    // What Freya is doing, as Plex shows it.
+    activity-popup := PopupWindow {
+        x: activity.x + activity.width - 320px;
+        y: activity.y + activity.height;
+        width: 320px;
+        close-policy: close-on-click-outside;
+
+        MenuSurface {
+            VerticalLayout {
+                padding: 6px;
+
+                MenuHeading { text: "Library"; }
+                ActivityRow {
+                    text: Library.scanning ? Library.status : "Up to date";
+                    detail: Library.scanning ? Library.scan-folder : Library.status;
+                    busy: Library.scanning;
+                }
+                if !Library.scanning: MenuItem {
+                    text: "Check for Changes";
+                    activated => { Library.rescan(); }
+                }
+                if Updates.state == "downloading": MenuDivider { }
+                if Updates.state == "downloading": MenuHeading { text: "Updates"; }
+                if Updates.state == "downloading": ActivityRow {
+                    text: "Downloading Freya " + Updates.version;
+                    busy: true;
+                }
+            }
+        }
     }
 
     menu := PopupWindow {

@@ -20,6 +20,8 @@ use crate::tags::{TagInfo, read_tags};
 const COMMIT_INTERVAL: Duration = Duration::from_millis(500);
 /// Tags are read by up to this many threads; reading is mostly waiting for the disk.
 const MAX_READERS: usize = 8;
+/// The folder being read is told at most this often.
+const LOOKING_INTERVAL: Duration = Duration::from_millis(200);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ScanEvent {
@@ -29,6 +31,8 @@ pub enum ScanEvent {
         done: usize,
         total: usize,
     },
+    /// The folder being looked through or read now, told every so often.
+    Looking(PathBuf),
     Finished(ScanSummary),
     Failed(String),
 }
@@ -62,7 +66,7 @@ pub fn scan(
     cancel: &AtomicBool,
     mut progress: impl FnMut(ScanEvent),
 ) -> Result<ScanSummary> {
-    let found = find(folders, cancel);
+    let found = find(folders, cancel, &mut progress);
     let known = library.sources()?;
     // Tracks found from now on came into the library now, except on the library's first scan:
     // everything comes in at once then, and the files' own dates say more.
@@ -144,6 +148,9 @@ pub fn scan(
             }
             if committed.elapsed() >= COMMIT_INTERVAL {
                 tx.commit()?;
+                if let Some(folder) = source.parent() {
+                    progress(ScanEvent::Looking(folder.to_owned()));
+                }
                 progress(ScanEvent::Progress { done, total });
                 tx = library.transaction()?;
                 committed = Instant::now();
@@ -158,10 +165,22 @@ pub fn scan(
 /// What there is to read under `folders`: audio files, and the discs of CUE sheets in place of
 /// the files they cut, each with the stamp of what it is read from. Each is listed once, even
 /// when folders overlap.
-fn find(folders: &[PathBuf], cancel: &AtomicBool) -> Vec<(Found, FileStamp)> {
+fn find(
+    folders: &[PathBuf],
+    cancel: &AtomicBool,
+    progress: &mut impl FnMut(ScanEvent),
+) -> Vec<(Found, FileStamp)> {
     let mut seen = HashSet::new();
     let mut found = Vec::new();
-    for item in cue::apply_sheets(files::collect_with_sheets_until(folders, cancel)) {
+    let mut told: Option<Instant> = None;
+    let mut entering = |dir: &Path| {
+        if told.is_none_or(|at| at.elapsed() >= LOOKING_INTERVAL) {
+            told = Some(Instant::now());
+            progress(ScanEvent::Looking(dir.to_owned()));
+        }
+    };
+    let files = files::collect_with_sheets_watched(folders, cancel, &mut entering);
+    for item in cue::apply_sheets(files) {
         if cancel.load(Ordering::Relaxed) {
             break;
         }

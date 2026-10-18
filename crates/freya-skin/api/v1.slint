@@ -249,6 +249,9 @@ export global Library {
     in property <bool> scanning;
     /// "10,412 tracks · 682 albums", or a scan's progress: "Reading 1,234 of 5,000 files".
     in property <string> status;
+    /// While scanning, the folder looked through or read now, with the one it is in: "Peter
+    /// Gabriel / So". Empty otherwise.
+    in property <string> scan-folder;
 
     /// Search for tracks whose artist, album, title, genre or file name has words starting
     /// with each word of the text. Empty text goes back to browsing.

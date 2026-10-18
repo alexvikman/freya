@@ -605,6 +605,7 @@ skin_api! {
         Library."album-view" => set_album_view, get_album_view;
         Library."scanning" => set_scanning, get_scanning;
         Library."status" => set_status, get_status;
+        Library."scan-folder" => set_scan_folder, get_scan_folder;
 
         Equalizer."enabled" => set_enabled, get_enabled;
         Equalizer."preamp" => set_preamp, get_preamp;

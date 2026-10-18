@@ -14,7 +14,7 @@ pub const AUDIO_EXTENSIONS: &[&str] = &[
 /// Expands folders (recursively, sorted) into the audio files they contain. Files are kept
 /// as given. Hidden files and folders are skipped, like macOS's `._name.mp3` companion files.
 pub fn collect(paths: &[PathBuf]) -> Vec<PathBuf> {
-    collect_matching(paths, is_audio, &AtomicBool::new(false))
+    collect_matching(paths, is_audio, &AtomicBool::new(false), &mut |_| {})
 }
 
 /// Like [`collect`], but also finds CUE sheets, which cut audio files into tracks; see
@@ -26,19 +26,41 @@ pub fn collect_with_sheets(paths: &[PathBuf]) -> Vec<PathBuf> {
 /// Like [`collect_with_sheets`], but gives up, with what it found so far, once `cancel` is
 /// set: walking a large or slow drive can take minutes.
 pub fn collect_with_sheets_until(paths: &[PathBuf], cancel: &AtomicBool) -> Vec<PathBuf> {
-    collect_matching(paths, |path| is_audio(path) || cue::is_sheet(path), cancel)
+    collect_with_sheets_watched(paths, cancel, &mut |_| {})
+}
+
+/// Like [`collect_with_sheets_until`], telling `entering` of each folder as it is walked.
+pub fn collect_with_sheets_watched(
+    paths: &[PathBuf],
+    cancel: &AtomicBool,
+    entering: &mut dyn FnMut(&Path),
+) -> Vec<PathBuf> {
+    collect_matching(
+        paths,
+        |path| is_audio(path) || cue::is_sheet(path),
+        cancel,
+        entering,
+    )
 }
 
 fn collect_matching(
     paths: &[PathBuf],
     wanted: fn(&Path) -> bool,
     cancel: &AtomicBool,
+    entering: &mut dyn FnMut(&Path),
 ) -> Vec<PathBuf> {
     let mut files = Vec::new();
     for path in paths {
         if path.is_dir() {
             let mut found = Vec::new();
-            walk(path, wanted, &mut found, &mut HashSet::new(), cancel);
+            walk(
+                path,
+                wanted,
+                &mut found,
+                &mut HashSet::new(),
+                cancel,
+                entering,
+            );
             found.sort();
             files.extend(found);
         } else {
@@ -55,10 +77,12 @@ fn walk(
     out: &mut Vec<PathBuf>,
     visited: &mut HashSet<PathBuf>,
     cancel: &AtomicBool,
+    entering: &mut dyn FnMut(&Path),
 ) {
     if cancel.load(Ordering::Relaxed) {
         return;
     }
+    entering(dir);
     let Ok(real) = dir.canonicalize() else {
         return;
     };
@@ -74,7 +98,7 @@ fn walk(
         }
         let path = entry.path();
         if path.is_dir() {
-            walk(&path, wanted, out, visited, cancel);
+            walk(&path, wanted, out, visited, cancel, entering);
         } else if wanted(&path) {
             out.push(path);
         }

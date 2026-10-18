@@ -209,6 +209,8 @@ pub struct LibraryPanel {
     album_list: bool,
     /// A scan was started and its end not yet taken in.
     scanning: bool,
+    /// The folder a scan looks through or reads now.
+    scan_folder: Option<PathBuf>,
     /// The track playing, by its file and where in it it starts, and its row, or -1.
     playing: Option<(PathBuf, Duration)>,
     playing_row: i32,
@@ -253,6 +255,22 @@ struct ArtistPage {
     /// Their most played tracks, and whether all ten show rather than five.
     popular: Vec<Played>,
     more: bool,
+}
+
+/// A folder as the scan shows it: its parent and its own name, "Peter Gabriel / So", which is
+/// mostly the artist and the album.
+fn folder_name(folder: &Path) -> String {
+    let mut names: Vec<String> = folder
+        .components()
+        .rev()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(name) => Some(name.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .take(2)
+        .collect();
+    names.reverse();
+    names.join(" / ")
 }
 
 /// The size of an artist's round picture: sharp at 232 points on a Retina screen.
@@ -361,6 +379,7 @@ impl LibraryPanel {
             covers_ready: 0,
             plays: Vec::new(),
             scanning: false,
+            scan_folder: None,
             album_sort: AlbumSort::ReleaseDate,
             album_list: false,
             playing: None,
@@ -490,6 +509,7 @@ impl LibraryPanel {
                     self.progress = Some((done, total));
                     self.stale = true;
                 }
+                ScanEvent::Looking(folder) => self.scan_folder = Some(folder),
                 ScanEvent::Finished(summary) => {
                     self.progress = None;
                     self.scanning = false;
@@ -509,6 +529,9 @@ impl LibraryPanel {
         if ended && self.scanning {
             self.scanning = false;
             finished = true;
+        }
+        if !self.scanning {
+            self.scan_folder = None;
         }
         // Plays noted while the scan wrote.
         if finished && self.write_plays() && self.shows_plays() {
@@ -1448,6 +1471,15 @@ impl LibraryPanel {
             ),
             ("query", string(&self.query)),
             ("scanning", Value::Bool(self.scanning)),
+            (
+                "scan-folder",
+                string(
+                    self.scan_folder
+                        .as_deref()
+                        .map(folder_name)
+                        .unwrap_or_default(),
+                ),
+            ),
             ("covers-ready", Value::Number(f64::from(self.covers_ready))),
             ("status", string(status)),
             (
@@ -1858,6 +1890,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(panel.backdrop_source(&page).fanart, Downloaded::Missing);
+    }
+
+    #[test]
+    fn names_a_folder_by_its_last_two() {
+        assert_eq!(
+            folder_name(Path::new("/Volumes/Music/Peter Gabriel/So")),
+            "Peter Gabriel / So"
+        );
+        assert_eq!(folder_name(Path::new("/Music")), "Music");
+        assert_eq!(folder_name(Path::new("/")), "");
     }
 
     #[test]
