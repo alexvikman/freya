@@ -49,11 +49,10 @@ pub fn switch_skin(app: &Rc<RefCell<App>>, source: SkinSource) {
     let old = app.borrow_mut().replace_view(ui, source);
     let _ = app.borrow().view.ui.show();
     let _ = old.ui.hide();
-    // Windows ties the media controls to the window, so they move to the new one. The old
-    // ones close first: on Linux both would want the same name on the bus.
+    // Windows ties the media controls to the window, so they move to the new one with the
+    // next tick. The old ones close first: on Linux both would want the same name on the bus.
     if app.borrow_mut().system_media.take().is_some() {
-        let media = super::system_media::SystemMedia::new(app.borrow().view.ui.window());
-        app.borrow_mut().system_media = media;
+        app.borrow_mut().media_tries = super::MEDIA_TRIES;
     }
     refresh_picker(app);
 }

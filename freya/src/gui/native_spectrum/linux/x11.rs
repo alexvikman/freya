@@ -192,15 +192,21 @@ impl Layer {
         background: [f64; 4],
         rects: &[Rectangle],
     ) -> Result<(), Error> {
-        // TrueColor, as every current X server uses: 0xRRGGBB.
-        let [r, g, b] = blend(color, background);
-        let pixel = u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b);
+        let pixel = pixel(blend(color, background), self.depth);
         self.connection
             .change_gc(self.gc, &ChangeGCAux::new().foreground(pixel))?;
         self.connection
             .poly_fill_rectangle(pixmap, self.gc, rects)?;
         Ok(())
     }
+}
+
+/// A pixel of TrueColor, as every current X server uses: 0xRRGGBB, and opaque in the top byte
+/// at depth 32. The window takes its parent's visual, which is ARGB where Slint asks for a
+/// window that can be see-through, and a compositor shows alpha 0 as a hole.
+fn pixel([r, g, b]: [u8; 3], depth: u8) -> u32 {
+    let alpha = if depth == 32 { 0xff00_0000 } else { 0 };
+    alpha | u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)
 }
 
 impl Drop for Layer {
@@ -211,5 +217,16 @@ impl Drop for Layer {
         let _ = self.connection.free_gc(self.gc);
         let _ = self.connection.destroy_window(self.window);
         let _ = self.connection.flush();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pixels_are_opaque_in_windows_with_alpha() {
+        assert_eq!(pixel([0x12, 0x34, 0x56], 24), 0x0012_3456);
+        assert_eq!(pixel([0x12, 0x34, 0x56], 32), 0xff12_3456);
     }
 }

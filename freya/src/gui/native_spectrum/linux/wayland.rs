@@ -19,7 +19,7 @@ use wayland_client::protocol::{
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, delegate_noop};
 
 use super::super::{Area, Rect};
-use super::{Error, area_size, pixels};
+use super::{Error, pixels};
 
 /// What Freya's event queue keeps track of.
 #[derive(Default)]
@@ -197,7 +197,7 @@ impl Layer {
         }
         self.refresh()?;
         let scale = f64::from(self.scale);
-        let (width, height) = area_size(area, scale);
+        let (width, height) = buffer_size(area, self.scale);
         let buffers = self.buffers(width, height)?;
         // Both buffers still on screen: skip this frame rather than wait.
         let Some(index) = buffers.busy.iter().position(|busy| !busy) else {
@@ -317,9 +317,37 @@ fn map(file: &File) -> std::io::Result<MmapMut> {
     unsafe { MmapMut::map_mut(file) }
 }
 
+/// The area's size in pixels at the integer buffer `scale`: whole logical pixels times the
+/// scale. Wayland refuses, and disconnects for, a buffer of any other size, as the area's
+/// physical size at fractional output scales (an odd width at 150 %) would be.
+fn buffer_size(area: &Area, scale: i32) -> (u32, u32) {
+    let scale = scale.max(1) as u32;
+    let whole = |logical: f64| (logical.round() as u32).max(1) * scale;
+    (whole(area.width), whole(area.height))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn buffers_are_a_whole_multiple_of_their_scale() {
+        // 1101 logical pixels wide at 150 %: the area is 800.33 wide, which made a buffer of
+        // 1601 pixels at scale 2.
+        let area = Area {
+            x: 0.0,
+            y: 0.0,
+            width: 800.33,
+            height: 120.67,
+            shown: true,
+            bar_color: [1.0; 4],
+            peak_color: [1.0; 4],
+            peak_thickness: 2.0,
+            background: [1.0; 4],
+        };
+        assert_eq!(buffer_size(&area, 2), (1600, 242));
+        assert_eq!(buffer_size(&area, 3), (2400, 363));
+    }
 
     #[test]
     fn colors_are_premultiplied() {

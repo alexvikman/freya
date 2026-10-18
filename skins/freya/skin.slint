@@ -1152,7 +1152,7 @@ component TrackList inherits FocusScope {
             }
         } else if (event.text == Key.Delete || event.text == Key.Backspace) {
             Playlist.remove-selected();
-        } else if (event.text == Key.Escape) {
+        } else if (event.text == Key.Escape && !Stage.on) {
             Playlist.clear-selection();
         } else if ((event.modifiers.control || event.modifiers.meta) && (event.text == "a" || event.text == "A")) {
             Playlist.select-all();
@@ -1625,6 +1625,11 @@ component AlbumTile inherits Rectangle {
 component LibraryPanel inherits FocusScope {
     /// Ctrl/Cmd+F: move to the search field.
     callback find();
+
+    /// New results start from the top, so Enter in the search plays the first of them and
+    /// not the row the keyboard was on in the old ones.
+    property <string> query: Library.query;
+    changed query => { root.start-over(); }
 
     /// The row a right-click opened the menu for, and where, in this component.
     property <int> menu-row: -1;
@@ -2955,9 +2960,11 @@ component VisualizerView inherits Rectangle {
 
     function wake() {
         root.awake = true;
-        idle.stop();
+        // A stop and a start in one go left the timer running from its first start.
         if (root.stage) {
-            idle.start();
+            idle.restart();
+        } else {
+            idle.stop();
         }
     }
 
@@ -3699,7 +3706,7 @@ component Toolbar inherits HorizontalLayout {
         stroked: true;
         size: 36px;
         label: "Add files";
-        tooltip: "Add files (O)";
+        tooltip: "Add files";
         clicked => { Playlist.add-files(); }
     }
     if root.view == "queue": IconButton {
@@ -3986,6 +3993,14 @@ export component FreyaSkin inherits Window {
     init => { App.title-bar-height = 56px; }
 
     function show(view: string) {
+        root.open(view);
+        // What had the keyboard may be gone with the view it was in, and with it every
+        // shortcut: they go back to the window.
+        shortcuts.focus();
+    }
+
+    /// Shows `view` and leaves the keyboard where it is: typing a search opens the library.
+    function open(view: string) {
         if (view == "queue" || view == "library" || view == "radio" || view == "playlist") {
             root.music-view = view;
         }
@@ -3999,6 +4014,7 @@ export component FreyaSkin inherits Window {
         root.stage = true;
         Stage.on = true;
         root.full-screen = true;
+        shortcuts.focus();
     }
 
     function leave-stage() {
@@ -4008,6 +4024,7 @@ export component FreyaSkin inherits Window {
         if (!root.was-full-screen) {
             root.full-screen = false;
         }
+        shortcuts.focus();
     }
 
     function toggle-stage() {
@@ -4020,7 +4037,7 @@ export component FreyaSkin inherits Window {
 
     function toggle-view(view: string) {
         if (root.view == view) {
-            root.view = root.music-view;
+            root.show(root.music-view);
         } else {
             root.show(view);
         }
@@ -4094,8 +4111,13 @@ export component FreyaSkin inherits Window {
                                 can-go-back: root.view == "library" && Library.can-go-back;
                                 toggle-sidebar => { root.sidebar-shown = !root.sidebar-shown; }
                                 back => { library.back(); }
-                                search-edited => { root.show("library"); }
-                                search-accepted => { library.activate-current(); }
+                                search-edited => { root.open("library"); }
+                                // The keyboard goes to the results, so Space plays again
+                                // instead of typing into the search.
+                                search-accepted => {
+                                    library.activate-current();
+                                    library.focus();
+                                }
                                 show-view(view) => { root.show(view); }
                                 check-updates => {
                                     Updates.check();

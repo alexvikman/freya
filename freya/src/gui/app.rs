@@ -233,6 +233,9 @@ pub struct App {
     cover_file: Option<PathBuf>,
     /// Media keys and the system's Now Playing display.
     pub system_media: Option<SystemMedia>,
+    /// Tries left to connect to the system's media controls, made from the ticks: Windows
+    /// ties them to the window, which only exists once the event loop has shown it.
+    pub media_tries: u8,
     track: Option<Arc<TrackInfo>>,
     /// Whether the track playing has been listened to long enough to count as played.
     listening: Listening,
@@ -335,6 +338,7 @@ impl App {
             cover: None,
             cover_file: None,
             system_media: None,
+            media_tries: 0,
             track: None,
             listening: Listening::default(),
             playlist_dirty: true,
@@ -912,6 +916,10 @@ impl App {
             show_cover(&self.view.ui, self.cover.clone());
         }
 
+        if self.system_media.is_none() && self.media_tries > 0 {
+            self.media_tries -= 1;
+            self.system_media = SystemMedia::new(self.view.ui.window());
+        }
         let requests: Vec<MediaRequest> = self
             .system_media
             .as_ref()

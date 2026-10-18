@@ -353,9 +353,11 @@ impl Playlist {
         let last = self.entries.len() as isize - 1;
         let target = match self.cursor {
             Some(c) => (c as isize + delta).clamp(0, last),
-            // With nothing focused, Down starts at the top and Up at the bottom.
-            None if delta < 0 => last,
-            None => 0,
+            // With nothing focused, the cursor is just before the top going down, and just
+            // past the bottom going up: Down starts at the top, Up at the bottom, and Home
+            // and End go to their ends.
+            None if delta < 0 => (last + 1 + delta).clamp(0, last),
+            None => (delta - 1).clamp(0, last),
         } as usize;
         let mode = if extend {
             SelectMode::Range
@@ -735,6 +737,20 @@ mod tests {
         let mut empty = Playlist::with_seed(1);
         empty.move_cursor(1, false);
         assert_eq!(empty.cursor(), None);
+    }
+
+    #[test]
+    fn home_and_end_go_to_their_ends_without_a_cursor() {
+        // Home went to the bottom and End to the top.
+        let start = |delta: isize| {
+            let mut p = list(5);
+            p.move_cursor(delta, false);
+            p.cursor()
+        };
+        assert_eq!(start(-5), Some(0));
+        assert_eq!(start(5), Some(4));
+        assert_eq!(start(1), Some(0));
+        assert_eq!(start(-1), Some(4));
     }
 
     #[test]

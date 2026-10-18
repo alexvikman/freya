@@ -676,50 +676,11 @@ fn an_unplayable_entry_is_skipped_and_hopeless_lists_stop() {
     );
 }
 
-/// A radio station on localhost: `/radio.pls` lists `/stream`, which sends a short MP3.
-fn station_with_list() -> String {
-    use std::io::{BufRead, BufReader, Write};
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
-    let stream = format!("{base}/stream");
-    let audio = std::fs::read(fixture("sine.mp3")).unwrap();
-    std::thread::spawn(move || {
-        for connection in listener.incoming() {
-            let Ok(connection) = connection else { return };
-            let mut reader = BufReader::new(connection);
-            let mut request = String::new();
-            let _ = reader.read_line(&mut request);
-            loop {
-                let mut line = String::new();
-                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
-                    break;
-                }
-            }
-            let mut connection = reader.into_inner();
-            if request.contains(".pls") {
-                let body = format!("[playlist]\nFile1={stream}\nTitle1=Test\nNumberOfEntries=1\n");
-                let _ = write!(
-                    connection,
-                    "HTTP/1.0 200 OK\r\nContent-Type: audio/x-scpls\r\n\r\n{body}"
-                );
-            } else {
-                let _ =
-                    connection.write_all(b"HTTP/1.0 200 OK\r\nContent-Type: audio/mpeg\r\n\r\n");
-                // Slowly, so it plays for a while.
-                for piece in audio.chunks(1024) {
-                    let _ = connection.write_all(piece);
-                    std::thread::sleep(Duration::from_millis(30));
-                }
-            }
-        }
-    });
-    format!("{base}/radio.pls")
-}
-
 #[test]
 fn a_station_list_is_played_again_without_adding_it_again() {
     let app = silent_app("station-list");
-    let list = station_with_list();
+    let base = radio_server(std::fs::read(fixture("sine.mp3")).unwrap());
+    let list = format!("{base}/list.pls");
     app.borrow_mut().stations.add("Test", &list).unwrap();
     let index = app
         .borrow()

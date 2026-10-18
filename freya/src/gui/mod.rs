@@ -45,6 +45,10 @@ const TICK: Duration = Duration::from_millis(33);
 /// checks; at 30 a second this was most of the main thread's time while music played.
 const IDLE_TICK: Duration = Duration::from_millis(200);
 
+/// How many ticks try to connect to the system's media controls before Freya does without:
+/// on Windows the first may come before the window exists.
+const MEDIA_TRIES: u8 = 5;
+
 /// Measured in M7: FemtoVG (GPU) used 0.3 % CPU idle and 1.5 % while playing on an M-series
 /// MacBook, the software renderer 0.5 % and 4.1 %. So FemtoVG is the default, and Slint's own
 /// choice is the fallback if it cannot start. `SLINT_BACKEND` still overrides everything.
@@ -141,7 +145,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
     app.borrow_mut().start(&options.files);
     bindings::connect(&ui, &app);
     skins::attach_window(&ui);
-    app.borrow_mut().system_media = system_media::SystemMedia::new(ui.window());
+    app.borrow_mut().media_tries = MEDIA_TRIES;
     {
         let app = Rc::downgrade(&app);
         system_media::on_request(move || {
