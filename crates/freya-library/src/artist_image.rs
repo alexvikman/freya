@@ -43,10 +43,21 @@ const MAX_PICTURE_BYTES: u64 = 16 * 1024 * 1024;
 
 /// A wide picture of the artist in their own folder, the parent of their albums' folders.
 pub fn local_backdrop(album_tracks: &[PathBuf]) -> Option<PathBuf> {
-    album_tracks
-        .iter()
-        .filter_map(|track| track.parent()?.parent())
+    artist_dirs(album_tracks)
+        .into_iter()
         .find_map(|dir| in_dir(dir, BACKDROP_FILES))
+}
+
+/// The folders holding the artist's albums' folders, each once: an artist's albums are
+/// mostly in one, and looking in a folder on a network drive takes a while.
+fn artist_dirs(album_tracks: &[PathBuf]) -> Vec<&Path> {
+    let mut dirs: Vec<&Path> = Vec::new();
+    for dir in album_tracks.iter().filter_map(|t| t.parent()?.parent()) {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    dirs
 }
 
 /// The first of `names`, with any of the image extensions, that is a file in `dir`.
@@ -64,9 +75,8 @@ fn in_dir(dir: &Path, names: &[&str]) -> Option<PathBuf> {
 /// each of their albums.
 pub fn local(album_tracks: &[PathBuf]) -> Option<PathBuf> {
     let album_dirs: Vec<&Path> = album_tracks.iter().filter_map(|t| t.parent()).collect();
-    album_dirs
-        .iter()
-        .filter_map(|dir| dir.parent())
+    artist_dirs(album_tracks)
+        .into_iter()
         .find_map(|dir| in_dir(dir, ARTIST_FILES))
         .or_else(|| {
             album_dirs

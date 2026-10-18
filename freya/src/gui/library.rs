@@ -203,6 +203,8 @@ pub struct LibraryPanel {
     /// What the internet said of artists, until the library is free to keep it: written
     /// while a scan writes, it would hold up the window.
     fetched: Vec<Fetched>,
+    /// Pictures to make ahead of their being shown.
+    prepare: VecDeque<Prepare>,
     /// `Library.covers-ready`: goes up as covers are made.
     covers_ready: i32,
     /// Plays not yet written: a scan may be writing to the database.
@@ -311,6 +313,15 @@ struct ArtistPage {
     popular: Vec<Played>,
     more: bool,
 }
+
+/// A picture to make ahead of its being shown.
+enum Prepare {
+    Artist(Option<String>),
+    Album(Album),
+}
+
+/// Pictures handed to the threads to make ahead, each time the library is polled.
+const PREPARE_AT_ONCE: usize = 8;
 
 /// A picture the user can choose for an artist.
 struct Choice {
@@ -468,6 +479,7 @@ impl LibraryPanel {
                 .zip(pictures.clone())
                 .map(|(covers, pictures)| Thumbnails::new(covers, Pictures::new(pictures))),
             fetched: Vec::new(),
+            prepare: VecDeque::new(),
             cover_tracks: HashMap::new(),
             recent_covers: RecentCovers::default(),
             covers_ready: 0,
@@ -558,6 +570,7 @@ impl LibraryPanel {
         }
         self.find_playing_album();
         self.clear_older_cache();
+        self.prepare_all();
         self.reload();
         if scan {
             self.rescan(folders);
@@ -619,9 +632,27 @@ impl LibraryPanel {
 
     /// Handles scan progress and covers made. Returns true when the rows changed.
     pub fn poll(&mut self) -> bool {
+        if let Some(thumbnails) = &mut self.thumbnails {
+            thumbnails.save_index(false);
+        }
+        // Made again: what was read of them is old.
+        for key in self
+            .thumbnails
+            .as_mut()
+            .map(Thumbnails::take_remade)
+            .unwrap_or_default()
+        {
+            self.recent_covers.remove(&key);
+        }
+        if !self.scanning {
+            self.prepare_some();
+        }
         if let Some(thumbnails) = &mut self.thumbnails
             && thumbnails.poll()
         {
+            for key in thumbnails.take_remade() {
+                self.recent_covers.remove(&key);
+            }
             self.fetched.extend(thumbnails.take_fetched());
             if !self.scanning {
                 self.write_fetched();
@@ -720,6 +751,7 @@ impl LibraryPanel {
         if finished {
             self.write_fetched();
             self.keep_named_pictures();
+            self.prepare_all();
         }
         if self.stale && (finished || self.reloaded.elapsed() >= RELOAD_INTERVAL) {
             self.reload();
@@ -751,6 +783,9 @@ impl LibraryPanel {
     pub fn save(&mut self) {
         self.write_plays();
         self.write_fetched();
+        if let Some(thumbnails) = &mut self.thumbnails {
+            thumbnails.save_index(true);
+        }
     }
 
     /// Keeps what the internet said of artists.
@@ -2453,32 +2488,20 @@ impl LibraryPanel {
         if let Some(image) = self.recent_covers.get(key) {
             return image;
         }
-        let state = match (&self.db, self.artist_keys.get(key)) {
+        // Known already, made or not: asked for again on every scroll and every new picture,
+        // without the library being read for it.
+        let known = self.thumbnails.as_ref().and_then(|t| t.known(key));
+        let state = match (known, &self.db, self.artist_keys.get(key)) {
+            (Some(known), ..) => known,
             // An artist's picture, from a track of each of their albums.
-            (Some(db), Some(name)) => {
-                let album_tracks = db
-                    .albums(name.as_deref())
-                    .map(|albums| albums.into_iter().map(|a| a.track).collect())
-                    .unwrap_or_default();
-                // By their id, when Freya knows it, without searching for it.
-                let fanart = self
-                    .fanart_key
-                    .clone()
-                    .and_then(|key| Some((self.known_mbid(name.as_deref())?, key)));
-                let source = ArtistSource {
-                    name: name.clone(),
-                    album_tracks,
-                    online: self.online_pictures,
-                    fanart,
-                    deezer: self.downloaded(name.as_deref(), PictureKind::Portrait),
-                    chosen: self.chosen(name.as_deref(), PictureKind::Portrait),
-                };
+            (None, Some(_), Some(name)) => {
+                let source = self.artist_source(name.as_deref());
                 match &mut self.thumbnails {
                     Some(thumbnails) => thumbnails.get_artist(key, &source),
                     None => return Image::default(),
                 }
             }
-            _ => {
+            (None, ..) => {
                 let (Some(thumbnails), Some(track)) =
                     (&mut self.thumbnails, self.cover_tracks.get(key))
                 else {
@@ -2498,6 +2521,67 @@ impl LibraryPanel {
             Err(_) => {
                 log::debug!("could not read the cover {}", file.display());
                 Image::default()
+            }
+        }
+    }
+
+    /// Where the artist `name`'s picture can come from, as the library knows it now.
+    fn artist_source(&self, name: Option<&str>) -> ArtistSource {
+        let album_tracks = self
+            .db
+            .as_ref()
+            .and_then(|db| db.albums(name).ok())
+            .map(|albums| albums.into_iter().map(|a| a.track).collect())
+            .unwrap_or_default();
+        // By their id, when Freya knows it, without searching for it.
+        let fanart = self
+            .fanart_key
+            .clone()
+            .and_then(|key| Some((self.known_mbid(name)?, key)));
+        ArtistSource {
+            name: name.map(str::to_owned),
+            album_tracks,
+            online: self.online_pictures,
+            fanart,
+            deezer: self.downloaded(name, PictureKind::Portrait),
+            chosen: self.chosen(name, PictureKind::Portrait),
+        }
+    }
+
+    /// Lines up every artist's and album's picture to be made ahead of its being shown.
+    fn prepare_all(&mut self) {
+        let Some(db) = &self.db else {
+            return;
+        };
+        self.prepare.clear();
+        if let Ok(artists) = db.artists() {
+            self.prepare
+                .extend(artists.into_iter().map(|a| Prepare::Artist(a.name)));
+        }
+        if let Ok(albums) = db.all_albums() {
+            self.prepare.extend(albums.into_iter().map(Prepare::Album));
+        }
+    }
+
+    /// Hands a few of the pictures lined up to the threads: the window is not held up.
+    fn prepare_some(&mut self) {
+        for _ in 0..PREPARE_AT_ONCE {
+            let Some(next) = self.prepare.pop_front() else {
+                return;
+            };
+            match next {
+                Prepare::Artist(name) => {
+                    let key = Thumbnails::artist_key(name.as_deref());
+                    let source = self.artist_source(name.as_deref());
+                    if let Some(thumbnails) = &mut self.thumbnails {
+                        thumbnails.prepare_artist(&key, &source);
+                    }
+                }
+                Prepare::Album(album) => {
+                    if let Some(thumbnails) = &mut self.thumbnails {
+                        thumbnails.prepare(&cover_key(&album), &album.track);
+                    }
+                }
             }
         }
     }

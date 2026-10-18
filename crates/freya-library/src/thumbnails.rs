@@ -1,14 +1,17 @@
 //! Small album covers for grids, and artists' pictures in the sizes shown. Each is made once,
-//! on a thread of its own, and kept as a file, so showing thousands of albums only ever decodes
-//! the covers on screen. All of them can be made again without the internet: from the music's
+//! on threads of their own, and kept as a file, so showing thousands of albums only ever decodes
+//! the covers on screen. The window never waits for the music's folders, which may be on a
+//! network drive: what was made before shows at once, while a thread looks whether it is still
+//! right; and every artist's and album's are made ahead, a few at a time, so they are there
+//! when scrolled to. All of them can be made again without the internet: from the music's
 //! folders, or from the pictures downloaded for artists, which are kept apart (see
 //! [`crate::pictures`]). That an album has no cover is only remembered until Freya quits, so a
 //! cover added later is found.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, Sender, channel};
-use std::time::Instant;
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError, channel};
+use std::time::{Duration, Instant};
 
 use crate::artist_image;
 use crate::cover::read_cover;
@@ -96,32 +99,8 @@ pub enum Fetched {
     },
 }
 
-/// A thumbnail to make: an album's cover from one of its tracks, or an artist's picture.
-enum Job {
-    Album(PathBuf),
-    Artist {
-        job: ArtistJob,
-        album_tracks: Vec<PathBuf>,
-    },
-}
-
-/// Where an artist's picture is made from.
-enum ArtistJob {
-    /// Their picture in their folder.
-    Local(PathBuf),
-    /// One kept among the downloaded pictures: the user's choice.
-    Kept(String),
-    /// From the internet: the one kept when there is one, else asked of fanart.tv by their
-    /// MusicBrainz id and key, then of Deezer by their name when it may be.
-    Online {
-        name: String,
-        kept: Option<String>,
-        deezer: bool,
-        fanart: Option<(String, String)>,
-    },
-    /// Their album covers.
-    Collage,
-}
+/// An album's cover to make, from one of its tracks.
+struct AlbumJob(PathBuf);
 
 /// Where a wide picture of an artist is made from.
 enum BackdropJob {
@@ -138,8 +117,24 @@ enum BackdropJob {
     },
 }
 
-/// What a thread did: the thumbnail's key, whether it was made, and what it learned.
-type Finished = (String, bool, Vec<Fetched>);
+/// What a thread did.
+enum Done {
+    /// The thumbnail or picture for `key` to show now, and an artist's large picture; none
+    /// when there is none. `remade` when the file shown was made again, as it changed.
+    Shown {
+        key: String,
+        shown: Option<PathBuf>,
+        large: Option<PathBuf>,
+        remade: bool,
+        fetched: Vec<Fetched>,
+    },
+    /// A wide picture, made or not.
+    Backdrop {
+        key: String,
+        made: bool,
+        fetched: Vec<Fetched>,
+    },
+}
 
 /// What is known about one album's thumbnail.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -152,6 +147,55 @@ pub enum Thumbnail {
     Pending,
 }
 
+/// A thread taking jobs, those the window waits for before those made ahead.
+struct Worker<J> {
+    urgent: Sender<(String, J)>,
+    later: Sender<(String, J)>,
+}
+
+impl<J: Send + 'static> Worker<J> {
+    /// Starts a thread doing each job with `run`, telling `done`.
+    fn start(
+        name: &str,
+        done: Sender<Done>,
+        mut run: impl FnMut(String, J) -> Done + Send + 'static,
+    ) -> Option<Self> {
+        let (urgent, urgent_jobs) = channel::<(String, J)>();
+        let (later, later_jobs) = channel::<(String, J)>();
+        let started = std::thread::Builder::new()
+            .name(name.into())
+            .spawn(move || {
+                loop {
+                    let job = match urgent_jobs.try_recv() {
+                        Ok(job) => job,
+                        Err(TryRecvError::Disconnected) => break,
+                        Err(TryRecvError::Empty) => match later_jobs.try_recv() {
+                            Ok(job) => job,
+                            Err(_) => match urgent_jobs.recv_timeout(Duration::from_millis(100)) {
+                                Ok(job) => job,
+                                Err(RecvTimeoutError::Timeout) => continue,
+                                Err(RecvTimeoutError::Disconnected) => break,
+                            },
+                        },
+                    };
+                    if done.send(run(job.0, job.1)).is_err() {
+                        break;
+                    }
+                }
+            });
+        match started {
+            Ok(_) => Some(Self { urgent, later }),
+            Err(e) => {
+                log::warn!("could not start {name}: {e}");
+                None
+            }
+        }
+    }
+}
+
+/// The pictures made for each artist, kept between runs, so they show at once.
+const INDEX: &str = "artists.index";
+
 pub struct Thumbnails {
     dir: PathBuf,
     pictures: Pictures,
@@ -159,18 +203,30 @@ pub struct Thumbnails {
     known: HashMap<String, Thumbnail>,
     /// The large picture of each artist asked for, by their key, once made.
     portraits: HashMap<String, PathBuf>,
-    /// Pictures asked of the internet in this run, by their key: each once, even when it
+    /// The file shown for each artist, and their large picture, as made last: by their key.
+    index: HashMap<String, (PathBuf, Option<PathBuf>)>,
+    index_changed: bool,
+    index_saved: Instant,
+    /// Asked of a thread in this run, by their key: each once; and those of artists, kept in
+    /// the index.
+    queued: HashSet<String>,
+    artist_keys: HashSet<String>,
+    /// Jobs a thread has not done yet.
+    waiting: usize,
+    /// Wide pictures asked of the internet in this run, by their key: each once, even when it
     /// could not be reached.
     asked: HashSet<String>,
-    /// Started with the first request.
-    jobs: Option<Sender<(String, Job)>>,
+    covers: Option<Worker<AlbumJob>>,
+    artists: Option<Worker<ArtistSource>>,
     /// Wide pictures, on a thread of their own: MusicBrainz is asked once a second at most,
     /// which would hold up the covers.
     backdrop_jobs: Option<Sender<(String, BackdropJob)>>,
-    finished_tx: Sender<Finished>,
-    finished: Receiver<Finished>,
+    finished_tx: Sender<Done>,
+    finished: Receiver<Done>,
     /// What the threads learned, until the library takes it.
     fetched: Vec<Fetched>,
+    /// Keys whose file was made again since the library last asked, so it reads them anew.
+    remade: Vec<String>,
 }
 
 impl Thumbnails {
@@ -178,17 +234,26 @@ impl Thumbnails {
     /// from the downloaded `pictures`.
     pub fn new(dir: PathBuf, pictures: Pictures) -> Self {
         let (finished_tx, finished) = channel();
+        let index = read_index(&dir);
         Self {
             dir,
             pictures,
             known: HashMap::new(),
             portraits: HashMap::new(),
+            index,
+            index_changed: false,
+            index_saved: Instant::now(),
+            queued: HashSet::new(),
+            artist_keys: HashSet::new(),
+            waiting: 0,
             asked: HashSet::new(),
-            jobs: None,
+            covers: None,
+            artists: None,
             backdrop_jobs: None,
             finished_tx,
             finished,
             fetched: Vec::new(),
+            remade: Vec::new(),
         }
     }
 
@@ -238,96 +303,39 @@ impl Thumbnails {
         Self::key(Some("\u{1}artist"), artist)
     }
 
-    /// The picture for the artist `key`. When it is not made yet, it is made from `source`:
-    /// their picture in their folder, else Deezer's when allowed, else their album covers.
+    /// The picture for the artist `key`: the one made before at once, while a thread looks
+    /// whether it is still right; else made from `source`, as soon as a thread can.
     pub fn get_artist(&mut self, key: &str, source: &ArtistSource) -> Thumbnail {
         if let Some(known) = self.known.get(key) {
             return known.clone();
         }
-        let chosen = source
-            .chosen
-            .clone()
-            .filter(|chosen| *chosen != Downloaded::Unknown);
-        let local = artist_image::local(&source.album_tracks).filter(|_| chosen.is_none());
-        let online = source.online || source.fanart.is_some();
-        let deezer = match (&source.name, &source.deezer) {
-            _ if chosen.is_some() => None,
-            (Some(name), Downloaded::Kept(checksum)) if online => {
-                Some((name.clone(), Some(checksum.clone())))
+        let state = match self.index.get(key).cloned() {
+            Some((shown, large)) => {
+                if let Some(large) = large {
+                    self.portraits.insert(key.to_owned(), large);
+                }
+                self.send_artist(key, source.clone(), false);
+                Thumbnail::Ready(shown)
             }
-            (Some(name), Downloaded::Unknown) if online && !self.asked.contains(key) => {
-                Some((name.clone(), None))
-            }
-            _ => None,
-        };
-        let (thumbnail, large, job) = match (chosen, local, deezer) {
-            (Some(Downloaded::Kept(checksum)), ..) => {
-                let thumbnail = self.file(&format!("{checksum}-{SIZE}"));
-                let large = self.file(&format!("{checksum}-large"));
-                let made = thumbnail.exists() && large.exists();
-                (
-                    thumbnail,
-                    Some(large),
-                    (!made).then_some(ArtistJob::Kept(checksum)),
-                )
-            }
-            (Some(_), ..) | (None, None, None) => {
-                let collage = self.file(&format!("{key}-collage"));
-                let fresh = source
-                    .album_tracks
-                    .first()
-                    .is_none_or(|track| !outdated(&collage, track));
-                let job = (!(collage.exists() && fresh)).then_some(ArtistJob::Collage);
-                (collage, None, job)
-            }
-            (None, Some(file), _) => {
-                let thumbnail = self.file(&format!("{key}-local"));
-                let large = self.file(&format!("{key}-local-large"));
-                let fresh = [&thumbnail, &large].iter().all(|made| !older(made, &file));
-                (
-                    thumbnail,
-                    Some(large),
-                    (!fresh).then_some(ArtistJob::Local(file)),
-                )
-            }
-            (None, None, Some((name, Some(checksum)))) => {
-                let thumbnail = self.file(&format!("{checksum}-{SIZE}"));
-                let large = self.file(&format!("{checksum}-large"));
-                let made = thumbnail.exists() && large.exists();
-                let job = ArtistJob::Online {
-                    name,
-                    kept: Some(checksum),
-                    deezer: source.online,
-                    fanart: source.fanart.clone(),
-                };
-                (thumbnail, Some(large), (!made).then_some(job))
-            }
-            (None, None, Some((name, None))) => {
-                self.asked.insert(key.to_owned());
-                let job = ArtistJob::Online {
-                    name,
-                    kept: None,
-                    deezer: source.online,
-                    fanart: source.fanart.clone(),
-                };
-                // Its name is known once the internet answered.
-                (PathBuf::new(), None, Some(job))
-            }
-        };
-        match large {
-            Some(large) if job.is_none() => self.portraits.insert(key.to_owned(), large),
-            _ => self.portraits.remove(key),
-        };
-        let state = match job {
-            None => Thumbnail::Ready(thumbnail),
-            Some(job) => {
-                let album_tracks = source.album_tracks.clone();
-                self.send(key, Job::Artist { job, album_tracks });
+            None => {
+                self.send_artist(key, source.clone(), true);
                 Thumbnail::Pending
             }
         };
         self.known.insert(key.to_owned(), state.clone());
         state
+    }
+
+    /// Makes the picture for the artist `key` ahead of their being shown, when a thread is
+    /// free.
+    pub fn prepare_artist(&mut self, key: &str, source: &ArtistSource) {
+        // Those made before are looked over when shown, not all at once.
+        if !self.known.contains_key(key)
+            && !self.queued.contains(key)
+            && !self.index.contains_key(key)
+        {
+            self.send_artist(key, source.clone(), false);
+        }
     }
 
     /// The artist `key`'s picture at up to 1400 pixels, for their page, once made; none when
@@ -409,6 +417,10 @@ impl Thumbnails {
     pub fn forget_artist(&mut self, key: &str) {
         self.known.remove(key);
         self.portraits.remove(key);
+        self.queued.remove(key);
+        if self.index.remove(key).is_some() {
+            self.index_changed = true;
+        }
         self.forget_backdrop(key);
     }
 
@@ -439,29 +451,41 @@ impl Thumbnails {
         format!("{hash:016x}")
     }
 
-    /// The thumbnail for `key`. When it is not made yet, it is made from the cover of `track`,
-    /// one of the album's tracks.
+    /// The thumbnail for `key`: the one made before at once, while a thread looks whether the
+    /// cover changed; else made from `track`'s, one of the album's tracks, as soon as a thread
+    /// can.
     pub fn get(&mut self, key: &str, track: &Path) -> Thumbnail {
         if let Some(known) = self.known.get(key) {
             return known.clone();
         }
+        // The cache is on this computer: it is quick to look in.
         let file = self.file(key);
-        let state = if file.exists() && !outdated(&file, track) {
+        let state = if file.exists() {
+            self.send_album(key, track, false);
             Thumbnail::Ready(file)
         } else {
-            self.send(key, Job::Album(track.to_owned()));
+            self.send_album(key, track, true);
             Thumbnail::Pending
         };
         self.known.insert(key.to_owned(), state.clone());
         state
     }
 
-    /// How many covers and pictures are being made or downloaded.
+    /// Makes the thumbnail for `key` ahead of its being shown, when a thread is free.
+    pub fn prepare(&mut self, key: &str, track: &Path) {
+        if !self.known.contains_key(key) && !self.queued.contains(key) && !self.file(key).exists() {
+            self.send_album(key, track, false);
+        }
+    }
+
+    /// What is known about `key`'s thumbnail or picture, if it was asked for in this run.
+    pub fn known(&self, key: &str) -> Option<Thumbnail> {
+        self.known.get(key).cloned()
+    }
+
+    /// How many covers and pictures are being made, looked over or downloaded.
     pub fn pending(&self) -> usize {
-        self.known
-            .values()
-            .filter(|state| **state == Thumbnail::Pending)
-            .count()
+        self.waiting
     }
 
     /// The file shown for `key`, once made.
@@ -472,20 +496,57 @@ impl Thumbnails {
         }
     }
 
-    /// Takes in thumbnails made since the last call. Returns true when there were any.
+    /// Takes in what the threads did since the last call. Returns true when anything shown
+    /// changed.
     pub fn poll(&mut self) -> bool {
-        let mut any = false;
-        while let Ok((key, made, fetched)) = self.finished.try_recv() {
-            if made {
-                // Found as a file on the next `get`, made with what the library then knows.
-                self.known.remove(&key);
-            } else {
-                self.known.insert(key, Thumbnail::None);
+        let mut changed = false;
+        while let Ok(done) = self.finished.try_recv() {
+            self.waiting = self.waiting.saturating_sub(1);
+            match done {
+                Done::Shown {
+                    key,
+                    shown,
+                    large,
+                    remade,
+                    fetched,
+                } => {
+                    self.fetched.extend(fetched);
+                    let state = shown.clone().map_or(Thumbnail::None, Thumbnail::Ready);
+                    if remade {
+                        self.remade.push(key.clone());
+                    }
+                    changed |= remade || self.known.get(&key) != Some(&state);
+                    match &large {
+                        Some(large) => self.portraits.insert(key.clone(), large.clone()),
+                        None => self.portraits.remove(&key),
+                    };
+                    // Only artists are in the index: an album's file is named by its key.
+                    if self.artist_keys.contains(&key) {
+                        let entry = shown.map(|shown| (shown, large));
+                        if self.index.get(&key) != entry.as_ref() {
+                            match entry {
+                                Some(entry) => self.index.insert(key.clone(), entry),
+                                None => self.index.remove(&key),
+                            };
+                            self.index_changed = true;
+                        }
+                    }
+                    self.known.insert(key, state);
+                }
+                Done::Backdrop { key, made, fetched } => {
+                    self.fetched.extend(fetched);
+                    if made {
+                        // Found as a file on the next `get_backdrop`, made with what the
+                        // library then knows.
+                        self.known.remove(&key);
+                    } else {
+                        self.known.insert(key, Thumbnail::None);
+                    }
+                    changed = true;
+                }
             }
-            self.fetched.extend(fetched);
-            any = true;
         }
-        any
+        changed
     }
 
     /// What the threads learned from the internet since the last call, for the library to
@@ -494,8 +555,121 @@ impl Thumbnails {
         std::mem::take(&mut self.fetched)
     }
 
+    /// The keys whose file was made again since the last call: what was read of them before
+    /// is old.
+    pub fn take_remade(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.remade)
+    }
+
+    /// Keeps the index of artists' pictures, when it changed, at most every few seconds unless
+    /// `now`.
+    pub fn save_index(&mut self, now: bool) {
+        if !self.index_changed || (!now && self.index_saved.elapsed() < Duration::from_secs(5)) {
+            return;
+        }
+        self.index_saved = Instant::now();
+        self.index_changed = false;
+        let name = |path: &Path| {
+            path.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        let text: String = self
+            .index
+            .iter()
+            .map(|(key, (shown, large))| {
+                let large = large.as_deref().map(name).unwrap_or_default();
+                format!("{key}\t{}\t{large}\n", name(shown))
+            })
+            .collect();
+        let saved = create_private_dir(&self.dir).and_then(|()| {
+            let partial = self.dir.join(format!("{INDEX}.partial"));
+            std::fs::write(&partial, text)?;
+            std::fs::rename(&partial, self.dir.join(INDEX))
+        });
+        if let Err(e) = saved {
+            log::debug!("could not keep the index of artists' pictures: {e}");
+        }
+    }
+
     fn file(&self, name: &str) -> PathBuf {
         self.dir.join(format!("{name}.jpg"))
+    }
+
+    fn send_artist(&mut self, key: &str, source: ArtistSource, urgent: bool) {
+        self.artist_keys.insert(key.to_owned());
+        if self.artists.is_none() {
+            let (dir, pictures) = (self.dir.clone(), self.pictures.clone());
+            let mut asked = HashSet::new();
+            self.artists = Worker::start(
+                "freya-artist-pictures",
+                self.finished_tx.clone(),
+                move |key, source: ArtistSource| {
+                    let mut fetched = Vec::new();
+                    let (shown, large, remade) =
+                        resolve_artist(&dir, &pictures, &key, &source, &mut asked, &mut fetched)
+                            .unwrap_or_else(|e| {
+                                log::debug!("no picture for {key}: {e}");
+                                (None, None, false)
+                            });
+                    Done::Shown {
+                        key,
+                        shown,
+                        large,
+                        remade,
+                        fetched,
+                    }
+                },
+            );
+        }
+        if let Some(worker) = &self.artists {
+            let queue = if urgent {
+                &worker.urgent
+            } else {
+                &worker.later
+            };
+            if queue.send((key.to_owned(), source)).is_ok() {
+                self.waiting += 1;
+                self.queued.insert(key.to_owned());
+            }
+        }
+    }
+
+    fn send_album(&mut self, key: &str, track: &Path, urgent: bool) {
+        if self.covers.is_none() {
+            let dir = self.dir.clone();
+            self.covers = Worker::start(
+                "freya-covers",
+                self.finished_tx.clone(),
+                move |key, AlbumJob(track)| {
+                    let (shown, remade) = resolve_album(&dir, &key, &track).unwrap_or_else(|e| {
+                        log::debug!("no thumbnail for {key}: {e}");
+                        (None, false)
+                    });
+                    Done::Shown {
+                        key,
+                        shown,
+                        large: None,
+                        remade,
+                        fetched: Vec::new(),
+                    }
+                },
+            );
+        }
+        if let Some(worker) = &self.covers {
+            let queue = if urgent {
+                &worker.urgent
+            } else {
+                &worker.later
+            };
+            if queue
+                .send((key.to_owned(), AlbumJob(track.to_owned())))
+                .is_ok()
+            {
+                self.waiting += 1;
+                self.queued.insert(key.to_owned());
+            }
+        }
     }
 
     fn send_backdrop(&mut self, key: &str, job: BackdropJob) {
@@ -523,7 +697,10 @@ impl Thumbnails {
                             log::warn!("no wide picture of {artist}: {e}");
                             false
                         });
-                        if finished.send((key, made, fetched)).is_err() {
+                        if finished
+                            .send(Done::Backdrop { key, made, fetched })
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -533,93 +710,122 @@ impl Thumbnails {
             }
             jobs
         });
-        let _ = jobs.send((key.to_owned(), job));
-    }
-
-    fn send(&mut self, key: &str, job: Job) {
-        let jobs = self.jobs.get_or_insert_with(|| {
-            let (jobs, queue) = channel::<(String, Job)>();
-            let dir = self.dir.clone();
-            let pictures = self.pictures.clone();
-            let finished = self.finished_tx.clone();
-            let started = std::thread::Builder::new()
-                .name("freya-covers".into())
-                .spawn(move || {
-                    for (key, job) in queue {
-                        let mut fetched = Vec::new();
-                        let made = match &job {
-                            Job::Album(track) => make(&dir, &key, track),
-                            Job::Artist { job, album_tracks } => {
-                                make_artist(&dir, &pictures, &key, job, album_tracks, &mut fetched)
-                            }
-                        };
-                        let made = match made {
-                            Ok(made) => made,
-                            Err(e) => {
-                                log::debug!("no thumbnail for {key}: {e}");
-                                false
-                            }
-                        };
-                        if finished.send((key, made, fetched)).is_err() {
-                            break;
-                        }
-                    }
-                });
-            if let Err(e) = started {
-                log::warn!("could not start making covers: {e}");
-            }
-            jobs
-        });
-        let _ = jobs.send((key.to_owned(), job));
+        if jobs.send((key.to_owned(), job)).is_ok() {
+            self.waiting += 1;
+        }
     }
 }
 
-/// Makes the picture for the artist `key` as `job` says, in the grid's size and large. What
-/// Deezer gave goes into `fetched`. Without a picture from Deezer, whether it had none or could
-/// not be reached, their album covers stand in. Returns false when there is nothing to show.
-fn make_artist(
+/// The index of artists' pictures kept in `dir`: key, file shown, large file, by tabs.
+fn read_index(dir: &Path) -> HashMap<String, (PathBuf, Option<PathBuf>)> {
+    let Ok(text) = std::fs::read_to_string(dir.join(INDEX)) else {
+        return HashMap::new();
+    };
+    text.lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\t');
+            let (key, shown, large) = (fields.next()?, fields.next()?, fields.next()?);
+            if key.is_empty() || shown.is_empty() {
+                return None;
+            }
+            let large = (!large.is_empty()).then(|| dir.join(large));
+            Some((key.to_owned(), (dir.join(shown), large)))
+        })
+        .collect()
+}
+
+/// What to show for the artist `key`, as `source` says, made when missing or old: the user's
+/// choice; else their picture in their folder; else one from the internet, when it may be
+/// asked, each once in `asked`; else their album covers. With their large picture, and whether
+/// the file shown was made again. What the internet said goes into `fetched`.
+fn resolve_artist(
     dir: &Path,
     pictures: &Pictures,
     key: &str,
-    job: &ArtistJob,
-    album_tracks: &[PathBuf],
+    source: &ArtistSource,
+    asked: &mut HashSet<String>,
     fetched: &mut Vec<Fetched>,
-) -> Result<bool, String> {
-    let (picture, name) = match job {
-        ArtistJob::Local(file) => (
-            Some(image::open(file).map_err(|e| e.to_string())?),
-            format!("{key}-local"),
-        ),
-        ArtistJob::Kept(checksum) => match pictures.read(checksum) {
-            Some(bytes) => (
-                Some(image::load_from_memory(&bytes).map_err(|e| e.to_string())?),
-                checksum.clone(),
-            ),
-            // Gone: their covers stand in.
-            None => (None, String::new()),
-        },
-        ArtistJob::Online {
-            name,
-            kept,
-            deezer,
-            fanart,
-        } => match online_portrait(pictures, name, kept.as_deref(), *deezer, fanart, fetched) {
-            Ok(Some((checksum, picture))) => (Some(picture), checksum),
-            Ok(None) => (None, String::new()),
-            Err(e) => {
-                log::debug!("no picture of {name} from the internet: {e}");
-                (None, String::new())
+) -> Result<Made, String> {
+    let chosen = source
+        .chosen
+        .clone()
+        .filter(|chosen| *chosen != Downloaded::Unknown);
+    match &chosen {
+        Some(Downloaded::Kept(checksum)) => {
+            if let Some(made) = from_kept(dir, pictures, checksum)? {
+                return Ok(made);
             }
-        },
-        ArtistJob::Collage => (None, String::new()),
+            return collage_of(dir, key, &source.album_tracks);
+        }
+        Some(_) => return collage_of(dir, key, &source.album_tracks),
+        None => {}
+    }
+    if let Some(file) = artist_image::local(&source.album_tracks) {
+        let base = format!("{key}-local");
+        let (shown, large) = portrait_files(dir, &base);
+        if !older(&shown, &file) && !older(&large, &file) {
+            return Ok((Some(shown), Some(large), false));
+        }
+        let picture = image::open(&file).map_err(|e| e.to_string())?;
+        let (shown, large) = save_portrait(dir, &base, &picture)?;
+        return Ok((Some(shown), Some(large), true));
+    }
+    let online = source.online || source.fanart.is_some();
+    match (&source.name, &source.deezer) {
+        (Some(_), Downloaded::Kept(checksum)) if online => {
+            if let Some(made) = from_kept(dir, pictures, checksum)? {
+                return Ok(made);
+            }
+        }
+        (Some(name), Downloaded::Unknown) if online && asked.insert(key.to_owned()) => {
+            let found =
+                online_portrait(pictures, name, None, source.online, &source.fanart, fetched);
+            match found {
+                Ok(Some((checksum, picture))) => {
+                    let (shown, large) = save_portrait(dir, &checksum, &picture)?;
+                    return Ok((Some(shown), Some(large), true));
+                }
+                Ok(None) => {}
+                Err(e) => log::debug!("no picture of {name} from the internet: {e}"),
+            }
+        }
+        _ => {}
+    }
+    collage_of(dir, key, &source.album_tracks)
+}
+
+/// What is shown for an artist: the file, their large picture, and whether it was made again.
+type Made = (Option<PathBuf>, Option<PathBuf>, bool);
+
+/// The files of a portrait named `base`: in the grid's size, and large.
+fn portrait_files(dir: &Path, base: &str) -> (PathBuf, PathBuf) {
+    (
+        dir.join(format!("{base}-{SIZE}.jpg")),
+        dir.join(format!("{base}-large.jpg")),
+    )
+}
+
+/// The portrait made from the downloaded picture `checksum`, made now if missing; none when
+/// the picture is gone.
+fn from_kept(dir: &Path, pictures: &Pictures, checksum: &str) -> Result<Option<Made>, String> {
+    let (shown, large) = portrait_files(dir, checksum);
+    if shown.exists() && large.exists() {
+        return Ok(Some((Some(shown), Some(large), false)));
+    }
+    let Some(bytes) = pictures.read(checksum) else {
+        return Ok(None);
     };
-    let Some(picture) = picture else {
-        let Some(collage) = artist_image::collage(album_tracks, SIZE) else {
-            return Ok(false);
-        };
-        save_jpeg(dir, &format!("{key}-collage"), &collage, JPEG_QUALITY)?;
-        return Ok(true);
-    };
+    let picture = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+    let (shown, large) = save_portrait(dir, checksum, &picture)?;
+    Ok(Some((Some(shown), Some(large), true)))
+}
+
+/// Saves `picture` as the portrait named `base`, in the grid's size and large.
+fn save_portrait(
+    dir: &Path,
+    base: &str,
+    picture: &image::DynamicImage,
+) -> Result<(PathBuf, PathBuf), String> {
     let large = if picture.width() > LARGE || picture.height() > LARGE {
         picture.resize(LARGE, LARGE, image::imageops::FilterType::Triangle)
     } else {
@@ -627,20 +833,44 @@ fn make_artist(
     };
     save_jpeg(
         dir,
-        &format!("{name}-large"),
+        &format!("{base}-large"),
         &large.to_rgb8(),
         JPEG_QUALITY,
     )?;
     let thumbnail = picture
         .resize_to_fill(SIZE, SIZE, image::imageops::FilterType::Triangle)
         .to_rgb8();
-    let size = if name.ends_with("-local") {
-        String::new()
-    } else {
-        format!("-{SIZE}")
+    save_jpeg(dir, &format!("{base}-{SIZE}"), &thumbnail, JPEG_QUALITY)?;
+    Ok(portrait_files(dir, base))
+}
+
+/// The artist `key`'s album covers as one picture, made again when a cover changed; none when
+/// they have no covers.
+fn collage_of(dir: &Path, key: &str, album_tracks: &[PathBuf]) -> Result<Made, String> {
+    let file = dir.join(format!("{key}-collage.jpg"));
+    let fresh = album_tracks
+        .first()
+        .is_none_or(|track| !outdated(&file, track));
+    if file.exists() && fresh {
+        return Ok((Some(file), None, false));
+    }
+    let Some(collage) = artist_image::collage(album_tracks, SIZE) else {
+        let _ = std::fs::remove_file(&file);
+        return Ok((None, None, false));
     };
-    save_jpeg(dir, &format!("{name}{size}"), &thumbnail, JPEG_QUALITY)?;
-    Ok(true)
+    save_jpeg(dir, &format!("{key}-collage"), &collage, JPEG_QUALITY)?;
+    Ok((Some(file), None, true))
+}
+
+/// The thumbnail `key` from `track`'s cover: as made before while the cover is unchanged,
+/// else made again; none when the album has no cover. And whether it was made again.
+fn resolve_album(dir: &Path, key: &str, track: &Path) -> Result<(Option<PathBuf>, bool), String> {
+    let file = dir.join(format!("{key}.jpg"));
+    if file.exists() && !outdated(&file, track) {
+        return Ok((Some(file), false));
+    }
+    let made = make(dir, key, track)?;
+    Ok((made.then_some(file), made))
 }
 
 /// A picture of the artist `name` from the internet and its checksum: the one kept as
@@ -900,9 +1130,14 @@ mod tests {
         Thumbnails::new(dir.join("covers"), Pictures::new(dir.join("pictures")))
     }
 
+    /// Until the threads have done all they were asked.
     fn wait(thumbnails: &mut Thumbnails) {
         let deadline = Instant::now() + Duration::from_secs(10);
-        while !thumbnails.poll() {
+        loop {
+            thumbnails.poll();
+            if thumbnails.pending() == 0 {
+                break;
+            }
             assert!(Instant::now() < deadline, "no thumbnail was made");
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -1032,6 +1267,9 @@ mod tests {
         source.online = true;
         source.deezer = Downloaded::Missing;
         let mut missing = super::tests::thumbnails(&cache);
+        missing.get_artist(&key, &source);
+        wait(&mut missing);
+        assert!(missing.take_fetched().is_empty(), "Deezer was not asked");
         assert!(matches!(
             missing.get_artist(&key, &source),
             Thumbnail::Ready(_)
@@ -1138,6 +1376,39 @@ mod tests {
     }
 
     #[test]
+    fn shows_an_artists_picture_made_before_at_once() {
+        let (_, track) = artist_with_album("index-music", [0, 0, 200]);
+        let source = ArtistSource {
+            name: Some("Opeth".into()),
+            album_tracks: vec![track],
+            online: false,
+            fanart: None,
+            deezer: Downloaded::Unknown,
+            chosen: None,
+        };
+        let cache = temp_dir("index-cache");
+        let key = Thumbnails::artist_key(source.name.as_deref());
+        let mut thumbnails = thumbnails(&cache);
+        assert_eq!(thumbnails.get_artist(&key, &source), Thumbnail::Pending);
+        wait(&mut thumbnails);
+        let made = thumbnails.get_artist(&key, &source);
+        assert!(matches!(made, Thumbnail::Ready(_)));
+        thumbnails.save_index(true);
+
+        // The next run: shown before a thread has looked at the music's folders.
+        let mut next = super::tests::thumbnails(&cache);
+        assert_eq!(next.get_artist(&key, &source), made);
+        wait(&mut next);
+        assert!(next.take_remade().is_empty(), "nothing changed");
+
+        // Made ahead of its being shown.
+        let other = Thumbnails::artist_key(Some("Ghost"));
+        next.prepare_artist(&other, &source);
+        wait(&mut next);
+        assert!(matches!(next.known(&other), Some(Thumbnail::Ready(_))));
+    }
+
+    #[test]
     fn clears_a_cache_of_the_older_layout_once() {
         let cache = temp_dir("layout");
         let covers = cache.join("covers");
@@ -1208,9 +1479,11 @@ mod tests {
         std::thread::sleep(Duration::from_millis(20));
         let image = image::RgbImage::from_pixel(600, 300, image::Rgb([0, 0, 255]));
         image.save(music.join("cover.jpg")).unwrap();
+        // The old one shows at once, while a thread looks.
         let mut later = super::tests::thumbnails(&cache);
-        assert_eq!(later.get("a", &track), Thumbnail::Pending);
+        assert_eq!(later.get("a", &track), Thumbnail::Ready(file.clone()));
         wait(&mut later);
+        assert_eq!(later.take_remade(), ["a"]);
         let Thumbnail::Ready(file) = later.get("a", &track) else {
             panic!("the thumbnail is made again");
         };
