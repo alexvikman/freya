@@ -1,6 +1,9 @@
 //! Pictures of artists, for the library's grid of artists: one in the artist's own folder,
 //! as Plex and Kodi read them; else a photo from Deezer, when the user allows it; else the
 //! artist's album covers, four in a square or the first alone.
+//!
+//! And wide ones across the top of an artist's page: in their folder, else from fanart.tv
+//! with the user's own key, found by the artist's MusicBrainz id.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -14,27 +17,51 @@ const ARTIST_FILES: &[&str] = &["artist", "poster", "folder"];
 /// And in an album's folder, where `folder` is the album's cover.
 const ALBUM_FOLDER_FILES: &[&str] = &["artist"];
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png"];
+/// Names of a wide picture in the artist's folder, as Kodi, Plex and Jellyfin read them.
+const BACKDROP_FILES: &[&str] = &["fanart", "backdrop", "background"];
 
 const DEEZER_SEARCH: &str = "https://api.deezer.com/search/artist";
+const MUSICBRAINZ_SEARCH: &str = "https://musicbrainz.org/ws/2/artist/";
+const FANART: &str = "https://webservice.fanart.tv/v3/music";
+/// MusicBrainz asks for at most one request a second, and for a way to reach the program's
+/// makers in its user agent.
+pub const MUSICBRAINZ_INTERVAL: Duration = Duration::from_millis(1100);
+const USER_AGENT: &str = concat!(
+    "Freya/",
+    env!("CARGO_PKG_VERSION"),
+    " ( https://github.com/alexvikman/freya )"
+);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10);
 /// A search answer is at most this large, and a picture this large, to keep a broken answer
 /// from filling memory.
 const MAX_ANSWER_BYTES: u64 = 256 * 1024;
 const MAX_PICTURE_BYTES: u64 = 4 * 1024 * 1024;
+/// fanart.tv's wide pictures can be 3840 pixels wide.
+const MAX_BACKDROP_BYTES: u64 = 16 * 1024 * 1024;
+
+/// A wide picture of the artist in their own folder, the parent of their albums' folders.
+pub fn local_backdrop(album_tracks: &[PathBuf]) -> Option<PathBuf> {
+    album_tracks
+        .iter()
+        .filter_map(|track| track.parent()?.parent())
+        .find_map(|dir| in_dir(dir, BACKDROP_FILES))
+}
+
+/// The first of `names`, with any of the image extensions, that is a file in `dir`.
+fn in_dir(dir: &Path, names: &[&str]) -> Option<PathBuf> {
+    names.iter().find_map(|name| {
+        IMAGE_EXTENSIONS
+            .iter()
+            .map(|ext| dir.join(format!("{name}.{ext}")))
+            .find(|path| path.is_file())
+    })
+}
 
 /// A picture of the artist next to their music: in their own folder, the parent of their
 /// albums' folders, or in an album's folder as `artist.jpg`. `album_tracks` has a track of
 /// each of their albums.
 pub fn local(album_tracks: &[PathBuf]) -> Option<PathBuf> {
     let album_dirs: Vec<&Path> = album_tracks.iter().filter_map(|t| t.parent()).collect();
-    let in_dir = |dir: &Path, names: &[&str]| {
-        names.iter().find_map(|name| {
-            IMAGE_EXTENSIONS
-                .iter()
-                .map(|ext| dir.join(format!("{name}.{ext}")))
-                .find(|path| path.is_file())
-        })
-    };
     album_dirs
         .iter()
         .filter_map(|dir| dir.parent())
@@ -46,7 +73,15 @@ pub fn local(album_tracks: &[PathBuf]) -> Option<PathBuf> {
         })
 }
 
-/// What Deezer has for an artist.
+fn agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(DOWNLOAD_TIMEOUT))
+        .user_agent(USER_AGENT)
+        .build()
+        .into()
+}
+
+/// What Deezer or fanart.tv has for an artist.
 #[derive(Debug, PartialEq)]
 pub enum Online {
     Picture(Vec<u8>),
@@ -58,11 +93,7 @@ pub enum Online {
 /// artist of the same name counts, not the nearest match. An error means Deezer could not
 /// be asked, and may be asked again later.
 pub fn deezer(name: &str) -> Result<Online, String> {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(DOWNLOAD_TIMEOUT))
-        .user_agent(concat!("Freya/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .into();
+    let agent = agent();
     let text = agent
         .get(DEEZER_SEARCH)
         .query("q", name)
@@ -88,6 +119,109 @@ pub fn deezer(name: &str) -> Result<Online, String> {
         .read_to_vec()
         .map_err(|e| e.to_string())?;
     Ok(Online::Picture(bytes))
+}
+
+/// MusicBrainz's id of the artist named `name`: only an artist of that very name counts, the
+/// best match of them. None when MusicBrainz knows no such artist. Callers wait
+/// [`MUSICBRAINZ_INTERVAL`] between calls.
+pub fn musicbrainz_id(name: &str) -> Result<Option<String>, String> {
+    // Quoted, as Lucene reads a query, so a name is not taken for its syntax.
+    let escaped = name.replace('\\', "\\\\").replace('"', "\\\"");
+    let text = agent()
+        .get(MUSICBRAINZ_SEARCH)
+        .query("query", format!("artist:\"{escaped}\""))
+        .query("fmt", "json")
+        .query("limit", "10")
+        .call()
+        .map_err(|e| e.to_string())?
+        .body_mut()
+        .with_config()
+        .limit(MAX_ANSWER_BYTES)
+        .read_to_string()
+        .map_err(|e| e.to_string())?;
+    let answer: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    Ok(artist_id(&answer, name))
+}
+
+/// The id of the best matching artist named `name` in a MusicBrainz search answer, which
+/// lists the best matches first.
+fn artist_id(answer: &serde_json::Value, name: &str) -> Option<String> {
+    let wanted = comparable(name);
+    answer
+        .get("artists")?
+        .as_array()?
+        .iter()
+        .find(|a| a.get("name").and_then(|n| n.as_str()).map(comparable) == Some(wanted.clone()))?
+        .get("id")?
+        .as_str()
+        .map(str::to_owned)
+}
+
+/// A wide picture of the artist with the MusicBrainz id `mbid` from fanart.tv, asked with
+/// the user's personal key: the one its users like best. An error means fanart.tv could not
+/// be asked, or did not take the key.
+pub fn fanart_backdrop(mbid: &str, key: &str) -> Result<Online, String> {
+    let agent = agent();
+    let response = agent
+        .get(format!("{FANART}/{mbid}"))
+        .query("client_key", key)
+        .call();
+    let text = match response {
+        Ok(mut response) => response
+            .body_mut()
+            .with_config()
+            .limit(MAX_ANSWER_BYTES)
+            .read_to_string()
+            .map_err(|e| e.to_string())?,
+        // fanart.tv has nothing of this artist.
+        Err(ureq::Error::StatusCode(404)) => return Ok(Online::NoPicture),
+        Err(ureq::Error::StatusCode(401 | 403)) => {
+            return Err("fanart.tv did not take the API key".to_owned());
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+    let answer: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let Some(url) = backdrop_url(&answer) else {
+        return Ok(Online::NoPicture);
+    };
+    let bytes = agent
+        .get(&url)
+        .call()
+        .map_err(|e| e.to_string())?
+        .body_mut()
+        .with_config()
+        .limit(MAX_BACKDROP_BYTES)
+        .read_to_vec()
+        .map_err(|e| e.to_string())?;
+    Ok(Online::Picture(bytes))
+}
+
+/// The address of the best liked wide picture in a fanart.tv answer, in 4K when there is one.
+fn backdrop_url(answer: &serde_json::Value) -> Option<String> {
+    ["artist4kbackground", "artistbackground"]
+        .iter()
+        .find_map(|kind| best_liked(answer.get(kind)?))
+}
+
+/// The address of the best liked of a list of fanart.tv pictures.
+fn best_liked(pictures: &serde_json::Value) -> Option<String> {
+    let likes = |picture: &serde_json::Value| {
+        let likes = picture.get("likes");
+        likes
+            .and_then(serde_json::Value::as_u64)
+            .or_else(|| likes?.as_str()?.parse().ok())
+            .unwrap_or(0)
+    };
+    pictures
+        .as_array()?
+        .iter()
+        .filter(|p| p.get("url").and_then(|u| u.as_str()).is_some())
+        // The first of those liked as much: fanart.tv lists them as its users ranked them.
+        .rev()
+        .max_by_key(|p| likes(p))?
+        .get("url")?
+        .as_str()
+        .map(str::to_owned)
 }
 
 /// The address of the largest picture of the artist named `name` in a Deezer search answer.
@@ -191,6 +325,60 @@ mod tests {
         ]});
         assert_eq!(picture_url(&blank, "Opeth"), None, "Deezer's empty picture");
         assert_eq!(comparable("AC/DC"), comparable("ac dc"));
+    }
+
+    #[test]
+    fn finds_a_wide_picture_in_the_artists_folder() {
+        let artist = temp_dir("backdrop");
+        let album = artist.join("Dead Magic");
+        std::fs::create_dir_all(&album).unwrap();
+        let track = album.join("01.flac");
+        std::fs::write(&track, b"").unwrap();
+        // Not in an album's folder.
+        std::fs::write(album.join("fanart.jpg"), b"x").unwrap();
+        assert_eq!(local_backdrop(std::slice::from_ref(&track)), None);
+        std::fs::write(artist.join("backdrop.png"), b"x").unwrap();
+        assert_eq!(
+            local_backdrop(std::slice::from_ref(&track)),
+            Some(artist.join("backdrop.png"))
+        );
+        std::fs::write(artist.join("fanart.jpg"), b"x").unwrap();
+        assert_eq!(local_backdrop(&[track]), Some(artist.join("fanart.jpg")));
+    }
+
+    #[test]
+    fn takes_only_the_artist_of_that_name_from_musicbrainz() {
+        let answer = serde_json::json!({ "artists": [
+            { "id": "aaa", "name": "Anna von Hausswolff Tribute", "score": 100 },
+            { "id": "bbb", "name": "Anna Von Hausswolff", "score": 98 },
+            { "id": "ccc", "name": "Anna von Hausswolff", "score": 60 },
+        ]});
+        assert_eq!(
+            artist_id(&answer, "Anna von Hausswolff").as_deref(),
+            Some("bbb")
+        );
+        assert_eq!(artist_id(&answer, "Opeth"), None);
+    }
+
+    #[test]
+    fn takes_the_best_liked_wide_picture_from_fanart_tv() {
+        let answer = serde_json::json!({
+            "artistthumb": [{ "url": "https://x/thumb.jpg", "likes": "9" }],
+            "artistbackground": [
+                { "url": "https://x/a.jpg", "likes": "1" },
+                { "url": "https://x/b.jpg", "likes": "4" },
+                { "url": "https://x/c.jpg", "likes": "4" },
+            ],
+        });
+        assert_eq!(backdrop_url(&answer).as_deref(), Some("https://x/b.jpg"));
+        let mut with_4k = answer.clone();
+        with_4k["artist4kbackground"] =
+            serde_json::json!([{ "url": "https://x/4k.jpg", "likes": "0" }]);
+        assert_eq!(backdrop_url(&with_4k).as_deref(), Some("https://x/4k.jpg"));
+        assert_eq!(
+            backdrop_url(&serde_json::json!({ "artistthumb": [] })),
+            None
+        );
     }
 
     #[test]

@@ -149,9 +149,12 @@ export struct ArtistPage {
     genres: string,
     /// What to pass to `Library.cover` for their picture.
     picture: string,
-    /// Their picture large, for the top of the page; empty (zero width) when they have none
-    /// but a collage of covers, or before it is made.
+    /// A wide picture of them across the top of the page, from their folder (fanart.jpg) or
+    /// fanart.tv; empty (zero width) when there is none, or before it is found.
     banner: image,
+    /// Their picture cut round, clear outside the circle, beside their name when there is no
+    /// banner; empty before the grid's picture of them is made.
+    portrait: image,
     /// A color from their picture, dark enough for white text.
     color: color,
     /// What Last.fm says of them, in plain text: a short biography, the whole one, and the
@@ -206,6 +209,9 @@ export global Library {
     /// Whether artists' pages show what Last.fm says of them, which is then told their names.
     /// Kept between runs.
     in property <bool> artist-bios-online: true;
+    /// The user's personal fanart.tv API key, for wide pictures of artists; empty for none.
+    /// Kept between runs.
+    in property <string> fanart-key;
     /// The row of the track playing or paused, or -1 when it is not among the rows.
     in property <int> playing-row: -1;
     /// True while the artists are shown, which `artist-sort` and `artist-view` apply to.
@@ -277,6 +283,7 @@ export global Library {
     callback play-popular(int);
     callback more-popular();
     callback set-artist-bios-online(bool);
+    callback set-fanart-key(string);
     /// Change `artist-sort`, `artist-view` or `artist-pictures-online`.
     callback set-artist-sort(string);
     callback set-artist-view(string);
@@ -666,7 +673,8 @@ export global App {
     callback go-back();
     callback go-forward();
     /// Open one of Freya's own pages in the browser: "github", "releases", "issues" or
-    /// "license". Other names are ignored; skins cannot open other addresses.
+    /// "license"; or "fanart-key", fanart.tv's page for getting a personal API key. Other names
+    /// are ignored; skins cannot open other addresses.
     callback open-link(string);
 }
 

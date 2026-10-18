@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use rusqlite::{Connection, Row, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 
 use crate::cue::Part;
 use crate::tags::TagInfo;
@@ -22,7 +22,7 @@ pub use scan::{ScanEvent, ScanSummary, Scanner, scan};
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Bumped whenever the tracks' tables change; they are then rebuilt.
-const SCHEMA_VERSION: i32 = 3;
+const SCHEMA_VERSION: i32 = 4;
 
 const SCHEMA: &str = "
     CREATE TABLE tracks (
@@ -43,6 +43,8 @@ const SCHEMA: &str = "
         album TEXT,
         -- The artist the album is filed under: the album artist tag, else the artist.
         album_artist TEXT,
+        -- MusicBrainz's id of the album artist, from the tags.
+        artist_mbid TEXT,
         genre TEXT,
         year INTEGER,
         track INTEGER,
@@ -140,6 +142,7 @@ impl Track {
             artist: self.artist.clone(),
             album: self.album.clone(),
             album_artist: self.album_artist.clone(),
+            artist_mbid: None,
             genre: None,
             year: self.year,
             track: self.track,
@@ -257,7 +260,15 @@ impl Library {
         db.pragma_update(None, "journal_mode", "WAL")?;
         db.pragma_update(None, "synchronous", "NORMAL")?;
         let version: i32 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if version != SCHEMA_VERSION {
+        if version == 3 {
+            // Each file is read again on the next scan, which keeps when its tracks came in.
+            log::info!("adding artists' MusicBrainz ids to the library");
+            db.execute_batch(
+                "ALTER TABLE tracks ADD COLUMN artist_mbid TEXT;
+                 UPDATE tracks SET modified = -1;",
+            )?;
+            db.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        } else if version != SCHEMA_VERSION {
             if version != 0 {
                 log::info!("rebuilding the library (layout {version} → {SCHEMA_VERSION})");
             }
@@ -459,6 +470,18 @@ impl Library {
             .collect()
     }
 
+    /// The artist's MusicBrainz id, as most of their tracks' tags give it.
+    pub fn artist_mbid(&self, artist: Option<&str>) -> Result<Option<String>> {
+        self.db
+            .prepare_cached(
+                "SELECT artist_mbid FROM tracks
+                 WHERE album_artist IS ?1 AND artist_mbid IS NOT NULL
+                 GROUP BY artist_mbid ORDER BY count(*) DESC LIMIT 1",
+            )?
+            .query_row([artist], |row| row.get(0))
+            .optional()
+    }
+
     /// What an artist's page says of them: how many albums and tracks, how long they play,
     /// and their most frequent genres, at most `genres`.
     pub fn artist_summary(&self, artist: Option<&str>, genres: usize) -> Result<ArtistSummary> {
@@ -615,9 +638,9 @@ fn put(
     let id: i64 = db
         .prepare_cached(
             "INSERT INTO tracks (path, start_ms, end_ms, source, size, modified, title, artist,
-                                 album, album_artist, genre, year, track, disc, duration_ms,
-                                 added)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                                 album, album_artist, artist_mbid, genre, year, track, disc,
+                                 duration_ms, added)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
              RETURNING id",
         )?
         .query_row(
@@ -632,6 +655,7 @@ fn put(
                 tags.artist,
                 tags.album,
                 album_artist,
+                tags.artist_mbid,
                 tags.genre,
                 tags.year,
                 tags.track,

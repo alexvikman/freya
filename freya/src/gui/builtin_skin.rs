@@ -317,6 +317,7 @@ impl Convert for ArtistPage {
             genres: field(&s, "genres"),
             picture: field(&s, "picture"),
             banner: field(&s, "banner"),
+            portrait: field(&s, "portrait"),
             color: field(&s, "color"),
             summary: field(&s, "summary"),
             biography: field(&s, "biography"),
@@ -334,6 +335,7 @@ impl Convert for ArtistPage {
             ("genres", self.genres.to_value()),
             ("picture", self.picture.to_value()),
             ("banner", self.banner.to_value()),
+            ("portrait", self.portrait.to_value()),
             ("color", self.color.to_value()),
             ("summary", self.summary.to_value()),
             ("biography", self.biography.to_value()),
@@ -595,6 +597,7 @@ skin_api! {
         Library."artist-page" => set_artist_page, get_artist_page;
         Library."popular" => set_popular, get_popular;
         Library."artist-bios-online" => set_artist_bios_online, get_artist_bios_online;
+        Library."fanart-key" => set_fanart_key, get_fanart_key;
         Library."artist-sort" => set_artist_sort, get_artist_sort;
         Library."artist-view" => set_artist_view, get_artist_view;
         Library."artist-pictures-online" => set_artist_pictures_online, get_artist_pictures_online;
@@ -708,6 +711,7 @@ skin_api! {
         Library."play-popular" => on_play_popular, invoke_play_popular(index: i32);
         Library."more-popular" => on_more_popular, invoke_more_popular();
         Library."set-artist-bios-online" => on_set_artist_bios_online, invoke_set_artist_bios_online(online: bool);
+        Library."set-fanart-key" => on_set_fanart_key, invoke_set_fanart_key(key: SharedString);
         Library."set-artist-sort" => on_set_artist_sort, invoke_set_artist_sort(sort: SharedString);
         Library."set-artist-view" => on_set_artist_view, invoke_set_artist_view(view: SharedString);
         Library."set-artist-pictures-online" => on_set_artist_pictures_online, invoke_set_artist_pictures_online(online: bool);

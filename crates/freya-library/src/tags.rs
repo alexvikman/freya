@@ -13,6 +13,9 @@ pub struct TagInfo {
     pub artist: Option<String>,
     pub album: Option<String>,
     pub album_artist: Option<String>,
+    /// MusicBrainz's id of the album's artist, as Picard writes it: of the album artist, else
+    /// of the artist.
+    pub artist_mbid: Option<String>,
     pub genre: Option<String>,
     pub year: Option<u32>,
     pub track: Option<u32>,
@@ -39,12 +42,32 @@ pub fn read_tags(path: &Path) -> Option<TagInfo> {
         artist: tag.and_then(|t| text(t.artist())),
         album: tag.and_then(|t| text(t.album())),
         album_artist: tag.and_then(|t| text(t.get_string(ItemKey::AlbumArtist).map(Into::into))),
+        artist_mbid: tag.and_then(|t| {
+            [
+                ItemKey::MusicBrainzReleaseArtistId,
+                ItemKey::MusicBrainzArtistId,
+            ]
+            .iter()
+            .find_map(|key| t.get_string(*key).and_then(mbid))
+        }),
         genre: tag.and_then(|t| text(t.genre())),
         year: tag.and_then(|t| t.date()).map(|d| u32::from(d.year)),
         track: tag.and_then(|t| t.track()),
         disc: tag.and_then(|t| t.disk()),
         duration,
     })
+}
+
+/// The first MusicBrainz id in a tag's text: one with several artists holds an id for each.
+fn mbid(text: &str) -> Option<String> {
+    text.split(|c: char| !(c.is_ascii_hexdigit() || c == '-'))
+        .find(|id| {
+            id.len() == 36
+                && id
+                    .char_indices()
+                    .all(|(i, c)| [8, 13, 18, 23].contains(&i) == (c == '-'))
+        })
+        .map(str::to_ascii_lowercase)
 }
 
 /// Reads tags on a background thread so adding thousands of files stays responsive.
@@ -110,6 +133,19 @@ mod tests {
             let secs = tags.duration.unwrap().as_secs_f64();
             assert!((secs - 1.0).abs() < 0.1, "{name}: {secs}");
         }
+    }
+
+    #[test]
+    fn takes_the_first_musicbrainz_id() {
+        let id = "a74b1b7f-71a5-4011-9441-d0b5e4122711";
+        assert_eq!(mbid(id).as_deref(), Some(id));
+        let two = format!(
+            "{} / 5b11f4ce-a62d-471e-81fc-a69a8278c7da",
+            id.to_uppercase()
+        );
+        assert_eq!(mbid(&two).as_deref(), Some(id));
+        assert_eq!(mbid("not an id"), None);
+        assert_eq!(mbid("a74b1b7f71a5401194419d0b5e4122711abc"), None);
     }
 
     #[test]

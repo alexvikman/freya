@@ -1804,7 +1804,6 @@ component ArtistPageHead inherits Rectangle {
     callback read-more();
 
     property <length> pad: 24px;
-    property <image> picture: page.picture == "" ? @image-url("") : Library.cover(page.picture, Library.covers-ready);
 
     accessible-role: groupbox;
     accessible-label: page.name;
@@ -1817,11 +1816,16 @@ component ArtistPageHead inherits Rectangle {
             background: root.page.color;
             clip: true;
 
+            // Filling the width, cut a third of the way down rather than through the middle,
+            // where faces in such pictures mostly are.
             if root.page.banner.width > 0: Image {
-                width: parent.width;
-                height: parent.height;
+                property <float> aspect: root.page.banner.width / max(1, root.page.banner.height);
+
+                width: max(parent.width, parent.height * self.aspect);
+                height: self.width / self.aspect;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) * 0.3;
                 source: root.page.banner;
-                image-fit: cover;
                 image-rendering: smooth;
             }
             Rectangle {
@@ -1831,28 +1835,31 @@ component ArtistPageHead inherits Rectangle {
                 padding: root.pad;
                 spacing: 24px;
 
-                if root.page.banner.width == 0: Rectangle {
-                    width: 232px;
-                    height: 232px;
-                    y: parent.height - root.pad - self.height;
-                    border-radius: 116px;
-                    clip: true;
-                    background: #ffffff1a;
-                    drop-shadow-blur: 24px;
-                    drop-shadow-color: #00000066;
+                // At the foot, beside their name; cut round by Freya.
+                if root.page.banner.width == 0: VerticalLayout {
+                    alignment: end;
 
-                    if root.picture.width > 0: Image {
-                        width: parent.width;
-                        height: parent.height;
-                        source: root.picture;
-                        image-fit: cover;
-                    }
-                    if root.picture.width == 0: Icon {
-                        width: 64px;
-                        height: 64px;
-                        data: Icons.artist;
-                        stroked: true;
-                        color: #ffffffb3;
+                    Rectangle {
+                        width: 232px;
+                        height: 232px;
+                        border-radius: 116px;
+                        background: root.page.portrait.width > 0 ? transparent : #ffffff1a;
+                        drop-shadow-blur: 24px;
+                        drop-shadow-color: #00000066;
+
+                        if root.page.portrait.width > 0: Image {
+                            width: parent.width;
+                            height: parent.height;
+                            source: root.page.portrait;
+                            image-rendering: smooth;
+                        }
+                        if root.page.portrait.width == 0: Icon {
+                            width: 64px;
+                            height: 64px;
+                            data: Icons.artist;
+                            stroked: true;
+                            color: #ffffffb3;
+                        }
                     }
                 }
                 VerticalLayout {
@@ -3719,6 +3726,109 @@ component FoldersForm inherits MenuSurface {
     }
 }
 
+/// Asks for the user's personal fanart.tv API key, or takes it away.
+component FanartKeyForm inherits MenuSurface {
+    callback closed();
+
+    function save() {
+        if (input.text != "") {
+            Library.set-fanart-key(input.text);
+            root.closed();
+        }
+    }
+
+    init => { input.focus(); }
+
+    VerticalLayout {
+        padding: 20px;
+        spacing: 14px;
+
+        VerticalLayout {
+            spacing: 4px;
+
+            Text {
+                text: "fanart.tv API key";
+                font-size: 17px;
+                font-weight: 600;
+                color: Theme.text;
+            }
+            Text {
+                text: "With your personal key, the top of an artist's page shows a wide picture of them from fanart.tv. The key is free with a fanart.tv account. fanart.tv is told the artists' MusicBrainz ids; MusicBrainz is told the names of artists whose tags lack them.";
+                font-size: 13px;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                alignment: start;
+
+                Text {
+                    text: "Get a personal API key at fanart.tv";
+                    font-size: 13px;
+                    font-weight: 600;
+                    color: Theme.accent-text;
+
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { App.open-link("fanart-key"); }
+                    }
+                }
+            }
+        }
+        Rectangle {
+            height: 34px;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: input.has-focus ? Theme.accent : Theme.divider;
+            background: Theme.background;
+
+            if input.text == "": Text {
+                x: 10px;
+                height: parent.height;
+                text: Library.fanart-key == "" ? "Personal API key" : "A key is saved; paste another to replace it";
+                font-size: 13px;
+                color: Theme.text-secondary;
+                vertical-alignment: center;
+            }
+            input := TextInput {
+                x: 10px;
+                width: parent.width - 20px;
+                height: parent.height;
+                input-type: password;
+                single-line: true;
+                font-size: 13px;
+                color: Theme.text;
+                selection-background-color: Theme.selection;
+                selection-foreground-color: Theme.text;
+                vertical-alignment: center;
+                accessible-role: text-input;
+                accessible-label: "fanart.tv personal API key";
+                accepted => { root.save(); }
+            }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+
+            if Library.fanart-key != "": TextButton {
+                text: "Remove Key";
+                clicked => {
+                    Library.set-fanart-key("");
+                    root.closed();
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            TextButton {
+                text: "Cancel";
+                clicked => { root.closed(); }
+            }
+            TextButton {
+                text: "Save";
+                primary: true;
+                clicked => { root.save(); }
+            }
+        }
+    }
+}
+
 component UpdateForm inherits MenuSurface {
     callback closed();
 
@@ -4619,8 +4729,9 @@ component SettingsPage inherits ScrollView {
 
 /// Settings: appearance, the music folders, the visualization and the skin.
 component SettingsView inherits Rectangle {
-    /// Open the dialog for the library's folders.
+    /// Open the dialog for the library's folders, or for the fanart.tv key.
     callback manage-folders();
+    callback edit-fanart-key();
 
     SettingsPage {
         width: 100%;
@@ -4707,6 +4818,20 @@ component SettingsView inherits Rectangle {
                         label: "Artist pictures from Deezer";
                         checked: Library.artist-pictures-online;
                         toggled => { Library.set-artist-pictures-online(!Library.artist-pictures-online); }
+                    }
+                }
+            }
+            SettingsRow {
+                label: "Wide artist pictures from fanart.tv";
+                detail: Library.fanart-key == "" ? "Add your personal fanart.tv API key to show a wide picture across the top of an artist's page. A picture in the artist's folder (fanart.jpg) comes first."
+                    : "Your personal API key is saved. A picture in the artist's folder (fanart.jpg) comes first.";
+
+                VerticalLayout {
+                    alignment: center;
+
+                    TextButton {
+                        text: Library.fanart-key == "" ? "Add Key…" : "Change Key…";
+                        clicked => { root.edit-fanart-key(); }
                     }
                 }
             }
@@ -5581,6 +5706,7 @@ export component FreyaSkin inherits Window {
                                 width: 100%;
                                 height: 100%;
                                 manage-folders => { root.manage-folders(); }
+                                edit-fanart-key => { fanart-popup.show(); }
                             }
                             if root.view == "about": AboutView {
                                 width: 100%;
@@ -5633,6 +5759,37 @@ export component FreyaSkin inherits Window {
                     x: (parent.width - self.width) / 2;
                     y: max(24px, (parent.height - self.preferred-height) / 3);
                     closed => { folders-popup.close(); }
+                }
+            }
+        }
+    }
+
+    // As the folders' dialog.
+    fanart-popup := PopupWindow {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        close-policy: no-auto-close;
+
+        FocusScope {
+            key-pressed(event) => {
+                if (event.text == Key.Escape) {
+                    fanart-popup.close();
+                    return accept;
+                }
+                reject
+            }
+
+            Rectangle {
+                background: #00000059;
+
+                FanartKeyForm {
+                    width: min(480px, parent.width - 48px);
+                    height: self.preferred-height;
+                    x: (parent.width - self.width) / 2;
+                    y: max(24px, (parent.height - self.preferred-height) / 3);
+                    closed => { fanart-popup.close(); }
                 }
             }
         }

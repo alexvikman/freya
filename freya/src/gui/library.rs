@@ -9,7 +9,7 @@ use freya_library::cue::Part;
 use freya_library::library::{
     Album, Artist, ArtistOrder, Genre, Played, ScanEvent, Scanner, Track,
 };
-use freya_library::thumbnails::{ArtistSource, Thumbnail, Thumbnails};
+use freya_library::thumbnails::{ArtistSource, BackdropSource, Thumbnail, Thumbnails};
 use freya_library::{Entry, Library};
 use slint::{Image, ModelRc, VecModel};
 use slint_interpreter::{Struct, Value};
@@ -218,6 +218,8 @@ pub struct LibraryPanel {
     artist_page: Option<ArtistPage>,
     artist_infos: ArtistInfos,
     online_bios: bool,
+    /// The user's personal fanart.tv key, for wide pictures of artists.
+    fanart_key: Option<String>,
     popular_rows: ModelRows,
     /// While an album's tracks are shown: how often each was played, and its page.
     play_counts: HashMap<(PathBuf, Option<Duration>), u32>,
@@ -229,16 +231,57 @@ struct ArtistPage {
     name: Option<String>,
     detail: String,
     genres: String,
-    /// Their picture's key, and the picture large, once made, with a color from it.
+    /// Their picture's key; a wide picture of them and their picture large, once made; and a
+    /// color from the one shown.
     picture: String,
     banner: Option<Image>,
+    portrait: Option<Image>,
+    /// Whether `portrait` is made from their picture large, rather than the grid's.
+    portrait_large: bool,
     color: Option<[u8; 3]>,
+    /// Where the wide picture can come from, but for the fanart.tv key.
+    backdrop: BackdropSource,
     summary: String,
     biography: String,
     tags: String,
     /// Their most played tracks, and whether all ten show rather than five.
     popular: Vec<Played>,
     more: bool,
+}
+
+/// The size of an artist's round picture: sharp at 232 points on a Retina screen.
+const ROUND_PICTURE: u32 = 480;
+
+/// The picture in `file`, square and cut round with a soft edge, for a skin to show as is:
+/// Slint's software renderer clips to rectangles only.
+fn round_picture(file: &Path) -> Option<Image> {
+    let square = image::open(file)
+        .ok()?
+        .resize_to_fill(
+            ROUND_PICTURE,
+            ROUND_PICTURE,
+            image::imageops::FilterType::Lanczos3,
+        )
+        .to_rgba8();
+    let mut pixels =
+        slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(ROUND_PICTURE, ROUND_PICTURE);
+    let radius = ROUND_PICTURE as f32 / 2.0;
+    for ((x, y, from), to) in square.enumerate_pixels().zip(pixels.make_mut_slice()) {
+        let (dx, dy) = (x as f32 + 0.5 - radius, y as f32 + 0.5 - radius);
+        // Partly covered at the edge, by how far the circle reaches into the pixel.
+        let cover = (radius - (dx * dx + dy * dy).sqrt() + 0.5).clamp(0.0, 1.0);
+        // Premultiplied, as Slint draws it.
+        let [r, g, b, a] = from.0;
+        let alpha = f32::from(a) / 255.0 * cover;
+        let channel = |c: u8| (f32::from(c) * alpha).round() as u8;
+        *to = slint::Rgba8Pixel::new(
+            channel(r),
+            channel(g),
+            channel(b),
+            (alpha * 255.0).round() as u8,
+        );
+    }
+    Some(Image::from_rgba8_premultiplied(pixels))
 }
 
 /// Popular tracks shown on an artist's page, or all of them with "more".
@@ -326,6 +369,7 @@ impl LibraryPanel {
             artist_page: None,
             artist_infos: ArtistInfos::new(artists),
             online_bios: true,
+            fanart_key: None,
             popular_rows: ModelRows::new(),
         }
     }
@@ -621,6 +665,15 @@ impl LibraryPanel {
                 detail.push(long_time(s.duration));
             }
         }
+        let backdrop = BackdropSource {
+            name: artist.clone(),
+            album_tracks: db
+                .albums(artist.as_deref())
+                .map(|albums| albums.into_iter().map(|a| a.track).collect())
+                .unwrap_or_default(),
+            mbid: db.artist_mbid(artist.as_deref()).ok().flatten(),
+            fanart_key: None,
+        };
         let picture = Thumbnails::artist_key(artist.as_deref());
         self.artist_keys.insert(picture.clone(), artist.clone());
         self.artist_page = Some(ArtistPage {
@@ -629,7 +682,10 @@ impl LibraryPanel {
             genres: summary.map(|s| s.genres.join(", ")).unwrap_or_default(),
             picture,
             banner: None,
+            portrait: None,
+            portrait_large: false,
             color: None,
+            backdrop,
             summary: String::new(),
             biography: String::new(),
             tags: String::new(),
@@ -641,38 +697,62 @@ impl LibraryPanel {
         self.show_popular();
     }
 
-    /// The artist page's large picture and its color, once their picture is made; asking for
-    /// it to be made the first time.
+    /// The artist page's wide picture, or else their picture large, and a color from the one
+    /// shown, once made; asking for them to be made the first time.
     fn show_artist_picture(&mut self) {
-        let Some(key) = self.artist_page.as_ref().map(|p| p.picture.clone()) else {
+        let Some(page) = &self.artist_page else {
             return;
         };
-        if self.artist_page.as_ref().is_some_and(|p| p.color.is_some()) {
-            return;
-        }
+        let key = page.picture.clone();
+        let needs_banner = page.banner.is_none();
+        let needs_portrait = !page.portrait_large;
+        let backdrop = BackdropSource {
+            fanart_key: self.fanart_key.clone(),
+            ..page.backdrop.clone()
+        };
         // Made, or asked to be made, as for the grid.
         let thumbnail = self.cover(&key);
-        let Some(thumbnails) = &self.thumbnails else {
+        let Some(thumbnails) = &mut self.thumbnails else {
             return;
         };
-        let banner = thumbnails.artist_banner(&key);
-        let color = match &banner {
-            Some(file) => image::open(file)
+        let color_of = |file: &Path| {
+            image::open(file)
                 .ok()
-                .map(|i| freya_library::cover::page_color(i.thumbnail(64, 64).to_rgb8().as_raw())),
-            // A collage, or nothing yet: the color of what the grid shows, once it does.
-            None if thumbnail.size().width > 0 => {
-                let file = thumbnails.file_of(&key);
-                image::open(file)
-                    .ok()
-                    .map(|i| freya_library::cover::page_color(i.to_rgb8().as_raw()))
-            }
-            None => None,
+                .map(|i| freya_library::cover::page_color(i.thumbnail(64, 64).to_rgb8().as_raw()))
         };
-        let banner = banner.and_then(|file| Image::load_from_path(&file).ok());
-        if let Some(page) = &mut self.artist_page {
-            page.banner = banner;
-            page.color = color;
+        let banner = match needs_banner.then(|| thumbnails.get_backdrop(&key, &backdrop)) {
+            Some(Thumbnail::Ready(file)) => Image::load_from_path(&file)
+                .ok()
+                .map(|image| (image, color_of(&file))),
+            _ => None,
+        };
+        let portrait_file = thumbnails.artist_portrait(&key);
+        // Their picture large, else the grid's while it is made, or of a collage.
+        let portrait = match (&portrait_file, needs_portrait) {
+            (Some(file), true) => round_picture(file).map(|image| (image, true)),
+            (None, true) if thumbnail.size().width > 0 => {
+                round_picture(&thumbnails.file_of(&key)).map(|image| (image, false))
+            }
+            _ => None,
+        };
+        let Some(page) = &mut self.artist_page else {
+            return;
+        };
+        if let Some((image, color)) = banner {
+            page.banner = Some(image);
+            page.color = color.or(page.color);
+        }
+        if let Some((image, large)) = portrait {
+            page.portrait = Some(image);
+            page.portrait_large = large;
+        }
+        if page.color.is_none() {
+            // Without a wide picture: the color of their picture, or of what the grid shows.
+            page.color = match portrait_file {
+                Some(file) => color_of(&file),
+                None if thumbnail.size().width > 0 => color_of(&thumbnails.file_of(&key)),
+                None => None,
+            };
         }
     }
 
@@ -749,6 +829,18 @@ impl LibraryPanel {
             page.more = !page.more;
         }
         self.show_popular();
+    }
+
+    /// The user's personal fanart.tv key, or none: a new one looks again for wide pictures
+    /// it had none of.
+    pub fn set_fanart_key(&mut self, key: Option<String>) {
+        if self.fanart_key != key {
+            self.fanart_key = key;
+            if let Some(thumbnails) = &mut self.thumbnails {
+                thumbnails.forget_missing_backdrops();
+            }
+            self.show_artist_picture();
+        }
     }
 
     /// Whether Last.fm may be asked what it says of artists.
@@ -1200,6 +1292,10 @@ impl LibraryPanel {
             ("artist-page", self.artist_page_value()),
             ("artist-bios-online", Value::Bool(self.online_bios)),
             (
+                "fanart-key",
+                string(self.fanart_key.clone().unwrap_or_default()),
+            ),
+            (
                 "artist-options",
                 Value::Bool(!self.searching() && *self.level() == Level::Artists),
             ),
@@ -1256,6 +1352,10 @@ impl LibraryPanel {
             (
                 "banner".to_owned(),
                 Value::Image(page.and_then(|p| p.banner.clone()).unwrap_or_default()),
+            ),
+            (
+                "portrait".to_owned(),
+                Value::Image(page.and_then(|p| p.portrait.clone()).unwrap_or_default()),
             ),
             (
                 "color".to_owned(),

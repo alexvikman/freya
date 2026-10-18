@@ -48,9 +48,14 @@ impl CueTrack {
     /// The file's title and artist are left alone; they are the first track's, or the disc's.
     pub fn tags_with(&self, file: &TagInfo) -> TagInfo {
         let tags = self.tags.clone();
+        // The file's artist id, unless the sheet names another artist.
+        let file_artist = tags.album_artist.is_none() || tags.album_artist == file.album_artist;
         TagInfo {
             album: tags.album.or_else(|| file.album.clone()),
             album_artist: tags.album_artist.or_else(|| file.album_artist.clone()),
+            artist_mbid: tags
+                .artist_mbid
+                .or_else(|| file.artist_mbid.clone().filter(|_| file_artist)),
             genre: tags.genre.or_else(|| file.genre.clone()),
             year: tags.year.or(file.year),
             disc: tags.disc.or(file.disc),
@@ -339,6 +344,7 @@ impl Sheet {
             artist: artist.or_else(|| self.performer.clone()),
             album: self.title.clone(),
             album_artist: self.performer.clone(),
+            artist_mbid: None,
             genre: self.genre.clone(),
             year: self.year,
             track: Some(track.number).filter(|&n| n > 0),

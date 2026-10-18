@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::time::{Duration, Instant};
 
 use crate::cover::read_cover;
 
@@ -14,6 +15,13 @@ pub const SIZE: u32 = 300;
 const JPEG_QUALITY: u8 = 85;
 /// The longest side of an artist's picture at the top of their page.
 const LARGE: u32 = 1400;
+/// The longest side of a wide picture across the top of an artist's page: sharp across a 4K
+/// screen.
+const BACKDROP: u32 = 3840;
+const BACKDROP_QUALITY: u8 = 90;
+/// How long fanart.tv having no wide picture of an artist is believed, before it is asked
+/// again: its users add pictures all the time.
+const NO_BACKDROP_KEPT: Duration = Duration::from_secs(30 * 24 * 3600);
 
 /// Where an artist's picture can come from: see [`crate::artist_image`].
 #[derive(Clone, Debug)]
@@ -23,6 +31,18 @@ pub struct ArtistSource {
     pub album_tracks: Vec<PathBuf>,
     /// Whether Deezer may be asked.
     pub online: bool,
+}
+
+/// Where a wide picture of an artist can come from: see [`crate::artist_image`].
+#[derive(Clone, Debug)]
+pub struct BackdropSource {
+    pub name: Option<String>,
+    /// A track of each of the artist's albums.
+    pub album_tracks: Vec<PathBuf>,
+    /// Their MusicBrainz id, when their tags give it.
+    pub mbid: Option<String>,
+    /// The user's personal fanart.tv key; without one, fanart.tv is not asked.
+    pub fanart_key: Option<String>,
 }
 
 /// A thumbnail to make: an album's cover from one of its tracks, or an artist's picture.
@@ -48,6 +68,9 @@ pub struct Thumbnails {
     known: HashMap<String, Thumbnail>,
     /// Started with the first request.
     jobs: Option<Sender<(String, Job)>>,
+    /// Wide pictures, on a thread of their own: MusicBrainz is asked once a second at most,
+    /// which would hold up the covers.
+    backdrop_jobs: Option<Sender<(String, BackdropSource)>>,
     /// Albums whose covers were looked for, and whether a thumbnail was made.
     finished_tx: Sender<(String, bool)>,
     finished: Receiver<(String, bool)>,
@@ -61,6 +84,7 @@ impl Thumbnails {
             dir,
             known: HashMap::new(),
             jobs: None,
+            backdrop_jobs: None,
             finished_tx,
             finished,
         }
@@ -100,10 +124,51 @@ impl Thumbnails {
         state
     }
 
-    /// The artist `key`'s picture at up to 1400 pixels, for the top of their page, once made;
-    /// none when it is a collage of their covers.
-    pub fn artist_banner(&self, key: &str) -> Option<PathBuf> {
+    /// The artist `key`'s picture at up to 1400 pixels, for their page, once made; none when
+    /// it is a collage of their covers.
+    pub fn artist_portrait(&self, key: &str) -> Option<PathBuf> {
         Some(self.dir.join(format!("{key}-large.jpg"))).filter(|file| file.exists())
+    }
+
+    /// The wide picture across the top of the page of the artist `key`. When it is not made
+    /// yet, or fanart.tv had none a month ago, it is looked for from `source`.
+    pub fn get_backdrop(&mut self, key: &str, source: &BackdropSource) -> Thumbnail {
+        let known_key = format!("{key}-backdrop");
+        if let Some(known) = self.known.get(&known_key) {
+            return known.clone();
+        }
+        let file = self.file(&known_key);
+        let marker = self.dir.join(format!("{key}.nobackdrop"));
+        let modified = |path: &Path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
+        // A picture put in the artist's folder since changes the folder.
+        let artist_dir = source
+            .album_tracks
+            .first()
+            .and_then(|track| track.parent()?.parent());
+        let fresh = |made: &Path| match (modified(made), artist_dir.and_then(modified)) {
+            (Some(made), Some(dir)) => dir <= made,
+            (made, _) => made.is_some(),
+        };
+        let believed = modified(&marker)
+            .and_then(|made| made.elapsed().ok())
+            .is_some_and(|age| age < NO_BACKDROP_KEPT);
+        let state = if file.exists() && fresh(&file) {
+            Thumbnail::Ready(file)
+        } else if believed && fresh(&marker) {
+            Thumbnail::None
+        } else {
+            self.send_backdrop(&known_key, source.clone());
+            Thumbnail::Pending
+        };
+        self.known.insert(known_key, state.clone());
+        state
+    }
+
+    /// Forgets which artists had no wide picture, to look again: after the fanart.tv key
+    /// changed.
+    pub fn forget_missing_backdrops(&mut self) {
+        self.known
+            .retain(|key, state| !(key.ends_with("-backdrop") && *state == Thumbnail::None));
     }
 
     /// A name for an album's thumbnail that stays the same between runs: 16 hex digits.
@@ -161,6 +226,35 @@ impl Thumbnails {
 
     fn request(&mut self, key: &str, track: &Path) {
         self.send(key, Job::Album(track.to_owned()));
+    }
+
+    fn send_backdrop(&mut self, key: &str, source: BackdropSource) {
+        let jobs = self.backdrop_jobs.get_or_insert_with(|| {
+            let (jobs, queue) = channel::<(String, BackdropSource)>();
+            let dir = self.dir.clone();
+            let finished = self.finished_tx.clone();
+            let started = std::thread::Builder::new()
+                .name("freya-backdrops".into())
+                .spawn(move || {
+                    let mut asked = None;
+                    for (key, source) in queue {
+                        let artist = key.trim_end_matches("-backdrop");
+                        let made =
+                            make_backdrop(&dir, artist, &source, &mut asked).unwrap_or_else(|e| {
+                                log::warn!("no wide picture of {:?}: {e}", source.name);
+                                false
+                            });
+                        if finished.send((key, made)).is_err() {
+                            break;
+                        }
+                    }
+                });
+            if let Err(e) = started {
+                log::warn!("could not start looking for wide pictures: {e}");
+            }
+            jobs
+        });
+        let _ = jobs.send((key.to_owned(), source));
     }
 
     fn send(&mut self, key: &str, job: Job) {
@@ -249,13 +343,86 @@ fn make_artist(dir: &Path, key: &str, source: &ArtistSource) -> Result<bool, Str
     Ok(true)
 }
 
+/// Makes the wide picture for the artist `key`: from their folder, else from fanart.tv when
+/// the user gave a key. When fanart.tv has none, a marker says so, holding the artist's
+/// MusicBrainz id, so the next look a month later need not search for it. `asked` is when
+/// MusicBrainz was last asked. Returns false when there is no picture.
+fn make_backdrop(
+    dir: &Path,
+    key: &str,
+    source: &BackdropSource,
+    asked: &mut Option<Instant>,
+) -> Result<bool, String> {
+    use crate::artist_image::{self, Online};
+
+    let marker = dir.join(format!("{key}.nobackdrop"));
+    let picture = if let Some(file) = artist_image::local_backdrop(&source.album_tracks) {
+        image::open(&file).map_err(|e| e.to_string())?
+    } else {
+        let Some(fanart_key) = &source.fanart_key else {
+            return Ok(false);
+        };
+        let found_before = std::fs::read_to_string(&marker)
+            .ok()
+            .map(|id| id.trim().to_owned())
+            .filter(|id| !id.is_empty());
+        let mbid = match (source.mbid.clone().or(found_before), &source.name) {
+            (Some(mbid), _) => Some(mbid),
+            (None, Some(name)) => {
+                if let Some(wait) = asked
+                    .and_then(|at| artist_image::MUSICBRAINZ_INTERVAL.checked_sub(at.elapsed()))
+                {
+                    std::thread::sleep(wait);
+                }
+                *asked = Some(Instant::now());
+                artist_image::musicbrainz_id(name)?
+            }
+            (None, None) => None,
+        };
+        let online = match &mbid {
+            Some(mbid) => artist_image::fanart_backdrop(mbid, fanart_key)?,
+            None => Online::NoPicture,
+        };
+        match online {
+            Online::Picture(bytes) => image::load_from_memory(&bytes).map_err(|e| e.to_string())?,
+            Online::NoPicture => {
+                create_private_dir(dir).map_err(|e| e.to_string())?;
+                std::fs::write(&marker, mbid.unwrap_or_default()).map_err(|e| e.to_string())?;
+                return Ok(false);
+            }
+        }
+    };
+    let picture = if picture.width() > BACKDROP || picture.height() > BACKDROP {
+        picture.resize(BACKDROP, BACKDROP, image::imageops::FilterType::Lanczos3)
+    } else {
+        picture
+    };
+    save_jpeg_with(
+        dir,
+        &format!("{key}-backdrop"),
+        &picture.to_rgb8(),
+        BACKDROP_QUALITY,
+    )?;
+    let _ = std::fs::remove_file(&marker);
+    Ok(true)
+}
+
 /// Writes `picture` as `key`'s thumbnail, under another name first and then renamed, so a
 /// half-written file is never shown.
 fn save_jpeg(dir: &Path, key: &str, picture: &image::RgbImage) -> Result<(), String> {
+    save_jpeg_with(dir, key, picture, JPEG_QUALITY)
+}
+
+fn save_jpeg_with(
+    dir: &Path,
+    key: &str,
+    picture: &image::RgbImage,
+    quality: u8,
+) -> Result<(), String> {
     create_private_dir(dir).map_err(|e| e.to_string())?;
     let partial = dir.join(format!("{key}.partial"));
     let file = std::fs::File::create(&partial).map_err(|e| e.to_string())?;
-    image::codecs::jpeg::JpegEncoder::new_with_quality(std::io::BufWriter::new(file), JPEG_QUALITY)
+    image::codecs::jpeg::JpegEncoder::new_with_quality(std::io::BufWriter::new(file), quality)
         .encode_image(picture)
         .map_err(|e| e.to_string())?;
     std::fs::rename(&partial, dir.join(format!("{key}.jpg"))).map_err(|e| e.to_string())
@@ -392,7 +559,53 @@ mod tests {
         };
         assert!(image::open(&file).unwrap().to_rgb8().get_pixel(150, 150)[0] > 150);
         // And large, for their page; a collage has none.
-        assert!(later.artist_banner(&key).is_some());
+        assert!(later.artist_portrait(&key).is_some());
+    }
+
+    #[test]
+    fn makes_wide_pictures_from_the_artists_folder_and_believes_fanart_tv_for_a_month() {
+        let artist = temp_dir("backdrop-music");
+        let album = artist.join("Dead Magic");
+        std::fs::create_dir_all(&album).unwrap();
+        let track = album.join("01.flac");
+        std::fs::write(&track, b"").unwrap();
+        let mut source = BackdropSource {
+            name: Some("Anna von Hausswolff".into()),
+            album_tracks: vec![track],
+            mbid: None,
+            fanart_key: None,
+        };
+        let cache = temp_dir("backdrop-cache").join("covers");
+        let key = Thumbnails::artist_key(source.name.as_deref());
+
+        // None in their folder, and no key for fanart.tv.
+        let mut thumbnails = Thumbnails::new(cache.clone());
+        assert_eq!(thumbnails.get_backdrop(&key, &source), Thumbnail::Pending);
+        wait(&mut thumbnails);
+        assert_eq!(thumbnails.get_backdrop(&key, &source), Thumbnail::None);
+
+        // fanart.tv had none a while ago: it is not asked again yet.
+        source.fanart_key = Some("key".into());
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join(format!("{key}.nobackdrop")), "mbid").unwrap();
+        thumbnails.forget_missing_backdrops();
+        assert_eq!(thumbnails.get_backdrop(&key, &source), Thumbnail::None);
+
+        // One put in their folder is taken at full size, up to 4K.
+        std::thread::sleep(Duration::from_millis(20));
+        image::RgbImage::from_pixel(4000, 2000, image::Rgb([0, 180, 0]))
+            .save(artist.join("fanart.jpg"))
+            .unwrap();
+        let mut later = Thumbnails::new(cache.clone());
+        assert_eq!(later.get_backdrop(&key, &source), Thumbnail::Pending);
+        wait(&mut later);
+        let Thumbnail::Ready(file) = later.get_backdrop(&key, &source) else {
+            panic!("made from fanart.jpg");
+        };
+        let made = image::open(&file).unwrap();
+        assert_eq!((made.width(), made.height()), (BACKDROP, 1920));
+        assert!(!cache.join(format!("{key}.nobackdrop")).exists());
     }
 
     #[test]

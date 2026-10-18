@@ -556,16 +556,53 @@ fn rebuilds_a_library_from_an_older_layout() {
         .unwrap();
 
     // A rebuild drops the tracks, which a scan reads again, but never the plays.
-    library
-        .db
-        .pragma_update(None, "user_version", SCHEMA_VERSION - 1)
-        .unwrap();
+    library.db.pragma_update(None, "user_version", 2).unwrap();
     drop(library);
     let mut library = Library::open(&path).unwrap();
     assert_eq!(library.stats().unwrap().tracks, 0);
     add(&mut library, "/m/1.mp3", &tags("A", "B", "C", 1));
     assert_eq!(library.most_played(10).unwrap()[0].plays, 1);
     // Closed first: Windows does not delete a database that is open.
+    drop(library);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn adds_artist_ids_to_a_library_and_reads_every_file_again() {
+    let dir = temp_dir("mbid");
+    let path = dir.join("library.sqlite3");
+    let mut library = Library::open(&path).unwrap();
+    add_at(&mut library, "/m/1.mp3", &tags("A", "B", "C", 1), 5);
+    library
+        .db
+        .execute_batch("ALTER TABLE tracks DROP COLUMN artist_mbid; PRAGMA user_version = 3;")
+        .unwrap();
+    drop(library);
+
+    let mut library = Library::open(&path).unwrap();
+    // Changed as far as a scan can tell, so it reads the tags again.
+    let stamp = library.sources().unwrap()[Path::new("/m/1.mp3")];
+    assert_eq!(stamp.modified, -1);
+    assert_eq!(library.artist_mbid(Some("A")).unwrap(), None);
+    // And came in when it did.
+    let added: i64 = library
+        .db
+        .query_row("SELECT added FROM tracks", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(added, 5);
+
+    let with_id = |id: &str| TagInfo {
+        artist_mbid: Some(id.into()),
+        ..tags("A", "B", "C", 1)
+    };
+    add(&mut library, "/m/2.mp3", &with_id("one"));
+    add(&mut library, "/m/3.mp3", &with_id("two"));
+    add(&mut library, "/m/4.mp3", &with_id("two"));
+    assert_eq!(
+        library.artist_mbid(Some("A")).unwrap().as_deref(),
+        Some("two")
+    );
+    assert_eq!(library.artist_mbid(Some("Z")).unwrap(), None);
     drop(library);
     std::fs::remove_dir_all(&dir).unwrap();
 }

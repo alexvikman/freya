@@ -322,6 +322,17 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     );
     bind(
         "Library",
+        "set-fanart-key",
+        Box::new(|app, args| {
+            if let Some(Value::String(key)) = args.first() {
+                let key = Some(key.trim().to_owned()).filter(|k| !k.is_empty());
+                app.settings.fanart_key.clone_from(&key);
+                app.library.set_fanart_key(key);
+            }
+        }),
+    );
+    bind(
+        "Library",
         "set-artist-pictures-online",
         Box::new(|app, args| {
             if let Some(Value::Bool(online)) = args.first() {

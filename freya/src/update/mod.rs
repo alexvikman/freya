@@ -294,6 +294,8 @@ pub fn page(name: &str) -> Option<String> {
         "releases" => format!("{base}/releases"),
         "issues" => format!("{base}/issues"),
         "license" => format!("{base}/blob/main/README.md#license"),
+        // Where users get the personal key Freya asks fanart.tv with.
+        "fanart-key" => "https://fanart.tv/get-an-api-key/".to_owned(),
         _ => return None,
     })
 }
