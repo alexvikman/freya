@@ -480,6 +480,35 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     );
     bind(
         "Library",
+        "set-watch-folders",
+        Box::new(|app, args| {
+            if let Some(Value::Bool(watch)) = args.first() {
+                app.settings.watch_folders = *watch;
+                app.library.set_watch_folders(*watch);
+            }
+        }),
+    );
+    bind(
+        "Library",
+        "set-scan-every-hours",
+        Box::new(|app, args| {
+            let hours = index(args, 0) as u32;
+            app.settings.scan_every_hours = hours;
+            app.library.set_scan_every_hours(hours);
+        }),
+    );
+    bind(
+        "Library",
+        "set-scan-at-start",
+        Box::new(|app, args| {
+            if let Some(Value::Bool(scan)) = args.first() {
+                app.settings.scan_at_start = *scan;
+                app.library.set_scan_at_start(*scan);
+            }
+        }),
+    );
+    bind(
+        "Library",
         "set-artist-pictures-online",
         Box::new(|app, args| {
             if let Some(Value::Bool(online)) = args.first() {

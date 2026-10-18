@@ -59,6 +59,14 @@ pub struct Settings {
     pub artist_wikipedia_online: bool,
     /// The user's personal fanart.tv API key, for wide pictures across artists' pages.
     pub fanart_key: Option<String>,
+    /// Whether the music folders are watched, and what changes in them scanned at once.
+    pub watch_folders: bool,
+    /// How often the whole library is scanned, in hours, for what watching misses, as on
+    /// network drives; 0 for never.
+    pub scan_every_hours: u32,
+    /// Whether the whole library is scanned each time Freya starts; it is the first time
+    /// anyway.
+    pub scan_at_start: bool,
 }
 
 impl Default for Settings {
@@ -88,6 +96,9 @@ impl Default for Settings {
             artist_bios_online: true,
             artist_wikipedia_online: true,
             fanart_key: None,
+            watch_folders: true,
+            scan_every_hours: 24,
+            scan_at_start: false,
             damaged: false,
         }
     }

@@ -91,6 +91,8 @@ log = "0.4.34"
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.8"
 directories = "6.0.0"
+# Watching the music folders for changes (see src/gui/folder_watch.rs).
+notify = "8.2.0"
 # With `termination`, SIGTERM and SIGHUP too (logging out, shutting down, a closed terminal).
 ctrlc = { version = "3.5.2", features = ["termination"] }
 # Updates (see src/update): the release list, its signature and checksums, with the HTTP and

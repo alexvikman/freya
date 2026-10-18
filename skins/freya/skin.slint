@@ -6066,7 +6066,7 @@ component SettingsView inherits Rectangle {
             }
             SettingsRow {
                 label: Library.scanning ? Library.status
-                    : "Freya scans the folders each time it starts: it reads new and changed files, makes their albums' covers, takes in the pictures in artists' folders, and asks the internet for what artists lack, as allowed below.";
+                    : "A scan reads new and changed files, makes their albums' covers, takes in the pictures in artists' folders, and asks the internet for what artists lack, as allowed below.";
 
                 VerticalLayout {
                     alignment: center;
@@ -6086,6 +6086,72 @@ component SettingsView inherits Rectangle {
                             text: "Manage Folders…";
                             clicked => { root.manage-folders(); }
                         }
+                    }
+                }
+            }
+            SettingsRow {
+                label: "Scan when files change";
+                detail: "Freya watches the music folders and scans what changed a few seconds after. Network drives may not tell of changes made from other computers.";
+
+                VerticalLayout {
+                    alignment: center;
+
+                    Toggle {
+                        label: "Scan when files change";
+                        checked: Library.watch-folders;
+                        toggled => { Library.set-watch-folders(!Library.watch-folders); }
+                    }
+                }
+            }
+            SettingsRow {
+                label: "Scan the whole library";
+                detail: "For what watching misses, such as changes on network drives.";
+
+                VerticalLayout {
+                    alignment: center;
+
+                    HorizontalLayout {
+                        spacing: 4px;
+
+                        ChoiceButton {
+                            text: "Never";
+                            selected: Library.scan-every-hours == 0;
+                            clicked => { Library.set-scan-every-hours(0); }
+                        }
+                        ChoiceButton {
+                            text: "Hourly";
+                            selected: Library.scan-every-hours == 1;
+                            clicked => { Library.set-scan-every-hours(1); }
+                        }
+                        ChoiceButton {
+                            text: "6 hours";
+                            selected: Library.scan-every-hours == 6;
+                            clicked => { Library.set-scan-every-hours(6); }
+                        }
+                        ChoiceButton {
+                            text: "12 hours";
+                            selected: Library.scan-every-hours == 12;
+                            clicked => { Library.set-scan-every-hours(12); }
+                        }
+                        ChoiceButton {
+                            text: "Daily";
+                            selected: Library.scan-every-hours == 24;
+                            clicked => { Library.set-scan-every-hours(24); }
+                        }
+                    }
+                }
+            }
+            SettingsRow {
+                label: "Scan when Freya starts";
+                detail: "The whole library, each time. Freya scans it the first time anyway.";
+
+                VerticalLayout {
+                    alignment: center;
+
+                    Toggle {
+                        label: "Scan when Freya starts";
+                        checked: Library.scan-at-start;
+                        toggled => { Library.set-scan-at-start(!Library.scan-at-start); }
                     }
                 }
             }

@@ -1028,9 +1028,10 @@ fn a_scan_of_one_folder_leaves_the_others_alone() {
     std::fs::remove_file(b.join("sine.mp3")).unwrap();
     std::fs::copy(fixtures().join("sine.mp3"), b.join("other.mp3")).unwrap();
     let options = ScanOptions {
-        only: Some(b.clone()),
+        only: vec![b.clone()],
         ..ScanOptions::default()
     };
+    let full = library.last_full_scan().unwrap().expect("noted");
     let summary = scan_with(
         &mut library,
         &folders,
@@ -1040,6 +1041,11 @@ fn a_scan_of_one_folder_leaves_the_others_alone() {
     )
     .unwrap();
     assert_eq!((summary.added, summary.removed), (1, 1));
+    assert_eq!(
+        library.last_full_scan().unwrap(),
+        Some(full),
+        "not a full scan"
+    );
     let paths: Vec<PathBuf> = library
         .all_tracks()
         .unwrap()
@@ -1051,6 +1057,23 @@ fn a_scan_of_one_folder_leaves_the_others_alone() {
         "a was not looked through"
     );
     assert!(paths.contains(&b.join("other.mp3")));
+
+    // A folder within one, taken away: its tracks go, though it is not there to look through.
+    let album = a.join("Album");
+    std::fs::create_dir_all(&album).unwrap();
+    // Not empty without it: an empty folder of the library's is taken for a drive not there.
+    std::fs::write(a.join("notes.txt"), "").unwrap();
+    std::fs::copy(fixtures().join("sine.mp3"), album.join("01.mp3")).unwrap();
+    let options = ScanOptions {
+        only: vec![album.clone()],
+        ..ScanOptions::default()
+    };
+    let scan = |library: &mut Library| {
+        scan_with(library, &folders, &options, &AtomicBool::new(false), |_| {}).unwrap()
+    };
+    assert_eq!(scan(&mut library).added, 1);
+    std::fs::remove_dir_all(&album).unwrap();
+    assert_eq!(scan(&mut library).removed, 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1088,5 +1111,41 @@ fn plays_follow_a_file_moved_or_renamed() {
     assert_eq!(played[0].track.path, after.join("01 Sine.mp3"));
     assert_eq!(played[0].plays, 2);
     assert_eq!(added(&library), first, "it came in when it first did");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_scan_of_one_folder_makes_no_other_albums_covers() {
+    let dir = temp_dir("one-folder-covers");
+    let music = dir.join("music");
+    // Albums apart by their tags, as the fixtures have them.
+    for (album, file) in [("A", "sine.mp3"), ("B", "sine.flac")] {
+        let folder = music.join(album);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::copy(fixtures().join(file), folder.join(file)).unwrap();
+        image::RgbImage::from_pixel(300, 300, image::Rgb([0, 90, 0]))
+            .save(folder.join("cover.jpg"))
+            .unwrap();
+    }
+    let folders = [music.clone()];
+    let pictures = crate::pictures::Pictures::new(dir.join("pictures"));
+    let mut library = Library::open_in_memory().unwrap();
+    let scan = |library: &mut Library, only: Vec<PathBuf>| {
+        let options = ScanOptions {
+            pictures: Some(pictures.clone()),
+            only,
+            ..ScanOptions::default()
+        };
+        let mut covers = 0;
+        scan_with(library, &folders, &options, &AtomicBool::new(false), |e| {
+            if let ScanEvent::Covers { total, .. } = e {
+                covers = total;
+            }
+        })
+        .unwrap();
+        covers
+    };
+    assert_eq!(scan(&mut library, Vec::new()), 2);
+    assert_eq!(scan(&mut library, vec![music.join("A")]), 0);
     let _ = std::fs::remove_dir_all(&dir);
 }

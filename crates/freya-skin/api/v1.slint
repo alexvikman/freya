@@ -357,6 +357,16 @@ export global Library {
     in property <[string]> folders;
     /// True while Freya reads the folders.
     in property <bool> scanning;
+    /// Whether the music folders are watched, and what changes in them scanned a few seconds
+    /// after; how often the whole library is scanned, in hours, for what watching misses, as
+    /// on network drives (0 for never); and whether it is each time Freya starts. Kept
+    /// between runs.
+    in property <bool> watch-folders: true;
+    in property <int> scan-every-hours: 24;
+    in property <bool> scan-at-start;
+    callback set-watch-folders(bool);
+    callback set-scan-every-hours(int);
+    callback set-scan-at-start(bool);
     /// The letters to jump to beside the artists or albums shown, when they are in the order
     /// of their names; empty otherwise.
     in property <[LetterJump]> letters;

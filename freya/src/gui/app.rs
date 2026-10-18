@@ -429,6 +429,9 @@ impl App {
         library.set_online_bios(settings.artist_bios_online);
         library.set_online_wikipedia(settings.artist_wikipedia_online);
         library.set_fanart_key(settings.fanart_key.clone());
+        library.set_watch_folders(settings.watch_folders);
+        library.set_scan_every_hours(settings.scan_every_hours);
+        library.set_scan_at_start(settings.scan_at_start);
         let lastfm = LastFm::start(settings.lastfm_user.clone());
         let mut app = Self {
             player,
@@ -920,8 +923,9 @@ impl App {
     }
 
     pub fn add_library_folder(&mut self, folder: PathBuf) {
-        if add_folder(&mut self.settings.library_folders, folder) {
-            self.library.rescan(&self.settings.library_folders);
+        if add_folder(&mut self.settings.library_folders, folder.clone()) {
+            self.library
+                .scan_added(&self.settings.library_folders, vec![folder]);
         }
     }
 
@@ -957,8 +961,15 @@ impl App {
             return;
         };
         if draft != self.settings.library_folders {
-            self.settings.library_folders = draft;
-            self.library.rescan(&self.settings.library_folders);
+            let before = std::mem::replace(&mut self.settings.library_folders, draft);
+            let folders = &self.settings.library_folders;
+            // Only new folders are read; one taken away needs every folder looked over.
+            if before.iter().all(|f| folders.contains(f)) {
+                let added = folders.iter().filter(|f| !before.contains(f)).cloned();
+                self.library.scan_added(folders, added.collect());
+            } else {
+                self.library.rescan(folders);
+            }
         }
     }
 

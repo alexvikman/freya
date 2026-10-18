@@ -18,6 +18,7 @@ use slint::{Image, ModelRc, VecModel};
 use slint_interpreter::{Struct, Value};
 
 use super::cover_decoder::CoverDecoder;
+use super::folder_watch::FolderWatch;
 use super::match_finder::{AlbumFinder, MatchFinder};
 use super::picture_finder::{Found, Pick, PictureFinder, Request};
 use super::skin_state::{ModelRows, format_time, string};
@@ -26,6 +27,8 @@ use super::skin_window::SkinWindow;
 /// Search results are cut off here; nobody scrolls through more, and building rows for the
 /// whole library on every keystroke would be wasted work.
 const SEARCH_LIMIT: usize = 1_000;
+/// How often Freya looks whether the whole library is due to be scanned.
+const SCAN_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 /// While a scan runs, the rows are reloaded at most this often.
 const RELOAD_INTERVAL: Duration = Duration::from_secs(1);
 /// Decoded covers kept: about 270 KB each, 70 MB in all. Those on screen, at most about 90 full
@@ -225,6 +228,20 @@ pub struct LibraryPanel {
     album_list: bool,
     /// A scan was started and its end not yet taken in.
     scanning: bool,
+    /// The library's folders, and whether scans may bring the library in line with them: not
+    /// when the settings were damaged, and the list may be missing some.
+    folders: Vec<PathBuf>,
+    scans_allowed: bool,
+    /// The folders' watch, while they are watched; and the folders where something changed,
+    /// to scan once the scan running ends.
+    watch: Option<FolderWatch>,
+    watch_folders: bool,
+    scan_later: Vec<PathBuf>,
+    /// How often the whole library is scanned, if at all, and when that was last looked into;
+    /// and whether it is each time Freya starts.
+    scan_every: Option<Duration>,
+    scan_checked: Option<Instant>,
+    scan_at_start: bool,
     /// The folder a scan looks through or reads now, and how far it is with albums' covers
     /// and with asking the internet about artists.
     scan_folder: Option<PathBuf>,
@@ -570,6 +587,14 @@ impl LibraryPanel {
             covers_ready: 0,
             plays: Vec::new(),
             scanning: false,
+            folders: Vec::new(),
+            scans_allowed: false,
+            watch: None,
+            watch_folders: true,
+            scan_later: Vec::new(),
+            scan_every: Some(Duration::from_secs(24 * 3600)),
+            scan_checked: None,
+            scan_at_start: false,
             scan_folder: None,
             covers_progress: None,
             artists_progress: None,
@@ -663,10 +688,109 @@ impl LibraryPanel {
         self.clear_older_cache();
         self.prepare_all();
         self.reload();
-        if scan {
-            self.rescan(folders);
-        } else {
+        self.scans_allowed = scan;
+        self.set_folders(folders);
+        if !scan {
             log::warn!("the library is not checked against its folders: the settings were damaged");
+            return;
+        }
+        // The first time, everything is read; after, what changed while Freya was not
+        // running is found by a periodic scan, or by one at each start if the user wants it.
+        let empty = self
+            .db
+            .as_ref()
+            .is_none_or(|db| db.last_full_scan().ok().flatten().is_none());
+        if empty || self.scan_at_start {
+            self.rescan(folders);
+        }
+    }
+
+    /// The library's folders now: those watched, and scanned later.
+    pub fn set_folders(&mut self, folders: &[PathBuf]) {
+        if self.folders != folders {
+            self.folders = folders.to_vec();
+            self.watch = None;
+        }
+        self.start_watching();
+    }
+
+    /// Whether the folders are watched, and what changes in them scanned at once.
+    pub fn set_watch_folders(&mut self, watch: bool) {
+        self.watch_folders = watch;
+        if !watch {
+            self.watch = None;
+        }
+        self.start_watching();
+    }
+
+    /// How often the whole library is scanned, in hours; 0 for never.
+    pub fn set_scan_every_hours(&mut self, hours: u32) {
+        self.scan_every = (hours > 0).then(|| Duration::from_secs(u64::from(hours) * 3600));
+        self.scan_checked = None;
+    }
+
+    pub fn set_scan_at_start(&mut self, scan: bool) {
+        self.scan_at_start = scan;
+    }
+
+    fn start_watching(&mut self) {
+        if self.watch.is_none()
+            && self.watch_folders
+            && self.scans_allowed
+            && self.db.is_some()
+            && !self.folders.is_empty()
+        {
+            self.watch = FolderWatch::new(&self.folders);
+        }
+    }
+
+    /// Scans `changed`, folders within the library's, once no scan runs.
+    fn scan_changed(&mut self, changed: Vec<PathBuf>) {
+        let changed: Vec<PathBuf> = changed
+            .into_iter()
+            .filter(|c| self.folders.iter().any(|f| c.starts_with(f)))
+            .collect();
+        if changed.is_empty() {
+            return;
+        }
+        if self.scanning {
+            self.scan_later.extend(changed);
+            return;
+        }
+        log::info!("scanning what changed in {} folders", changed.len());
+        let folders = self.folders.clone();
+        self.scan(&folders, changed, false);
+    }
+
+    /// Scans the whole library when the last scan of it is older than the user wants.
+    fn scan_when_due(&mut self) {
+        let Some(every) = self.scan_every else {
+            return;
+        };
+        if self.scanning
+            || !self.scans_allowed
+            || self
+                .scan_checked
+                .is_some_and(|at| at.elapsed() < SCAN_CHECK_INTERVAL)
+        {
+            return;
+        }
+        self.scan_checked = Some(Instant::now());
+        let Some(db) = &self.db else {
+            return;
+        };
+        let due = match db.last_full_scan() {
+            Ok(Some(last)) => last.elapsed().is_ok_and(|age| age >= every),
+            Ok(None) => true,
+            Err(e) => {
+                log::warn!("could not read when the library was last scanned: {e}");
+                false
+            }
+        };
+        if due {
+            log::info!("scanning the whole library, as it is time to");
+            let folders = self.folders.clone();
+            self.rescan(&folders);
         }
     }
 
@@ -717,29 +841,37 @@ impl LibraryPanel {
     /// Brings the library in line with `folders`: reads what changed, and asks the internet
     /// for what artists lack.
     pub fn rescan(&mut self, folders: &[PathBuf]) {
-        self.scan(folders, None, false);
+        self.set_folders(folders);
+        self.scan(folders, Vec::new(), false);
     }
 
     /// Reads every file in `folders` again and makes every cover again, changed or not.
     pub fn rescan_files(&mut self, folders: &[PathBuf]) {
-        self.scan(folders, None, true);
+        self.scan(folders, Vec::new(), true);
     }
 
     /// Looks through the `index`th of `folders` only.
     pub fn scan_folder(&mut self, folders: &[PathBuf], index: usize) {
         if let Some(folder) = folders.get(index) {
-            self.scan(folders, Some(folder.clone()), false);
+            self.scan(folders, vec![folder.clone()], false);
         }
+    }
+
+    /// Looks through `added`, folders new in `folders`, only.
+    pub fn scan_added(&mut self, folders: &[PathBuf], added: Vec<PathBuf>) {
+        self.set_folders(folders);
+        self.scan(folders, added, false);
     }
 
     /// Stops the scan running; what it did so far is kept.
     pub fn stop_scan(&mut self) {
         self.fetch_later.clear();
         self.fetch_all_later = false;
+        self.scan_later.clear();
         self.scanner.stop();
     }
 
-    fn scan(&mut self, folders: &[PathBuf], only: Option<PathBuf>, rescan: bool) {
+    fn scan(&mut self, folders: &[PathBuf], only: Vec<PathBuf>, rescan: bool) {
         if let (Some(path), Some(_)) = (&self.path, &self.db) {
             let options = ScanOptions {
                 pictures: self.thumbnails.as_ref().map(|t| t.pictures().clone()),
@@ -766,6 +898,10 @@ impl LibraryPanel {
         if !self.scanning {
             self.prepare_some();
         }
+        if let Some(changed) = self.watch.as_mut().and_then(FolderWatch::poll) {
+            self.scan_changed(changed);
+        }
+        self.scan_when_due();
         if self.decode_covers() {
             self.covers_ready += 1;
         }
@@ -883,7 +1019,13 @@ impl LibraryPanel {
         if finished {
             self.keep_named_pictures();
             self.prepare_all();
-            if std::mem::take(&mut self.fetch_all_later) {
+            // A scan asks the internet for what every artist lacks too.
+            if !self.scan_later.is_empty() {
+                self.fetch_later.clear();
+                self.fetch_all_later = false;
+                let changed = std::mem::take(&mut self.scan_later);
+                self.scan_changed(changed);
+            } else if std::mem::take(&mut self.fetch_all_later) {
                 self.fetch_later.clear();
                 self.fetch(None);
             } else if !self.fetch_later.is_empty() {
@@ -2901,6 +3043,15 @@ impl LibraryPanel {
                 string(if self.artist_list { "list" } else { "grid" }),
             ),
             ("artist-pictures-online", Value::Bool(self.online_pictures)),
+            ("watch-folders", Value::Bool(self.watch_folders)),
+            (
+                "scan-every-hours",
+                Value::Number(
+                    self.scan_every
+                        .map_or(0.0, |every| (every.as_secs() / 3600) as f64),
+                ),
+            ),
+            ("scan-at-start", Value::Bool(self.scan_at_start)),
             ("album-sort", string(self.album_sort.name())),
             (
                 "album-view",

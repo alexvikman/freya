@@ -823,6 +823,9 @@ skin_api! {
         Library."album-view" => set_album_view, get_album_view;
         Library."scanning" => set_scanning, get_scanning;
         Library."letters" => set_letters, get_letters;
+        Library."watch-folders" => set_watch_folders, get_watch_folders;
+        Library."scan-every-hours" => set_scan_every_hours, get_scan_every_hours;
+        Library."scan-at-start" => set_scan_at_start, get_scan_at_start;
         Library."status" => set_status, get_status;
         Library."scan-folder" => set_scan_folder, get_scan_folder;
 
@@ -953,6 +956,9 @@ skin_api! {
         Library."set-artist-sort" => on_set_artist_sort, invoke_set_artist_sort(sort: SharedString);
         Library."set-artist-view" => on_set_artist_view, invoke_set_artist_view(view: SharedString);
         Library."set-artist-pictures-online" => on_set_artist_pictures_online, invoke_set_artist_pictures_online(online: bool);
+        Library."set-watch-folders" => on_set_watch_folders, invoke_set_watch_folders(watch: bool);
+        Library."set-scan-every-hours" => on_set_scan_every_hours, invoke_set_scan_every_hours(hours: i32);
+        Library."set-scan-at-start" => on_set_scan_at_start, invoke_set_scan_at_start(scan: bool);
         Library."open-album-artist" => on_open_album_artist, invoke_open_album_artist();
         Library."open-playing-artist" => on_open_playing_artist, invoke_open_playing_artist();
         Library."open-playing-album" => on_open_playing_album, invoke_open_playing_album();

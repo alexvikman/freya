@@ -103,6 +103,12 @@ criteria = "safe-to-deploy"
 delta = "0.2.3 -> 0.2.4"
 notes = "Manifest only: syn 2 to syn 3 for the proc-macro. No source, unsafe or build changes."
 
+[[audits.fsevent-sys]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+version = "4.1.0"
+notes = "Raw FFI declarations for macOS FSEvents and a CoreFoundation subset, plus a helper that canonicalizes a path via CFURL; unsafe confined to those framework calls; no build script, links only the CoreFoundation and CoreServices frameworks via #[link]; no network, process, or credential access."
+
 [[audits.futures]]
 who = "Freya maintainers (AI-assisted review by Claude)"
 criteria = "safe-to-deploy"
@@ -217,6 +223,30 @@ criteria = "safe-to-deploy"
 delta = "1.2.1 -> 1.2.2"
 notes = "is_virama uses the UTS 46 mapper instead of the combining class map; edition and README updates. No unsafe or capabilities."
 
+[[audits.inotify]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+version = "0.11.5"
+notes = "Safe wrapper around Linux inotify: init/add/remove watches and read events from the inotify fd; kcmp is used only to compare the process's own fds. unsafe confined to inotify/fcntl/read FFI and bounds-asserted read_unaligned parsing of the event buffer; no build script; no network, process, or credential access."
+
+[[audits.inotify-sys]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+version = "0.1.8"
+notes = "Raw inotify constants, the inotify_event struct and extern declarations; the build script only links libinotify on NetBSD/OpenBSD, finding its libdir with pkg-config; no network, process, or credential access at runtime."
+
+[[audits.kqueue]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+version = "1.2.1"
+notes = "Safe wrapper around BSD/macOS kqueue/kevent; opens watched files read-only to register vnode filters and closes them on removal. unsafe confined to kqueue/kevent FFI and fd ownership; process spawning appears only in cfg(test) code; no build script; no network or credential access."
+
+[[audits.kqueue-sys]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+version = "1.1.2"
+notes = "no_std raw kqueue/kevent declarations, the per-OS kevent struct and constants; no logic beyond constructors; no build script; no network, process, or credential access."
+
 [[audits.litemap]]
 who = "Freya maintainers (AI-assisted review by Claude)"
 criteria = "safe-to-deploy"
@@ -252,6 +282,18 @@ who = "Freya maintainers (AI-assisted review by Claude)"
 criteria = "safe-to-deploy"
 delta = "30.0.0 -> 30.0.1"
 notes = "Version number in Cargo.toml only."
+
+[[audits.notify]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+version = "8.2.0"
+notes = "Cross-platform filesystem watcher. Spawns one background thread per watcher and uses FSEvents, inotify, kqueue, ReadDirectoryChangesW or polling; reads directory listings (and file contents only with compare_contents) under paths the caller watches, and current_dir only to absolutize relative paths. unsafe is confined to FSEvents/CoreFoundation and ReadDirectoryChangesW FFI with correct context/OVERLAPPED ownership; no build script; no network, process, or credential access."
+
+[[audits.notify-types]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+version = "2.1.0"
+notes = "Plain event/kind/mask data types for notify with optional serde derives; no unsafe, no I/O, no build script; no network, process, or credential access."
 
 [[audits.num_enum]]
 who = "Freya maintainers (AI-assisted review by Claude)"

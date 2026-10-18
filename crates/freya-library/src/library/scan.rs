@@ -90,8 +90,10 @@ pub struct ScanOptions {
     pub pictures: Option<Pictures>,
     /// Read every file and make every cover again, changed or not.
     pub rescan: bool,
-    /// Look through this one of the folders only, leaving the others' tracks as they are.
-    pub only: Option<PathBuf>,
+    /// Look through these folders within the library's only, leaving the rest as it is; the
+    /// whole library when empty. A file moved from one to another keeps its plays, as with
+    /// the whole library.
+    pub only: Vec<PathBuf>,
     /// What may be asked of the internet about artists who lack something, once the tracks
     /// and covers are in.
     pub online: Online,
@@ -106,10 +108,9 @@ pub fn scan_with(
     cancel: &AtomicBool,
     mut progress: impl FnMut(ScanEvent),
 ) -> Result<ScanSummary> {
-    let walked = match &options.only {
-        Some(folder) => std::slice::from_ref(folder),
-        None => folders,
-    };
+    let partial = !options.only.is_empty();
+    let walked = if partial { &options.only[..] } else { folders };
+    let within = |path: &Path| !partial || walked.iter().any(|f| path.starts_with(f));
     let (found, images) = find(walked, cancel, &mut progress);
     let known = library.sources()?;
     // Tracks found from now on came into the library now, except on the library's first scan:
@@ -118,12 +119,13 @@ pub fn scan_with(
     let now = epoch_millis(SystemTime::now());
     let mut summary = ScanSummary::default();
 
-    let offline: Vec<&PathBuf> = walked.iter().filter(|f| is_offline(f)).collect();
+    // Of the library's folders: a folder within one that is gone was taken away.
+    let offline: Vec<&PathBuf> = folders.iter().filter(|f| is_offline(f)).collect();
     let gone: Vec<&PathBuf> = {
         let found: HashSet<&Path> = found.iter().map(|(f, _)| f.source()).collect();
         known
             .keys()
-            .filter(|p| options.only.as_ref().is_none_or(|only| p.starts_with(only)))
+            .filter(|p| within(p))
             .filter(|p| !found.contains(p.as_path()))
             .filter(|p| !offline.iter().any(|f| p.starts_with(f)))
             .collect()
@@ -227,6 +229,7 @@ pub fn scan_with(
             &images,
             &changed_sources,
             options.rescan,
+            &within,
             pictures,
             cancel,
             &mut progress,
@@ -244,6 +247,9 @@ pub fn scan_with(
                 &mut progress,
             )?;
         }
+    }
+    if !partial && !cancel.load(Ordering::Relaxed) {
+        library.note_full_scan(SystemTime::now())?;
     }
     Ok(summary)
 }
@@ -377,12 +383,15 @@ fn take_picture(
 
 /// Makes the covers of the albums that need one: new ones, those with tracks in
 /// `changed_sources`, and those whose folder's `images` changed; all when `rescan`. A few at
-/// a time, as reading a cover is mostly waiting for the disk.
+/// a time, as reading a cover is mostly waiting for the disk. Only albums `within` the folders
+/// looked through, whose pictures are in `images`.
+#[allow(clippy::too_many_arguments)]
 fn make_covers(
     library: &mut Library,
     images: &[PathBuf],
     changed_sources: &[PathBuf],
     rescan: bool,
+    within: &dyn Fn(&Path) -> bool,
     pictures: &Pictures,
     cancel: &AtomicBool,
     progress: &mut impl FnMut(ScanEvent),
@@ -409,9 +418,10 @@ fn make_covers(
         let track = album.track.to_string_lossy().into_owned();
         let images = album.track.parent().map_or(0, |folder| stamps.of(folder));
         let made = kept.get(&key);
-        let needed = rescan
-            || changed.contains(&key)
-            || made.is_none_or(|made| made.track != track || made.images != images);
+        let needed = within(&album.track)
+            && (rescan
+                || changed.contains(&key)
+                || made.is_none_or(|made| made.track != track || made.images != images));
         if needed {
             work.push((key.clone(), album.track, images));
         }

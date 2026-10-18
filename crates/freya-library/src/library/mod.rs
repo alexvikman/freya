@@ -89,6 +89,12 @@ const HISTORY: &str = "
         played INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS plays_by_track ON plays (path, start_ms);
+    -- When things last happened to the library, by name, in milliseconds since 1970:
+    -- 'full-scan', when a scan of all its folders last ended.
+    CREATE TABLE IF NOT EXISTS library_state (
+        key TEXT NOT NULL PRIMARY KEY,
+        at INTEGER NOT NULL
+    );
 ";
 
 /// Each played track once, with how often and when it was last played; joined with `tracks`
@@ -598,6 +604,26 @@ impl Library {
     }
 
     // ----- History ------------------------------------------------------------------------------
+
+    /// When a scan of all the library's folders last ended, if one ever did.
+    pub fn last_full_scan(&self) -> Result<Option<SystemTime>> {
+        let at: Option<i64> = self
+            .db
+            .prepare_cached("SELECT at FROM library_state WHERE key = 'full-scan'")?
+            .query_row([], |row| row.get(0))
+            .optional()?;
+        Ok(at.map(from_epoch_millis))
+    }
+
+    /// Notes that a scan of all the library's folders ended at `at`.
+    pub fn note_full_scan(&self, at: SystemTime) -> Result<()> {
+        self.db
+            .prepare_cached(
+                "INSERT OR REPLACE INTO library_state (key, at) VALUES ('full-scan', ?1)",
+            )?
+            .execute([epoch_millis(at)])?;
+        Ok(())
+    }
 
     /// Notes that a track was played, at `at`. It need not be in the library: its plays count
     /// once it is.
