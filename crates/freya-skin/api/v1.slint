@@ -138,6 +138,21 @@ export struct LibraryRow {
     plays: string,
 }
 
+/// What the user may change about an artist, for a form: see `Library.edit-artist`. Each
+/// field is empty where they changed nothing.
+export struct ArtistDraft {
+    /// The artist as their tags name them, which the changes are kept by.
+    artist: string,
+    name: string,
+    /// The name they are sorted by: "Beatles, The".
+    sort-name: string,
+    /// Their MusicBrainz id, and the one Freya has without it, from the tags or a search.
+    mbid: string,
+    found-mbid: string,
+    /// Their biography, in place of what Last.fm says.
+    biography: string,
+}
+
 /// An artist's own page, over their albums: see `Library.artist-page`.
 export struct ArtistPage {
     /// True while an artist's albums are shown.
@@ -304,6 +319,12 @@ export global Library {
     callback more-popular();
     callback set-artist-bios-online(bool);
     callback set-fanart-key(string);
+    /// Start changing the artist whose page is shown: Freya sets `artist-draft` to what was
+    /// changed about them before. `save-artist` keeps the name, sort name, MusicBrainz id and
+    /// biography given; empty ones go back to the tags' and the internet's.
+    in property <ArtistDraft> artist-draft;
+    callback edit-artist();
+    callback save-artist(string, string, string, string);
     /// Change `artist-sort`, `artist-view` or `artist-pictures-online`.
     callback set-artist-sort(string);
     callback set-artist-view(string);

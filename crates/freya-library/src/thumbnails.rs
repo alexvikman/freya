@@ -349,6 +349,13 @@ impl Thumbnails {
         state
     }
 
+    /// Forgets the wide picture of the artist `key`, to look for it again.
+    pub fn forget_backdrop(&mut self, key: &str) {
+        let known_key = format!("{key}-backdrop");
+        self.known.remove(&known_key);
+        self.asked.remove(&known_key);
+    }
+
     /// Forgets which artists had no wide picture, to look again: after the fanart.tv key
     /// changed.
     pub fn forget_missing_backdrops(&mut self) {

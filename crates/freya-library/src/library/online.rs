@@ -129,6 +129,14 @@ impl Library {
         Ok(())
     }
 
+    /// Forgets what was asked of the artist's picture, so it is asked again.
+    pub fn forget_artist_picture(&self, artist: &str, kind: PictureKind) -> Result<()> {
+        self.db
+            .prepare_cached("DELETE FROM artist_pictures WHERE artist = ?1 AND kind = ?2")?
+            .execute(params![artist, kind.name()])?;
+        Ok(())
+    }
+
     /// The downloaded pictures any artist has, to keep.
     pub fn artist_picture_checksums(&self) -> Result<HashSet<String>> {
         let mut statement = self

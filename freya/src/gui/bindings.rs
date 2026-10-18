@@ -333,6 +333,28 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     );
     bind(
         "Library",
+        "edit-artist",
+        Box::new(|app, _| app.library.edit_artist()),
+    );
+    bind(
+        "Library",
+        "save-artist",
+        Box::new(|app, args| {
+            let text = |i: usize| match args.get(i) {
+                Some(Value::String(s)) => Some(s.to_string()),
+                _ => None,
+            };
+            let edit = freya_library::library::ArtistEdit {
+                name: text(0),
+                sort_name: text(1),
+                mbid: text(2),
+                biography: text(3),
+            };
+            app.library.save_artist(&edit);
+        }),
+    );
+    bind(
+        "Library",
         "set-fanart-key",
         Box::new(|app, args| {
             if let Some(Value::String(key)) = args.first() {

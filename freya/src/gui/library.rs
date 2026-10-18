@@ -234,6 +234,8 @@ pub struct LibraryPanel {
     online_bios: bool,
     /// What the user changed about artists, by the tags' name for them.
     edits: HashMap<String, ArtistEdit>,
+    /// While the user changes an artist: who, by the tags' name.
+    draft: Option<Option<String>>,
     /// The user's personal fanart.tv key, for wide pictures of artists.
     fanart_key: Option<String>,
     popular_rows: ModelRows,
@@ -410,6 +412,7 @@ impl LibraryPanel {
             artist_page: None,
             artist_infos: ArtistInfos::new(),
             edits: HashMap::new(),
+            draft: None,
             online_bios: true,
             fanart_key: None,
             popular_rows: ModelRows::new(),
@@ -675,14 +678,29 @@ impl LibraryPanel {
     /// now.
     fn backdrop_source(&self, page: &ArtistPage) -> BackdropSource {
         let name = page.name.as_deref();
-        // The user's, else the tags'.
-        let tagged = name
-            .and_then(|n| self.edits.get(n)?.mbid.clone())
-            .or_else(|| {
-                self.db
-                    .as_ref()
-                    .and_then(|db| db.artist_mbid(name).ok().flatten())
-            });
+        let edited = name.and_then(|n| self.edits.get(n)?.mbid.clone());
+        let (mbid, search) = match edited {
+            Some(mbid) => (Some(mbid), false),
+            None => self.found_mbid(name),
+        };
+        BackdropSource {
+            name: page.name.clone(),
+            album_tracks: page.album_tracks.clone(),
+            mbid,
+            search,
+            fanart_key: self.fanart_key.clone(),
+            fanart: self.downloaded(name, PictureKind::Backdrop),
+        }
+    }
+
+    /// The artist's MusicBrainz id but for the user's: the tags', else what MusicBrainz's
+    /// search found; and whether to search for it, when it found none long ago or was never
+    /// asked.
+    fn found_mbid(&self, name: Option<&str>) -> (Option<String>, bool) {
+        let tagged = self
+            .db
+            .as_ref()
+            .and_then(|db| db.artist_mbid(name).ok().flatten());
         let noted = self.fetched.iter().rev().find_map(|fetched| match fetched {
             Fetched::ArtistId { artist, mbid } if Some(artist.as_str()) == name => {
                 Some(mbid.clone())
@@ -694,20 +712,12 @@ impl LibraryPanel {
             let recent = asked.recent();
             Some((asked.answer, recent))
         });
-        let (mbid, search) = match (tagged, searched) {
+        match (tagged, searched) {
             (Some(mbid), _) => (Some(mbid), false),
             (None, Some((Some(mbid), _))) => (Some(mbid), false),
             // MusicBrainz found none lately: not searched again yet.
             (None, Some((None, recent))) => (None, !recent),
             (None, None) => (None, true),
-        };
-        BackdropSource {
-            name: page.name.clone(),
-            album_tracks: page.album_tracks.clone(),
-            mbid,
-            search,
-            fanart_key: self.fanart_key.clone(),
-            fanart: self.downloaded(name, PictureKind::Backdrop),
         }
     }
 
@@ -1139,6 +1149,58 @@ impl LibraryPanel {
         if let Some(page) = &mut self.album_page {
             page.color = color;
         }
+    }
+
+    /// Starts changing the artist whose page is shown: the form gets what was changed before.
+    pub fn edit_artist(&mut self) {
+        self.draft = self.artist_page.as_ref().map(|page| page.name.clone());
+    }
+
+    /// The form for changing an artist, as `artist-draft` gives it.
+    fn draft_value(&self) -> Value {
+        let artist = self
+            .artist_page
+            .as_ref()
+            .filter(|_| self.draft.is_some())
+            .and_then(|p| p.name.clone());
+        let edit = artist
+            .as_deref()
+            .and_then(|a| self.edits.get(a).cloned())
+            .unwrap_or_default();
+        // Without the user's: the tags', else what MusicBrainz's search found.
+        let found_mbid = self.found_mbid(artist.as_deref()).0.unwrap_or_default();
+        let text = |value: Option<String>| string(value.unwrap_or_default());
+        Value::Struct(Struct::from_iter([
+            ("artist".to_owned(), text(artist)),
+            ("name".to_owned(), text(edit.name)),
+            ("sort-name".to_owned(), text(edit.sort_name)),
+            ("mbid".to_owned(), text(edit.mbid)),
+            ("found-mbid".to_owned(), string(found_mbid)),
+            ("biography".to_owned(), text(edit.biography)),
+        ]))
+    }
+
+    /// Keeps what the user changed about the artist being changed, and shows it. A new
+    /// MusicBrainz id looks again for their wide picture.
+    pub fn save_artist(&mut self, edit: &ArtistEdit) {
+        let (Some(Some(artist)), Some(db)) = (self.draft.take(), &self.db) else {
+            return;
+        };
+        let before = self.edits.get(&artist).cloned().unwrap_or_default();
+        if let Err(e) = db.set_artist_edit(&artist, edit) {
+            log::warn!("could not keep what was changed about {artist}: {e}");
+            return;
+        }
+        let kept = db.artist_edit(&artist).unwrap_or_default();
+        if kept.mbid != before.mbid {
+            if let Err(e) = db.forget_artist_picture(&artist, PictureKind::Backdrop) {
+                log::warn!("could not forget the wide picture of {artist}: {e}");
+            }
+            if let Some(thumbnails) = &mut self.thumbnails {
+                thumbnails.forget_backdrop(&Thumbnails::artist_key(Some(&artist)));
+            }
+        }
+        self.reload();
     }
 
     /// The name an artist is shown by: the one the user gave them, else the tags'.
@@ -1587,6 +1649,7 @@ impl LibraryPanel {
                 "fanart-key",
                 string(self.fanart_key.clone().unwrap_or_default()),
             ),
+            ("artist-draft", self.draft_value()),
             (
                 "artist-options",
                 Value::Bool(!self.searching() && *self.level() == Level::Artists),
@@ -2083,6 +2146,66 @@ mod tests {
             panel.backdrop_source(page).mbid.as_deref(),
             Some("0000-mbid")
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn changes_an_artist_from_the_form() {
+        let dir = std::env::temp_dir().join(format!("freya-form-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fixtures =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-audio/tests/fixtures");
+        std::fs::copy(fixtures.join("sine.mp3"), dir.join("sine.mp3")).unwrap();
+        let mut db = Library::open_in_memory().unwrap();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        freya_library::library::scan(&mut db, std::slice::from_ref(&dir), &cancel, |_| {}).unwrap();
+        db.set_artist_picture(
+            "Freya",
+            PictureKind::Backdrop,
+            "fanart.tv",
+            None,
+            SystemTime::now(),
+        )
+        .unwrap();
+        db.set_searched_artist_id("Freya", Some("found-id"), SystemTime::now())
+            .unwrap();
+        let mut panel = LibraryPanel::new(None, None, None);
+        panel.db = Some(db);
+        panel.online_bios = false;
+        panel.opened = vec![
+            Level::Artists,
+            Level::ArtistAlbums {
+                artist: Some("Freya".into()),
+            },
+        ];
+        panel.reload();
+
+        // Nothing to save without the form open.
+        panel.save_artist(&ArtistEdit::default());
+        panel.edit_artist();
+        let Value::Struct(draft) = panel.draft_value() else {
+            panic!("a struct");
+        };
+        assert_eq!(draft.get_field("artist"), Some(&string("Freya")));
+        assert_eq!(draft.get_field("name"), Some(&string("")));
+        assert_eq!(draft.get_field("found-mbid"), Some(&string("found-id")));
+
+        panel.save_artist(&ArtistEdit {
+            name: Some("Freya Herself".into()),
+            mbid: Some("own-id".into()),
+            ..ArtistEdit::default()
+        });
+        assert_eq!(panel.title, "Freya Herself");
+        assert!(panel.draft.is_none(), "the form is done");
+        // Another id: fanart.tv is asked again.
+        let db = panel.db.as_ref().unwrap();
+        assert_eq!(
+            db.artist_picture("Freya", PictureKind::Backdrop).unwrap(),
+            None
+        );
+        let page = panel.artist_page.as_ref().unwrap();
+        assert_eq!(panel.backdrop_source(page).mbid.as_deref(), Some("own-id"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -4,7 +4,7 @@
 // contrast against the background it is drawn on (WCAG AA), light and dark mode follow the
 // system.
 
-import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, LastFm, PlaybackState, Shortcuts, TrackRow, LibraryRow, AlbumPage, ArtistPage, PlaylistRow, StationRow, NativeSpectrum, NativeOscilloscope, NativeHologram } from "@freya/v1.slint";
+import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, LastFm, PlaybackState, Shortcuts, TrackRow, LibraryRow, AlbumPage, ArtistPage, ArtistDraft, PlaylistRow, StationRow, NativeSpectrum, NativeOscilloscope, NativeHologram } from "@freya/v1.slint";
 import { AboutSlint, ListView, Palette, ScrollView } from "std-widgets.slint";
 
 // Every skin re-exports the API globals so the app can reach them.
@@ -80,6 +80,7 @@ global Icons {
     out property <string> star: "M12 3 L14.8 8.8 L21 9.6 L16.5 14 L17.6 20.3 L12 17.3 L6.4 20.3 L7.5 14 L3 9.6 L9.2 8.8 Z";
     out property <string> genre: "M3 4 V11 L13 21 L21 13 L11 3 H4 C3.4 3 3 3.4 3 4 Z M7.5 7.5 H7.6";
     out property <string> expand: "M4 9 V4 H9 M15 4 H20 V9 M20 15 V20 H15 M9 20 H4 V15";
+    out property <string> pencil: "M4 20 H8 L19.5 8.5 L15.5 4.5 L4 16 Z M13.5 6.5 L17.5 10.5";
     // A pulse in a ring: what Freya is doing.
     out property <string> activity: "M12 2.5 A9.5 9.5 0 1 0 12 21.5 A9.5 9.5 0 1 0 12 2.5 Z M6.5 12 H9 L10.75 8.5 L13.25 15.5 L15 12 H17.5";
     out property <string> external: "M7 17 L17 7 M9 7 H17 V15";
@@ -1896,6 +1897,8 @@ component ArtistPageHead inherits Rectangle {
     callback read-more();
     /// Show their picture whole and large.
     callback show-picture();
+    /// Change their name, picture and biography.
+    callback edit();
 
     property <length> pad: 24px;
 
@@ -2027,6 +2030,15 @@ component ArtistPageHead inherits Rectangle {
                     label: "Add " + root.page.name + " to Up Next";
                     tooltip: "Add to Up Next";
                     clicked => { Library.enqueue-all(); }
+                }
+                IconButton {
+                    y: (parent.height - self.height) / 2;
+                    icon: Icons.pencil;
+                    stroked: true;
+                    size: 44px;
+                    label: "Edit " + root.page.name;
+                    tooltip: "Edit";
+                    clicked => { root.edit(); }
                 }
             }
         }
@@ -2554,6 +2566,8 @@ component DiscographyAlbum inherits Rectangle {
 component LibraryPanel inherits FocusScope {
     /// Ctrl/Cmd+F: move to the search field.
     callback find();
+    /// The dialog for changing the artist whose page is shown.
+    callback edit-artist();
 
     /// Back and forward: how far down the list shown is scrolled, and scrolling it back there.
     property <bool> shown: App.view == "library";
@@ -2840,6 +2854,7 @@ component LibraryPanel inherits FocusScope {
             if line < root.head-lines: ArtistPageHead {
                 page: Library.artist-page;
                 options => { options-menu.show(); }
+                edit => { root.edit-artist(); }
                 read-more => { bio-popup.show(); }
                 show-picture => { picture-popup.show(); }
             }
@@ -2919,6 +2934,7 @@ component LibraryPanel inherits FocusScope {
             if cell.head: ArtistPageHead {
                 page: Library.artist-page;
                 options => { options-menu.show(); }
+                edit => { root.edit-artist(); }
                 read-more => { bio-popup.show(); }
                 show-picture => { picture-popup.show(); }
             }
@@ -3352,6 +3368,8 @@ component RadioView inherits Rectangle {
 component FormField inherits VerticalLayout {
     in property <string> label;
     in property <string> placeholder;
+    /// Under the field, in small print.
+    in property <string> hint;
     in-out property <string> text;
     callback accepted();
 
@@ -3394,6 +3412,12 @@ component FormField inherits VerticalLayout {
             accessible-label: root.label;
             accepted => { root.accepted(); }
         }
+    }
+    if root.hint != "": Text {
+        text: root.hint;
+        font-size: 12px;
+        color: Theme.text-secondary;
+        wrap: word-wrap;
     }
 }
 
@@ -3858,6 +3882,227 @@ component FoldersForm inherits MenuSurface {
                     Library.save-folders();
                     root.closed();
                 }
+            }
+        }
+    }
+}
+
+/// One page of a dialog with pages, in its list at the side.
+component FormTab inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <bool> selected;
+    callback clicked;
+
+    height: 38px;
+    border-radius: 6px;
+    background: selected ? Theme.hover : (touch.has-hover ? Theme.hover.transparentize(50%) : transparent);
+    accessible-role: tab;
+    accessible-label: text;
+    accessible-item-selected: selected;
+    accessible-action-default => { root.clicked(); }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        spacing: 10px;
+
+        Icon {
+            width: 18px;
+            height: 18px;
+            y: (parent.height - self.height) / 2;
+            data: root.icon;
+            stroked: true;
+            color: root.selected ? Theme.accent-text : Theme.text-secondary;
+        }
+        Text {
+            text: root.text;
+            font-size: 14px;
+            font-weight: root.selected ? 600 : 400;
+            color: root.selected ? Theme.accent-text : Theme.text;
+            vertical-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+/// Changing an artist: the name shown and sorted by, their MusicBrainz id and biography. What
+/// is left empty goes back to the tags' and the internet's.
+component ArtistEditForm inherits MenuSurface {
+    callback closed();
+
+    property <string> tab: "general";
+    property <ArtistDraft> draft: Library.artist-draft;
+    property <string> name: draft.name;
+    property <string> sort-name: draft.sort-name;
+    property <string> mbid: draft.mbid;
+    property <string> biography: draft.biography;
+
+    function save() {
+        Library.save-artist(root.name, root.sort-name, root.mbid, root.biography);
+        root.closed();
+    }
+
+    VerticalLayout {
+        HorizontalLayout {
+            padding: 20px;
+            padding-right: 12px;
+            spacing: 12px;
+
+            Icon {
+                width: 22px;
+                height: 22px;
+                y: (parent.height - self.height) / 2;
+                data: Icons.pencil;
+                stroked: true;
+                color: Theme.text-secondary;
+            }
+            Text {
+                horizontal-stretch: 1;
+                text: "Edit " + Library.artist-page.name;
+                font-size: 20px;
+                font-weight: 600;
+                color: Theme.text;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            IconButton {
+                icon: Icons.close;
+                stroked: true;
+                size: 32px;
+                label: "Close";
+                clicked => { root.closed(); }
+            }
+        }
+        Rectangle {
+            height: 1px;
+            background: Theme.divider;
+        }
+        HorizontalLayout {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                width: 190px;
+                padding: 10px;
+                spacing: 2px;
+                alignment: start;
+
+                FormTab {
+                    text: "General";
+                    icon: Icons.queue;
+                    selected: root.tab == "general";
+                    clicked => { root.tab = "general"; }
+                }
+            }
+            Rectangle {
+                width: 1px;
+                background: Theme.divider;
+            }
+            if root.tab == "general": ScrollView {
+                horizontal-stretch: 1;
+
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 18px;
+
+                    Text {
+                        text: "Kept in Freya: your music's files and tags are not changed. What you leave empty is what the tags and the internet say.";
+                        font-size: 13px;
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
+                    }
+                    FormField {
+                        label: "Name";
+                        placeholder: root.draft.artist;
+                        text <=> root.name;
+                    }
+                    FormField {
+                        label: "Sort name";
+                        placeholder: root.name != "" ? root.name : root.draft.artist;
+                        hint: "Artists are ordered by this: \"Beatles, The\".";
+                        text <=> root.sort-name;
+                    }
+                    FormField {
+                        label: "MusicBrainz ID";
+                        placeholder: root.draft.found-mbid != "" ? root.draft.found-mbid : "Found from the name";
+                        hint: "Which artist fanart.tv's pictures are of. Set it when the one found is someone else.";
+                        text <=> root.mbid;
+                    }
+                    VerticalLayout {
+                        spacing: 6px;
+
+                        Text {
+                            text: "Biography";
+                            font-size: 13px;
+                            font-weight: 600;
+                            color: Theme.text-secondary;
+                        }
+                        Rectangle {
+                            height: 200px;
+                            border-radius: 6px;
+                            border-width: 1px;
+                            border-color: biography-input.has-focus ? Theme.accent : Theme.divider;
+                            background: Theme.background;
+                            clip: true;
+
+                            if biography-input.text == "": Text {
+                                x: 10px;
+                                y: 9px;
+                                text: "What Last.fm says";
+                                font-size: 13px;
+                                color: Theme.text-secondary;
+                            }
+                            ScrollView {
+                                VerticalLayout {
+                                    padding: 9px;
+                                    padding-left: 10px;
+                                    padding-right: 10px;
+
+                                    biography-input := TextInput {
+                                        text <=> root.biography;
+                                        single-line: false;
+                                        wrap: word-wrap;
+                                        font-size: 13px;
+                                        color: Theme.text;
+                                        selection-background-color: Theme.selection;
+                                        selection-foreground-color: Theme.text;
+                                        accessible-role: text-input;
+                                        accessible-label: "Biography";
+                                    }
+                                }
+                            }
+                        }
+                        Text {
+                            text: "Shown in place of what Last.fm says, which is then not asked.";
+                            font-size: 12px;
+                            color: Theme.text-secondary;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+        }
+        Rectangle {
+            height: 1px;
+            background: Theme.divider;
+        }
+        HorizontalLayout {
+            padding: 14px;
+            padding-left: 20px;
+            padding-right: 20px;
+            spacing: 8px;
+            alignment: end;
+
+            TextButton {
+                text: "Cancel";
+                clicked => { root.closed(); }
+            }
+            TextButton {
+                text: "Save Changes";
+                primary: true;
+                clicked => { root.save(); }
             }
         }
     }
@@ -5848,6 +6093,10 @@ export component FreyaSkin inherits Window {
                                 height: 100%;
                                 visible: root.view == "library";
                                 find => { toolbar.focus-search(); }
+                                edit-artist => {
+                                    Library.edit-artist();
+                                    artist-popup.show();
+                                }
                             }
                             if root.view == "playlist": PlaylistView {
                                 width: 100%;
@@ -5926,6 +6175,37 @@ export component FreyaSkin inherits Window {
                     x: (parent.width - self.width) / 2;
                     y: max(24px, (parent.height - self.preferred-height) / 3);
                     closed => { folders-popup.close(); }
+                }
+            }
+        }
+    }
+
+    // As the folders' dialog, a fixed size: its pages scroll.
+    artist-popup := PopupWindow {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        close-policy: no-auto-close;
+
+        FocusScope {
+            key-pressed(event) => {
+                if (event.text == Key.Escape) {
+                    artist-popup.close();
+                    return accept;
+                }
+                reject
+            }
+
+            Rectangle {
+                background: #00000059;
+
+                ArtistEditForm {
+                    width: min(780px, parent.width - 48px);
+                    height: min(600px, parent.height - 48px);
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    closed => { artist-popup.close(); }
                 }
             }
         }

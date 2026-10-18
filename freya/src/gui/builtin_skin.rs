@@ -307,6 +307,31 @@ impl Convert for LibraryRow {
     }
 }
 
+impl Convert for ArtistDraft {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            artist: field(&s, "artist"),
+            name: field(&s, "name"),
+            sort_name: field(&s, "sort-name"),
+            mbid: field(&s, "mbid"),
+            found_mbid: field(&s, "found-mbid"),
+            biography: field(&s, "biography"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("artist", self.artist.to_value()),
+            ("name", self.name.to_value()),
+            ("sort-name", self.sort_name.to_value()),
+            ("mbid", self.mbid.to_value()),
+            ("found-mbid", self.found_mbid.to_value()),
+            ("biography", self.biography.to_value()),
+        ])
+    }
+}
+
 impl Convert for ArtistPage {
     fn from_value(value: Value) -> Option<Self> {
         let Value::Struct(s) = value else { return None };
@@ -605,6 +630,7 @@ skin_api! {
         Library."popular" => set_popular, get_popular;
         Library."artist-bios-online" => set_artist_bios_online, get_artist_bios_online;
         Library."fanart-key" => set_fanart_key, get_fanart_key;
+        Library."artist-draft" => set_artist_draft, get_artist_draft;
         Library."artist-sort" => set_artist_sort, get_artist_sort;
         Library."artist-view" => set_artist_view, get_artist_view;
         Library."artist-pictures-online" => set_artist_pictures_online, get_artist_pictures_online;
@@ -720,6 +746,8 @@ skin_api! {
         Library."more-popular" => on_more_popular, invoke_more_popular();
         Library."set-artist-bios-online" => on_set_artist_bios_online, invoke_set_artist_bios_online(online: bool);
         Library."set-fanart-key" => on_set_fanart_key, invoke_set_fanart_key(key: SharedString);
+        Library."edit-artist" => on_edit_artist, invoke_edit_artist();
+        Library."save-artist" => on_save_artist, invoke_save_artist(name: SharedString, sort_name: SharedString, mbid: SharedString, biography: SharedString);
         Library."set-artist-sort" => on_set_artist_sort, invoke_set_artist_sort(sort: SharedString);
         Library."set-artist-view" => on_set_artist_view, invoke_set_artist_view(view: SharedString);
         Library."set-artist-pictures-online" => on_set_artist_pictures_online, invoke_set_artist_pictures_online(online: bool);
