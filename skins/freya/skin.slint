@@ -2103,7 +2103,7 @@ component ArtistPageHead inherits Rectangle {
                     }
                 }
                 Text {
-                    text: root.page.own-biography ? "" : (root.page.tags == "" ? "" : root.page.tags + " · ") + "From Last.fm";
+                    text: root.page.own-biography ? "" : (root.page.tags == "" ? "" : root.page.tags + " · ") + "From " + root.page.biography-from;
                     font-size: 12px;
                     color: Theme.text-secondary;
                     overflow: elide;
@@ -3224,7 +3224,9 @@ component LibraryPanel inherits FocusScope {
                     HorizontalLayout {
                         Text {
                             horizontal-stretch: 1;
-                            text: Library.artist-page.own-biography ? "" : "From Last.fm, by its listeners (CC BY-SA)";
+                            text: Library.artist-page.own-biography ? ""
+                                : Library.artist-page.biography-from == "Wikipedia" ? "From Wikipedia, the free encyclopedia (CC BY-SA)"
+                                : "From Last.fm, by its listeners (CC BY-SA)";
                             font-size: 12px;
                             color: Theme.text-secondary;
                             vertical-alignment: center;
@@ -4882,9 +4884,9 @@ component ArtistEditForm inherits MenuSurface {
                             }
                         }
                         Text {
-                            text: root.draft.biography-from-lastfm
-                                ? "From Last.fm. Change it to make it yours: it is then shown in place of Last.fm's, which is not asked again. Empty, Last.fm's is shown."
-                                : "Yours, shown in place of Last.fm's. Empty, Last.fm's is shown again.";
+                            text: root.draft.biography-from != ""
+                                ? "From " + root.draft.biography-from + ". Change it to make it yours: it is then shown in its place, and the internet is not asked for it again. Empty, " + root.draft.biography-from + "'s is shown."
+                                : "Yours, shown in place of what Wikipedia and Last.fm say. Empty, theirs is shown again.";
                             font-size: 12px;
                             color: Theme.text-secondary;
                             wrap: word-wrap;
@@ -5984,6 +5986,20 @@ component SettingsView inherits Rectangle {
                         label: "Artist biographies from Last.fm";
                         checked: Library.artist-bios-online;
                         toggled => { Library.set-artist-bios-online(!Library.artist-bios-online); }
+                    }
+                }
+            }
+            SettingsRow {
+                label: "Artist biographies from Wikipedia";
+                detail: "The opening of the artist's Wikipedia article, before what Last.fm says. MusicBrainz, Wikidata and Wikipedia are told the artist's MusicBrainz id and article.";
+
+                VerticalLayout {
+                    alignment: center;
+
+                    Toggle {
+                        label: "Artist biographies from Wikipedia";
+                        checked: Library.artist-wikipedia-online;
+                        toggled => { Library.set-artist-wikipedia-online(!Library.artist-wikipedia-online); }
                     }
                 }
             }

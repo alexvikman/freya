@@ -256,6 +256,25 @@ fn album_candidates(answer: &serde_json::Value) -> Vec<AlbumCandidate> {
         .collect()
 }
 
+/// The JSON answer at `address` with the `query` given, asked again while the service is busy.
+pub(crate) fn get_json(address: &str, query: &[(&str, &str)]) -> Result<serde_json::Value, String> {
+    let agent = agent();
+    let text = call_patiently(|| {
+        let mut request = agent.get(address);
+        for (name, value) in query {
+            request = request.query(*name, *value);
+        }
+        request.call()
+    })
+    .map_err(|e| e.to_string())?
+    .body_mut()
+    .with_config()
+    .limit(MAX_ANSWER_BYTES)
+    .read_to_string()
+    .map_err(|e| e.to_string())?;
+    serde_json::from_str(&text).map_err(|e| e.to_string())
+}
+
 fn musicbrainz_search(query: &str) -> Result<serde_json::Value, String> {
     musicbrainz_query(MUSICBRAINZ_SEARCH, query)
 }

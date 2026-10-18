@@ -29,6 +29,17 @@ pub(super) const SCHEMA: &str = "
         mbid TEXT,
         searched INTEGER NOT NULL
     );
+    -- Their Wikipedia article's opening, by the MusicBrainz id it was found by; title NULL
+    -- when there is none.
+    CREATE TABLE IF NOT EXISTS artist_articles (
+        artist TEXT NOT NULL PRIMARY KEY,
+        mbid TEXT NOT NULL,
+        title TEXT,
+        summary TEXT NOT NULL,
+        biography TEXT NOT NULL,
+        url TEXT NOT NULL,
+        asked INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS artist_info (
         artist TEXT NOT NULL PRIMARY KEY,
         summary TEXT NOT NULL,
@@ -222,6 +233,65 @@ impl Library {
             .optional()
     }
 
+    /// The artist's Wikipedia article, or that they have none, found by the MusicBrainz id
+    /// given with it; asked when.
+    pub fn artist_article(
+        &self,
+        artist: &str,
+    ) -> Result<Option<(String, Asked<Option<crate::wikipedia::Article>>)>> {
+        self.db
+            .prepare_cached(
+                "SELECT mbid, title, summary, biography, url, asked FROM artist_articles
+                 WHERE artist = ?1",
+            )?
+            .query_row([artist], |row| {
+                let title: Option<String> = row.get(1)?;
+                let article = match title {
+                    Some(title) => Some(crate::wikipedia::Article {
+                        title,
+                        summary: row.get(2)?,
+                        biography: row.get(3)?,
+                        url: row.get(4)?,
+                    }),
+                    None => None,
+                };
+                Ok((
+                    row.get(0)?,
+                    Asked {
+                        answer: article,
+                        asked: from_epoch_millis(row.get(5)?),
+                    },
+                ))
+            })
+            .optional()
+    }
+
+    pub fn set_artist_article(
+        &self,
+        artist: &str,
+        mbid: &str,
+        article: Option<&crate::wikipedia::Article>,
+        asked: SystemTime,
+    ) -> Result<()> {
+        let text = |f: fn(&crate::wikipedia::Article) -> &str| article.map_or("", f);
+        self.db
+            .prepare_cached(
+                "INSERT OR REPLACE INTO artist_articles
+                     (artist, mbid, title, summary, biography, url, asked)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )?
+            .execute(params![
+                artist,
+                mbid,
+                article.map(|a| a.title.as_str()),
+                text(|a| &a.summary),
+                text(|a| &a.biography),
+                text(|a| &a.url),
+                epoch_millis(asked)
+            ])?;
+        Ok(())
+    }
+
     /// Forgets what Last.fm said of the artist, so it is asked again.
     pub fn forget_artist_text(&self, artist: &str) -> Result<()> {
         self.db
@@ -317,6 +387,33 @@ mod tests {
             .unwrap();
         let opeth = library.artist_picture("Opeth", portrait).unwrap().unwrap();
         assert_eq!(opeth.picture.as_deref(), Some("ddd"));
+    }
+
+    #[test]
+    fn keeps_wikipedia_articles_by_the_id_they_were_found_by() {
+        let library = Library::open_in_memory().unwrap();
+        assert_eq!(library.artist_article("Shining").unwrap(), None);
+        let article = crate::wikipedia::Article {
+            title: "Shining (Norwegian band)".into(),
+            summary: "A Norwegian band.".into(),
+            biography: "A Norwegian band. From Oslo.".into(),
+            url: "https://en.wikipedia.org/wiki/Shining_(Norwegian_band)".into(),
+        };
+        library
+            .set_artist_article("Shining", "no", Some(&article), at(3))
+            .unwrap();
+        let (mbid, kept) = library.artist_article("Shining").unwrap().unwrap();
+        assert_eq!(
+            (mbid.as_str(), kept.answer, kept.asked),
+            ("no", Some(article), at(3))
+        );
+        library
+            .set_artist_article("Opeth", "op", None, at(4))
+            .unwrap();
+        assert_eq!(
+            library.artist_article("Opeth").unwrap().unwrap().1.answer,
+            None
+        );
     }
 
     #[test]

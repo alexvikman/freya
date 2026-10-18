@@ -443,7 +443,7 @@ impl Convert for ArtistDraft {
             mbid: field(&s, "mbid"),
             found_mbid: field(&s, "found-mbid"),
             biography: field(&s, "biography"),
-            biography_from_lastfm: field(&s, "biography-from-lastfm"),
+            biography_from: field(&s, "biography-from"),
         })
     }
 
@@ -455,10 +455,7 @@ impl Convert for ArtistDraft {
             ("mbid", self.mbid.to_value()),
             ("found-mbid", self.found_mbid.to_value()),
             ("biography", self.biography.to_value()),
-            (
-                "biography-from-lastfm",
-                self.biography_from_lastfm.to_value(),
-            ),
+            ("biography-from", self.biography_from.to_value()),
         ])
     }
 }
@@ -480,6 +477,7 @@ impl Convert for ArtistPage {
             biography: field(&s, "biography"),
             tags: field(&s, "tags"),
             own_biography: field(&s, "own-biography"),
+            biography_from: field(&s, "biography-from"),
             note: field(&s, "note"),
             more: field(&s, "more"),
             popular_count: field(&s, "popular-count"),
@@ -501,6 +499,7 @@ impl Convert for ArtistPage {
             ("biography", self.biography.to_value()),
             ("tags", self.tags.to_value()),
             ("own-biography", self.own_biography.to_value()),
+            ("biography-from", self.biography_from.to_value()),
             ("note", self.note.to_value()),
             ("more", self.more.to_value()),
             ("popular-count", self.popular_count.to_value()),
@@ -762,6 +761,7 @@ skin_api! {
         Library."artist-page" => set_artist_page, get_artist_page;
         Library."popular" => set_popular, get_popular;
         Library."artist-bios-online" => set_artist_bios_online, get_artist_bios_online;
+        Library."artist-wikipedia-online" => set_artist_wikipedia_online, get_artist_wikipedia_online;
         Library."fanart-key" => set_fanart_key, get_fanart_key;
         Library."artist-draft" => set_artist_draft, get_artist_draft;
         Library."portrait-choices" => set_portrait_choices, get_portrait_choices;
@@ -891,6 +891,7 @@ skin_api! {
         Library."play-popular" => on_play_popular, invoke_play_popular(index: i32);
         Library."more-popular" => on_more_popular, invoke_more_popular();
         Library."set-artist-bios-online" => on_set_artist_bios_online, invoke_set_artist_bios_online(online: bool);
+        Library."set-artist-wikipedia-online" => on_set_artist_wikipedia_online, invoke_set_artist_wikipedia_online(online: bool);
         Library."set-fanart-key" => on_set_fanart_key, invoke_set_fanart_key(key: SharedString);
         Library."edit-artist" => on_edit_artist, invoke_edit_artist();
         Library."save-artist" => on_save_artist, invoke_save_artist(name: SharedString, sort_name: SharedString, mbid: SharedString, biography: SharedString);

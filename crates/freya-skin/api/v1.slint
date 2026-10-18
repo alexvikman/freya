@@ -149,10 +149,11 @@ export struct ArtistDraft {
     /// Their MusicBrainz id, and the one Freya has without it, from the tags or a search.
     mbid: string,
     found-mbid: string,
-    /// Their biography: theirs, in place of what Last.fm says, else Last.fm's, to start
-    /// from. Saved unchanged, Last.fm's stays Last.fm's.
+    /// Their biography: theirs, in place of what the internet says, else the internet's, to
+    /// start from: "Wikipedia" or "Last.fm" says where from, empty for theirs. Saved
+    /// unchanged, the internet's stays the internet's.
     biography: string,
-    biography-from-lastfm: bool,
+    biography-from: string,
 }
 
 /// The artist being matched: see `Library.match-artist`.
@@ -240,8 +241,10 @@ export struct ArtistPage {
     summary: string,
     biography: string,
     tags: string,
-    /// Whether `summary` and `biography` are the user's own text rather than Last.fm's.
+    /// Whether `summary` and `biography` are the user's own text; else where they are from:
+    /// "Wikipedia", found by their MusicBrainz id, or "Last.fm".
     own-biography: bool,
+    biography-from: string,
     /// What tells them from others of the name, once matched in MusicBrainz: "Norwegian
     /// jazz/metal/rock group".
     note: string,
@@ -292,6 +295,9 @@ export global Library {
     /// Whether artists' pages show what Last.fm says of them, which is then told their names.
     /// Kept between runs.
     in property <bool> artist-bios-online: true;
+    /// Whether artists' pages show the opening of their Wikipedia article, found by their
+    /// MusicBrainz id, before what Last.fm says. Kept between runs.
+    in property <bool> artist-wikipedia-online: true;
     /// The user's personal fanart.tv API key, for wide pictures of artists; empty for none.
     /// Kept between runs.
     in property <string> fanart-key;
@@ -381,6 +387,7 @@ export global Library {
     callback play-popular(int);
     callback more-popular();
     callback set-artist-bios-online(bool);
+    callback set-artist-wikipedia-online(bool);
     callback set-fanart-key(string);
     /// Start changing the artist whose page is shown: Freya sets `artist-draft` to what was
     /// changed about them before. `save-artist` keeps the name, sort name, MusicBrainz id and

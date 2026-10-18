@@ -12,6 +12,7 @@ pub mod playlist;
 pub mod playlist_file;
 pub mod tags;
 pub mod thumbnails;
+pub mod wikipedia;
 
 pub use library::{Library, ScanEvent, Scanner};
 pub use playlist::{Entry, Playlist, SelectMode, SortKey};

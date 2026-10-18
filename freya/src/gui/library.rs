@@ -18,6 +18,7 @@ use freya_library::{Entry, Library};
 use slint::{Image, ModelRc, VecModel};
 use slint_interpreter::{Struct, Value};
 
+use super::articles::Articles;
 use super::artist_info::ArtistInfos;
 use super::match_finder::{AlbumFinder, MatchFinder};
 use super::picture_finder::{Found, Pick, PictureFinder, Request};
@@ -235,12 +236,16 @@ pub struct LibraryPanel {
     artist_page: Option<ArtistPage>,
     artist_infos: ArtistInfos,
     online_bios: bool,
+    /// What Wikipedia says of artists, if it may be asked.
+    articles: Articles,
+    online_wikipedia: bool,
     /// What the user changed about artists, by the tags' name for them.
     edits: HashMap<String, ArtistEdit>,
-    /// While the user changes an artist: who, by the tags' name, and what Last.fm says of
-    /// them, which their biography starts from.
+    /// While the user changes an artist: who, by the tags' name, and what the internet says
+    /// of them and where, which their biography starts from.
     draft: Option<Option<String>>,
-    lastfm_biography: String,
+    found_biography: String,
+    found_biography_from: String,
     /// And the pictures they can choose from, what was chosen when they began, and what is
     /// chosen now.
     finder: PictureFinder,
@@ -281,8 +286,10 @@ struct ArtistPage {
     name: Option<String>,
     /// The name shown: the one the user gave them, else the tags'.
     shown_name: String,
-    /// Whether the biography is the user's own, rather than Last.fm's.
+    /// Whether the biography is the user's own, rather than Last.fm's; and where it is from
+    /// when not: "Wikipedia" or "Last.fm".
     own_biography: bool,
+    biography_from: String,
     detail: String,
     genres: String,
     /// Their picture's key; a wide picture of them and their picture large, once made; and a
@@ -482,9 +489,12 @@ impl LibraryPanel {
             artist_keys: HashMap::new(),
             artist_page: None,
             artist_infos: ArtistInfos::new(),
+            articles: Articles::new(),
+            online_wikipedia: true,
             edits: HashMap::new(),
             draft: None,
-            lastfm_biography: String::new(),
+            found_biography: String::new(),
+            found_biography_from: String::new(),
             finder: PictureFinder::new(pictures.clone().map(Pictures::new)),
             choices: Vec::new(),
             none_shown: HashMap::new(),
@@ -664,7 +674,7 @@ impl LibraryPanel {
                 self.show_choices();
             }
         }
-        if self.artist_infos.poll() {
+        if self.articles.poll() | self.artist_infos.poll() {
             if !self.scanning {
                 self.write_fetched();
             }
@@ -749,6 +759,7 @@ impl LibraryPanel {
             return;
         };
         self.artist_infos.save(db);
+        self.articles.save(db);
         let now = SystemTime::now();
         for fetched in std::mem::take(&mut self.fetched) {
             let Some(db) = &self.db else {
@@ -1123,6 +1134,7 @@ impl LibraryPanel {
         self.artist_page = Some(ArtistPage {
             shown_name: self.shown_artist(artist.as_deref()),
             own_biography: false,
+            biography_from: String::new(),
             name: artist,
             detail: detail.join(" · "),
             genres: summary.map(|s| s.genres.join(", ")).unwrap_or_default(),
@@ -1206,40 +1218,67 @@ impl LibraryPanel {
 
     /// What Last.fm says of the artist, once it has; asking it the first time.
     fn show_artist_info(&mut self) {
-        let Some(page) = &mut self.artist_page else {
+        let Some(name) = self.artist_page.as_ref().and_then(|p| p.name.clone()) else {
             return;
         };
-        let Some(name) = page.name.as_deref() else {
-            return;
-        };
-        // The user's own replaces Last.fm's, which is then not asked.
-        let own = self.edits.get(name).and_then(|e| e.biography.clone());
-        page.own_biography = own.is_some();
-        if let Some(own) = &own {
-            page.summary = own.split("\n\n").next().unwrap_or(own).trim().to_owned();
-            page.biography.clone_from(own);
-            page.tags.clear();
-            return;
+        let (summary, biography, tags, from) = self.biography_of(&name, true);
+        let own = self.edits.get(&name).is_some_and(|e| e.biography.is_some());
+        if let Some(page) = &mut self.artist_page {
+            page.own_biography = own;
+            page.summary = summary;
+            page.biography = biography;
+            page.tags = tags;
+            page.biography_from = from;
         }
-        // Which artist of the name: the user's match, else the tags'.
-        let mbid = self
+    }
+
+    /// What is said of the artist `name`: their summary, whole biography, tags, and where
+    /// from. The user's own goes before Wikipedia's article, found by their id, which goes
+    /// before what Last.fm says; those not known are asked for when `ask` and allowed.
+    fn biography_of(&mut self, name: &str, ask: bool) -> (String, String, String, String) {
+        // The user's own replaces the internet's, which is then not asked.
+        if let Some(own) = self.edits.get(name).and_then(|e| e.biography.clone()) {
+            let summary = own.split("\n\n").next().unwrap_or(&own).trim().to_owned();
+            return (summary, own, String::new(), String::new());
+        }
+        // Which artist of the name: the user's match, else the tags'; Wikipedia also takes
+        // what MusicBrainz's search found.
+        let matched = self
             .edits
             .get(name)
             .and_then(|e| e.mbid.clone())
             .or_else(|| self.db.as_ref()?.artist_mbid(Some(name)).ok()?);
-        if let Some(info) =
-            self.artist_infos
-                .get(name, mbid.as_deref(), self.online_bios, self.db.as_ref())
-        {
-            page.summary.clone_from(&info.summary);
-            page.biography.clone_from(&info.biography);
-            page.tags = info
-                .tags
-                .iter()
-                .take(5)
+        let known = self.known_mbid(Some(name));
+        let article = known.and_then(|mbid| {
+            let online = ask && self.online_wikipedia;
+            self.articles
+                .get(name, &mbid, online, self.db.as_ref())
                 .cloned()
-                .collect::<Vec<_>>()
-                .join(", ");
+        });
+        let info = self
+            .artist_infos
+            .get(
+                name,
+                matched.as_deref(),
+                ask && self.online_bios,
+                self.db.as_ref(),
+            )
+            .cloned();
+        let tags = info
+            .as_ref()
+            .map(|info| {
+                info.tags
+                    .iter()
+                    .take(5)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        match (article, info) {
+            (Some(article), _) => (article.summary, article.biography, tags, "Wikipedia".into()),
+            (None, Some(info)) => (info.summary, info.biography, tags, "Last.fm".into()),
+            (None, None) => Default::default(),
         }
     }
 
@@ -1309,6 +1348,11 @@ impl LibraryPanel {
         }
     }
 
+    /// Whether Wikipedia may be asked for articles on artists.
+    pub fn set_online_wikipedia(&mut self, online: bool) {
+        self.online_wikipedia = online;
+    }
+
     /// Whether Last.fm may be asked what it says of artists.
     pub fn set_online_bios(&mut self, online: bool) {
         self.online_bios = online;
@@ -1343,15 +1387,19 @@ impl LibraryPanel {
     /// Starts changing the artist whose page is shown: the form gets what was changed before.
     pub fn edit_artist(&mut self) {
         self.draft = self.artist_page.as_ref().map(|page| page.name.clone());
-        let name = self.draft.clone().flatten();
-        self.lastfm_biography = name
-            .and_then(|name| {
-                let info = self
-                    .artist_infos
-                    .get(&name, None, false, self.db.as_ref())?;
-                Some(info.biography.clone())
-            })
-            .unwrap_or_default();
+        // What the internet says, which their own starts from.
+        let found = self.draft.clone().flatten().map(|name| {
+            let own = self
+                .edits
+                .get_mut(&name)
+                .and_then(|edit| edit.biography.take());
+            let (_, biography, _, from) = self.biography_of(&name, false);
+            if let Some(edit) = self.edits.get_mut(&name) {
+                edit.biography = own;
+            }
+            (biography, from)
+        });
+        (self.found_biography, self.found_biography_from) = found.unwrap_or_default();
         self.choices.clear();
         self.none_shown.clear();
         self.forget_matches();
@@ -1962,11 +2010,11 @@ impl LibraryPanel {
         let found_mbid = self.found_mbid(artist.as_deref()).0.unwrap_or_default();
         let text = |value: Option<String>| string(value.unwrap_or_default());
         // Theirs, else Last.fm's to start from.
-        let from_lastfm = edit.biography.is_none() && !self.lastfm_biography.is_empty();
+        let found = edit.biography.is_none() && !self.found_biography.is_empty();
         let biography = edit
             .biography
             .clone()
-            .unwrap_or_else(|| self.lastfm_biography.clone());
+            .unwrap_or_else(|| self.found_biography.clone());
         Value::Struct(Struct::from_iter([
             (
                 "artist".to_owned(),
@@ -1977,7 +2025,14 @@ impl LibraryPanel {
             ("mbid".to_owned(), text(edit.mbid)),
             ("found-mbid".to_owned(), string(found_mbid)),
             ("biography".to_owned(), string(biography)),
-            ("biography-from-lastfm".to_owned(), Value::Bool(from_lastfm)),
+            (
+                "biography-from".to_owned(),
+                string(if found {
+                    self.found_biography_from.as_str()
+                } else {
+                    ""
+                }),
+            ),
         ]))
     }
 
@@ -2000,7 +2055,7 @@ impl LibraryPanel {
                 .find(|m| Some(m.mbid.as_str()) == mbid)
                 .map(|m| m.disambiguation.clone())
         };
-        if edit.biography.as_deref().map(str::trim) == Some(self.lastfm_biography.trim()) {
+        if edit.biography.as_deref().map(str::trim) == Some(self.found_biography.trim()) {
             edit.biography = None;
         }
         if let Err(e) = db.set_artist_edit(&artist, &edit) {
@@ -2467,10 +2522,15 @@ impl LibraryPanel {
                 count(pending, "picture"),
             ));
         }
-        let mut asked: Vec<&str> = self.artist_infos.waiting().map(plain_name).collect();
-        if !asked.is_empty() {
-            asked.sort_unstable();
-            activities.push(("Asking Last.fm about artists".to_owned(), asked.join(", ")));
+        for (source, waiting) in [
+            ("Last.fm", self.artist_infos.waiting().collect::<Vec<_>>()),
+            ("Wikipedia", self.articles.waiting().collect()),
+        ] {
+            let mut asked: Vec<&str> = waiting.into_iter().map(plain_name).collect();
+            if !asked.is_empty() {
+                asked.sort_unstable();
+                activities.push((format!("Asking {source} about artists"), asked.join(", ")));
+            }
         }
         let page_name = || {
             self.artist_page
@@ -2549,6 +2609,10 @@ impl LibraryPanel {
             ("artist-page", self.artist_page_value()),
             ("artist-bios-online", Value::Bool(self.online_bios)),
             (
+                "artist-wikipedia-online",
+                Value::Bool(self.online_wikipedia),
+            ),
+            (
                 "fanart-key",
                 string(self.fanart_key.clone().unwrap_or_default()),
             ),
@@ -2621,6 +2685,10 @@ impl LibraryPanel {
             (
                 "own-biography".to_owned(),
                 Value::Bool(page.is_some_and(|p| p.own_biography)),
+            ),
+            (
+                "biography-from".to_owned(),
+                text(|p| p.biography_from.clone()),
             ),
             (
                 "note".to_owned(),
@@ -2949,6 +3017,7 @@ mod tests {
             name: Some("Ghost".into()),
             shown_name: "Ghost".into(),
             own_biography: false,
+            biography_from: String::new(),
             detail: String::new(),
             genres: String::new(),
             picture: String::new(),

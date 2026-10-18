@@ -333,6 +333,16 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     );
     bind(
         "Library",
+        "set-artist-wikipedia-online",
+        Box::new(|app, args| {
+            if let Some(Value::Bool(online)) = args.first() {
+                app.settings.artist_wikipedia_online = *online;
+                app.library.set_online_wikipedia(*online);
+            }
+        }),
+    );
+    bind(
+        "Library",
         "edit-artist",
         Box::new(|app, _| app.library.edit_artist()),
     );

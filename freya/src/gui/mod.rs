@@ -2,6 +2,7 @@
 
 mod app;
 mod app_icon;
+mod articles;
 mod artist_info;
 mod bindings;
 mod builtin_skin;

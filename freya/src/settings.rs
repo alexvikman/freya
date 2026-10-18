@@ -55,6 +55,8 @@ pub struct Settings {
     pub artist_pictures_online: bool,
     /// Whether artists' pages show what Last.fm says of them, which is told their names.
     pub artist_bios_online: bool,
+    /// Whether they show the opening of their Wikipedia article, found by their MusicBrainz id.
+    pub artist_wikipedia_online: bool,
     /// The user's personal fanart.tv API key, for wide pictures across artists' pages.
     pub fanart_key: Option<String>,
 }
@@ -84,6 +86,7 @@ impl Default for Settings {
             artist_view: "grid".to_owned(),
             artist_pictures_online: true,
             artist_bios_online: true,
+            artist_wikipedia_online: true,
             fanart_key: None,
             damaged: false,
         }
