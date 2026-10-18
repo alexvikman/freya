@@ -299,6 +299,29 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     );
     bind(
         "Library",
+        "play-popular",
+        Box::new(|app, args| {
+            let tracks = app.library.popular_tracks();
+            app.play_tracks(&tracks, index(args, 0));
+        }),
+    );
+    bind(
+        "Library",
+        "more-popular",
+        Box::new(|app, _| app.library.toggle_more_popular()),
+    );
+    bind(
+        "Library",
+        "set-artist-bios-online",
+        Box::new(|app, args| {
+            if let Some(Value::Bool(online)) = args.first() {
+                app.settings.artist_bios_online = *online;
+                app.library.set_online_bios(*online);
+            }
+        }),
+    );
+    bind(
+        "Library",
         "set-artist-pictures-online",
         Box::new(|app, args| {
             if let Some(Value::Bool(online)) = args.first() {

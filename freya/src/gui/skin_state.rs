@@ -38,7 +38,11 @@ impl GlobalWriter {
             return;
         }
         for (name, value) in values {
-            if self.shown.iter().any(|(n, v)| *n == name && *v == value) {
+            if self
+                .shown
+                .iter()
+                .any(|(n, v)| *n == name && same(v, &value))
+            {
                 continue;
             }
             if let Err(e) = ui.set_global_property(self.global, name, value.clone()) {
@@ -47,6 +51,23 @@ impl GlobalWriter {
             self.shown.retain(|(n, _)| *n != name);
             self.shown.push((name, value));
         }
+    }
+}
+
+/// Whether the skin already shows `b` when it shows `a`. Slint counts no image as equal to
+/// another, not even two empty ones; a value holding one would be written again on every
+/// refresh, and the skin would rebuild all that depends on it, such as a grid's tiles.
+fn same(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Image(a), Value::Image(b)) => {
+            a == b || (a.size().is_empty() && b.size().is_empty())
+        }
+        (Value::Struct(a), Value::Struct(b)) => {
+            a.iter().count() == b.iter().count()
+                && a.iter()
+                    .all(|(name, value)| b.get_field(name).is_some_and(|v| same(value, v)))
+        }
+        _ => a == b,
     }
 }
 
@@ -333,6 +354,23 @@ pub fn format_info(track: &Arc<TrackInfo>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_value_with_no_image_is_the_same_again() {
+        let page = || {
+            Value::Struct(Struct::from_iter([
+                ("shown".to_owned(), Value::Bool(false)),
+                ("banner".to_owned(), Value::Image(slint::Image::default())),
+            ]))
+        };
+        assert_ne!(page(), page(), "Slint's own comparison");
+        assert!(same(&page(), &page()));
+        let shown = Value::Struct(Struct::from_iter([
+            ("shown".to_owned(), Value::Bool(true)),
+            ("banner".to_owned(), Value::Image(slint::Image::default())),
+        ]));
+        assert!(!same(&page(), &shown));
+    }
 
     #[test]
     fn dates_from_days() {

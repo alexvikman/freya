@@ -408,6 +408,7 @@ impl App {
         }
         library.set_artist_list(settings.artist_view == "list");
         library.set_online_pictures(settings.artist_pictures_online);
+        library.set_online_bios(settings.artist_bios_online);
         let lastfm = LastFm::start(settings.lastfm_user.clone());
         let mut app = Self {
             player,

@@ -2,6 +2,7 @@
 
 mod app;
 mod app_icon;
+mod artist_info;
 mod bindings;
 mod builtin_skin;
 pub mod equalizer;

@@ -14,6 +14,7 @@ use freya_library::{Entry, Library};
 use slint::{Image, ModelRc, VecModel};
 use slint_interpreter::{Struct, Value};
 
+use super::artist_info::ArtistInfos;
 use super::skin_state::{ModelRows, format_time, string};
 use super::skin_window::SkinWindow;
 
@@ -212,10 +213,37 @@ pub struct LibraryPanel {
     online_pictures: bool,
     /// The artists shown, by their picture's key.
     artist_keys: HashMap<String, Option<String>>,
+    /// While an artist's albums are shown, the page over them; and what Last.fm says of
+    /// artists, if it may be asked.
+    artist_page: Option<ArtistPage>,
+    artist_infos: ArtistInfos,
+    online_bios: bool,
+    popular_rows: ModelRows,
     /// While an album's tracks are shown: how often each was played, and its page.
     play_counts: HashMap<(PathBuf, Option<Duration>), u32>,
     album_page: Option<AlbumPage>,
 }
+
+/// What an artist's own page shows over their albums.
+struct ArtistPage {
+    name: Option<String>,
+    detail: String,
+    genres: String,
+    /// Their picture's key, and the picture large, once made, with a color from it.
+    picture: String,
+    banner: Option<Image>,
+    color: Option<[u8; 3]>,
+    summary: String,
+    biography: String,
+    tags: String,
+    /// Their most played tracks, and whether all ten show rather than five.
+    popular: Vec<Played>,
+    more: bool,
+}
+
+/// Popular tracks shown on an artist's page, or all of them with "more".
+const POPULAR: usize = 5;
+const POPULAR_MORE: usize = 10;
 
 /// What an album's own page shows over its tracks.
 #[derive(Clone, Debug, PartialEq)]
@@ -258,6 +286,11 @@ impl RecentCovers {
 impl LibraryPanel {
     /// A library kept at `path`, with album covers made in `covers`.
     pub fn new(path: Option<PathBuf>, covers: Option<PathBuf>) -> Self {
+        // What Last.fm says of artists is kept beside the covers.
+        let artists = covers
+            .as_ref()
+            .and_then(|c| c.parent())
+            .map(|dir| dir.join("artists"));
         Self {
             path,
             db: None,
@@ -290,6 +323,10 @@ impl LibraryPanel {
             artist_list: false,
             online_pictures: true,
             artist_keys: HashMap::new(),
+            artist_page: None,
+            artist_infos: ArtistInfos::new(artists),
+            online_bios: true,
+            popular_rows: ModelRows::new(),
         }
     }
 
@@ -300,6 +337,7 @@ impl LibraryPanel {
     /// otherwise remove every track.
     pub fn attach(&mut self, ui: &SkinWindow, folders: &[PathBuf], scan: bool) {
         let _ = ui.set_global_property("Library", "rows", self.rows.model_value());
+        let _ = ui.set_global_property("Library", "popular", self.popular_rows.model_value());
         self.folders_shown = None;
         self.draft_shown = None;
         if self.db.is_some() {
@@ -341,6 +379,10 @@ impl LibraryPanel {
         if self.thumbnails.as_mut().is_some_and(Thumbnails::poll) {
             self.covers_ready += 1;
             self.color_album_page();
+            self.show_artist_picture();
+        }
+        if self.artist_infos.poll() {
+            self.show_artist_info();
         }
         // Asked before the events are read: a scan that had ended by then has sent them all.
         let ended = !self.scanner.is_running();
@@ -553,6 +595,165 @@ impl LibraryPanel {
             color: None,
         });
         self.color_album_page();
+    }
+
+    /// The page of the artist whose albums are shown; for anything else, none.
+    fn load_artist_page(&mut self) {
+        let more = self.artist_page.as_ref().is_some_and(|p| p.more);
+        self.artist_page = None;
+        let (Some(db), Level::ArtistAlbums { artist }) = (&self.db, self.level().clone()) else {
+            self.popular_rows.sync(Vec::new());
+            return;
+        };
+        if self.searching() {
+            self.popular_rows.sync(Vec::new());
+            return;
+        }
+        let summary = db.artist_summary(artist.as_deref(), 3).ok();
+        let popular = db
+            .artist_popular(artist.as_deref(), POPULAR_MORE)
+            .unwrap_or_default();
+        let mut detail = Vec::new();
+        if let Some(s) = &summary {
+            detail.push(count(s.albums as usize, "album"));
+            detail.push(count(s.tracks as usize, "track"));
+            if !s.duration.is_zero() {
+                detail.push(long_time(s.duration));
+            }
+        }
+        let picture = Thumbnails::artist_key(artist.as_deref());
+        self.artist_keys.insert(picture.clone(), artist.clone());
+        self.artist_page = Some(ArtistPage {
+            name: artist,
+            detail: detail.join(" · "),
+            genres: summary.map(|s| s.genres.join(", ")).unwrap_or_default(),
+            picture,
+            banner: None,
+            color: None,
+            summary: String::new(),
+            biography: String::new(),
+            tags: String::new(),
+            popular,
+            more,
+        });
+        self.show_artist_picture();
+        self.show_artist_info();
+        self.show_popular();
+    }
+
+    /// The artist page's large picture and its color, once their picture is made; asking for
+    /// it to be made the first time.
+    fn show_artist_picture(&mut self) {
+        let Some(key) = self.artist_page.as_ref().map(|p| p.picture.clone()) else {
+            return;
+        };
+        if self.artist_page.as_ref().is_some_and(|p| p.color.is_some()) {
+            return;
+        }
+        // Made, or asked to be made, as for the grid.
+        let thumbnail = self.cover(&key);
+        let Some(thumbnails) = &self.thumbnails else {
+            return;
+        };
+        let banner = thumbnails.artist_banner(&key);
+        let color = match &banner {
+            Some(file) => image::open(file)
+                .ok()
+                .map(|i| freya_library::cover::page_color(i.thumbnail(64, 64).to_rgb8().as_raw())),
+            // A collage, or nothing yet: the color of what the grid shows, once it does.
+            None if thumbnail.size().width > 0 => {
+                let file = thumbnails.file_of(&key);
+                image::open(file)
+                    .ok()
+                    .map(|i| freya_library::cover::page_color(i.to_rgb8().as_raw()))
+            }
+            None => None,
+        };
+        let banner = banner.and_then(|file| Image::load_from_path(&file).ok());
+        if let Some(page) = &mut self.artist_page {
+            page.banner = banner;
+            page.color = color;
+        }
+    }
+
+    /// What Last.fm says of the artist, once it has; asking it the first time.
+    fn show_artist_info(&mut self) {
+        let Some(page) = &mut self.artist_page else {
+            return;
+        };
+        let Some(name) = page.name.as_deref() else {
+            return;
+        };
+        if let Some(info) = self.artist_infos.get(name, self.online_bios) {
+            page.summary.clone_from(&info.summary);
+            page.biography.clone_from(&info.biography);
+            page.tags = info
+                .tags
+                .iter()
+                .take(5)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+        }
+    }
+
+    fn show_popular(&mut self) {
+        let rows = match &self.artist_page {
+            Some(page) => {
+                let shown = if page.more { POPULAR_MORE } else { POPULAR };
+                page.popular
+                    .iter()
+                    .take(shown)
+                    .enumerate()
+                    .map(|(i, played)| {
+                        let item = Item::Track(played.track.clone());
+                        let mut row = row_value(&item, None, |_| String::new(), Some(played.plays));
+                        if let Value::Struct(s) = &mut row {
+                            s.set_field("number".into(), string((i + 1).to_string()));
+                            let album = Album {
+                                artist: played.track.album_artist.clone(),
+                                name: played.track.album.clone(),
+                                year: None,
+                                tracks: 0,
+                                track: played.track.path.clone(),
+                            };
+                            let key = cover_key(&album);
+                            self.cover_tracks
+                                .insert(key.clone(), played.track.path.clone());
+                            s.set_field("cover".into(), string(key));
+                        }
+                        row
+                    })
+                    .collect()
+            }
+            None => Vec::new(),
+        };
+        self.popular_rows.sync(rows);
+    }
+
+    /// Plays the artist's popular tracks shown, from the `index`th.
+    pub fn popular_tracks(&self) -> Vec<Track> {
+        self.artist_page.as_ref().map_or_else(Vec::new, |page| {
+            let shown = if page.more { POPULAR_MORE } else { POPULAR };
+            page.popular
+                .iter()
+                .take(shown)
+                .map(|p| p.track.clone())
+                .collect()
+        })
+    }
+
+    /// Shows all ten popular tracks, or five again.
+    pub fn toggle_more_popular(&mut self) {
+        if let Some(page) = &mut self.artist_page {
+            page.more = !page.more;
+        }
+        self.show_popular();
+    }
+
+    /// Whether Last.fm may be asked what it says of artists.
+    pub fn set_online_bios(&mut self, online: bool) {
+        self.online_bios = online;
     }
 
     /// Takes the album page's color from its cover, once the cover's thumbnail is made.
@@ -774,6 +975,7 @@ impl LibraryPanel {
             }
         }
         self.load_album_page();
+        self.load_artist_page();
         let mut album_artist = match self.level() {
             Level::AlbumTracks { artist, .. } if !self.searching() => Some(artist.as_deref()),
             _ => None,
@@ -995,6 +1197,8 @@ impl LibraryPanel {
             ),
             ("playing-row", Value::Number(f64::from(self.playing_row))),
             ("album-page", self.album_page_value()),
+            ("artist-page", self.artist_page_value()),
+            ("artist-bios-online", Value::Bool(self.online_bios)),
             (
                 "artist-options",
                 Value::Bool(!self.searching() && *self.level() == Level::Artists),
@@ -1037,6 +1241,37 @@ impl LibraryPanel {
 }
 
 impl LibraryPanel {
+    fn artist_page_value(&self) -> Value {
+        let page = self.artist_page.as_ref().filter(|_| !self.searching());
+        let [r, g, b] = page
+            .and_then(|p| p.color)
+            .unwrap_or(freya_library::cover::page_color(&[]));
+        let text = |f: fn(&ArtistPage) -> String| string(page.map(f).unwrap_or_default());
+        Value::Struct(Struct::from_iter([
+            ("shown".to_owned(), Value::Bool(page.is_some())),
+            ("name".to_owned(), text(|p| artist_name(p.name.as_deref()))),
+            ("detail".to_owned(), text(|p| p.detail.clone())),
+            ("genres".to_owned(), text(|p| p.genres.clone())),
+            ("picture".to_owned(), text(|p| p.picture.clone())),
+            (
+                "banner".to_owned(),
+                Value::Image(page.and_then(|p| p.banner.clone()).unwrap_or_default()),
+            ),
+            (
+                "color".to_owned(),
+                Value::Brush(slint::Brush::SolidColor(slint::Color::from_rgb_u8(r, g, b))),
+            ),
+            ("summary".to_owned(), text(|p| p.summary.clone())),
+            ("biography".to_owned(), text(|p| p.biography.clone())),
+            ("tags".to_owned(), text(|p| p.tags.clone())),
+            ("more".to_owned(), Value::Bool(page.is_some_and(|p| p.more))),
+            (
+                "popular-count".to_owned(),
+                Value::Number(page.map_or(0, |p| p.popular.len()) as f64),
+            ),
+        ]))
+    }
+
     fn album_page_value(&self) -> Value {
         let page = self.album_page.clone().filter(|_| !self.searching());
         let [r, g, b] = page
@@ -1514,6 +1749,74 @@ mod tests {
             },
             Some(Value::Bool(false))
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_artists_page_has_their_summary_and_most_played_tracks() {
+        let dir = std::env::temp_dir().join(format!("freya-artist-page-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fixtures =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-audio/tests/fixtures");
+        for name in ["sine.flac", "sine.ogg"] {
+            std::fs::copy(fixtures.join(name), dir.join(name)).unwrap();
+        }
+        let mut db = Library::open_in_memory().unwrap();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        freya_library::library::scan(&mut db, std::slice::from_ref(&dir), &cancel, |_| {}).unwrap();
+        for _ in 0..3 {
+            db.record_play(&dir.join("sine.ogg"), None, SystemTime::now())
+                .unwrap();
+        }
+        let artist = db
+            .artists()
+            .unwrap()
+            .into_iter()
+            .next()
+            .expect("an artist")
+            .name;
+
+        let mut panel = LibraryPanel::new(None, None);
+        panel.db = Some(db);
+        panel.online_bios = false;
+        panel.opened = vec![
+            Level::Artists,
+            Level::ArtistAlbums {
+                artist: artist.clone(),
+            },
+        ];
+        panel.reload();
+        let Value::Struct(page) = panel.artist_page_value() else {
+            panic!("a struct");
+        };
+        assert_eq!(page.get_field("shown"), Some(&Value::Bool(true)));
+        assert_eq!(
+            page.get_field("name"),
+            Some(&string(artist_name(artist.as_deref())))
+        );
+        let Some(Value::String(detail)) = page.get_field("detail") else {
+            panic!("a detail");
+        };
+        assert!(detail.contains("1 album · 2 tracks"), "{detail}");
+        // Only what was played is popular, numbered from 1, with its plays.
+        let tracks = panel.popular_tracks();
+        assert_eq!(tracks.len(), 1);
+        assert!(tracks[0].path.ends_with("sine.ogg"));
+        let Value::Model(popular) = panel.popular_rows.model_value() else {
+            panic!("a model");
+        };
+        use slint::Model;
+        let Some(Value::Struct(row)) = popular.row_data(0) else {
+            panic!("a row");
+        };
+        assert_eq!(row.get_field("number"), Some(&string("1")));
+        assert_eq!(row.get_field("plays"), Some(&string("3")));
+
+        // Elsewhere, no page.
+        panel.opened = vec![Level::Artists];
+        panel.reload();
+        assert!(panel.popular_tracks().is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 

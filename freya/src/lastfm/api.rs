@@ -47,6 +47,16 @@ pub struct Scrobble {
     pub started: u64,
 }
 
+/// What Last.fm says of an artist, in plain text: a short biography, the whole one, the tags
+/// listeners gave them, and their page. Empty for an artist Last.fm does not know.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ArtistInfo {
+    pub summary: String,
+    pub biography: String,
+    pub tags: Vec<String>,
+    pub url: String,
+}
+
 /// A signed-in user: their name, and the session key that lets Freya scrobble for them.
 pub struct Session {
     pub user: String,
@@ -187,6 +197,34 @@ impl Client {
         Ok(accepted as usize)
     }
 
+    /// What Last.fm says of the artist `name`; empty for one it does not know. Needs no user.
+    pub fn artist_info(&self, name: &str) -> Result<ArtistInfo, Error> {
+        match self.get("artist.getInfo", &[("artist", name), ("autocorrect", "1")]) {
+            Ok(answer) => Ok(artist_info(&answer)),
+            // "The artist you supplied could not be found."
+            Err(Error::Api(6, _)) => Ok(ArtistInfo::default()),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// An unsigned GET, for what anyone may read, answered in JSON.
+    fn get(&self, method: &str, params: &[(&str, &str)]) -> Result<Value, Error> {
+        let mut request = self
+            .agent
+            .get(ENDPOINT)
+            .query("method", method)
+            .query("api_key", self.credentials.key)
+            .query("format", "json");
+        for (name, value) in params {
+            request = request.query(*name, *value);
+        }
+        let body = request
+            .call()
+            .and_then(|mut response| response.body_mut().read_to_string())
+            .map_err(|e| Error::Network(e.to_string()))?;
+        answer_of(&body)
+    }
+
     /// A signed POST to the API, answered in JSON.
     fn call(&self, method: &str, params: &[(&str, &str)]) -> Result<Value, Error> {
         let mut params = params.to_vec();
@@ -202,18 +240,74 @@ impl Client {
             .send_form(params.iter().copied())
             .and_then(|mut response| response.body_mut().read_to_string())
             .map_err(|e| Error::Network(e.to_string()))?;
-        let answer: Value =
-            serde_json::from_str(&body).map_err(|e| Error::Network(e.to_string()))?;
-        if let Some(code) = answer.get("error").and_then(Value::as_u64) {
-            let message = answer
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown error")
-                .to_owned();
-            return Err(Error::Api(code as u32, message));
-        }
-        Ok(answer)
+        answer_of(&body)
     }
+}
+
+/// An answer's JSON, or the error Last.fm answered with.
+fn answer_of(body: &str) -> Result<Value, Error> {
+    let answer: Value = serde_json::from_str(body).map_err(|e| Error::Network(e.to_string()))?;
+    if let Some(code) = answer.get("error").and_then(Value::as_u64) {
+        let message = answer
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown error")
+            .to_owned();
+        return Err(Error::Api(code as u32, message));
+    }
+    Ok(answer)
+}
+
+/// An artist.getInfo answer as plain text.
+fn artist_info(answer: &Value) -> ArtistInfo {
+    let artist = &answer["artist"];
+    let text = |value: &Value| plain_text(value.as_str().unwrap_or(""));
+    // One tag comes as an object, several as a list.
+    let tags = match &artist["tags"]["tag"] {
+        Value::Array(tags) => tags.iter().collect(),
+        tag @ Value::Object(_) => vec![tag],
+        _ => Vec::new(),
+    };
+    ArtistInfo {
+        summary: text(&artist["bio"]["summary"]),
+        biography: text(&artist["bio"]["content"]),
+        tags: tags
+            .into_iter()
+            .filter_map(|t| t["name"].as_str().map(str::to_owned))
+            .collect(),
+        url: artist["url"].as_str().unwrap_or("").to_owned(),
+    }
+}
+
+/// Last.fm's biography HTML as plain text: without its tags and its "Read more on Last.fm"
+/// link, entities decoded, and paragraphs kept.
+fn plain_text(html: &str) -> String {
+    let html = match html.find("<a href=\"https://www.last.fm") {
+        Some(link) => &html[..link],
+        None => html,
+    };
+    let mut text = String::new();
+    let mut in_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            c if !in_tag => text.push(c),
+            _ => {}
+        }
+    }
+    let text = text
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&");
+    let paragraphs: Vec<&str> = text
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .collect();
+    paragraphs.join("\n\n")
 }
 
 /// Last.fm's signature: every parameter but `format` and `callback`, sorted by name, each
@@ -263,6 +357,31 @@ fn encode(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_an_artists_biography_as_plain_text() {
+        let answer = serde_json::json!({ "artist": {
+            "name": "Ane Brun",
+            "url": "https://www.last.fm/music/Ane+Brun",
+            "tags": { "tag": [ { "name": "female vocalists" }, { "name": "folk" } ] },
+            "bio": {
+                "summary": "Ane Brun is a &quot;Norwegian&quot; singer &amp; songwriter. <a href=\"https://www.last.fm/music/Ane+Brun\">Read more on Last.fm</a>",
+                "content": "First paragraph.\n\n<b>Second</b> paragraph.\n\n <a href=\"https://www.last.fm/music/Ane+Brun\">Read more on Last.fm</a>. User-contributed text"
+            }
+        }});
+        let info = artist_info(&answer);
+        assert_eq!(
+            info.summary,
+            "Ane Brun is a \"Norwegian\" singer & songwriter."
+        );
+        assert_eq!(info.biography, "First paragraph.\n\nSecond paragraph.");
+        assert_eq!(info.tags, ["female vocalists", "folk"]);
+        assert_eq!(info.url, "https://www.last.fm/music/Ane+Brun");
+
+        // One tag alone is an object, not a list.
+        let one = serde_json::json!({ "artist": { "tags": { "tag": { "name": "folk" } } } });
+        assert_eq!(artist_info(&one).tags, ["folk"]);
+    }
 
     #[test]
     fn signs_as_last_fm_describes() {

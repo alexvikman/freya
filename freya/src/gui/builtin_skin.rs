@@ -307,6 +307,43 @@ impl Convert for LibraryRow {
     }
 }
 
+impl Convert for ArtistPage {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            shown: field(&s, "shown"),
+            name: field(&s, "name"),
+            detail: field(&s, "detail"),
+            genres: field(&s, "genres"),
+            picture: field(&s, "picture"),
+            banner: field(&s, "banner"),
+            color: field(&s, "color"),
+            summary: field(&s, "summary"),
+            biography: field(&s, "biography"),
+            tags: field(&s, "tags"),
+            more: field(&s, "more"),
+            popular_count: field(&s, "popular-count"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("shown", self.shown.to_value()),
+            ("name", self.name.to_value()),
+            ("detail", self.detail.to_value()),
+            ("genres", self.genres.to_value()),
+            ("picture", self.picture.to_value()),
+            ("banner", self.banner.to_value()),
+            ("color", self.color.to_value()),
+            ("summary", self.summary.to_value()),
+            ("biography", self.biography.to_value()),
+            ("tags", self.tags.to_value()),
+            ("more", self.more.to_value()),
+            ("popular-count", self.popular_count.to_value()),
+        ])
+    }
+}
+
 impl Convert for AlbumPage {
     fn from_value(value: Value) -> Option<Self> {
         let Value::Struct(s) = value else { return None };
@@ -555,6 +592,9 @@ skin_api! {
         Library."playing-row" => set_playing_row, get_playing_row;
         Library."album-page" => set_album_page, get_album_page;
         Library."artist-options" => set_artist_options, get_artist_options;
+        Library."artist-page" => set_artist_page, get_artist_page;
+        Library."popular" => set_popular, get_popular;
+        Library."artist-bios-online" => set_artist_bios_online, get_artist_bios_online;
         Library."artist-sort" => set_artist_sort, get_artist_sort;
         Library."artist-view" => set_artist_view, get_artist_view;
         Library."artist-pictures-online" => set_artist_pictures_online, get_artist_pictures_online;
@@ -665,6 +705,9 @@ skin_api! {
         Library."back" => on_back, invoke_back();
         Library."set-album-sort" => on_set_album_sort, invoke_set_album_sort(sort: SharedString);
         Library."shuffle-all" => on_shuffle_all, invoke_shuffle_all();
+        Library."play-popular" => on_play_popular, invoke_play_popular(index: i32);
+        Library."more-popular" => on_more_popular, invoke_more_popular();
+        Library."set-artist-bios-online" => on_set_artist_bios_online, invoke_set_artist_bios_online(online: bool);
         Library."set-artist-sort" => on_set_artist_sort, invoke_set_artist_sort(sort: SharedString);
         Library."set-artist-view" => on_set_artist_view, invoke_set_artist_view(view: SharedString);
         Library."set-artist-pictures-online" => on_set_artist_pictures_online, invoke_set_artist_pictures_online(online: bool);

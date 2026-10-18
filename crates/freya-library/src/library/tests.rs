@@ -470,6 +470,18 @@ fn lists_albums_by_when_they_came_and_tracks_by_plays() {
         names(library.artists_by(ArtistOrder::MostPlayed).unwrap()),
         ["C", "A", "B"]
     );
+    // An artist's page: their albums, tracks and genres, and their most played tracks.
+    let summary = library.artist_summary(Some("A"), 3).unwrap();
+    assert_eq!((summary.albums, summary.tracks), (1, 2));
+    let popular = library.artist_popular(Some("A"), 5).unwrap();
+    assert_eq!(titles_of(&popular), ["One"], "only what was played");
+    assert_eq!(popular[0].plays, 2);
+    assert!(
+        library
+            .artist_popular(Some("Nobody"), 5)
+            .unwrap()
+            .is_empty()
+    );
     // B's "New" came last, then C's "Middle".
     assert_eq!(
         names(library.artists_by(ArtistOrder::RecentlyAdded).unwrap()),

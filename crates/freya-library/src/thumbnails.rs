@@ -12,6 +12,8 @@ use crate::cover::read_cover;
 /// screen, about 30 KB as a JPEG.
 pub const SIZE: u32 = 300;
 const JPEG_QUALITY: u8 = 85;
+/// The longest side of an artist's picture at the top of their page.
+const LARGE: u32 = 1400;
 
 /// Where an artist's picture can come from: see [`crate::artist_image`].
 #[derive(Clone, Debug)]
@@ -84,7 +86,11 @@ impl Thumbnails {
         };
         let first = source.album_tracks.first();
         let fresh = first.is_none_or(|track| !outdated(&file, track) && !artist_dir_newer(track));
-        let state = if file.exists() && fresh {
+        // Made with its large picture for the artist's page, or as a collage, which has none:
+        // pictures made before there were large ones are made again.
+        let whole = self.dir.join(format!("{key}-large.jpg")).exists()
+            || self.dir.join(format!("{key}.collage")).exists();
+        let state = if file.exists() && fresh && whole {
             Thumbnail::Ready(file)
         } else {
             self.send(key, Job::Artist(source.clone()));
@@ -92,6 +98,12 @@ impl Thumbnails {
         };
         self.known.insert(key.to_owned(), state.clone());
         state
+    }
+
+    /// The artist `key`'s picture at up to 1400 pixels, for the top of their page, once made;
+    /// none when it is a collage of their covers.
+    pub fn artist_banner(&self, key: &str) -> Option<PathBuf> {
+        Some(self.dir.join(format!("{key}-large.jpg"))).filter(|file| file.exists())
     }
 
     /// A name for an album's thumbnail that stays the same between runs: 16 hex digits.
@@ -136,6 +148,11 @@ impl Thumbnails {
             any = true;
         }
         any
+    }
+
+    /// Where `key`'s thumbnail is kept, made or not.
+    pub fn file_of(&self, key: &str) -> PathBuf {
+        self.file(key)
     }
 
     fn file(&self, key: &str) -> PathBuf {
@@ -203,16 +220,32 @@ fn make_artist(dir: &Path, key: &str, source: &ArtistSource) -> Result<bool, Str
         }
         _ => None,
     };
-    let picture = match picture {
-        Some(picture) => picture
-            .resize_to_fill(SIZE, SIZE, image::imageops::FilterType::Triangle)
-            .to_rgb8(),
+    let collage_marker = dir.join(format!("{key}.collage"));
+    let thumbnail = match picture {
+        Some(picture) => {
+            // Large too, for the top of the artist's page.
+            let large = if picture.width() > LARGE || picture.height() > LARGE {
+                picture.resize(LARGE, LARGE, image::imageops::FilterType::Triangle)
+            } else {
+                picture.clone()
+            };
+            save_jpeg(dir, &format!("{key}-large"), &large.to_rgb8())?;
+            let _ = std::fs::remove_file(&collage_marker);
+            picture
+                .resize_to_fill(SIZE, SIZE, image::imageops::FilterType::Triangle)
+                .to_rgb8()
+        }
         None => match artist_image::collage(&source.album_tracks, SIZE) {
-            Some(collage) => collage,
+            Some(collage) => {
+                let _ = std::fs::remove_file(dir.join(format!("{key}-large.jpg")));
+                create_private_dir(dir).map_err(|e| e.to_string())?;
+                std::fs::write(&collage_marker, b"").map_err(|e| e.to_string())?;
+                collage
+            }
             None => return Ok(false),
         },
     };
-    save_jpeg(dir, key, &picture)?;
+    save_jpeg(dir, key, &thumbnail)?;
     Ok(true)
 }
 
@@ -358,6 +391,8 @@ mod tests {
             panic!("made from the artist's picture");
         };
         assert!(image::open(&file).unwrap().to_rgb8().get_pixel(150, 150)[0] > 150);
+        // And large, for their page; a collage has none.
+        assert!(later.artist_banner(&key).is_some());
     }
 
     #[test]

@@ -53,6 +53,8 @@ pub struct Settings {
     /// Whether pictures of artists without one of their own come from Deezer, which is told
     /// the artists' names.
     pub artist_pictures_online: bool,
+    /// Whether artists' pages show what Last.fm says of them, which is told their names.
+    pub artist_bios_online: bool,
 }
 
 impl Default for Settings {
@@ -79,6 +81,7 @@ impl Default for Settings {
             artist_sort: "name".to_owned(),
             artist_view: "grid".to_owned(),
             artist_pictures_online: true,
+            artist_bios_online: true,
             damaged: false,
         }
     }

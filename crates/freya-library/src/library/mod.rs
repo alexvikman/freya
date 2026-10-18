@@ -149,6 +149,16 @@ impl Track {
     }
 }
 
+/// What an artist's page says of them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArtistSummary {
+    pub albums: u32,
+    pub tracks: u32,
+    pub duration: Duration,
+    /// Their most frequent genres, most first.
+    pub genres: Vec<String>,
+}
+
 /// How artists are listed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArtistOrder {
@@ -440,6 +450,51 @@ impl Library {
         ))?;
         query
             .query_map([limit as i64], |row| {
+                Ok(Played {
+                    track: Track::from_row(row)?,
+                    plays: row.get(12)?,
+                    last: from_epoch_millis(row.get(13)?),
+                })
+            })?
+            .collect()
+    }
+
+    /// What an artist's page says of them: how many albums and tracks, how long they play,
+    /// and their most frequent genres, at most `genres`.
+    pub fn artist_summary(&self, artist: Option<&str>, genres: usize) -> Result<ArtistSummary> {
+        let (albums, tracks, millis) = self.db.query_row(
+            // Tracks without an album are one, "Unknown album", as the albums list them.
+            "SELECT count(DISTINCT coalesce(album, char(0))), count(*), coalesce(sum(duration_ms), 0)
+             FROM tracks WHERE album_artist IS ?1",
+            [artist],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get::<_, i64>(2)?)),
+        )?;
+        let mut query = self.db.prepare_cached(
+            "SELECT genre FROM tracks WHERE album_artist IS ?1 AND genre IS NOT NULL
+             GROUP BY genre ORDER BY count(*) DESC, genre COLLATE NOCASE LIMIT ?2",
+        )?;
+        let genres = query
+            .query_map(params![artist, genres as i64], |row| row.get(0))?
+            .collect::<Result<_>>()?;
+        Ok(ArtistSummary {
+            albums,
+            tracks,
+            duration: from_millis(millis),
+            genres,
+        })
+    }
+
+    /// An artist's most played tracks, most first; equally often played ones by when they were
+    /// played last. At most `limit`, and only those played.
+    pub fn artist_popular(&self, artist: Option<&str>, limit: usize) -> Result<Vec<Played>> {
+        let mut query = self.db.prepare_cached(&format!(
+            "SELECT {TRACK_COLUMNS}, plays.n, plays.last FROM {PLAYED}
+             WHERE tracks.album_artist IS ?1
+             ORDER BY plays.n DESC, plays.last DESC
+             LIMIT ?2"
+        ))?;
+        query
+            .query_map(params![artist, limit as i64], |row| {
                 Ok(Played {
                     track: Track::from_row(row)?,
                     plays: row.get(12)?,
