@@ -73,6 +73,27 @@ pub fn local(album_tracks: &[PathBuf]) -> Option<PathBuf> {
         })
 }
 
+/// Busy services answer 503 now and then, MusicBrainz often: each wait, the request is made
+/// again.
+const BUSY_WAITS: [Duration; 3] = [
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+];
+
+/// Makes the request `call` makes, again after a wait while the service is busy.
+fn call_patiently(
+    call: impl Fn() -> Result<ureq::http::Response<ureq::Body>, ureq::Error>,
+) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
+    for wait in BUSY_WAITS {
+        match call() {
+            Err(ureq::Error::StatusCode(503)) => std::thread::sleep(wait),
+            answer => return answer,
+        }
+    }
+    call()
+}
+
 fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(DOWNLOAD_TIMEOUT))
@@ -127,18 +148,21 @@ pub fn deezer(name: &str) -> Result<Online, String> {
 pub fn musicbrainz_id(name: &str) -> Result<Option<String>, String> {
     // Quoted, as Lucene reads a query, so a name is not taken for its syntax.
     let escaped = name.replace('\\', "\\\\").replace('"', "\\\"");
-    let text = agent()
-        .get(MUSICBRAINZ_SEARCH)
-        .query("query", format!("artist:\"{escaped}\""))
-        .query("fmt", "json")
-        .query("limit", "10")
-        .call()
-        .map_err(|e| e.to_string())?
-        .body_mut()
-        .with_config()
-        .limit(MAX_ANSWER_BYTES)
-        .read_to_string()
-        .map_err(|e| e.to_string())?;
+    let agent = agent();
+    let text = call_patiently(|| {
+        agent
+            .get(MUSICBRAINZ_SEARCH)
+            .query("query", format!("artist:\"{escaped}\""))
+            .query("fmt", "json")
+            .query("limit", "10")
+            .call()
+    })
+    .map_err(|e| e.to_string())?
+    .body_mut()
+    .with_config()
+    .limit(MAX_ANSWER_BYTES)
+    .read_to_string()
+    .map_err(|e| e.to_string())?;
     let answer: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
     Ok(artist_id(&answer, name))
 }
@@ -162,10 +186,12 @@ fn artist_id(answer: &serde_json::Value, name: &str) -> Option<String> {
 /// be asked, or did not take the key.
 pub fn fanart_backdrop(mbid: &str, key: &str) -> Result<Online, String> {
     let agent = agent();
-    let response = agent
-        .get(format!("{FANART}/{mbid}"))
-        .query("client_key", key)
-        .call();
+    let response = call_patiently(|| {
+        agent
+            .get(format!("{FANART}/{mbid}"))
+            .query("client_key", key)
+            .call()
+    });
     let text = match response {
         Ok(mut response) => response
             .body_mut()
