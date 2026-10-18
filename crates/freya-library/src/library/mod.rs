@@ -5,6 +5,7 @@
 //! layout changes, they are rebuilt by the next scan. What the files cannot tell, when each
 //! track was played, is kept in a table of its own that a rebuild leaves alone.
 
+mod online;
 mod scan;
 
 use std::collections::HashMap;
@@ -16,6 +17,7 @@ use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 use crate::cue::Part;
 use crate::tags::TagInfo;
 
+pub use online::{ASK_AGAIN_AFTER, ArtistText, Asked, PictureKind};
 pub use rusqlite::Error;
 pub use scan::{ScanEvent, ScanSummary, Scanner, scan};
 
@@ -280,6 +282,7 @@ impl Library {
             db.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         db.execute_batch(HISTORY)?;
+        db.execute_batch(online::SCHEMA)?;
         Ok(Self { db })
     }
 
