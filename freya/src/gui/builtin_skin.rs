@@ -324,6 +324,25 @@ impl Convert for Activity {
     }
 }
 
+impl Convert for LogEntry {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            time: field(&s, "time"),
+            level: field(&s, "level"),
+            message: field(&s, "message"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("time", self.time.to_value()),
+            ("level", self.level.to_value()),
+            ("message", self.message.to_value()),
+        ])
+    }
+}
+
 impl Convert for ArtistMatchDraft {
     fn from_value(value: Value) -> Option<Self> {
         let Value::Struct(s) = value else { return None };
@@ -810,6 +829,8 @@ skin_api! {
         App."build-date" => set_build_date, get_build_date;
         App."theme" => set_theme, get_theme;
         App."activities" => set_activities, get_activities;
+        App."log" => set_log, get_log;
+        App."log-level" => set_log_level, get_log_level;
         App."equalizer-visible" => set_equalizer_visible, get_equalizer_visible;
         App."title-bar-height" => set_title_bar_height, get_title_bar_height;
         App."window-buttons-width" => set_window_buttons_width, get_window_buttons_width;
@@ -942,6 +963,7 @@ skin_api! {
         Visualizer."peaks-path" => on_peaks_path, invoke_peaks_path(width: f32, height: f32, peaks: ModelRc<f32>, thickness: f32) -> SharedString;
 
         App."show-about" => on_show_about, invoke_show_about();
+        App."set-log-level" => on_set_log_level, invoke_set_log_level(level: SharedString);
         App."show-skins" => on_show_skins, invoke_show_skins();
         App."set-theme" => on_set_theme, invoke_set_theme(theme: SharedString);
         App."toggle-equalizer" => on_toggle_equalizer, invoke_toggle_equalizer();

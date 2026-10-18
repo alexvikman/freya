@@ -921,6 +921,18 @@ user-id = 189 # Andrew Gallant (BurntSushi)
 start = "2025-03-06"
 end = "2027-10-17"
 
+[[trusted.jiff-tzdb]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2024-07-09"
+end = "2027-10-18"
+
+[[trusted.jiff-tzdb-platform]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2024-07-09"
+end = "2027-10-18"
+
 [[trusted.jobserver]]
 criteria = "safe-to-deploy"
 user-id = 55123 # rust-lang-owner

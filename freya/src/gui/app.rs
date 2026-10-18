@@ -82,6 +82,10 @@ pub struct View {
     playlist_list_rows: ModelRows,
     playlist_track_rows: ModelRows,
     activity_rows: ModelRows,
+    /// What was logged, as last given to the skin: the entries, at which level, and how many
+    /// had been logged then.
+    log_rows: ModelRows,
+    log_shown: Option<(log::Level, u64)>,
     /// The playlists' version and the playlist shown when their rows were last given to the
     /// skin; rows are only rebuilt when either changes.
     playlists_synced: Option<(u64, Option<usize>)>,
@@ -111,6 +115,8 @@ impl View {
             playlist_list_rows: ModelRows::new(),
             playlist_track_rows: ModelRows::new(),
             activity_rows: ModelRows::new(),
+            log_rows: ModelRows::new(),
+            log_shown: None,
             playlists_synced: None,
             eq_bands_shown: None,
             visualizer: Visualizer::new(&ui),
@@ -145,6 +151,9 @@ impl View {
             let _ =
                 view.ui
                     .set_global_property("App", "activities", view.activity_rows.model_value());
+            let _ = view
+                .ui
+                .set_global_property("App", "log", view.log_rows.model_value());
         }
         let version = skin_state::string(env!("CARGO_PKG_VERSION"));
         let built = skin_state::string(skin_state::build_date().unwrap_or_default());
@@ -302,6 +311,8 @@ pub struct App {
     /// far as the system says.
     window_hidden: bool,
     window_focused: bool,
+    /// What the Activity page shows of the log: entries at this level or worse.
+    log_level: log::Level,
     covers: Covers,
     /// The cover shown, kept so a new skin can show it too, and its file for the system.
     cover: Option<slint::Image>,
@@ -427,6 +438,7 @@ impl App {
             window_events,
             window_hidden: false,
             window_focused: true,
+            log_level: log::Level::Info,
             covers: Covers::new(),
             cover: None,
             cover_file: None,
@@ -1468,9 +1480,20 @@ impl App {
             view.updates_out.write(ui, values);
         }
         let activities = self.activities();
+        let log_level = self.log_level;
         let view = &mut self.view;
         let ui = &view.ui;
         view.activity_rows.sync(activities);
+        // Only while shown: a scan logs a lot.
+        let log_shown = matches!(
+            ui.get_global_property("App", "view"),
+            Ok(Value::String(shown)) if shown == "activity"
+        );
+        let logged = (log_level, crate::log_capture::count());
+        if log_shown && view.log_shown != Some(logged) {
+            view.log_shown = Some(logged);
+            view.log_rows.sync(log_rows(log_level));
+        }
         view.app_out.write(
             ui,
             vec![
@@ -1485,8 +1508,16 @@ impl App {
                 ),
                 ("can-go-back", Value::Bool(self.history.can_go_back())),
                 ("can-go-forward", Value::Bool(self.history.can_go_forward())),
+                ("log-level", skin_state::string(level_name(log_level))),
             ],
         );
+    }
+
+    /// Shows what was logged at `level` ("debug", "info", "warning" or "error") or worse.
+    pub fn set_log_level(&mut self, level: &str) {
+        if let Some(level) = level_of(level) {
+            self.log_level = level;
+        }
     }
 
     /// What Freya does in the background, for `App.activities`.
@@ -1619,4 +1650,43 @@ fn media(entry: &Entry) -> Media {
         },
         id: entry.id,
     }
+}
+
+/// What was logged at `level` or worse, for `App.log`.
+fn log_rows(level: log::Level) -> Vec<Value> {
+    crate::log_capture::entries(level, LOG_SHOWN)
+        .into_iter()
+        .map(|entry| {
+            Value::Struct(slint_interpreter::Struct::from_iter([
+                ("time".to_owned(), skin_state::string(&entry.time)),
+                (
+                    "level".to_owned(),
+                    skin_state::string(level_name(entry.level)),
+                ),
+                ("message".to_owned(), skin_state::string(&entry.message)),
+            ]))
+        })
+        .collect()
+}
+
+/// How many entries of the log the Activity page shows at most.
+const LOG_SHOWN: usize = 1_000;
+
+fn level_name(level: log::Level) -> &'static str {
+    match level {
+        log::Level::Error => "error",
+        log::Level::Warn => "warning",
+        log::Level::Info => "info",
+        log::Level::Debug | log::Level::Trace => "debug",
+    }
+}
+
+fn level_of(name: &str) -> Option<log::Level> {
+    Some(match name {
+        "error" => log::Level::Error,
+        "warning" => log::Level::Warn,
+        "info" => log::Level::Info,
+        "debug" => log::Level::Debug,
+        _ => return None,
+    })
 }

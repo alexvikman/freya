@@ -5,6 +5,7 @@
 mod cli_player;
 mod gui;
 mod lastfm;
+mod log_capture;
 mod settings;
 mod update;
 
@@ -63,7 +64,7 @@ enum SkinCommand {
 
 fn main() -> anyhow::Result<()> {
     attach_console();
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+    log_capture::init(settings::log_path().as_deref());
     let args = Args::parse();
     match args.command {
         Some(Command::Play { paths }) => cli_player::run(&paths),

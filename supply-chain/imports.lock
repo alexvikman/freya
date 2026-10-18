@@ -344,11 +344,6 @@ version = "1.18.1"
 when = "2026-09-21"
 trusted-publisher = "github:slint-ui/slint"
 
-[[publisher.i-slint-renderer-software]]
-version = "1.18.1"
-when = "2026-09-21"
-trusted-publisher = "github:slint-ui/slint"
-
 [[publisher.icu_collections]]
 version = "2.2.0"
 when = "2026-04-01"
@@ -450,6 +445,20 @@ user-name = "Andrew Gallant"
 [[publisher.jiff-static]]
 version = "0.2.38"
 when = "2026-10-06"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.jiff-tzdb]]
+version = "0.1.9"
+when = "2026-10-06"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.jiff-tzdb-platform]]
+version = "0.1.3"
+when = "2025-03-23"
 user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"

@@ -680,6 +680,15 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     );
 
     bind("App", "show-about", Box::new(|app, _| app.show_about()));
+    bind(
+        "App",
+        "set-log-level",
+        Box::new(|app, args| {
+            if let Some(Value::String(level)) = args.first() {
+                app.set_log_level(level);
+            }
+        }),
+    );
     bind("App", "go-back", Box::new(|app, _| app.go_back()));
     bind("App", "go-forward", Box::new(|app, _| app.go_forward()));
     // The skin changed its view; noted after every callback.

@@ -111,6 +111,11 @@ pub fn cache_dir() -> Option<PathBuf> {
     dirs().map(|d| d.cache_dir().to_owned())
 }
 
+/// Freya's log, of this run and earlier ones.
+pub fn log_path() -> Option<PathBuf> {
+    dirs().map(|d| d.data_dir().join("freya.log"))
+}
+
 /// The library database. It can always be rebuilt from the music folders.
 pub fn library_path() -> Option<PathBuf> {
     dirs().map(|d| d.data_dir().join("library.sqlite3"))

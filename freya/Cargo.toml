@@ -80,6 +80,8 @@ anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
 crossterm = "0.29.0"
 env_logger = "0.11.11"
+# Local time in the log (see src/log_capture.rs), as env_logger already brings it.
+jiff = "0.2.38"
 freya-skin = { path = "../crates/freya-skin" }
 freya-library = { path = "../crates/freya-library" }
 slint = { version = "1.18.1", features = ["unstable-winit-030"] }

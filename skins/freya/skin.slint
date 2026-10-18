@@ -6225,6 +6225,145 @@ component SettingsView inherits Rectangle {
 }
 
 /// About Freya: its icon and version, updates, links to its pages, and the credits.
+/// What Freya does in the background, and what it logged: in this run and earlier ones.
+component ActivityView inherits Rectangle {
+    VerticalLayout {
+        padding-top: 28px;
+        padding-bottom: 24px;
+        padding-left: 40px;
+        padding-right: 40px;
+        spacing: 16px;
+
+        Text {
+            text: "Activity";
+            font-size: 32px;
+            font-weight: 800;
+            color: Theme.text;
+        }
+        HorizontalLayout {
+            spacing: 12px;
+
+            Text {
+                text: "Running now";
+                font-size: 17px;
+                font-weight: 700;
+                color: Theme.text;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            if Library.scanning: TextButton {
+                text: "Stop Scan";
+                clicked => { Library.stop-scan(); }
+            }
+        }
+        Rectangle {
+            background: Theme.surface;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.divider;
+
+            VerticalLayout {
+                padding-top: 8px;
+                padding-bottom: 4px;
+
+                for doing in App.activities: ActivityRow {
+                    text: doing.title;
+                    detail: doing.detail;
+                    busy: true;
+                }
+                if App.activities.length == 0: ActivityRow {
+                    text: "Nothing is running in the background";
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: 4px;
+            padding-top: 12px;
+
+            Text {
+                text: "Log";
+                font-size: 17px;
+                font-weight: 700;
+                color: Theme.text;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            ChoiceButton {
+                text: "Errors";
+                selected: App.log-level == "error";
+                clicked => { App.set-log-level("error"); }
+            }
+            ChoiceButton {
+                text: "Warnings";
+                selected: App.log-level == "warning";
+                clicked => { App.set-log-level("warning"); }
+            }
+            ChoiceButton {
+                text: "Info";
+                selected: App.log-level == "info";
+                clicked => { App.set-log-level("info"); }
+            }
+            ChoiceButton {
+                text: "Debug";
+                selected: App.log-level == "debug";
+                clicked => { App.set-log-level("debug"); }
+            }
+        }
+        Rectangle {
+            vertical-stretch: 1;
+            background: Theme.surface;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.divider;
+            clip: true;
+
+            if App.log.length == 0: Text {
+                text: "Nothing logged at this level";
+                font-size: 13px;
+                color: Theme.text-secondary;
+            }
+            ListView {
+                for entry in App.log: VerticalLayout {
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    padding-top: 6px;
+                    padding-bottom: 6px;
+                    spacing: 2px;
+                    accessible-role: AccessibleRole.text;
+                    accessible-label: entry.time + ", " + entry.level + ": " + entry.message;
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: start;
+
+                        Text {
+                            text: entry.time;
+                            font-size: 12px;
+                            color: Theme.text-secondary;
+                        }
+                        Text {
+                            text: entry.level == "error" ? "Error"
+                                : entry.level == "warning" ? "Warning"
+                                : entry.level == "info" ? "Info" : "Debug";
+                            font-size: 12px;
+                            font-weight: 700;
+                            color: entry.level == "error" ? Theme.danger
+                                : entry.level == "warning" ? Theme.accent-text
+                                : Theme.text-secondary;
+                        }
+                    }
+                    Text {
+                        text: entry.message;
+                        font-size: 13px;
+                        color: Theme.text;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+    }
+}
+
 component AboutView inherits Rectangle {
     /// Show the update's notes, and install it.
     callback show-update();
@@ -6601,6 +6740,14 @@ component Toolbar inherits HorizontalLayout {
                 if App.activities.length == 0: ActivityRow {
                     text: "Nothing is running in the background";
                 }
+                MenuDivider { }
+                MenuItem {
+                    text: "Show Activity and Log";
+                    activated => {
+                        activity-popup.close();
+                        root.show-view("activity");
+                    }
+                }
             }
         }
     }
@@ -6749,7 +6896,7 @@ export component FreyaSkin inherits Window {
     forward-focus: shortcuts;
 
     /// The view in the content area: "queue", "library", "radio", "playlist", "visualizer",
-    /// "equalizer", "settings" or "about".
+    /// "equalizer", "settings", "activity" or "about".
     in-out property <string> view <=> App.view;
     /// The view the visualizer and equalizer buttons go back to.
     property <string> music-view: "queue";
@@ -6905,7 +7052,7 @@ export component FreyaSkin inherits Window {
                                     : root.view == "radio" ? "Radio"
                                     : root.view == "playlist" ? (Playlists.shown >= 0 ? Playlists.playlists[Playlists.shown].name : "Playlist")
                                     : root.view == "visualizer" ? "Visualizer"
-                                    : root.view == "settings" || root.view == "about" ? ""
+                                    : root.view == "settings" || root.view == "about" || root.view == "activity" ? ""
                                     : "Equalizer";
                                 subtitle: root.view == "queue" ? Playlist.summary
                                     : root.view == "library" ? (Library.subtitle != "" ? Library.subtitle : Library.status)
@@ -6993,6 +7140,10 @@ export component FreyaSkin inherits Window {
                                 height: 100%;
                                 manage-folders => { root.manage-folders(); }
                                 edit-fanart-key => { fanart-popup.show(); }
+                            }
+                            if root.view == "activity": ActivityView {
+                                width: 100%;
+                                height: 100%;
                             }
                             if root.view == "about": AboutView {
                                 width: 100%;

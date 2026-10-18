@@ -791,11 +791,26 @@ export struct Activity {
     detail: string,
 }
 
+/// Something Freya logged: see `App.log`.
+export struct LogEntry {
+    /// Local time: "26-10-18 21:36:37".
+    time: string,
+    /// "debug", "info", "warning" or "error".
+    level: string,
+    message: string,
+}
+
 export global App {
     /// What Freya does in the background now: reading the music folders, making and
     /// downloading pictures, asking the internet about artists, sending plays to Last.fm,
     /// downloading an update. Empty when it does nothing.
     in property <[Activity]> activities;
+    /// What Freya logged, in this run and earlier ones, the newest first: at `log-level` or
+    /// worse, at most 1,000 entries.
+    in property <[LogEntry]> log;
+    /// "debug", "info", "warning" or "error"; set with `set-log-level`.
+    in property <string> log-level: "info";
+    callback set-log-level(string);
     in property <string> version;
     /// When this copy of Freya was built, as "2026-10-17"; empty when unknown.
     in property <string> build-date;
