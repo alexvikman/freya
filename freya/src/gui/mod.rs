@@ -5,6 +5,7 @@ mod app_icon;
 mod artist_info;
 mod bindings;
 mod builtin_skin;
+mod cover_decoder;
 pub mod equalizer;
 mod history;
 mod hologram;

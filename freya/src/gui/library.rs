@@ -16,6 +16,7 @@ use freya_library::{Entry, Library};
 use slint::{Image, ModelRc, VecModel};
 use slint_interpreter::{Struct, Value};
 
+use super::cover_decoder::CoverDecoder;
 use super::match_finder::{AlbumFinder, MatchFinder};
 use super::picture_finder::{Found, Pick, PictureFinder, Request};
 use super::skin_state::{ModelRows, format_time, string};
@@ -26,10 +27,13 @@ use super::skin_window::SkinWindow;
 const SEARCH_LIMIT: usize = 1_000;
 /// While a scan runs, the rows are reloaded at most this often.
 const RELOAD_INTERVAL: Duration = Duration::from_secs(1);
-/// Decoded covers kept for scrolling back: about 360 KB each, 46 MB in all. More than a grid
-/// shows at once full screen on a 4K screen (about 90): with fewer, the covers on screen pushed
-/// each other out and were decoded again whenever the grid was drawn.
-const RECENT_COVERS: usize = 128;
+/// Decoded covers kept: about 270 KB each, 70 MB in all. Those on screen, at most about 90 full
+/// screen on a 4K screen, and those decoded ahead of them both ways.
+const RECENT_COVERS: usize = 256;
+/// Covers decoded ahead of those on screen, each way, in the order the rows are listed.
+const DECODE_AHEAD: usize = 64;
+/// Covers handed to the decoder each time the library is polled.
+const DECODE_AT_ONCE: usize = 24;
 /// How many albums or tracks the Recents sections show.
 const RECENT: usize = 200;
 
@@ -199,6 +203,15 @@ pub struct LibraryPanel {
     portraits: HashMap<String, String>,
     backdrops: HashMap<String, String>,
     recent_covers: RecentCovers,
+    /// Covers decoded on threads; the rows' covers' keys in order, with where each is; the
+    /// rows whose covers the skin asked for since the last poll, and those it asked for
+    /// before, which are on screen; and whether one it asked for was not decoded yet.
+    decoder: CoverDecoder,
+    cover_order: Vec<String>,
+    cover_rows: HashMap<String, usize>,
+    covers_asked: Option<(usize, usize)>,
+    covers_shown: (usize, usize),
+    covers_missed: bool,
     /// Pictures to make ahead of their being shown.
     prepare: VecDeque<Prepare>,
     /// `Library.covers-ready`: goes up as covers are made.
@@ -480,6 +493,12 @@ impl LibraryPanel {
                 .zip(pictures.clone())
                 .map(|(covers, pictures)| Thumbnails::new(covers, Pictures::new(pictures))),
             prepare: VecDeque::new(),
+            decoder: CoverDecoder::new(),
+            cover_order: Vec::new(),
+            cover_rows: HashMap::new(),
+            covers_asked: None,
+            covers_shown: (0, 0),
+            covers_missed: false,
             made_covers: HashMap::new(),
             portraits: HashMap::new(),
             backdrops: HashMap::new(),
@@ -679,6 +698,9 @@ impl LibraryPanel {
         }
         if !self.scanning {
             self.prepare_some();
+        }
+        if self.decode_covers() {
+            self.covers_ready += 1;
         }
         if let Some(thumbnails) = &mut self.thumbnails
             && thumbnails.poll()
@@ -2237,14 +2259,22 @@ impl LibraryPanel {
         self.title = title;
         self.subtitle = subtitle;
         self.artist_keys.clear();
+        self.cover_order.clear();
         for item in &self.items {
-            if let Item::Artist(artist) = item {
-                self.artist_keys.insert(
-                    Thumbnails::artist_key(artist.name.as_deref()),
-                    artist.name.clone(),
-                );
+            match item {
+                Item::Artist(artist) => {
+                    let key = Thumbnails::artist_key(artist.name.as_deref());
+                    self.artist_keys.insert(key.clone(), artist.name.clone());
+                    self.cover_order.push(key);
+                }
+                Item::Album(album) => self.cover_order.push(cover_key(album)),
+                _ => {}
             }
         }
+        self.cover_rows = (self.cover_order.iter().cloned())
+            .enumerate()
+            .map(|(i, key)| (key, i))
+            .collect();
         self.load_album_page();
         self.load_artist_page();
         let mut album_artist = match self.level() {
@@ -2387,48 +2417,95 @@ impl LibraryPanel {
     /// The cover for a row's cover key, or an empty image while it is made or when the album
     /// has none.
     pub fn cover(&mut self, key: &str) -> Image {
+        if let Some(&row) = self.cover_rows.get(key) {
+            self.covers_asked = Some(match self.covers_asked {
+                Some((first, last)) => (first.min(row), last.max(row)),
+                None => (row, row),
+            });
+        }
         if let Some(image) = self.recent_covers.get(key) {
             return image;
         }
+        // Shown once decoded, soon.
+        if self.decoder.is_decoding(key) {
+            self.covers_missed = true;
+            return Image::default();
+        }
+        let Thumbnail::Ready(file) = self.cover_state(key) else {
+            return Image::default();
+        };
+        // Not decoded ahead: scrolled to faster than the threads went, or the first screen.
+        self.decoder.decode(key, file);
+        self.covers_missed = true;
+        Image::default()
+    }
+
+    /// Whether the cover for `key` is made, or being made, or none: made, or asked to be
+    /// made, as soon as it is asked for.
+    fn cover_state(&mut self, key: &str) -> Thumbnail {
         // Known already, made or not: asked for again on every scroll and every new picture,
         // without the library being read for it.
-        let known = self.thumbnails.as_ref().and_then(|t| t.known(key));
-        let state = match (known, &self.db, self.artist_keys.get(key)) {
-            (Some(known), ..) => known,
-            // An artist's picture, from a track of each of their albums.
-            (None, Some(_), Some(name)) => {
+        if let Some(known) = self.thumbnails.as_ref().and_then(|t| t.known(key)) {
+            return known;
+        }
+        match (&self.db, self.artist_keys.get(key)) {
+            // An artist's picture.
+            (Some(_), Some(name)) => {
                 let source = self.artist_source(name.as_deref());
                 match &mut self.thumbnails {
                     Some(thumbnails) => thumbnails.get_artist(key, &source),
-                    None => return Image::default(),
+                    None => Thumbnail::None,
                 }
             }
             // An album's cover, as the scan made it; none made yet shows none.
-            (None, ..) => {
+            _ => {
                 let (Some(thumbnails), Some(checksum)) = (
                     &mut self.thumbnails,
                     self.made_covers
                         .get(key)
                         .and_then(|made| made.cover.as_deref()),
                 ) else {
-                    return Image::default();
+                    return Thumbnail::None;
                 };
                 thumbnails.get_picture(checksum)
             }
-        };
-        let Thumbnail::Ready(file) = state else {
-            return Image::default();
-        };
-        match Image::load_from_path(&file) {
-            Ok(image) => {
-                self.recent_covers.put(key, image.clone());
-                image
+        }
+    }
+
+    /// Takes in the covers decoded, and decodes those around the ones on screen ahead of
+    /// their being scrolled to. Returns whether one the skin asked for came.
+    fn decode_covers(&mut self) -> bool {
+        let mut came = false;
+        for (key, decoded) in self.decoder.take() {
+            let image = decoded.map(Image::from_rgb8).unwrap_or_default();
+            self.recent_covers.put(&key, image);
+            came = true;
+        }
+        if let Some(asked) = self.covers_asked.take() {
+            self.covers_shown = asked;
+        }
+        let (first, last) = self.covers_shown;
+        // Those on screen first, then outwards both ways.
+        let around = (1..=DECODE_AHEAD)
+            .flat_map(|d| [last.checked_add(d), first.checked_sub(d)])
+            .flatten();
+        let mut handed = 0;
+        for row in (first..=last).chain(around) {
+            if handed == DECODE_AT_ONCE {
+                break;
             }
-            Err(_) => {
-                log::debug!("could not read the cover {}", file.display());
-                Image::default()
+            let Some(key) = self.cover_order.get(row).cloned() else {
+                continue;
+            };
+            if self.recent_covers.images.contains_key(&key) || self.decoder.is_decoding(&key) {
+                continue;
+            }
+            if let Thumbnail::Ready(file) = self.cover_state(&key) {
+                self.decoder.decode(&key, file);
+                handed += 1;
             }
         }
+        came && std::mem::take(&mut self.covers_missed)
     }
 
     /// Reads the albums' covers and the artists' pictures from the library, when a scan or the
@@ -3347,7 +3424,7 @@ mod tests {
         assert!(panel.choices.is_empty(), "the dialog is done");
         // Shown at once, not only after Freya starts again.
         assert_eq!(panel.artist_source(Some("Freya")).picture, square.picture);
-        assert!(panel.backdrops.get("Freya").is_none());
+        assert!(!panel.backdrops.contains_key("Freya"));
 
         // Chosen: it stays.
         panel.edit_artist();
