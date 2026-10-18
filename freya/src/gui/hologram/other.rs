@@ -12,6 +12,10 @@ impl Renderer {
         None
     }
 
+    pub fn failed(&self) -> bool {
+        true
+    }
+
     pub fn place(&mut self, _area: Option<&Area>) {}
 
     pub fn set_pulse(&self, _pulse: f32) {}

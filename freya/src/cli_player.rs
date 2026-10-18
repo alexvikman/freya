@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, bail};
-use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::{cursor, terminal};
 use freya_audio::{Event, Media, PlaybackState, Player, Status, TrackInfo};
 
@@ -77,6 +77,8 @@ pub fn run(paths: &[PathBuf]) -> anyhow::Result<()> {
         let status = player.status();
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => break,
+            // Raw mode turns Ctrl+C into a key instead of a signal.
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
             KeyCode::Char(' ') => player.toggle_pause(),
             KeyCode::Right => player.seek(status.position + SEEK_STEP),
             KeyCode::Left => player.seek(status.position.saturating_sub(SEEK_STEP)),

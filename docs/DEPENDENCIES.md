@@ -94,8 +94,13 @@ On 2026-10-17, after the npm supply-chain attacks, the exemptions were worked do
   sources of each exempted version (it runs nothing) and lists process spawning, network and
   dynamic loading, references to credentials, encoded blobs and executables, and in build
   scripts and procedural macros the file writes, environment variables and addresses. Nothing
-  pointed to malice. The only executable is a test DLL in libloading's tests, never built;
-  the credential hits were PEM and RSA names in TLS code and Windows constants; the one
+  pointed to malice. Prebuilt code it lists by its magic (executables, libraries, static
+  archives, COFF objects) or its name: ring's 17 COFF objects, assembly it ships assembled
+  for Windows and which is linked into `freya.exe` there; winapi's import libraries for the
+  MinGW targets (about 2,800 `.a` files), used only by the cross-build in `ci/check.sh`, not
+  by the MSVC release; and two test DLLs in libloading's tests, never built. These are taken
+  as their authors published them, not read byte by byte. The scan fails when an exempted
+  crate is not downloaded, so a missing one is never taken for a clean one. The credential hits were PEM and RSA names in TLS code and Windows constants; the one
   token read is `CRATES_IO_TOKEN` in smol_str's own publishing script, outside the build. No
   build script or macro uses the network. Build scripts start only build tools (`rustc` for
   its version, `clang`, `llvm-config`, `rustfmt`, `ninja`, `git rev-parse`), read only

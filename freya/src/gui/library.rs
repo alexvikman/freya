@@ -20,8 +20,10 @@ use super::skin_window::SkinWindow;
 const SEARCH_LIMIT: usize = 1_000;
 /// While a scan runs, the rows are reloaded at most this often.
 const RELOAD_INTERVAL: Duration = Duration::from_secs(1);
-/// Decoded covers kept for scrolling back: about 360 KB each.
-const RECENT_COVERS: usize = 48;
+/// Decoded covers kept for scrolling back: about 360 KB each, 46 MB in all. More than a grid
+/// shows at once full screen on a 4K screen (about 90): with fewer, the covers on screen pushed
+/// each other out and were decoded again whenever the grid was drawn.
+const RECENT_COVERS: usize = 128;
 /// How many albums or tracks the Recents sections show.
 const RECENT: usize = 200;
 
@@ -121,7 +123,9 @@ pub struct LibraryPanel {
     rows: ModelRows,
     title: String,
     subtitle: String,
-    stats: String,
+    /// Totals of the whole library, counted again only when its tracks may have changed: not
+    /// for every keystroke of a search.
+    stats: Option<String>,
     progress: Option<(usize, usize)>,
     /// Rows need reloading, e.g. because a scan wrote more tracks.
     stale: bool,
@@ -181,7 +185,7 @@ impl LibraryPanel {
             rows: ModelRows::new(),
             title: String::new(),
             subtitle: String::new(),
-            stats: String::new(),
+            stats: None,
             progress: None,
             stale: false,
             reloaded: Instant::now(),
@@ -428,7 +432,9 @@ impl LibraryPanel {
 
     /// Reads the rows for the current level or search from the database.
     fn reload(&mut self) {
-        self.stale = false;
+        if std::mem::take(&mut self.stale) {
+            self.stats = None;
+        }
         self.reloaded = Instant::now();
         let Some(db) = &self.db else {
             return;
@@ -442,7 +448,9 @@ impl LibraryPanel {
                 self.items.clear();
             }
         }
-        self.stats = db.stats().map(|s| stats_text(&s)).unwrap_or_default();
+        if self.stats.is_none() {
+            self.stats = Some(db.stats().map(|s| stats_text(&s)).unwrap_or_default());
+        }
         let (title, subtitle) = self.heading();
         self.title = title;
         self.subtitle = subtitle;
@@ -584,7 +592,7 @@ impl LibraryPanel {
                 format!("Reading {} of {} files", thousands(done), thousands(total))
             }
             None if self.scanning => "Checking for changes…".to_owned(),
-            None => self.stats.clone(),
+            None => self.stats.clone().unwrap_or_default(),
         };
         let layout = if self.searching() {
             "table"

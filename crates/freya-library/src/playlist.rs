@@ -1,5 +1,6 @@
 //! The playlist: entries, selection, current track and next/previous with shuffle and repeat.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -464,6 +465,19 @@ impl Playlist {
     pub fn apply_tags(&mut self, path: &Path, tags: &TagInfo) {
         for e in self.entries.iter_mut().filter(|e| e.path == path) {
             e.apply_tags(tags);
+        }
+    }
+
+    /// Applies the tags of many files in one pass over the entries: one pass per file made
+    /// restoring a long Up Next take minutes.
+    pub fn apply_all_tags(&mut self, tags: &HashMap<PathBuf, TagInfo>) {
+        if tags.is_empty() {
+            return;
+        }
+        for e in &mut self.entries {
+            if let Some(tags) = tags.get(&e.path) {
+                e.apply_tags(tags);
+            }
         }
     }
 

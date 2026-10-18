@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::cue;
 
@@ -13,21 +14,31 @@ pub const AUDIO_EXTENSIONS: &[&str] = &[
 /// Expands folders (recursively, sorted) into the audio files they contain. Files are kept
 /// as given. Hidden files and folders are skipped, like macOS's `._name.mp3` companion files.
 pub fn collect(paths: &[PathBuf]) -> Vec<PathBuf> {
-    collect_matching(paths, is_audio)
+    collect_matching(paths, is_audio, &AtomicBool::new(false))
 }
 
 /// Like [`collect`], but also finds CUE sheets, which cut audio files into tracks; see
 /// [`crate::cue::apply_sheets`].
 pub fn collect_with_sheets(paths: &[PathBuf]) -> Vec<PathBuf> {
-    collect_matching(paths, |path| is_audio(path) || cue::is_sheet(path))
+    collect_with_sheets_until(paths, &AtomicBool::new(false))
 }
 
-fn collect_matching(paths: &[PathBuf], wanted: fn(&Path) -> bool) -> Vec<PathBuf> {
+/// Like [`collect_with_sheets`], but gives up, with what it found so far, once `cancel` is
+/// set: walking a large or slow drive can take minutes.
+pub fn collect_with_sheets_until(paths: &[PathBuf], cancel: &AtomicBool) -> Vec<PathBuf> {
+    collect_matching(paths, |path| is_audio(path) || cue::is_sheet(path), cancel)
+}
+
+fn collect_matching(
+    paths: &[PathBuf],
+    wanted: fn(&Path) -> bool,
+    cancel: &AtomicBool,
+) -> Vec<PathBuf> {
     let mut files = Vec::new();
     for path in paths {
         if path.is_dir() {
             let mut found = Vec::new();
-            walk(path, wanted, &mut found, &mut HashSet::new());
+            walk(path, wanted, &mut found, &mut HashSet::new(), cancel);
             found.sort();
             files.extend(found);
         } else {
@@ -43,7 +54,11 @@ fn walk(
     wanted: fn(&Path) -> bool,
     out: &mut Vec<PathBuf>,
     visited: &mut HashSet<PathBuf>,
+    cancel: &AtomicBool,
 ) {
+    if cancel.load(Ordering::Relaxed) {
+        return;
+    }
     let Ok(real) = dir.canonicalize() else {
         return;
     };
@@ -59,7 +74,7 @@ fn walk(
         }
         let path = entry.path();
         if path.is_dir() {
-            walk(&path, wanted, out, visited);
+            walk(&path, wanted, out, visited, cancel);
         } else if wanted(&path) {
             out.push(path);
         }
@@ -70,4 +85,25 @@ pub fn is_audio(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| AUDIO_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cancelled_walk_stops() {
+        // It could not be stopped, and the window waited for it when the library folders
+        // changed during a scan of a large drive.
+        let dir = std::env::temp_dir().join(format!("freya-walk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for sub in ["a", "b/c"] {
+            std::fs::create_dir_all(dir.join(sub)).unwrap();
+            std::fs::write(dir.join(sub).join("x.mp3"), b"").unwrap();
+        }
+        let folders = [dir.clone()];
+        assert_eq!(collect_with_sheets(&folders).len(), 2);
+        assert!(collect_with_sheets_until(&folders, &AtomicBool::new(true)).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

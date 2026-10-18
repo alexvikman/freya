@@ -77,7 +77,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn skin_command(command: SkinCommand) -> anyhow::Result<()> {
-    use freya_skin::{PACKAGE_EXTENSION, SkinInfo, SkinSource};
+    use freya_skin::{SkinInfo, SkinSource};
 
     let report = |warnings: &[String]| {
         for warning in warnings {
@@ -98,13 +98,29 @@ fn skin_command(command: SkinCommand) -> anyhow::Result<()> {
             );
         }
         SkinCommand::Pack { folder, output } => {
-            let output = output.unwrap_or_else(|| folder.with_extension(PACKAGE_EXTENSION));
+            let output = match output {
+                Some(output) => output,
+                None => default_package(&folder)?,
+            };
             let warnings = freya_skin::pack(&folder, &output)?;
             report(&warnings);
             println!("wrote {}", output.display());
         }
     }
     Ok(())
+}
+
+/// The package for `folder` when no output is named: next to it, with its whole name, so a
+/// folder `night.v2` makes `night.v2.freyaskin` and not `night.freyaskin`, another skin's.
+fn default_package(folder: &std::path::Path) -> anyhow::Result<PathBuf> {
+    let folder = folder.canonicalize()?;
+    let name = folder
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("name the package with --output"))?;
+    let mut file = name.to_os_string();
+    file.push(".");
+    file.push(freya_skin::PACKAGE_EXTENSION);
+    Ok(folder.with_file_name(file))
 }
 
 /// On Windows, a window app has no console; when started from a terminal, this connects it to

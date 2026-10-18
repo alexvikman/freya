@@ -180,7 +180,17 @@ fn copy_into(file: &Path, dir: &Path) -> std::io::Result<PathBuf> {
         .file_name()
         .ok_or_else(|| std::io::Error::other("not a file"))?;
     let target = dir.join(name);
-    std::fs::copy(file, &target)?;
+    // Picked from the skins folder itself: installed already.
+    if let (Ok(a), Ok(b)) = (file.canonicalize(), target.canonicalize())
+        && a == b
+    {
+        return Ok(target);
+    }
+    // Through a new file renamed over the old: copying straight onto a file that is the one
+    // copied (a link to it, say) empties it, and a failed copy would leave half a package.
+    let partial = target.with_extension("partial");
+    std::fs::copy(file, &partial)?;
+    std::fs::rename(&partial, &target)?;
     Ok(target)
 }
 
@@ -198,5 +208,30 @@ fn open_folder(dir: &Path) {
     };
     if let Err(e) = std::process::Command::new(opener).arg(dir).spawn() {
         log::warn!("could not open {}: {e}", dir.display());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::copy_into;
+
+    #[test]
+    fn installing_a_package_from_the_skins_folder_keeps_it() {
+        // It was copied onto itself, which left it empty.
+        let dir = std::env::temp_dir().join(format!("freya-install-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let package = dir.join("Night.freyaskin");
+        std::fs::write(&package, b"package bytes").unwrap();
+        let installed = copy_into(&package, &dir).unwrap();
+        assert_eq!(std::fs::read(&installed).unwrap(), b"package bytes");
+
+        // From elsewhere, it replaces the installed one.
+        let elsewhere = dir.join("download");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("Night.freyaskin"), b"newer").unwrap();
+        copy_into(&elsewhere.join("Night.freyaskin"), &dir).unwrap();
+        assert_eq!(std::fs::read(&package).unwrap(), b"newer");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

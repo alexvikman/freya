@@ -71,13 +71,12 @@ jobs:
     env:
       VERSION: ${{ needs.check.outputs.version }}
       # A Developer ID, when there is one: signing identity, certificate and notarization.
-      # Without them the app is signed ad hoc (see docs/RELEASING.md).
+      # Without them the app is signed ad hoc (see docs/RELEASING.md). Only whether they are
+      # there is known to every step; each secret is given to the step that uses it, after
+      # the build, whose dependencies' build scripts could otherwise read them.
       FREYA_MACOS_IDENTITY: ${{ vars.FREYA_MACOS_IDENTITY }}
-      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      HAS_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE != '' }}
+      HAS_APPLE_API_KEY: ${{ secrets.APPLE_API_KEY != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -87,8 +86,17 @@ jobs:
         run: rustup toolchain install
       - name: cargo-packager
         run: cargo install cargo-packager --locked --version "$CARGO_PACKAGER_VERSION"
+      - name: Build
+        # Freya's Last.fm API key, for scrobbling (see docs/RELEASING.md); only this step sees it.
+        env:
+          FREYA_LASTFM_API_KEY: ${{ secrets.FREYA_LASTFM_API_KEY }}
+          FREYA_LASTFM_SECRET: ${{ secrets.FREYA_LASTFM_SECRET }}
+        run: cargo packager -p freya --release --formats app
       - name: Developer ID certificate, into a keychain of its own
-        if: env.APPLE_CERTIFICATE != ''
+        if: env.HAS_APPLE_CERTIFICATE == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
           keychain="$RUNNER_TEMP/signing.keychain-db"
           password=$(openssl rand -hex 24)
@@ -102,17 +110,18 @@ jobs:
           security list-keychains -d user -s "$keychain" login.keychain-db
           rm "$RUNNER_TEMP/certificate.p12"
       - name: Notarization key
-        if: env.APPLE_API_KEY != ''
+        if: env.HAS_APPLE_API_KEY == 'true'
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
         run: |
           umask 077
           printf '%s' "$APPLE_API_KEY" > "$RUNNER_TEMP/notary.p8"
           echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/notary.p8" >> "$GITHUB_ENV"
-      - name: Package and sign
-        # Freya's Last.fm API key, for scrobbling (see docs/RELEASING.md); only this step sees it.
+      - name: Sign, notarize and package
         env:
-          FREYA_LASTFM_API_KEY: ${{ secrets.FREYA_LASTFM_API_KEY }}
-          FREYA_LASTFM_SECRET: ${{ secrets.FREYA_LASTFM_SECRET }}
-        run: ci/package-macos.sh
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: ci/package-macos.sh --skip-build
       - name: Smoke test
         run: |
           target/packages/Freya.app/Contents/MacOS/freya --version | grep -qx "freya $VERSION"
@@ -216,7 +225,8 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: github.ref_type == 'tag'
+    # Only for a pushed tag: started by hand, even on a tag, the workflow only builds.
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: [check, ci, macos, linux, windows]
     runs-on: ubuntu-24.04
     # Holds the release signing key, and waits for the owner's approval.
@@ -266,16 +276,26 @@ jobs:
           else
             ssh-keygen -Y sign -f "$key" -n freya-release dist/SHA256SUMS
           fi
-      - name: Check the signature against the key built into Freya
+      - name: Check the signature against the keys built into Freya
         run: |
-          # Only the keys in RELEASE_KEYS: signing.rs also holds keys for its tests.
-          awk '/^pub const RELEASE_KEYS/,/^\];/' freya/src/update/signing.rs |
-            grep -o '"ssh-ed25519 [^"]*"' | tr -d '"' |
-            awk '{ print "freya-release namespaces=\"freya-release\" " $1 " " $2 }' \
-            > "$RUNNER_TEMP/allowed_signers"
-          test -s "$RUNNER_TEMP/allowed_signers"
-          ssh-keygen -Y verify -f "$RUNNER_TEMP/allowed_signers" -I freya-release \
-            -n freya-release -s dist/SHA256SUMS.sig < dist/SHA256SUMS
+          # The keys of this release, and of the one before it: copies already installed update
+          # with the keys they were built with, so a release they would refuse stops here.
+          check() {
+            # Only the keys in RELEASE_KEYS: signing.rs also holds keys for its tests.
+            awk '/^pub const RELEASE_KEYS/,/^\];/' |
+              grep -o '"ssh-ed25519 [^"]*"' | tr -d '"' |
+              awk '{ print "freya-release namespaces=\"freya-release\" " $1 " " $2 }' \
+              > "$RUNNER_TEMP/allowed_signers"
+            test -s "$RUNNER_TEMP/allowed_signers"
+            ssh-keygen -Y verify -f "$RUNNER_TEMP/allowed_signers" -I freya-release \
+              -n freya-release -s dist/SHA256SUMS.sig < dist/SHA256SUMS
+          }
+          check < freya/src/update/signing.rs
+          previous=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
+          if [ -n "$previous" ] &&
+            git show "$previous:freya/src/update/signing.rs" > "$RUNNER_TEMP/previous.rs"; then
+            check < "$RUNNER_TEMP/previous.rs"
+          fi
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-checksums: dist/SHA256SUMS

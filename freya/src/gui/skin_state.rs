@@ -82,28 +82,61 @@ impl ModelRows {
         debug_assert_eq!(self.model.row_count(), rows.len());
         self.shown = rows;
     }
+
+    /// Replaces row `i`, which is shown.
+    fn set(&mut self, i: usize, row: Value) {
+        self.model.set_row_data(i, row.clone());
+        self.shown[i] = row;
+    }
 }
 
 /// The playlist rows shown by the skin.
-pub struct Rows(ModelRows);
+pub struct Rows {
+    rows: ModelRows,
+    /// The entries the rows were made from, and whether each was the current one.
+    made_from: Vec<(Entry, bool)>,
+}
 
 impl Rows {
     pub fn new() -> Self {
-        Self(ModelRows::new())
+        Self {
+            rows: ModelRows::new(),
+            made_from: Vec::new(),
+        }
     }
 
     pub fn model_value(&self) -> Value {
-        self.0.model_value()
+        self.rows.model_value()
     }
 
+    /// Makes again only the rows whose entries changed, while the entries are as many as
+    /// before: making all of them for every key that moves the selection took 40 ms with
+    /// 50,000.
     pub fn sync(&mut self, playlist: &Playlist) {
-        let rows = playlist
-            .entries()
+        let entries = playlist.entries();
+        let current = playlist.current();
+        if entries.len() == self.made_from.len() {
+            for (i, entry) in entries.iter().enumerate() {
+                let is_current = current == Some(i);
+                let (made, was_current) = &self.made_from[i];
+                if made != entry || *was_current != is_current {
+                    self.rows.set(i, track_row(i, entry, is_current));
+                    self.made_from[i] = (entry.clone(), is_current);
+                }
+            }
+            return;
+        }
+        let rows = entries
             .iter()
             .enumerate()
-            .map(|(i, e)| track_row(i, e, playlist.current() == Some(i)))
+            .map(|(i, e)| track_row(i, e, current == Some(i)))
             .collect();
-        self.0.sync(rows);
+        self.rows.sync(rows);
+        self.made_from = entries
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.clone(), current == Some(i)))
+            .collect();
     }
 }
 
@@ -131,16 +164,19 @@ pub fn player_values(
     let track = status.track.as_ref().or(track);
     let playing = status.state != PlaybackState::Stopped;
     let entry = playlist.current_entry();
-    let (title, artist) = match (track, entry) {
+    // Stopped, the entry Play would start; with none, nothing, not the track played last.
+    let (title, artist, album) = match (track, entry) {
         (Some(t), _) if playing => (
             t.title.clone().unwrap_or_else(|| t.display_title()),
             t.artist.clone().unwrap_or_default(),
+            t.album.clone().unwrap_or_default(),
         ),
         (_, Some(e)) => (
             e.title.clone().unwrap_or_else(|| e.display_title()),
             e.artist.clone().unwrap_or_default(),
+            e.album.clone().unwrap_or_default(),
         ),
-        _ => (String::new(), String::new()),
+        _ => (String::new(), String::new(), String::new()),
     };
     let length = track.and_then(|t| t.duration).filter(|_| playing);
     let position = if playing {
@@ -159,10 +195,7 @@ pub fn player_values(
     vec![
         ("title", string(title)),
         ("artist", string(artist)),
-        (
-            "album",
-            string(track.and_then(|t| t.album.clone()).unwrap_or_default()),
-        ),
+        ("album", string(album)),
         (
             "format-info",
             string(
@@ -352,12 +385,12 @@ mod tests {
         p.insert(None, ["/a.mp3", "/b.mp3", "/c.mp3"].map(Entry::new));
         let mut rows = Rows::new();
         rows.sync(&p);
-        assert_eq!(rows.0.model.row_count(), 3);
-        let before = rows.0.model.row_data(0);
+        assert_eq!(rows.rows.model.row_count(), 3);
+        let before = rows.rows.model.row_data(0);
         p.click(1, freya_library::SelectMode::Single);
         rows.sync(&p);
-        assert_eq!(rows.0.model.row_data(0), before);
-        let Some(Value::Struct(row)) = rows.0.model.row_data(1) else {
+        assert_eq!(rows.rows.model.row_data(0), before);
+        let Some(Value::Struct(row)) = rows.rows.model.row_data(1) else {
             panic!("row is a struct");
         };
         assert_eq!(row.get_field("selected"), Some(&Value::Bool(true)));

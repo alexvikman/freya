@@ -194,16 +194,24 @@ impl Covers {
                 latest = Some(cover);
             }
         }
+        if let Some(Some((_, Some(file)))) = &latest {
+            remove_other_cover_files(file);
+        }
         latest
     }
 }
 
-/// Saves `cover` for the system's Now Playing display, replacing the previous one. Named after
-/// the track, so the system does not show an old image it cached.
+/// Where covers are saved for the system's Now Playing display.
+fn cover_files_dir() -> Option<PathBuf> {
+    Some(settings::cache_dir()?.join("now-playing"))
+}
+
+/// Saves `cover` for the system's Now Playing display. Named after the track, so the system
+/// does not show an old image it cached. Earlier ones are removed once this one is shown, from
+/// the UI thread: a slower cover saved after it would otherwise remove it.
 fn save_cover_file(track: &Path, cover: &Cover) -> Option<PathBuf> {
     use std::hash::{Hash, Hasher};
-    let dir = settings::cache_dir()?.join("now-playing");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = cover_files_dir()?;
     std::fs::create_dir_all(&dir).ok()?;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     track.hash(&mut hasher);
@@ -213,6 +221,18 @@ fn save_cover_file(track: &Path, cover: &Cover) -> Option<PathBuf> {
         Err(e) => {
             log::debug!("could not save the cover for Now Playing: {e}");
             None
+        }
+    }
+}
+
+/// Removes the saved covers but `keep`.
+fn remove_other_cover_files(keep: &Path) {
+    let Some(entries) = cover_files_dir().and_then(|dir| std::fs::read_dir(dir).ok()) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.path() != keep {
+            let _ = std::fs::remove_file(entry.path());
         }
     }
 }
@@ -871,8 +891,9 @@ impl App {
             }
         }
 
-        for (path, tags) in self.tags.poll() {
-            self.playlist.apply_tags(&path, &tags);
+        let tags: HashMap<PathBuf, freya_library::TagInfo> = self.tags.poll().collect();
+        if !tags.is_empty() {
+            self.playlist.apply_all_tags(&tags);
             self.playlist_dirty = true;
         }
 
@@ -906,6 +927,16 @@ impl App {
             }
         }
 
+        // With nothing to play, the cover of what played last goes too.
+        if self.cover.is_some()
+            && self.playlist.current_entry().is_none()
+            && self.player.status().state == PlaybackState::Stopped
+        {
+            self.covers.wanted = None;
+            self.cover = None;
+            self.cover_file = None;
+            show_cover(&self.view.ui, None);
+        }
         if let Some(cover) = self.covers.poll() {
             self.cover_file = cover.as_ref().and_then(|(_, file)| file.clone());
             self.cover = cover.map(|(c, _)| {
@@ -1036,7 +1067,7 @@ impl App {
     }
 
     /// A request from the system's media controls: media keys, Now Playing.
-    fn handle_media_request(&mut self, request: MediaRequest) {
+    pub fn handle_media_request(&mut self, request: MediaRequest) {
         match request {
             MediaRequest::Play => self.play(),
             MediaRequest::Pause => self.player.set_paused(true),
@@ -1046,11 +1077,16 @@ impl App {
             MediaRequest::Stop => self.stop(),
             MediaRequest::SeekBy(seconds) => self.seek_by(seconds),
             MediaRequest::SetPosition(position) => self.player.seek(position),
-            MediaRequest::SetVolume(volume) => {
-                self.player.set_volume((volume as f32).clamp(0.0, 1.0));
-            }
-            MediaRequest::OpenUri(uri) => match uri.strip_prefix("file://") {
-                Some(path) => self.replace_and_play(&[PathBuf::from(path)]),
+            MediaRequest::SetVolume(volume) => self.player.set_volume(volume as f32),
+            // Added to Up Next and played, as for an address: what is queued stays.
+            MediaRequest::OpenUri(uri) => match playlist_file::file_url_path(&uri) {
+                Some(path) => {
+                    let first = self.playlist.len();
+                    self.add_paths(&[path]);
+                    if self.playlist.len() > first {
+                        self.play_index(first);
+                    }
+                }
                 None => self.add_url(&uri),
             },
             MediaRequest::Raise => {

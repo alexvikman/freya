@@ -365,7 +365,15 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> BufferInterface for BufferImpl<'_,
                 });
                 imp.surfaces.len() - 1
             }
-            None => 0,
+            // All held. The window server usually lets the oldest go within a frame: wait a
+            // little for it before drawing into it anyway, which could show a torn frame.
+            None => {
+                let until = std::time::Instant::now() + std::time::Duration::from_millis(4);
+                while imp.surfaces[0].surface.is_in_use() && std::time::Instant::now() < until {
+                    std::thread::sleep(std::time::Duration::from_micros(250));
+                }
+                0
+            }
         };
         let mut surface = imp.surfaces.remove(index);
         fill(

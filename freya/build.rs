@@ -14,7 +14,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 fn main() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    // Where Cargo says the package is as it runs this script: one built into the script would
+    // be where it was compiled, an old checkout after the folder moved.
+    let manifest_dir = std::env::var_os("CARGO_MANIFEST_DIR").expect("run by Cargo");
+    let root = PathBuf::from(manifest_dir).join("..");
     // `@freya/v1.slint` in the skin is the skin API, which the interpreter serves from memory.
     let library = HashMap::from([("freya".to_owned(), root.join("crates/freya-skin/api"))]);
     let config = slint_build::CompilerConfiguration::new().with_library_paths(library);

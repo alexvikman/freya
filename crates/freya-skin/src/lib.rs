@@ -68,6 +68,8 @@ pub enum Error {
     Compile(String),
     #[error("skin defines no window component")]
     NoComponent,
+    #[error("skin exports several components ({0}); export only its window")]
+    SeveralComponents(String),
     #[error(
         "skin does not export the `{0}` global; add `export {{ {0} }} from \"@freya/v{API_VERSION}.slint\";`"
     )]
@@ -152,7 +154,13 @@ fn compile_with_warnings(source: &SkinSource) -> Result<(ComponentDefinition, Ve
         Some(path) => spin_on::spin_on(compiler.build_from_path(path)),
     };
     let warnings = diagnostics(&result)?;
-    let component = result.components().last().ok_or(Error::NoComponent)?;
+    // Which of several would be the window is down to a hash map's order.
+    let mut names: Vec<&str> = result.component_names().collect();
+    if names.len() > 1 {
+        names.sort_unstable();
+        return Err(Error::SeveralComponents(names.join(", ")));
+    }
+    let component = result.components().next().ok_or(Error::NoComponent)?;
     for global in REQUIRED_GLOBALS {
         if !component.globals().any(|g| g == global) {
             return Err(Error::MissingGlobal(global));
@@ -267,6 +275,59 @@ mod tests {
         assert_eq!(names, ["Freya", "Mini"]);
         assert_eq!(skins[1].author, "Freya");
         assert_eq!(skins[1].source, source);
+    }
+
+    #[test]
+    fn a_manifest_that_is_not_utf8_is_an_error() {
+        // In a folder it was taken for no manifest, and its API version went unchecked.
+        let dir = temp_dir("latin1-manifest");
+        std::fs::write(dir.join("skin.toml"), b"name = \"Caf\xe9\"\napi = 99\n").unwrap();
+        let error = SkinInfo::read(&SkinSource::Folder(dir))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("UTF-8"), "{error}");
+    }
+
+    #[test]
+    fn a_skin_exporting_two_windows_is_refused() {
+        // Freya opened either of them, as a hash map's order had it.
+        let dir = temp_dir("two-windows");
+        std::fs::write(dir.join("skin.toml"), "name = \"Two\"\napi = 1\n").unwrap();
+        std::fs::write(
+            dir.join("skin.slint"),
+            "export { Player } from \"@freya/v1.slint\";\n\
+             export component A inherits Window { }\n\
+             export component B inherits Window { }\n",
+        )
+        .unwrap();
+        let Err(error) = compile(&SkinSource::Folder(dir)) else {
+            panic!("compiled");
+        };
+        let error = error.to_string();
+        assert!(error.contains("several components (A, B)"), "{error}");
+    }
+
+    #[test]
+    fn a_package_written_into_its_folder_leaves_itself_out() {
+        // It was listed, half written, among the files to pack.
+        let dir = temp_dir("pack-inside");
+        let folder = dir.join("mini");
+        std::fs::create_dir_all(&folder).unwrap();
+        // Mini is one folder of files.
+        for file in std::fs::read_dir(repo_skins().join("mini")).unwrap() {
+            let file = file.unwrap().path();
+            std::fs::copy(&file, folder.join(file.file_name().unwrap())).unwrap();
+        }
+        let package = folder.join("mini.freyaskin");
+        pack(&folder, &package).unwrap();
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(&package).unwrap()).unwrap();
+        let names: Vec<String> = (0..zip.len())
+            .map(|i| zip.by_index(i).unwrap().name().unwrap().into_owned())
+            .collect();
+        assert!(
+            !names.iter().any(|n| n.ends_with(".freyaskin")),
+            "{names:?}"
+        );
     }
 
     #[test]

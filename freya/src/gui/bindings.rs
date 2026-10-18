@@ -483,8 +483,9 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
         "Visualizer",
         "cycle-mode",
         Box::new(|app, _| {
+            let without_hologram = app.view.visualizer.without_hologram();
             app.settings.visualizer_mode =
-                visualizer::next_mode(&app.settings.visualizer_mode).to_owned();
+                visualizer::next_mode(&app.settings.visualizer_mode, without_hologram).to_owned();
         }),
     );
     bind(
@@ -636,14 +637,15 @@ fn numbers(args: &[Value], i: usize) -> Vec<f32> {
 }
 
 fn pick_audio() -> Option<Vec<PathBuf>> {
+    // CUE sheets too: they open as the tracks of the disc they cut.
     let extensions = [
         freya_library::files::AUDIO_EXTENSIONS,
-        &["m3u", "m3u8", "pls"],
+        &["cue", "m3u", "m3u8", "pls"],
     ]
     .concat();
     rfd::FileDialog::new()
         .set_title("Open music")
-        .add_filter("Audio and playlists", &extensions)
+        .add_filter("Audio, CUE sheets and playlists", &extensions)
         .pick_files()
 }
 

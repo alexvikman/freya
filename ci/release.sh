@@ -33,6 +33,10 @@ fi
 
 gitleaks git --redact --no-banner --log-level warn .
 
+# Should anything below fail, such as a commit that cannot be signed while the key is locked,
+# the version goes back: a half-made release would otherwise make the next try "not newer".
+trap 'git restore --staged --worktree Cargo.toml Cargo.lock' EXIT
+
 # The workspace version, in [workspace.package], is the first `version = ` line.
 awk -v v="$version" '!done && /^version = "/ { print "version = \"" v "\""; done = 1; next } { print }' \
     Cargo.toml > Cargo.toml.new
@@ -42,6 +46,7 @@ cargo run --quiet -p freya -- --version | grep -qx "freya $version"
 
 git add Cargo.toml Cargo.lock
 git commit --quiet -m "Release $version"
+trap - EXIT
 git tag -a "v$version" -m "Freya $version"
 echo "release: v$version is ready. Publish it with:"
 echo "    git push origin main v$version"

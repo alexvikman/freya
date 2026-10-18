@@ -128,7 +128,7 @@ fn resolve(entry: &str, base: &Path) -> PathBuf {
 
 /// The path a `file://` address names, as players like VLC and Rhythmbox write them:
 /// `file:///home/me/Song%20One.mp3`, or `file:///C:/Music/x.mp3` on Windows.
-fn file_url_path(entry: &str) -> Option<PathBuf> {
+pub fn file_url_path(entry: &str) -> Option<PathBuf> {
     let scheme = entry.get(..7)?;
     if !scheme.eq_ignore_ascii_case("file://") {
         return None;

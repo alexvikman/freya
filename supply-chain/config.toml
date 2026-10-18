@@ -26,7 +26,6 @@ url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 url = "https://raw.githubusercontent.com/zcash/rust-ecosystem/main/supply-chain/audits.toml"
 
 [policy.softbuffer]
-# Freya's patched copy in vendor/ (see vendor/README.md), reviewed as Freya's own code.
 audit-as-crates-io = false
 
 [[exemptions.ab_glyph_rasterizer]]

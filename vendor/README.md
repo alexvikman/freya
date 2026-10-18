@@ -26,11 +26,15 @@ The patch, in `src/backends/cg.rs` and the macOS dependencies in `Cargo.toml`:
 - Frames reach the window server through up to three `IOSurface`s, tagged sRGB. Only the
   rectangles that changed since a surface was last filled are copied into it, and the window
   server shows it directly, converting colors on the graphics card. The colors are the same as
-  before: screenshots differ by at most 1 in 255.
+  before: screenshots differ by at most 1 in 255. Should the window server hold all three,
+  the oldest is waited for, up to 4 ms, before it is drawn into anyway.
 
 Measured with the release build while playing, at the same window size: the queue view went
 from about 5 % to 1.9 % of a core, the full-screen visualizer with the spectrum from 6.2 % to
 3.3 %.
+
+For cargo vet, these copies are Freya's own code (`audit-as-crates-io = false` in
+`supply-chain/config.toml`): they are reviewed with Freya's changes, not audited as releases.
 
 Other systems are unchanged. When Slint or softbuffer present differently on macOS, check
 whether this is still needed; drop the copy once upstream does the same.

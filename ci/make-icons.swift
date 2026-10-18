@@ -7,13 +7,16 @@ import AppKit
 
 let srgb = CGColorSpace(name: CGColorSpace.sRGB)!
 
-/// The icon on a 1024×1024 canvas, y up.
-func drawIcon(in ctx: CGContext, art: CGImage) {
+/// The icon on a 1024×1024 canvas, y up, drawn at `scale` pixels per point.
+func drawIcon(in ctx: CGContext, art: CGImage, scale: CGFloat) {
     let tile = CGRect(x: 100, y: 100, width: 824, height: 824)
     let path = CGPath(roundedRect: tile, cornerWidth: 185, cornerHeight: 185, transform: nil)
 
     ctx.saveGState()
-    ctx.setShadow(offset: CGSize(width: 0, height: -10), blur: 28,
+    // A shadow's offset and blur are in pixels, whatever the context is scaled by: at 1024
+    // points they spread over the margin, and small icons need them scaled down to match, or
+    // the shadow reaches their edges.
+    ctx.setShadow(offset: CGSize(width: 0, height: -10 * scale), blur: 28 * scale,
                   color: CGColor(gray: 0, alpha: 0.30))
     ctx.addPath(path)
     ctx.setFillColor(CGColor(gray: 1, alpha: 1))
@@ -32,8 +35,9 @@ func render(_ size: Int, art: CGImage) -> Data {
     let ctx = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8,
                         bytesPerRow: 0, space: srgb,
                         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-    ctx.scaleBy(x: CGFloat(size) / 1024, y: CGFloat(size) / 1024)
-    drawIcon(in: ctx, art: art)
+    let scale = CGFloat(size) / 1024
+    ctx.scaleBy(x: scale, y: scale)
+    drawIcon(in: ctx, art: art, scale: scale)
     return NSBitmapImageRep(cgImage: ctx.makeImage()!).representation(using: .png, properties: [:])!
 }
 

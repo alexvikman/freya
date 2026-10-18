@@ -47,11 +47,11 @@ run() {
 }
 
 linux='cargo fmt --all --check
-       cargo clippy --all-targets -- -D warnings
-       cargo test --all
+       cargo clippy --locked --all-targets -- -D warnings
+       cargo test --locked --all
        shellcheck /src/ci/*.sh /src/.githooks/pre-commit'
-windows='cargo clippy --all-targets --target x86_64-pc-windows-gnu -- -D warnings
-         cargo build --release -p freya --target x86_64-pc-windows-gnu
+windows='cargo clippy --locked --all-targets --target x86_64-pc-windows-gnu -- -D warnings
+         cargo build --locked --release -p freya --target x86_64-pc-windows-gnu
          file /target/x86_64-pc-windows-gnu/release/freya.exe
          x86_64-w64-mingw32-objdump -h /target/x86_64-pc-windows-gnu/release/freya.exe | grep -q " .rsrc " &&
              echo "freya.exe has its icon and version resources"'
@@ -71,7 +71,7 @@ secrets='git config --global --add safe.directory /src
 deps='cargo install cargo-deny --locked --version 0.20.2 --root /target/tools
       cargo install cargo-vet --locked --version 0.10.2 --root /target/tools
       export PATH="/target/tools/bin:$PATH"
-      cargo deny check
+      cargo deny --locked check
       cp -R /src/supply-chain /tmp/supply-chain
       cargo vet --locked --store-path /tmp/supply-chain'
 # cargo-packager writes next to the source, so it works on a copy. The checkout's own target

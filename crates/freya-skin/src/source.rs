@@ -97,6 +97,12 @@ pub struct Manifest {
 }
 
 /// What the skin picker shows about a skin.
+/// A manifest's text, which TOML requires to be UTF-8: one that is not was ignored in a folder,
+/// API version and all, and read with replacement characters in a package.
+fn manifest_text(bytes: Vec<u8>) -> Result<String, Error> {
+    String::from_utf8(bytes).map_err(|_| Error::Manifest("not UTF-8 text".into()))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SkinInfo {
     pub source: SkinSource,
@@ -122,12 +128,16 @@ impl SkinInfo {
         let manifest = match source {
             SkinSource::Builtin => return Ok(Self::builtin()),
             SkinSource::File(_) => Manifest::default(),
-            SkinSource::Folder(dir) => match std::fs::read_to_string(dir.join(MANIFEST_FILE)) {
-                Ok(text) => parse_manifest(&text)?,
-                Err(_) => Manifest::default(),
-            },
+            SkinSource::Folder(dir) => {
+                let path = dir.join(MANIFEST_FILE);
+                match std::fs::read(&path) {
+                    Ok(bytes) => parse_manifest(&manifest_text(bytes)?)?,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Manifest::default(),
+                    Err(e) => return Err(io(&path, e)),
+                }
+            }
             SkinSource::Package(p) => match read_package_file(p, MANIFEST_FILE)? {
-                Some(bytes) => parse_manifest(&String::from_utf8_lossy(&bytes))?,
+                Some(bytes) => parse_manifest(&manifest_text(bytes)?)?,
                 None => Manifest::default(),
             },
         };
@@ -322,10 +332,15 @@ fn read_package_file(package: &Path, name: &str) -> Result<Option<Vec<u8>>, Erro
 pub fn pack(folder: &Path, out: &Path) -> Result<Vec<String>, Error> {
     let warnings = crate::check(&SkinSource::Folder(folder.to_owned()))?;
     let file = std::fs::File::create(out).map_err(|e| io(out, e))?;
+    // A package written inside the folder would pack itself, half written.
+    let written = out.canonicalize().ok();
     let mut zip = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
     for path in files_in(folder, true) {
+        if written.is_some() && path.canonicalize().ok() == written {
+            continue;
+        }
         let relative = path
             .strip_prefix(folder)
             .map_err(|e| Error::Package(e.to_string()))?;

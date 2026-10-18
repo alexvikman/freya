@@ -53,20 +53,26 @@ const MODES: [&str; 4] = ["spectrum", "oscilloscope", "hologram", "off"];
 /// The hologram pulses with the strongest of the lowest bars: this share of them,
 /// on the spectrum's logarithmic scale up to about 150 Hz.
 const BASS_SHARE: usize = 8;
-/// At least this many bars are computed, so the hologram has a bass even without a spectrum.
+/// Bars computed when the skin asks for none, so the hologram has a bass even without a
+/// spectrum.
 const MIN_BARS: usize = 16;
 
 pub fn is_mode(mode: &str) -> bool {
     MODES.contains(&mode)
 }
 
-/// The mode after `mode`, in the order spectrum, oscilloscope, hologram, off.
-pub fn next_mode(mode: &str) -> &'static str {
+/// The mode after `mode`, in the order spectrum, oscilloscope, hologram, off. The hologram is
+/// left out `without_hologram`, where it would only be an empty box.
+pub fn next_mode(mode: &str, without_hologram: bool) -> &'static str {
     let i = MODES
         .iter()
         .position(|m| *m == mode)
         .unwrap_or(MODES.len() - 1);
-    MODES[(i + 1) % MODES.len()]
+    let next = MODES[(i + 1) % MODES.len()];
+    if next == "hologram" && without_hologram {
+        return next_mode(next, without_hologram);
+    }
+    next
 }
 
 pub struct Visualizer {
@@ -81,6 +87,11 @@ pub struct Visualizer {
     /// window size it was last placed for.
     native: Option<NativeSpectrum>,
     native_placed: Option<(Option<Area>, slint::PhysicalSize)>,
+    /// Whether the system cannot have the layer, so it is not tried again.
+    native_unavailable: bool,
+    /// Whether the skin has a `NativeSpectrum` for the layer: skins without one draw the bars
+    /// they are given.
+    skin_has_native: bool,
     mode_shown: Option<String>,
     fps_shown: Option<u32>,
     /// The oscilloscope layer Freya draws itself, where the system allows it, and the area
@@ -88,9 +99,9 @@ pub struct Visualizer {
     oscilloscope: Option<NativeOscilloscope>,
     oscilloscope_placed: Option<(Option<native_oscilloscope::Area>, slint::PhysicalSize)>,
     /// The hologram, drawn by the graphics card where the system allows it, and where it was
-    /// last placed.
+    /// last placed, at which scale: moved to a screen of another scale, it needs new pixels.
     hologram: Option<Hologram>,
-    hologram_placed: Option<Option<hologram::Area>>,
+    hologram_placed: Option<(Option<hologram::Area>, f32)>,
     /// Whether the system cannot show the hologram, so it is not tried again.
     hologram_unavailable: bool,
     /// Whether the audio callback is copying samples for us.
@@ -112,6 +123,8 @@ impl Visualizer {
             peaks_shown: Vec::new(),
             native: None,
             native_placed: None,
+            native_unavailable: false,
+            skin_has_native: false,
             mode_shown: None,
             fps_shown: None,
             oscilloscope: None,
@@ -177,12 +190,16 @@ impl Visualizer {
     /// Adds Freya's own spectrum layer once the window is open, and keeps it where the skin's
     /// `NativeSpectrum` is.
     fn update_native(&mut self, ui: &SkinWindow, mode: &str) {
-        if !NativeSpectrum::SUPPORTED {
+        if !NativeSpectrum::SUPPORTED || self.native_unavailable {
             return;
         }
         if self.native.is_none() {
+            if !ui.window().has_winit_window() {
+                return;
+            }
             self.native = NativeSpectrum::new(ui.window());
             if self.native.is_none() {
+                self.native_unavailable = true;
                 return;
             }
             let _ = ui.set_global_property("Visualizer", "native-drawing", Value::Bool(true));
@@ -190,7 +207,9 @@ impl Visualizer {
         if let Some(native) = &mut self.native {
             native.refresh();
         }
-        let area = Area::read(ui).filter(|_| mode == "spectrum");
+        let area = Area::read(ui);
+        self.skin_has_native = area.is_some();
+        let area = area.filter(|_| mode == "spectrum");
         let placed = Some((area.clone(), ui.window().size()));
         if self.native_placed != placed
             && let Some(native) = &mut self.native
@@ -246,12 +265,27 @@ impl Visualizer {
             }
             let _ = ui.set_global_property("Visualizer", "hologram-drawing", Value::Bool(true));
         }
-        if self.hologram_placed.as_ref() != Some(&area)
+        // Setting up the graphics card failed on the hologram's thread: the skin shows its box
+        // as where the hologram cannot be drawn, and it is not tried again.
+        if self.hologram.as_ref().is_some_and(Hologram::failed) {
+            self.hologram = None;
+            self.hologram_placed = None;
+            self.hologram_unavailable = true;
+            let _ = ui.set_global_property("Visualizer", "hologram-drawing", Value::Bool(false));
+            return;
+        }
+        let placed = Some((area, ui.window().scale_factor()));
+        if self.hologram_placed != placed
             && let Some(hologram) = &mut self.hologram
         {
-            hologram.place(area.as_ref());
-            self.hologram_placed = Some(area);
+            hologram.place(placed.as_ref().and_then(|(area, _)| area.as_ref()));
+            self.hologram_placed = placed;
         }
+    }
+
+    /// Whether the hologram cannot be drawn here.
+    pub fn without_hologram(&self) -> bool {
+        !Hologram::SUPPORTED || self.hologram_unavailable
     }
 
     /// Draws one frame.
@@ -265,6 +299,15 @@ impl Visualizer {
     ) {
         if !self.available {
             return;
+        }
+        // The mode's layer is placed with every frame as well as every tick, so it follows its
+        // box while the window is resized, and not up to a fifth of a second later. Frames are
+        // only drawn while the window shows.
+        match mode {
+            "spectrum" => self.update_native(ui, mode),
+            "oscilloscope" => self.update_oscilloscope(ui, mode),
+            "hologram" => self.update_hologram(ui, mode, true),
+            _ => {}
         }
         let analyzer = self
             .analyzer
@@ -281,8 +324,9 @@ impl Visualizer {
             Ok(Value::Number(n)) => (n.max(0.0) as usize).min(MAX_BARS),
             _ => 0,
         };
-        // The hologram's pulse needs the lowest bars even when the skin draws none.
-        analyzer.update(count.max(MIN_BARS), dt);
+        // The hologram's pulse needs the lowest bars even when the skin draws none. A skin
+        // that asks for a few gets that few.
+        analyzer.update(if count > 0 { count } else { MIN_BARS }, dt);
         if let Some(hologram) = &self.hologram {
             let bars = analyzer.bars();
             let low = &bars[..(bars.len() / BASS_SHARE).max(2).min(bars.len())];
@@ -290,8 +334,8 @@ impl Visualizer {
         }
         match &mut self.native {
             // Freya draws the spectrum: the skin's window is not touched.
-            Some(native) => native.draw(analyzer.bars(), analyzer.peaks()),
-            None => {
+            Some(native) if self.skin_has_native => native.draw(analyzer.bars(), analyzer.peaks()),
+            _ => {
                 publish(ui, "bars", analyzer.bars(), &mut self.bars_shown);
                 publish(ui, "peaks", analyzer.peaks(), &mut self.peaks_shown);
             }
@@ -346,11 +390,13 @@ mod tests {
 
     #[test]
     fn modes_cycle() {
-        assert_eq!(next_mode("spectrum"), "oscilloscope");
-        assert_eq!(next_mode("oscilloscope"), "hologram");
-        assert_eq!(next_mode("hologram"), "off");
-        assert_eq!(next_mode("off"), "spectrum");
-        assert_eq!(next_mode("nonsense"), "spectrum");
+        assert_eq!(next_mode("spectrum", false), "oscilloscope");
+        assert_eq!(next_mode("oscilloscope", false), "hologram");
+        assert_eq!(next_mode("hologram", false), "off");
+        assert_eq!(next_mode("off", false), "spectrum");
+        // Where it cannot be drawn.
+        assert_eq!(next_mode("oscilloscope", true), "off");
+        assert_eq!(next_mode("nonsense", false), "spectrum");
     }
 
     #[test]

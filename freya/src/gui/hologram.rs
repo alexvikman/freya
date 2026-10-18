@@ -107,6 +107,11 @@ impl Hologram {
         Some(Self { renderer })
     }
 
+    /// Whether the graphics card turned out unusable, after `new`: nothing will be drawn.
+    pub fn failed(&self) -> bool {
+        self.renderer.failed()
+    }
+
     /// Shows the hologram in `area` and lets it run, or hides it and lets its thread sleep.
     pub fn place(&mut self, area: Option<&Area>) {
         self.renderer.place(area);

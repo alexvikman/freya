@@ -161,7 +161,7 @@ pub fn scan(
 fn find(folders: &[PathBuf], cancel: &AtomicBool) -> Vec<(Found, FileStamp)> {
     let mut seen = HashSet::new();
     let mut found = Vec::new();
-    for item in cue::apply_sheets(files::collect_with_sheets(folders)) {
+    for item in cue::apply_sheets(files::collect_with_sheets_until(folders, cancel)) {
         if cancel.load(Ordering::Relaxed) {
             break;
         }

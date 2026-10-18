@@ -184,8 +184,12 @@ pub fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
     }
     let partial = path.with_extension("partial");
-    std::fs::write(&partial, bytes)?;
-    std::fs::File::open(&partial)?.sync_all()?;
+    // Synced through the handle it was written with: Windows refuses to flush a file opened
+    // only for reading.
+    let mut file = std::fs::File::create(&partial)?;
+    std::io::Write::write_all(&mut file, bytes)?;
+    file.sync_all()?;
+    drop(file);
     std::fs::rename(&partial, path)
 }
 

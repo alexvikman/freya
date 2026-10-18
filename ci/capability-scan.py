@@ -32,7 +32,12 @@ PATTERNS = {
 BUILD_FS_WRITE = re.compile(r"fs::(?:write|create_dir_all|copy|rename|remove_file|remove_dir_all|File::create)|File::create")
 ENV_READ = re.compile(r"env::var(?:_os)?\(\s*\"([^\"]+)\"")
 HARMLESS_ENV = re.compile(r"^(CARGO|OUT_DIR|TARGET|HOST|PROFILE|OPT_LEVEL|DEBUG|NUM_JOBS|RUSTC|RUSTDOC|DOCS_RS|PKG_CONFIG|CC|CXX|AR|CFLAGS|CXXFLAGS|LDFLAGS|MACOSX_DEPLOYMENT_TARGET|IPHONEOS_DEPLOYMENT_TARGET|SDKROOT|DEP_|PATH$|VCPKG|LIB$|INCLUDE$|WINDIR|ANDROID|NDK|EMSCRIPTEN|WASI)")
-EXEC_MAGIC = [b"\x7fELF", b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"MZ"]
+# Executables and libraries (ELF, Mach-O, fat Mach-O, PE, static archives), and COFF objects by
+# their machine (x86-64, x86, ARM64, ARM), which have no magic of their own.
+EXEC_MAGIC = [b"\x7fELF", b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"MZ", b"!<arch>"]
+COFF_MACHINES = [b"\x64\x86", b"\x4c\x01", b"\x64\xaa", b"\xc4\x01"]
+# Prebuilt code by its name, whatever it starts with.
+BINARY_EXT = {".o", ".obj", ".so", ".dylib", ".dll", ".exe"}
 TEXT_EXT = {".rs", ".c", ".h", ".cc", ".cpp", ".hpp", ".s", ".S", ".asm", ".py", ".sh", ".pl", ".toml", ".js", ".json", ".txt", ".md", ".in", ".cmake", ".bat", ".ps1"}
 
 
@@ -61,19 +66,21 @@ def scan(name, version, out):
     root = next((r for r in roots if os.path.isdir(r)), None)
     if root is None:
         print(f"not downloaded: {name} {version} (run cargo fetch --locked)", file=sys.stderr)
-        return
+        return False
     build_files, proc_macro = build_time_files(root)
+    # Every folder: one named `target` or `.git` is as much part of the crate as any other.
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in (".git", "target")]
         for fn in filenames:
             path = os.path.join(dirpath, fn)
             rel = os.path.relpath(path, root)
             try:
-                head = open(path, "rb").read(4)
+                head = open(path, "rb").read(8)
             except OSError:
                 continue
-            ext = os.path.splitext(fn)[1]
-            if any(head.startswith(m) for m in EXEC_MAGIC) and ext not in TEXT_EXT:
+            ext = os.path.splitext(fn)[1].lower()
+            prebuilt = ext in BINARY_EXT or (ext not in TEXT_EXT and (
+                any(head.startswith(m) for m in EXEC_MAGIC) or head[:2] in COFF_MACHINES))
+            if prebuilt:
                 out.append({"crate": name, "version": version, "file": rel, "kind": "executable", "line": 0, "text": head.hex()})
                 continue
             if ext not in TEXT_EXT:
@@ -98,18 +105,22 @@ def scan(name, version, out):
                         if not HARMLESS_ENV.match(var):
                             out.append({"crate": name, "version": version, "file": rel, "kind": "build-env",
                                         "build_time": True, "line": no, "text": line.strip()[:200]})
+    return True
 
 
 def main():
     findings = []
-    for name, version in exempted():
-        scan(name, version, findings)
+    missing = [f"{name} {version}" for name, version in exempted() if not scan(name, version, findings)]
     out = sys.argv[1] if len(sys.argv) > 1 else "capability-scan.jsonl"
     with open(out, "w") as f:
         for item in findings:
             f.write(json.dumps(item) + "\n")
     from collections import Counter
     print(Counter((x["kind"], x.get("build_time", False)) for x in findings))
+    # A crate not scanned is not a crate found clean.
+    if missing:
+        print(f"{len(missing)} exempted crates were not scanned", file=sys.stderr)
+        sys.exit(1)
 
 
 main()

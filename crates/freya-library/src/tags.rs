@@ -22,7 +22,13 @@ pub struct TagInfo {
 
 /// Reads tags and duration from a file. Returns `None` if the file cannot be parsed.
 pub fn read_tags(path: &Path) -> Option<TagInfo> {
-    let file = lofty::read_from_path(path).ok()?;
+    // Without the pictures, which can be megabytes per file and are read for covers alone.
+    let options = lofty::config::ParseOptions::new().read_cover_art(false);
+    let file = lofty::probe::Probe::open(path)
+        .ok()?
+        .options(options)
+        .read()
+        .ok()?;
     let duration = Some(file.properties().duration()).filter(|d| !d.is_zero());
     let tag = file.primary_tag().or_else(|| file.first_tag());
     let text = |s: Option<std::borrow::Cow<'_, str>>| {

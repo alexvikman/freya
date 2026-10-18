@@ -67,7 +67,7 @@ impl Thumbnails {
             return known.clone();
         }
         let file = self.file(key);
-        let state = if file.exists() {
+        let state = if file.exists() && !outdated(&file, track) {
             Thumbnail::Ready(file)
         } else {
             self.request(key, track);
@@ -126,9 +126,37 @@ impl Thumbnails {
     }
 }
 
-/// Makes the thumbnail for `key` from `track`'s cover. Returns false when there is no cover.
+/// Whether the thumbnail `file` is older than where its cover may come from: the track, with
+/// its embedded picture, its folder, where adding a cover image changes the folder, and the
+/// images in it.
+fn outdated(file: &Path, track: &Path) -> bool {
+    let modified = |path: &Path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
+    let Some(made) = modified(file) else {
+        return true;
+    };
+    let newer = |path: &Path| modified(path).is_some_and(|changed| changed > made);
+    let Some(folder) = track.parent() else {
+        return newer(track);
+    };
+    let images = std::fs::read_dir(folder)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| {
+            let path = entry.path();
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            ["jpg", "jpeg", "png", "webp", "gif", "bmp"]
+                .iter()
+                .any(|known| ext.eq_ignore_ascii_case(known))
+        });
+    newer(track) || newer(folder) || images.into_iter().any(|entry| newer(&entry.path()))
+}
+
+/// Makes the thumbnail for `key` from `track`'s cover. Returns false when there is no cover,
+/// and then removes one made before.
 fn make(dir: &Path, key: &str, track: &Path) -> Result<bool, String> {
     let Some(cover) = read_cover(track, SIZE) else {
+        let _ = std::fs::remove_file(dir.join(format!("{key}.jpg")));
         return Ok(false);
     };
     create_private_dir(dir).map_err(|e| e.to_string())?;
@@ -224,8 +252,22 @@ mod tests {
         assert_eq!(thumbnails.known.len(), 2);
 
         // A new run finds the thumbnail made, and looks again for the missing cover.
-        let mut again = Thumbnails::new(cache);
-        assert_eq!(again.get("a", &track), Thumbnail::Ready(file));
+        let mut again = Thumbnails::new(cache.clone());
+        assert_eq!(again.get("a", &track), Thumbnail::Ready(file.clone()));
         assert_eq!(again.get("b", &bare), Thumbnail::Pending);
+
+        // A cover replaced after the thumbnail was made: the next run makes it again. It kept
+        // the old one for good.
+        std::thread::sleep(Duration::from_millis(20));
+        let image = image::RgbImage::from_pixel(600, 300, image::Rgb([0, 0, 255]));
+        image.save(music.join("cover.jpg")).unwrap();
+        let mut later = Thumbnails::new(cache);
+        assert_eq!(later.get("a", &track), Thumbnail::Pending);
+        wait(&mut later);
+        let Thumbnail::Ready(file) = later.get("a", &track) else {
+            panic!("the thumbnail is made again");
+        };
+        let made = image::open(&file).unwrap();
+        assert_eq!((made.width(), made.height()), (SIZE, SIZE / 2));
     }
 }

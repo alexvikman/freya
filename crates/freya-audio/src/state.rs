@@ -58,7 +58,11 @@ impl Shared {
         f32::from_bits(self.volume.load(Ordering::Relaxed))
     }
 
+    /// Ignores a value that is not a number, which would silence the output and be saved.
     pub fn set_volume(&self, v: f32) {
+        if v.is_nan() {
+            return;
+        }
         self.volume
             .store(v.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
     }
@@ -68,6 +72,9 @@ impl Shared {
     }
 
     pub fn set_balance(&self, b: f32) {
+        if b.is_nan() {
+            return;
+        }
         self.balance
             .store(b.clamp(-1.0, 1.0).to_bits(), Ordering::Relaxed);
     }
@@ -220,6 +227,17 @@ mod tests {
             path: name.into(),
             ..Default::default()
         })
+    }
+
+    #[test]
+    fn volume_and_balance_ignore_what_is_not_a_number() {
+        // MPRIS can send NaN; it silenced Freya and was saved.
+        let shared = Shared::new(48_000);
+        shared.set_volume(0.5);
+        shared.set_volume(f32::NAN);
+        assert_eq!(shared.volume(), 0.5);
+        shared.set_balance(f32::NAN);
+        assert_eq!(shared.balance(), 0.0);
     }
 
     #[test]

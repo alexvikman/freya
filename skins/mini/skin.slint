@@ -5,8 +5,9 @@
 
 import { Player, PlaybackState, Shortcuts } from "@freya/v1.slint";
 
-// Every skin re-exports the globals it uses, so the app can reach them.
-export { Player } from "@freya/v1.slint";
+// Every skin re-exports the globals it uses, so the app can reach them: App too, for the
+// shortcuts' F1 (about) and F2 (skins).
+export { Player, App } from "@freya/v1.slint";
 
 // Icons as SVG path data in a 24×24 box: text symbols such as ▶ are missing from many fonts.
 global Icons {

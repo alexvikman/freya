@@ -17,9 +17,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # toolchain that is already here instead of downloading it on every run.
 ARG RUST_VERSION
 ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:$PATH
-RUN test -n "$RUST_VERSION" && curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal \
+# Through a file, not a pipe: a failed download would otherwise go unnoticed by sh, which has
+# no pipefail, and leave an image without Rust in the cache.
+RUN test -n "$RUST_VERSION" && curl -sSf -o /tmp/rustup-init.sh https://sh.rustup.rs && \
+    sh /tmp/rustup-init.sh -y --profile minimal \
         --default-toolchain "$RUST_VERSION" \
-        --component clippy,rustfmt --target x86_64-pc-windows-gnu
+        --component clippy,rustfmt --target x86_64-pc-windows-gnu && \
+    rm /tmp/rustup-init.sh
 
 # MinGW for the Windows target, including the C code built by cmake (libopus). libopus is
 # built with GCC's stack protection, which MinGW keeps in libssp; MSVC builds do not need it.

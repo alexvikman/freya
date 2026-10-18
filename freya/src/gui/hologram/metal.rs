@@ -58,6 +58,8 @@ struct Uniforms {
 struct State {
     shown: bool,
     quit: bool,
+    /// The graphics card could not be set up: nothing will be drawn.
+    failed: bool,
     /// The drawable's size, in pixels.
     size: (f64, f64),
     pulse: f32,
@@ -97,6 +99,17 @@ const FRAME_SECONDS: f64 = 1.0 / 60.0;
 const CITY_FORMAT: MTLPixelFormat = MTLPixelFormat::RGBA16Float;
 
 /// What the drawing thread draws with.
+/// The shader's clock starts over after this long. Its noise multiplies the time by hundreds
+/// in 32-bit floats, which after a few minutes have too few digits left for it: the glitches
+/// stopped after about five minutes and everything froze after twenty. Starting over is a
+/// jump in the rain and the sway, once every two minutes, among the glitches.
+const SHADER_TIME_WRAP: f64 = 120.0;
+
+/// The time handed to the shader, `elapsed` since the hologram started.
+fn shader_time(elapsed: Duration) -> f32 {
+    (elapsed.as_secs_f64() % SHADER_TIME_WRAP) as f32
+}
+
 struct Gpu {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
@@ -137,6 +150,7 @@ impl Renderer {
                 .name("freya-hologram".into())
                 .spawn(move || {
                     let Some((gpu, textures, count)) = set_up(&layer, poses) else {
+                        shared.state().failed = true;
                         return;
                     };
                     draw(&shared, &layer, &gpu, &textures, count > 0);
@@ -149,6 +163,11 @@ impl Renderer {
             shared,
             thread: Some(thread),
         })
+    }
+
+    /// Whether the graphics card could not be set up, so nothing will be drawn.
+    pub fn failed(&self) -> bool {
+        self.shared.state().failed
     }
 
     pub fn place(&mut self, area: Option<&Area>) {
@@ -482,7 +501,7 @@ fn draw(shared: &Shared, layer: &ThreadLayer, gpu: &Gpu, poses: &[Texture], has_
             }
             let (current, next, transition) = poses_at(time, poses.len());
             let uniforms = Uniforms {
-                time,
+                time: shader_time(started.elapsed()),
                 pulse,
                 size: [size.0 as f32, size.1 as f32],
                 transition,

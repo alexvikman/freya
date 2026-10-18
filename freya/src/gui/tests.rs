@@ -732,3 +732,87 @@ fn relative_paths_are_kept_from_the_root() {
         relative.canonicalize().unwrap()
     );
 }
+
+#[test]
+fn a_file_opened_from_the_system_is_added_to_up_next() {
+    // MPRIS OpenUri: the address was not decoded, so a name with a space was not found, and
+    // Up Next was emptied all the same.
+    let app = silent_app("open-uri");
+    app.borrow_mut()
+        .add_paths(&[fixture("sine.flac"), fixture("sine.ogg")]);
+    let file = temp_dir("open-uri").join("with space.wav");
+    std::fs::copy(fixture("sine.wav"), &file).unwrap();
+    let path = file
+        .to_string_lossy()
+        .replace(' ', "%20")
+        .replace('\\', "/");
+    // "file:///C:/..." on Windows.
+    let uri = format!(
+        "file://{}{path}",
+        if path.starts_with('/') { "" } else { "/" }
+    );
+    app.borrow_mut()
+        .handle_media_request(system_media::MediaRequest::OpenUri(uri));
+    let app = app.borrow();
+    let paths: Vec<&Path> = app
+        .playlist
+        .entries()
+        .iter()
+        .map(|e| e.path.as_path())
+        .collect();
+    assert_eq!(paths.len(), 3, "{paths:?}");
+    assert_eq!(paths[2], file);
+    assert_eq!(app.playlist.current(), Some(2));
+}
+
+#[test]
+fn a_cleared_up_next_shows_nothing_of_what_played() {
+    // The album of the track played last stayed, under an empty title.
+    let app = silent_app("cleared");
+    let ui = current_ui(&app);
+    app.borrow_mut().add_paths(&[fixture("sine.ape")]);
+    app.borrow_mut().play_index(0);
+    let started = Instant::now();
+    while global(&ui, "Player", "album") != text("Fixtures") {
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the track plays"
+        );
+        app.borrow_mut().tick();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    app.borrow_mut().stop();
+    call(&ui, "Playlist", "clear", &[]);
+    let started = Instant::now();
+    while app.borrow().player.status().state != freya_audio::PlaybackState::Stopped {
+        assert!(started.elapsed() < Duration::from_secs(5), "it stops");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    app.borrow_mut().tick();
+    assert_eq!(global(&ui, "Player", "title"), text(""));
+    assert_eq!(global(&ui, "Player", "album"), text(""));
+}
+
+#[test]
+fn a_cue_sheet_opened_on_its_own_adds_its_tracks() {
+    // The open dialog offers sheets now; one opened alone is the disc it cuts.
+    let app = silent_app("open-cue");
+    let dir = temp_dir("open-cue");
+    std::fs::copy(fixture("sine.wav"), dir.join("disc.wav")).unwrap();
+    let sheet = dir.join("disc.cue");
+    std::fs::write(
+        &sheet,
+        "FILE \"disc.wav\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"One\"\n    INDEX 01 00:00:00\n  \
+         TRACK 02 AUDIO\n    TITLE \"Two\"\n    INDEX 01 00:00:30\n",
+    )
+    .unwrap();
+    app.borrow_mut().add_paths(&[sheet]);
+    let app = app.borrow();
+    let titles: Vec<Option<&str>> = app
+        .playlist
+        .entries()
+        .iter()
+        .map(|e| e.title.as_deref())
+        .collect();
+    assert_eq!(titles, [Some("One"), Some("Two")]);
+}

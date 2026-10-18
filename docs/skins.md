@@ -11,8 +11,9 @@ Create a folder with a file called `skin.slint`:
 ```slint
 import { Player, PlaybackState, Shortcuts } from "@freya/v1.slint";
 
-// Every skin re-exports the API globals it uses, so Freya can reach them.
-export { Player } from "@freya/v1.slint";
+// Every skin re-exports the API globals it uses, so Freya can reach them: App too, for the
+// shortcuts' F1 (about) and F2 (skins).
+export { Player, App } from "@freya/v1.slint";
 
 export component MySkin inherits Window {
     title: "Freya";
