@@ -8,7 +8,7 @@ use std::time::{Duration, Instant, SystemTime};
 use freya_library::cue::Part;
 use freya_library::library::{
     Album, AlbumMatch, Artist, ArtistEdit, ArtistOrder, CHOSEN, Genre, PictureKind, PictureRow,
-    Played, ScanEvent, Scanner, Track, plain_name, split_artist,
+    Played, ScanEvent, ScanOptions, Scanner, Track, plain_name, split_artist,
 };
 use freya_library::pictures::Pictures;
 use freya_library::thumbnails::{
@@ -215,8 +215,11 @@ pub struct LibraryPanel {
     album_list: bool,
     /// A scan was started and its end not yet taken in.
     scanning: bool,
-    /// The folder a scan looks through or reads now.
+    /// The folder a scan looks through or reads now, and how far it is with albums' covers.
     scan_folder: Option<PathBuf>,
+    covers_progress: Option<(usize, usize)>,
+    /// Whether the covers in the library changed since they were last read.
+    album_covers_stale: bool,
     /// The track playing, by its file and where in it it starts, and its row, or -1.
     playing: Option<(PathBuf, Duration)>,
     playing_row: i32,
@@ -486,6 +489,8 @@ impl LibraryPanel {
             plays: Vec::new(),
             scanning: false,
             scan_folder: None,
+            covers_progress: None,
+            album_covers_stale: true,
             album_sort: AlbumSort::ReleaseDate,
             album_list: false,
             playing: None,
@@ -625,7 +630,11 @@ impl LibraryPanel {
 
     pub fn rescan(&mut self, folders: &[PathBuf]) {
         if let (Some(path), Some(_)) = (&self.path, &self.db) {
-            self.scanner.start(path.clone(), folders.to_vec());
+            let options = ScanOptions {
+                pictures: self.thumbnails.as_ref().map(|t| t.pictures().clone()),
+                rescan: false,
+            };
+            self.scanner.start(path.clone(), folders.to_vec(), options);
             self.scanning = true;
         }
     }
@@ -721,6 +730,12 @@ impl LibraryPanel {
                     self.stale = true;
                 }
                 ScanEvent::Looking(folder) => self.scan_folder = Some(folder),
+                ScanEvent::Covers { done, total } => {
+                    self.covers_progress = Some((done, total));
+                    self.scan_folder = None;
+                    // Shown as they come.
+                    self.album_covers_stale = true;
+                }
                 ScanEvent::Finished(summary) => {
                     self.progress = None;
                     self.scanning = false;
@@ -743,6 +758,7 @@ impl LibraryPanel {
         }
         if !self.scanning {
             self.scan_folder = None;
+            self.covers_progress = None;
         }
         // Plays noted while the scan wrote.
         if finished && self.write_plays() && self.shows_plays() {
@@ -2590,11 +2606,16 @@ impl LibraryPanel {
     pub fn activities(&self) -> Vec<(String, String)> {
         let mut activities = Vec::new();
         if self.scanning {
-            let what = match self.progress {
-                Some((done, total)) => {
+            let what = match (self.covers_progress, self.progress) {
+                (Some((done, total)), _) => format!(
+                    "Making album covers: {} of {}",
+                    thousands(done),
+                    thousands(total)
+                ),
+                (None, Some((done, total))) => {
                     format!("Reading {} of {} files", thousands(done), thousands(total))
                 }
-                None => "Checking the music folders for changes".to_owned(),
+                (None, None) => "Checking the music folders for changes".to_owned(),
             };
             let folder = self.scan_folder.as_deref().map(folder_name);
             activities.push((what, folder.unwrap_or_default()));

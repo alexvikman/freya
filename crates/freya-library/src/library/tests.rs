@@ -820,3 +820,55 @@ fn an_album_matched_to_another_artist_of_the_name_is_filed_under_them() {
     assert_eq!(library.albums(Some("Shining")).unwrap().len(), 2);
     assert_eq!(library.album_match(&norwegian, "Blackjazz").unwrap(), None);
 }
+
+#[test]
+fn a_scan_makes_each_albums_cover_once_and_again_when_its_pictures_change() {
+    let dir = temp_dir("covers");
+    let album = dir.join("music").join("Artist").join("Album");
+    std::fs::create_dir_all(&album).unwrap();
+    std::fs::copy(fixtures().join("sine.mp3"), album.join("sine.mp3")).unwrap();
+    let pictures = crate::pictures::Pictures::new(dir.join("pictures"));
+    let options = ScanOptions {
+        pictures: Some(pictures.clone()),
+        rescan: false,
+    };
+    let folders = [dir.join("music")];
+    let mut library = Library::open_in_memory().unwrap();
+    let scan = |library: &mut Library| {
+        let mut covers = 0;
+        scan_with(library, &folders, &options, &AtomicBool::new(false), |e| {
+            if let ScanEvent::Covers { total, .. } = e {
+                covers = total;
+            }
+        })
+        .unwrap();
+        covers
+    };
+
+    // No picture yet: the album is noted as without one.
+    assert_eq!(scan(&mut library), 1);
+    let covers = library.album_covers().unwrap();
+    assert_eq!(covers.len(), 1);
+    let (key, cover) = covers.iter().next().unwrap();
+    assert_eq!(cover.cover, None);
+    assert_eq!(scan(&mut library), 0, "nothing changed");
+
+    // A cover put in the folder is made at the next scan, and kept among the pictures.
+    image::RgbImage::from_pixel(1200, 1200, image::Rgb([200, 30, 30]))
+        .save(album.join("cover.jpg"))
+        .unwrap();
+    assert_eq!(scan(&mut library), 1);
+    let cover = &library.album_covers().unwrap()[key];
+    let checksum = cover.cover.clone().expect("a cover");
+    let made = image::load_from_memory(&pictures.read(&checksum).unwrap()).unwrap();
+    assert_eq!((made.width(), made.height()), (600, 600));
+    assert!(cover.color.is_some());
+    assert!(
+        library
+            .artist_picture_checksums()
+            .unwrap()
+            .contains(&checksum)
+    );
+    assert_eq!(scan(&mut library), 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}

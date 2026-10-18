@@ -176,11 +176,12 @@ impl Library {
         Ok(())
     }
 
-    /// The downloaded pictures any artist has, to keep.
+    /// The pictures any artist or album has, to keep.
     pub fn artist_picture_checksums(&self) -> Result<HashSet<String>> {
-        let mut statement = self
-            .db
-            .prepare("SELECT DISTINCT picture FROM artist_pictures WHERE picture IS NOT NULL")?;
+        let mut statement = self.db.prepare(
+            "SELECT picture FROM artist_pictures WHERE picture IS NOT NULL
+             UNION SELECT cover FROM album_covers WHERE cover IS NOT NULL",
+        )?;
         let rows = statement.query_map([], |row| row.get(0))?;
         rows.collect()
     }

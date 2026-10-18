@@ -9,7 +9,7 @@ use lofty::prelude::*;
 const FOLDER_IMAGES: [&str; 5] = ["cover", "folder", "front", "album", "artwork"];
 const IMAGE_EXTENSIONS: [&str; 3] = ["jpg", "jpeg", "png"];
 /// Subfolders (lowercase) that rips often keep the artwork in.
-const ARTWORK_FOLDERS: [&str; 4] = ["cover", "covers", "artwork", "scans"];
+pub const ARTWORK_FOLDERS: [&str; 4] = ["cover", "covers", "artwork", "scans"];
 
 /// A decoded cover image, 4 bytes (RGBA) per pixel.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,6 +43,34 @@ pub fn read_cover(track: &Path, max_size: u32) -> Option<Cover> {
         height: rgba.height(),
         rgba: rgba.into_raw(),
     })
+}
+
+/// The longest side of the cover kept for an album: sharp on its page on a Retina screen.
+pub const ALBUM_ART: u32 = 600;
+
+/// An album's cover from `track`, one of its tracks, as Freya keeps it: at most
+/// [`ALBUM_ART`] wide or high, as a JPEG, and a color from it for the album's page. None when
+/// the album has no cover.
+pub fn album_art(track: &Path) -> Option<(Vec<u8>, [u8; 3])> {
+    let bytes = embedded_cover(track).or_else(|| folder_cover(track))?;
+    let image = image::load_from_memory(&bytes).ok()?;
+    let image = if image.width() > ALBUM_ART || image.height() > ALBUM_ART {
+        image.resize(ALBUM_ART, ALBUM_ART, image::imageops::FilterType::Lanczos3)
+    } else {
+        image
+    };
+    let rgb = image.to_rgb8();
+    let color = page_color(
+        image::DynamicImage::ImageRgb8(rgb.clone())
+            .thumbnail(64, 64)
+            .to_rgb8()
+            .as_raw(),
+    );
+    let mut jpeg = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 88)
+        .encode_image(&rgb)
+        .ok()?;
+    Some((jpeg, color))
 }
 
 /// The front cover from the file's tags, or else any picture in them.

@@ -14,7 +14,13 @@ pub const AUDIO_EXTENSIONS: &[&str] = &[
 /// Expands folders (recursively, sorted) into the audio files they contain. Files are kept
 /// as given. Hidden files and folders are skipped, like macOS's `._name.mp3` companion files.
 pub fn collect(paths: &[PathBuf]) -> Vec<PathBuf> {
-    collect_matching(paths, is_audio, &AtomicBool::new(false), &mut |_| {})
+    collect_matching(
+        paths,
+        is_audio,
+        &AtomicBool::new(false),
+        &mut |_| {},
+        &mut None,
+    )
 }
 
 /// Like [`collect`], but also finds CUE sheets, which cut audio files into tracks; see
@@ -26,21 +32,41 @@ pub fn collect_with_sheets(paths: &[PathBuf]) -> Vec<PathBuf> {
 /// Like [`collect_with_sheets`], but gives up, with what it found so far, once `cancel` is
 /// set: walking a large or slow drive can take minutes.
 pub fn collect_with_sheets_until(paths: &[PathBuf], cancel: &AtomicBool) -> Vec<PathBuf> {
-    collect_with_sheets_watched(paths, cancel, &mut |_| {})
-}
-
-/// Like [`collect_with_sheets_until`], telling `entering` of each folder as it is walked.
-pub fn collect_with_sheets_watched(
-    paths: &[PathBuf],
-    cancel: &AtomicBool,
-    entering: &mut dyn FnMut(&Path),
-) -> Vec<PathBuf> {
     collect_matching(
         paths,
         |path| is_audio(path) || cue::is_sheet(path),
         cancel,
-        entering,
+        &mut |_| {},
+        &mut None,
     )
+}
+
+/// What a walk through the music's folders found: audio files and CUE sheets, and the
+/// pictures beside them, which covers may be.
+#[derive(Debug, Default)]
+pub struct Walked {
+    pub files: Vec<PathBuf>,
+    pub images: Vec<PathBuf>,
+}
+
+/// Like [`collect_with_sheets_until`], with the pictures in the folders too, telling
+/// `entering` of each folder as it is walked: the one walk a scan makes through them.
+pub fn walk_library(
+    paths: &[PathBuf],
+    cancel: &AtomicBool,
+    entering: &mut dyn FnMut(&Path),
+) -> Walked {
+    let mut walked = Walked::default();
+    let mut images = Some(&mut walked.images);
+    let files = collect_matching(
+        paths,
+        |path| is_audio(path) || cue::is_sheet(path),
+        cancel,
+        entering,
+        &mut images,
+    );
+    walked.files = files;
+    walked
 }
 
 fn collect_matching(
@@ -48,6 +74,7 @@ fn collect_matching(
     wanted: fn(&Path) -> bool,
     cancel: &AtomicBool,
     entering: &mut dyn FnMut(&Path),
+    images: &mut Option<&mut Vec<PathBuf>>,
 ) -> Vec<PathBuf> {
     let mut files = Vec::new();
     for path in paths {
@@ -60,6 +87,7 @@ fn collect_matching(
                 &mut HashSet::new(),
                 cancel,
                 entering,
+                images,
             );
             found.sort();
             files.extend(found);
@@ -78,6 +106,7 @@ fn walk(
     visited: &mut HashSet<PathBuf>,
     cancel: &AtomicBool,
     entering: &mut dyn FnMut(&Path),
+    images: &mut Option<&mut Vec<PathBuf>>,
 ) {
     if cancel.load(Ordering::Relaxed) {
         return;
@@ -98,11 +127,22 @@ fn walk(
         }
         let path = entry.path();
         if path.is_dir() {
-            walk(&path, wanted, out, visited, cancel, entering);
+            walk(&path, wanted, out, visited, cancel, entering, images);
         } else if wanted(&path) {
             out.push(path);
+        } else if let Some(images) = images
+            && is_image(&path)
+        {
+            images.push(path);
         }
     }
+}
+
+/// A picture a cover may be: JPEG or PNG.
+pub fn is_image(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| ["jpg", "jpeg", "png"].contains(&e.to_ascii_lowercase().as_str()))
 }
 
 pub fn is_audio(path: &Path) -> bool {

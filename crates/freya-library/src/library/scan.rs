@@ -10,10 +10,13 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
 
-use super::{FileStamp, Library, NewTrack, Result, added, epoch_millis, put, remove};
+use super::{AlbumCover, FileStamp, Library, NewTrack, Result, added, epoch_millis, put, remove};
+use crate::cover::ARTWORK_FOLDERS;
 use crate::cue::{self, Found};
 use crate::files;
+use crate::pictures::Pictures;
 use crate::tags::{TagInfo, read_tags};
+use crate::thumbnails::Thumbnails;
 
 /// Changes are written in batches, at least this often, so the library fills up visibly
 /// during a long first scan without a transaction per file.
@@ -33,6 +36,11 @@ pub enum ScanEvent {
     },
     /// The folder being looked through or read now, told every so often.
     Looking(PathBuf),
+    /// `done` of `total` albums' covers have been made.
+    Covers {
+        done: usize,
+        total: usize,
+    },
     Finished(ScanSummary),
     Failed(String),
 }
@@ -64,9 +72,30 @@ pub fn scan(
     library: &mut Library,
     folders: &[PathBuf],
     cancel: &AtomicBool,
+    progress: impl FnMut(ScanEvent),
+) -> Result<ScanSummary> {
+    scan_with(library, folders, &ScanOptions::default(), cancel, progress)
+}
+
+/// What a scan does beyond reading the tracks.
+#[derive(Clone, Debug, Default)]
+pub struct ScanOptions {
+    /// Where albums' covers are kept; without, none are made.
+    pub pictures: Option<Pictures>,
+    /// Read every file and make every cover again, changed or not.
+    pub rescan: bool,
+}
+
+/// Like [`scan`], and then makes albums' covers as `options` says: of new albums, of those
+/// whose tracks changed, and of those whose folder's pictures changed.
+pub fn scan_with(
+    library: &mut Library,
+    folders: &[PathBuf],
+    options: &ScanOptions,
+    cancel: &AtomicBool,
     mut progress: impl FnMut(ScanEvent),
 ) -> Result<ScanSummary> {
-    let found = find(folders, cancel, &mut progress);
+    let (found, images) = find(folders, cancel, &mut progress);
     let known = library.sources()?;
     // Tracks found from now on came into the library now, except on the library's first scan:
     // everything comes in at once then, and the files' own dates say more.
@@ -95,7 +124,11 @@ pub fn scan(
     let found_count = found.len();
     let changed: Vec<(Found, FileStamp)> = found
         .into_iter()
-        .filter(|(found, stamp)| known.get(found.source()) != Some(stamp))
+        .filter(|(found, stamp)| options.rescan || known.get(found.source()) != Some(stamp))
+        .collect();
+    let changed_sources: Vec<PathBuf> = changed
+        .iter()
+        .map(|(found, _)| found.source().to_owned())
         .collect();
     summary.unchanged = found_count - changed.len();
     let total = changed.len();
@@ -159,17 +192,183 @@ pub fn scan(
         tx.commit()?;
         Ok(())
     })?;
+    if let Some(pictures) = &options.pictures
+        && !cancel.load(Ordering::Relaxed)
+    {
+        make_covers(
+            library,
+            &images,
+            &changed_sources,
+            options.rescan,
+            pictures,
+            cancel,
+            &mut progress,
+        )?;
+    }
     Ok(summary)
+}
+
+/// Makes the covers of the albums that need one: new ones, those with tracks in
+/// `changed_sources`, and those whose folder's `images` changed; all when `rescan`. A few at
+/// a time, as reading a cover is mostly waiting for the disk.
+fn make_covers(
+    library: &mut Library,
+    images: &[PathBuf],
+    changed_sources: &[PathBuf],
+    rescan: bool,
+    pictures: &Pictures,
+    cancel: &AtomicBool,
+    progress: &mut impl FnMut(ScanEvent),
+) -> Result<()> {
+    let mut changed = HashSet::new();
+    for source in changed_sources {
+        let mut statement = library
+            .db
+            .prepare_cached("SELECT DISTINCT album_artist, album FROM tracks WHERE source = ?1")?;
+        let albums = statement.query_map([source.to_string_lossy()], |row| {
+            let (artist, album): (Option<String>, Option<String>) = (row.get(0)?, row.get(1)?);
+            Ok(Thumbnails::key(artist.as_deref(), album.as_deref()))
+        })?;
+        for album in albums {
+            changed.insert(album?);
+        }
+    }
+    let stamps = ImageStamps::new(images);
+    let kept = library.album_covers()?;
+    let mut keys = HashSet::new();
+    let mut work = Vec::new();
+    for album in library.all_albums()? {
+        let key = Thumbnails::key(album.artist.as_deref(), album.name.as_deref());
+        let track = album.track.to_string_lossy().into_owned();
+        let images = album.track.parent().map_or(0, |folder| stamps.of(folder));
+        let made = kept.get(&key);
+        let needed = rescan
+            || changed.contains(&key)
+            || made.is_none_or(|made| made.track != track || made.images != images);
+        if needed {
+            work.push((key.clone(), album.track, images));
+        }
+        keys.insert(key);
+    }
+    library.keep_album_covers(&keys)?;
+    let total = work.len();
+    if total == 0 {
+        return Ok(());
+    }
+    progress(ScanEvent::Covers { done: 0, total });
+    let next = AtomicUsize::new(0);
+    let (results, made) = channel::<(usize, Option<(String, [u8; 3])>)>();
+    let workers = std::thread::available_parallelism()
+        .map_or(2, |n| n.get())
+        .clamp(1, MAX_READERS)
+        .min(total);
+    std::thread::scope(|threads| -> Result<()> {
+        for _ in 0..workers {
+            let results = results.clone();
+            let (work, next) = (&work, &next);
+            threads.spawn(move || {
+                while !cancel.load(Ordering::Relaxed) {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    let Some((_, track, _)) = work.get(i) else {
+                        break;
+                    };
+                    let cover = crate::cover::album_art(track).and_then(|(jpeg, color)| {
+                        match pictures.put(&jpeg) {
+                            Ok(checksum) => Some((checksum, color)),
+                            Err(e) => {
+                                log::warn!("could not keep the cover of {}: {e}", track.display());
+                                None
+                            }
+                        }
+                    });
+                    if results.send((i, cover)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(results);
+        let mut told = Instant::now();
+        for (done, (i, cover)) in (1..).zip(made) {
+            let (key, track, images) = &work[i];
+            let (cover, color) = cover.unzip();
+            library.set_album_cover(
+                key,
+                &AlbumCover {
+                    cover,
+                    color,
+                    track: track.to_string_lossy().into_owned(),
+                    images: *images,
+                },
+            )?;
+            if told.elapsed() >= COMMIT_INTERVAL || done == total {
+                told = Instant::now();
+                progress(ScanEvent::Covers { done, total });
+            }
+        }
+        Ok(())
+    })
+}
+
+/// A stamp of the pictures in each folder of the music, and in its artwork folders, such as
+/// "Covers": it changes when one is added, taken away or changed.
+struct ImageStamps<'a> {
+    by_folder: HashMap<&'a Path, Vec<&'a Path>>,
+}
+
+impl<'a> ImageStamps<'a> {
+    fn new(images: &'a [PathBuf]) -> Self {
+        let mut by_folder: HashMap<&Path, Vec<&Path>> = HashMap::new();
+        for image in images {
+            if let Some(folder) = image.parent() {
+                by_folder.entry(folder).or_default().push(image);
+                // An artwork folder's pictures count for the album's folder too.
+                let artwork = folder
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| ARTWORK_FOLDERS.contains(&n.to_ascii_lowercase().as_str()));
+                if artwork && let Some(album) = folder.parent() {
+                    by_folder.entry(album).or_default().push(image);
+                }
+            }
+        }
+        Self { by_folder }
+    }
+
+    /// The stamp of `folder`'s pictures: their names, sizes and times, hashed.
+    fn of(&self, folder: &Path) -> i64 {
+        let Some(images) = self.by_folder.get(folder) else {
+            return 0;
+        };
+        // FNV-1a: stable between runs, unlike the standard library's hasher.
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut images = images.clone();
+        images.sort();
+        for image in images {
+            let stamp = std::fs::metadata(image)
+                .map(|m| FileStamp::of(&m))
+                .unwrap_or(FileStamp {
+                    size: 0,
+                    modified: 0,
+                });
+            let text = format!("{}\0{}\0{}\0", image.display(), stamp.size, stamp.modified);
+            for byte in text.bytes() {
+                hash ^= u64::from(byte);
+                hash = hash.wrapping_mul(0x0100_0000_01b3);
+            }
+        }
+        hash as i64
+    }
 }
 
 /// What there is to read under `folders`: audio files, and the discs of CUE sheets in place of
 /// the files they cut, each with the stamp of what it is read from. Each is listed once, even
-/// when folders overlap.
+/// when folders overlap. With the pictures in the folders, which covers may be.
 fn find(
     folders: &[PathBuf],
     cancel: &AtomicBool,
     progress: &mut impl FnMut(ScanEvent),
-) -> Vec<(Found, FileStamp)> {
+) -> (Vec<(Found, FileStamp)>, Vec<PathBuf>) {
     let mut seen = HashSet::new();
     let mut found = Vec::new();
     let mut told: Option<Instant> = None;
@@ -179,8 +378,8 @@ fn find(
             progress(ScanEvent::Looking(dir.to_owned()));
         }
     };
-    let files = files::collect_with_sheets_watched(folders, cancel, &mut entering);
-    for item in cue::apply_sheets(files) {
+    let walked = files::walk_library(folders, cancel, &mut entering);
+    for item in cue::apply_sheets(walked.files) {
         if cancel.load(Ordering::Relaxed) {
             break;
         }
@@ -191,7 +390,7 @@ fn find(
             found.push((item, stamp));
         }
     }
-    found
+    (found, walked.images)
 }
 
 /// The stamp of what `found` is read from. For a disc, that is its sheet and its audio files
@@ -270,9 +469,9 @@ impl Scanner {
         }
     }
 
-    /// Scans `folders` into the library at `database`, stopping a scan that is still
-    /// running first.
-    pub fn start(&mut self, database: PathBuf, folders: Vec<PathBuf>) {
+    /// Scans `folders` into the library at `database` as `options` say, stopping a scan that
+    /// is still running first.
+    pub fn start(&mut self, database: PathBuf, folders: Vec<PathBuf>, options: ScanOptions) {
         self.stop();
         let cancel = Arc::new(AtomicBool::new(false));
         let events = self.events_out.clone();
@@ -282,7 +481,7 @@ impl Scanner {
             .spawn(move || {
                 let started = Instant::now();
                 let result = Library::open(&database).and_then(|mut library| {
-                    scan(&mut library, &folders, &stop, |e| {
+                    scan_with(&mut library, &folders, &options, &stop, |e| {
                         let _ = events.send(e);
                     })
                 });
