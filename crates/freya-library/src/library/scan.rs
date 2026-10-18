@@ -10,6 +10,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
 
+use super::fetch::{Online, fetch_artists};
 use super::{AlbumCover, FileStamp, Library, NewTrack, Result, added, epoch_millis, put, remove};
 use crate::cover::ARTWORK_FOLDERS;
 use crate::cue::{self, Found};
@@ -38,6 +39,11 @@ pub enum ScanEvent {
     Looking(PathBuf),
     /// `done` of `total` albums' covers have been made.
     Covers {
+        done: usize,
+        total: usize,
+    },
+    /// The internet was asked what `done` of the `total` artists who lack something lack.
+    Artists {
         done: usize,
         total: usize,
     },
@@ -84,6 +90,9 @@ pub struct ScanOptions {
     pub pictures: Option<Pictures>,
     /// Read every file and make every cover again, changed or not.
     pub rescan: bool,
+    /// What may be asked of the internet about artists who lack something, once the tracks
+    /// and covers are in.
+    pub online: Online,
 }
 
 /// Like [`scan`], and then makes albums' covers as `options` says: of new albums, of those
@@ -204,8 +213,95 @@ pub fn scan_with(
             cancel,
             &mut progress,
         )?;
+        if !cancel.load(Ordering::Relaxed) {
+            take_artists_pictures(library, &images, options.rescan, pictures)?;
+        }
+        if !cancel.load(Ordering::Relaxed) {
+            fetch_artists(
+                library,
+                None,
+                &options.online,
+                pictures,
+                cancel,
+                &mut progress,
+            )?;
+        }
     }
     Ok(summary)
+}
+
+/// Gives artists without a picture the one in their folder (artist.jpg, fanart.jpg), found
+/// among the pictures the walk found: the folders are not looked in again. A picture an artist
+/// has stays theirs, as the user chose it or Freya found it first; with `rescan`, one from
+/// their folder is taken in again.
+fn take_artists_pictures(
+    library: &mut Library,
+    images: &[PathBuf],
+    rescan: bool,
+    pictures: &Pictures,
+) -> Result<()> {
+    use crate::artist_image::FolderImages;
+    use crate::library::{FOLDER, PictureKind};
+
+    let found = FolderImages::new(images);
+    for artist in library.artists()? {
+        let Some(name) = artist.name else {
+            continue;
+        };
+        let tracks: Vec<PathBuf> = library
+            .albums(Some(&name))?
+            .into_iter()
+            .map(|album| album.track)
+            .collect();
+        let pictures_found = [
+            (PictureKind::Portrait, found.portrait(&tracks), 1400),
+            (PictureKind::Backdrop, found.backdrop(&tracks), 3840),
+        ];
+        for (kind, file, largest) in pictures_found {
+            let Some(file) = file else {
+                continue;
+            };
+            let had = library.artist_picture(&name, kind)?;
+            let again = rescan && had.as_ref().is_some_and(|row| row.source == FOLDER);
+            if had.is_some_and(|row| row.picture.is_some()) && !again {
+                continue;
+            }
+            if again {
+                library.forget_artist_picture(&name, kind)?;
+            }
+            match take_picture(&file, largest, pictures) {
+                Ok(picture) => library.set_artist_picture(
+                    &name,
+                    kind,
+                    FOLDER,
+                    Some(&picture),
+                    SystemTime::now(),
+                )?,
+                Err(e) => log::warn!("could not take in {}: {e}", file.display()),
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The picture in `file`, at most `largest` wide or high, kept among Freya's pictures: its
+/// checksum.
+fn take_picture(
+    file: &Path,
+    largest: u32,
+    pictures: &Pictures,
+) -> std::result::Result<String, String> {
+    let picture = image::open(file).map_err(|e| e.to_string())?;
+    let picture = if picture.width() > largest || picture.height() > largest {
+        picture.resize(largest, largest, image::imageops::FilterType::Lanczos3)
+    } else {
+        picture
+    };
+    let mut jpeg = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 90)
+        .encode_image(&picture.to_rgb8())
+        .map_err(|e| e.to_string())?;
+    pictures.put(&jpeg).map_err(|e| e.to_string())
 }
 
 /// Makes the covers of the albums that need one: new ones, those with tracks in
@@ -257,7 +353,10 @@ fn make_covers(
     }
     progress(ScanEvent::Covers { done: 0, total });
     let next = AtomicUsize::new(0);
-    let (results, made) = channel::<(usize, Option<(String, [u8; 3])>)>();
+    let (results, made) = channel::<(
+        usize,
+        std::result::Result<Option<(String, [u8; 3])>, String>,
+    )>();
     let workers = std::thread::available_parallelism()
         .map_or(2, |n| n.get())
         .clamp(1, MAX_READERS)
@@ -272,15 +371,13 @@ fn make_covers(
                     let Some((_, track, _)) = work.get(i) else {
                         break;
                     };
-                    let cover = crate::cover::album_art(track).and_then(|(jpeg, color)| {
-                        match pictures.put(&jpeg) {
-                            Ok(checksum) => Some((checksum, color)),
-                            Err(e) => {
-                                log::warn!("could not keep the cover of {}: {e}", track.display());
-                                None
-                            }
-                        }
-                    });
+                    let cover = match crate::cover::album_art(track) {
+                        Some((jpeg, color)) => pictures
+                            .put(&jpeg)
+                            .map(|checksum| Some((checksum, color)))
+                            .map_err(|e| e.to_string()),
+                        None => Ok(None),
+                    };
                     if results.send((i, cover)).is_err() {
                         break;
                     }
@@ -291,6 +388,14 @@ fn make_covers(
         let mut told = Instant::now();
         for (done, (i, cover)) in (1..).zip(made) {
             let (key, track, images) = &work[i];
+            // Not noted: made again at the next scan.
+            let cover = match cover {
+                Ok(cover) => cover,
+                Err(e) => {
+                    log::warn!("could not keep the cover of {}: {e}", track.display());
+                    continue;
+                }
+            };
             let (cover, color) = cover.unzip();
             library.set_album_cover(
                 key,
@@ -495,6 +600,45 @@ impl Scanner {
                 let _ = events.send(event);
             })
             .expect("spawn scan thread");
+        self.running = Some((thread, cancel));
+    }
+
+    /// Asks the internet what `artists` lack, as `online` allows, without scanning: after the
+    /// user matched them to another artist, or allowed another service. Stops a scan that is
+    /// still running first.
+    pub fn fetch(
+        &mut self,
+        database: PathBuf,
+        artists: Option<Vec<String>>,
+        online: Online,
+        pictures: Pictures,
+    ) {
+        self.stop();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let events = self.events_out.clone();
+        let stop = Arc::clone(&cancel);
+        let thread = std::thread::Builder::new()
+            .name("freya-fetch".into())
+            .spawn(move || {
+                let result = Library::open(&database).and_then(|library| {
+                    fetch_artists(
+                        &library,
+                        artists.as_deref(),
+                        &online,
+                        &pictures,
+                        &stop,
+                        &mut |e| {
+                            let _ = events.send(e);
+                        },
+                    )
+                });
+                let event = match result {
+                    Ok(()) => ScanEvent::Finished(ScanSummary::default()),
+                    Err(e) => ScanEvent::Failed(e.to_string()),
+                };
+                let _ = events.send(event);
+            })
+            .expect("spawn fetch thread");
         self.running = Some((thread, cancel));
     }
 

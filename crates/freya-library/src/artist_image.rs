@@ -10,8 +10,6 @@ use std::time::Duration;
 
 use image::{DynamicImage, RgbImage, imageops::FilterType};
 
-use crate::cover::read_cover;
-
 /// Names of an artist's picture in their folder, the one holding their albums' folders.
 const ARTIST_FILES: &[&str] = &["artist", "poster", "folder"];
 /// And in an album's folder, where `folder` is the album's cover.
@@ -41,13 +39,6 @@ const MAX_ANSWER_BYTES: u64 = 256 * 1024;
 /// fanart.tv's wide pictures can be 3840 pixels wide.
 const MAX_PICTURE_BYTES: u64 = 16 * 1024 * 1024;
 
-/// A wide picture of the artist in their own folder, the parent of their albums' folders.
-pub fn local_backdrop(album_tracks: &[PathBuf]) -> Option<PathBuf> {
-    artist_dirs(album_tracks)
-        .into_iter()
-        .find_map(|dir| in_dir(dir, BACKDROP_FILES))
-}
-
 /// The folders holding the artist's albums' folders, each once: an artist's albums are
 /// mostly in one, and looking in a folder on a network drive takes a while.
 fn artist_dirs(album_tracks: &[PathBuf]) -> Vec<&Path> {
@@ -60,29 +51,52 @@ fn artist_dirs(album_tracks: &[PathBuf]) -> Vec<&Path> {
     dirs
 }
 
-/// The first of `names`, with any of the image extensions, that is a file in `dir`.
-fn in_dir(dir: &Path, names: &[&str]) -> Option<PathBuf> {
-    names.iter().find_map(|name| {
-        IMAGE_EXTENSIONS
-            .iter()
-            .map(|ext| dir.join(format!("{name}.{ext}")))
-            .find(|path| path.is_file())
-    })
+/// The pictures a walk through the music's folders found, to look among by name, in any case,
+/// as the file system does on macOS and Windows: without looking in the folders again.
+pub struct FolderImages<'a> {
+    by_name: std::collections::HashMap<String, &'a Path>,
 }
 
-/// A picture of the artist next to their music: in their own folder, the parent of their
-/// albums' folders, or in an album's folder as `artist.jpg`. `album_tracks` has a track of
-/// each of their albums.
-pub fn local(album_tracks: &[PathBuf]) -> Option<PathBuf> {
-    let album_dirs: Vec<&Path> = album_tracks.iter().filter_map(|t| t.parent()).collect();
-    artist_dirs(album_tracks)
-        .into_iter()
-        .find_map(|dir| in_dir(dir, ARTIST_FILES))
-        .or_else(|| {
-            album_dirs
+impl<'a> FolderImages<'a> {
+    pub fn new(images: &'a [PathBuf]) -> Self {
+        Self {
+            by_name: images
                 .iter()
-                .find_map(|dir| in_dir(dir, ALBUM_FOLDER_FILES))
+                .map(|image| (image.to_string_lossy().to_lowercase(), image.as_path()))
+                .collect(),
+        }
+    }
+
+    /// The first of `names`, with any of the image extensions, in `dir`.
+    fn in_dir(&self, dir: &Path, names: &[&str]) -> Option<PathBuf> {
+        names.iter().find_map(|name| {
+            IMAGE_EXTENSIONS.iter().find_map(|ext| {
+                let path = dir.join(format!("{name}.{ext}"));
+                let found = self.by_name.get(&path.to_string_lossy().to_lowercase())?;
+                Some(found.to_path_buf())
+            })
         })
+    }
+
+    /// As [`local`]: a picture of the artist next to their music.
+    pub fn portrait(&self, album_tracks: &[PathBuf]) -> Option<PathBuf> {
+        artist_dirs(album_tracks)
+            .into_iter()
+            .find_map(|dir| self.in_dir(dir, ARTIST_FILES))
+            .or_else(|| {
+                album_tracks
+                    .iter()
+                    .filter_map(|t| t.parent())
+                    .find_map(|dir| self.in_dir(dir, ALBUM_FOLDER_FILES))
+            })
+    }
+
+    /// As [`local_backdrop`]: a wide picture of the artist in their own folder.
+    pub fn backdrop(&self, album_tracks: &[PathBuf]) -> Option<PathBuf> {
+        artist_dirs(album_tracks)
+            .into_iter()
+            .find_map(|dir| self.in_dir(dir, BACKDROP_FILES))
+    }
 }
 
 /// Busy services answer 503 now and then, MusicBrainz often: each wait, the request is made
@@ -349,19 +363,6 @@ fn artist_id(answer: &serde_json::Value, name: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// A wide picture of the artist with the MusicBrainz id `mbid` from fanart.tv, asked with
-/// the user's personal key: the one its users like best. An error means fanart.tv could not
-/// be asked, or did not take the key.
-pub fn fanart_backdrop(mbid: &str, key: &str) -> Result<Online, String> {
-    let Some(answer) = fanart_answer(mbid, key)? else {
-        return Ok(Online::NoPicture);
-    };
-    match backdrop_url(&answer) {
-        Some(url) => Ok(Online::Picture(download(&url)?)),
-        None => Ok(Online::NoPicture),
-    }
-}
-
 /// The addresses of every picture fanart.tv has of the artist with the MusicBrainz id
 /// `mbid`: portraits, and wide ones, 4K first. Best liked first.
 #[derive(Debug, Default, PartialEq)]
@@ -418,18 +419,6 @@ fn fanart_answer(mbid: &str, key: &str) -> Result<Option<serde_json::Value>, Str
         .map_err(|e| e.to_string())
 }
 
-/// The address of the best liked wide picture in a fanart.tv answer, in 4K when there is one.
-fn backdrop_url(answer: &serde_json::Value) -> Option<String> {
-    ["artist4kbackground", "artistbackground"]
-        .iter()
-        .find_map(|kind| best_liked(answer.get(kind)?))
-}
-
-/// The address of the best liked of a list of fanart.tv pictures.
-fn best_liked(pictures: &serde_json::Value) -> Option<String> {
-    by_likes(pictures).into_iter().next()
-}
-
 /// The addresses in a list of fanart.tv pictures, best liked first; those liked as much as
 /// fanart.tv lists them, as its users ranked them.
 fn by_likes(pictures: &serde_json::Value) -> Vec<String> {
@@ -480,17 +469,10 @@ fn comparable(name: &str) -> String {
         .collect()
 }
 
-/// The artist's album covers as one square picture `size` wide: four in a square, or the
-/// first alone when there are fewer.
-pub fn collage(album_tracks: &[PathBuf], size: u32) -> Option<RgbImage> {
+/// `covers` as one square picture `size` wide: the first four in a square, or the first alone
+/// when there are fewer.
+pub fn collage_of(covers: Vec<DynamicImage>, size: u32) -> Option<RgbImage> {
     let half = size / 2;
-    let covers: Vec<DynamicImage> = album_tracks
-        .iter()
-        .filter_map(|track| read_cover(track, size))
-        .filter_map(|c| image::RgbaImage::from_raw(c.width, c.height, c.rgba))
-        .map(DynamicImage::ImageRgba8)
-        .take(4)
-        .collect();
     match covers.len() {
         0 => None,
         1..=3 => Some(
@@ -515,33 +497,6 @@ pub fn collage(album_tracks: &[PathBuf], size: u32) -> Option<RgbImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("freya-artist-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    #[test]
-    fn finds_the_picture_in_the_artists_folder() {
-        let artist = temp_dir("local");
-        let album = artist.join("Homesick");
-        std::fs::create_dir_all(&album).unwrap();
-        let track = album.join("01.flac");
-        std::fs::write(&track, b"").unwrap();
-        // An album's own cover is not the artist's.
-        std::fs::write(album.join("folder.jpg"), b"x").unwrap();
-        assert_eq!(local(std::slice::from_ref(&track)), None);
-        std::fs::write(album.join("artist.png"), b"x").unwrap();
-        assert_eq!(
-            local(std::slice::from_ref(&track)),
-            Some(album.join("artist.png"))
-        );
-        // The artist's folder comes first.
-        std::fs::write(artist.join("folder.jpg"), b"x").unwrap();
-        assert_eq!(local(&[track]), Some(artist.join("folder.jpg")));
-    }
 
     #[test]
     fn takes_only_the_artist_of_that_name_from_deezer() {
@@ -575,22 +530,22 @@ mod tests {
     }
 
     #[test]
-    fn finds_a_wide_picture_in_the_artists_folder() {
-        let artist = temp_dir("backdrop");
-        let album = artist.join("Dead Magic");
-        std::fs::create_dir_all(&album).unwrap();
-        let track = album.join("01.flac");
-        std::fs::write(&track, b"").unwrap();
-        // Not in an album's folder.
-        std::fs::write(album.join("fanart.jpg"), b"x").unwrap();
-        assert_eq!(local_backdrop(std::slice::from_ref(&track)), None);
-        std::fs::write(artist.join("backdrop.png"), b"x").unwrap();
+    fn finds_artists_pictures_among_those_a_walk_found() {
+        let tracks = [PathBuf::from("/m/Opeth/Damnation/01.flac")];
+        let images = [
+            PathBuf::from("/m/Opeth/Damnation/folder.jpg"),
+            PathBuf::from("/m/Opeth/Artist.JPG"),
+            PathBuf::from("/m/Opeth/fanart.png"),
+        ];
+        let found = FolderImages::new(&images);
+        assert_eq!(found.portrait(&tracks), Some(images[1].clone()));
+        assert_eq!(found.backdrop(&tracks), Some(images[2].clone()));
+        let none = FolderImages::new(&images[..1]);
         assert_eq!(
-            local_backdrop(std::slice::from_ref(&track)),
-            Some(artist.join("backdrop.png"))
+            none.portrait(&tracks),
+            None,
+            "an album's own cover is not the artist's"
         );
-        std::fs::write(artist.join("fanart.jpg"), b"x").unwrap();
-        assert_eq!(local_backdrop(&[track]), Some(artist.join("fanart.jpg")));
     }
 
     #[test]
@@ -645,7 +600,7 @@ mod tests {
     }
 
     #[test]
-    fn takes_the_best_liked_wide_picture_from_fanart_tv() {
+    fn lists_fanart_tvs_pictures_best_liked_first() {
         let answer = serde_json::json!({
             "artistthumb": [{ "url": "https://x/thumb.jpg", "likes": "9" }],
             "artistbackground": [
@@ -654,11 +609,10 @@ mod tests {
                 { "url": "https://x/c.jpg", "likes": "4" },
             ],
         });
-        assert_eq!(backdrop_url(&answer).as_deref(), Some("https://x/b.jpg"));
+        assert_eq!(urls_of(&answer).backdrops[0], "https://x/b.jpg");
         let mut with_4k = answer.clone();
         with_4k["artist4kbackground"] =
             serde_json::json!([{ "url": "https://x/4k.jpg", "likes": "0" }]);
-        assert_eq!(backdrop_url(&with_4k).as_deref(), Some("https://x/4k.jpg"));
         let urls = urls_of(&with_4k);
         assert_eq!(urls.portraits, ["https://x/thumb.jpg"]);
         assert_eq!(
@@ -670,34 +624,31 @@ mod tests {
                 "https://x/a.jpg"
             ]
         );
-        assert_eq!(
-            backdrop_url(&serde_json::json!({ "artistthumb": [] })),
-            None
+        assert!(
+            urls_of(&serde_json::json!({ "artistthumb": [] }))
+                .backdrops
+                .is_empty()
         );
     }
 
     #[test]
     fn makes_a_square_of_four_covers_or_takes_the_first() {
-        let dir = temp_dir("collage");
-        let tracks: Vec<PathBuf> = (0..4)
+        let covers: Vec<DynamicImage> = (0..4)
             .map(|i| {
-                let album = dir.join(format!("album{i}"));
-                std::fs::create_dir_all(&album).unwrap();
                 let shade = 60 * i as u8;
-                image::RgbImage::from_pixel(400, 300, image::Rgb([shade, 0, 0]))
-                    .save(album.join("cover.jpg"))
-                    .unwrap();
-                let track = album.join("01.flac");
-                std::fs::write(&track, b"").unwrap();
-                track
+                DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+                    400,
+                    300,
+                    image::Rgb([shade, 0, 0]),
+                ))
             })
             .collect();
-        let square = collage(&tracks, 300).unwrap();
+        let square = collage_of(covers.clone(), 300).unwrap();
         assert_eq!(square.dimensions(), (300, 300));
         // Each quarter is one cover: the bottom right is the fourth, the reddest.
         assert!(square.get_pixel(225, 225)[0] > square.get_pixel(75, 75)[0] + 100);
-        let single = collage(&tracks[..2], 300).unwrap();
+        let single = collage_of(covers[..2].to_vec(), 300).unwrap();
         assert_eq!(single.dimensions(), (300, 300));
-        assert!(collage(&[], 300).is_none());
+        assert!(collage_of(Vec::new(), 300).is_none());
     }
 }

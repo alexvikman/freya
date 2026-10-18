@@ -1,10 +1,9 @@
-//! Pictures to choose from when the user changes an artist: the ones in their folder and
-//! those Freya has, and every one Deezer and fanart.tv have of them, found on a thread of its
-//! own. Each found is kept among the downloaded pictures at once, so choosing it needs no
+//! Pictures to choose from when the user changes an artist: those Freya keeps of them, the
+//! one from their folder among them, and every one Deezer and fanart.tv have of them, found
+//! on a thread of its own. Each found is kept among the downloaded pictures at once, so choosing it needs no
 //! second download; those not chosen are taken away later, as no artist has them.
 
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -28,8 +27,6 @@ type Known = Arc<Mutex<HashMap<String, String>>>;
 /// What choosing a picture means.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pick {
-    /// The one in the artist's folder: no choice of the user's, as Freya takes it first.
-    Folder,
     /// One kept among the downloaded pictures, by its SHA-256.
     Kept(String),
     /// None: their album covers, or no wide picture.
@@ -40,7 +37,7 @@ pub enum Pick {
 pub struct Found {
     pub kind: PictureKind,
     pub pick: Pick,
-    /// Where it is from: "Folder", "Deezer", "fanart.tv", "Freya's".
+    /// Where it is from: "Folder", "Deezer", "fanart.tv", "Chosen before".
     pub source: String,
     pub width: u32,
     pub height: u32,
@@ -60,12 +57,10 @@ pub struct Request {
     /// Whether MusicBrainz may be searched for the id, when there is none.
     pub search: bool,
     pub fanart_key: Option<String>,
-    /// Their pictures in their folder, square and wide.
-    pub folder: Vec<(PictureKind, PathBuf)>,
     /// Pictures of theirs already kept, with where they came from.
     pub kept: Vec<(PictureKind, String, String)>,
-    /// A track of each of their albums, for a collage of the covers.
-    pub album_tracks: Vec<PathBuf>,
+    /// Their albums' covers among Freya's pictures, for a collage of them.
+    pub covers: Vec<String>,
 }
 
 enum Message {
@@ -195,7 +190,13 @@ fn look(request: &Request, pictures: &Pictures, known: &Known, send: &(dyn Fn(Fo
         order
     };
     // What none means for a square picture: their album covers, when they have any.
-    if let Some(collage) = artist_image::collage(&request.album_tracks, PREVIEW) {
+    let covers = request
+        .covers
+        .iter()
+        .filter_map(|checksum| image::load_from_memory(&pictures.read(checksum)?).ok())
+        .take(4)
+        .collect();
+    if let Some(collage) = artist_image::collage_of(covers, PREVIEW) {
         let rgba = image::DynamicImage::ImageRgb8(collage).to_rgba8();
         send(Found {
             kind: PictureKind::Portrait,
@@ -211,24 +212,6 @@ fn look(request: &Request, pictures: &Pictures, known: &Known, send: &(dyn Fn(Fo
             choose: false,
             order: 0,
         });
-    }
-    for (kind, file) in &request.folder {
-        match std::fs::read(file)
-            .map_err(|e| e.to_string())
-            .and_then(|bytes| preview(&bytes))
-        {
-            Ok((width, height, preview)) => send(Found {
-                kind: *kind,
-                pick: Pick::Folder,
-                source: "Folder".to_owned(),
-                width,
-                height,
-                preview,
-                choose: false,
-                order: next(),
-            }),
-            Err(e) => log::debug!("no preview of {}: {e}", file.display()),
-        }
     }
     for (kind, checksum, source) in &request.kept {
         let shown = pictures
@@ -384,7 +367,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn finds_the_folders_and_the_kept_pictures_and_keeps_the_users_own() {
+    fn finds_the_kept_pictures_and_keeps_the_users_own() {
         let dir = std::env::temp_dir().join(format!("freya-finder-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -398,8 +381,8 @@ mod tests {
                 .unwrap();
             bytes
         };
-        std::fs::write(dir.join("fanart.jpg"), jpeg([0, 0, 200], 1920, 1080)).unwrap();
         let pictures = Pictures::new(dir.join("pictures"));
+        let folder = pictures.put(&jpeg([0, 0, 200], 1920, 1080)).unwrap();
         let kept = pictures.put(&jpeg([200, 0, 0], 1000, 1000)).unwrap();
         let mut finder = PictureFinder::new(Some(pictures));
         finder.find(Request {
@@ -408,9 +391,11 @@ mod tests {
             mbid: None,
             search: false,
             fanart_key: None,
-            folder: vec![(PictureKind::Backdrop, dir.join("fanart.jpg"))],
-            kept: vec![(PictureKind::Portrait, kept.clone(), "Deezer".into())],
-            album_tracks: Vec::new(),
+            kept: vec![
+                (PictureKind::Backdrop, folder.clone(), "Folder".into()),
+                (PictureKind::Portrait, kept.clone(), "Deezer".into()),
+            ],
+            covers: Vec::new(),
         });
         assert!(finder.searching());
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -424,7 +409,7 @@ mod tests {
         let wide = &found[0];
         assert_eq!(
             (wide.kind, &wide.pick),
-            (PictureKind::Backdrop, &Pick::Folder)
+            (PictureKind::Backdrop, &Pick::Kept(folder))
         );
         assert_eq!((wide.width, wide.height), (1920, 1080));
         assert_eq!(wide.preview.width(), PREVIEW);

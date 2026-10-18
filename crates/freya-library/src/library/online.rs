@@ -2,7 +2,7 @@
 //! theirs (see [`crate::pictures`]), their MusicBrainz id, and what Last.fm says of them. Kept
 //! with the user's plays, as getting them again takes the internet: never dropped.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, SystemTime};
 
 use rusqlite::{OptionalExtension, params};
@@ -75,6 +75,8 @@ impl PictureKind {
 
 /// The source of a picture the user chose themselves.
 pub const CHOSEN: &str = "user";
+/// The source of a picture a scan found in the artist's folder.
+pub const FOLDER: &str = "folder";
 
 /// Which downloaded picture is an artist's, where from, and when it was asked for.
 #[derive(Clone, Debug, PartialEq)]
@@ -95,6 +97,11 @@ impl PictureRow {
     /// Whether it is recent enough not to ask again.
     pub fn recent(&self) -> bool {
         self.asked.elapsed().is_ok_and(|age| age < ASK_AGAIN_AFTER)
+    }
+
+    /// Whether it came from the internet: neither the user's choice nor their folder's.
+    pub fn from_internet(&self) -> bool {
+        self.source != CHOSEN && self.source != FOLDER
     }
 }
 
@@ -139,9 +146,19 @@ impl Library {
             .optional()
     }
 
+    /// Every artist's picture of `kind`, by the artist: those who have one.
+    pub fn artist_pictures(&self, kind: PictureKind) -> Result<HashMap<String, String>> {
+        let mut statement = self.db.prepare_cached(
+            "SELECT artist, picture FROM artist_pictures WHERE kind = ?1 AND picture IS NOT NULL",
+        )?;
+        let rows = statement.query_map([kind.name()], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
     /// Notes that `source` was asked for the artist's picture at `asked`, and what it gave:
-    /// the downloaded picture's SHA-256, or none. A picture the user chose stays, unless
-    /// `source` is [`CHOSEN`] too.
+    /// the picture's SHA-256 among Freya's pictures, or none. Once an artist has a picture it
+    /// stays theirs: only the user's choice, [`CHOSEN`], replaces it; another source only fills
+    /// in a picture they lack.
     pub fn set_artist_picture(
         &self,
         artist: &str,
@@ -156,7 +173,8 @@ impl Library {
                  VALUES (?1, ?2, ?3, ?4, ?5)
                  ON CONFLICT (artist, kind) DO UPDATE
                  SET source = ?3, picture = ?4, asked = ?5
-                 WHERE artist_pictures.source != 'user' OR ?3 = 'user'",
+                 WHERE ?3 = 'user'
+                    OR (artist_pictures.source != 'user' AND artist_pictures.picture IS NULL)",
             )?
             .execute(params![
                 artist,
@@ -364,16 +382,31 @@ mod tests {
             HashSet::from(["aaa".to_owned()])
         );
 
-        // Asked again: the new answer stands.
+        // Once theirs, a picture stays: another answer does not replace it.
         let now = SystemTime::now();
         library
             .set_artist_picture("Opeth", portrait, "deezer", Some("bbb"), now)
             .unwrap();
         let opeth = library.artist_picture("Opeth", portrait).unwrap().unwrap();
-        assert_eq!(opeth.picture.as_deref(), Some("bbb"));
-        assert!(opeth.recent());
+        assert_eq!(opeth.picture.as_deref(), Some("aaa"));
+        // But fills in one they lack.
+        library
+            .set_artist_picture(
+                "Opeth",
+                PictureKind::Backdrop,
+                "fanart.tv",
+                Some("wide"),
+                now,
+            )
+            .unwrap();
+        let wide = library
+            .artist_picture("Opeth", PictureKind::Backdrop)
+            .unwrap()
+            .unwrap();
+        assert_eq!(wide.picture.as_deref(), Some("wide"));
+        assert!(wide.recent());
 
-        // The user's choice stays when Deezer answers again, and gives way to another of theirs.
+        // The user's choice replaces any, and stays.
         library
             .set_artist_picture("Opeth", portrait, CHOSEN, None, now)
             .unwrap();

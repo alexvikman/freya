@@ -292,14 +292,14 @@ export global Library {
     /// Their most played tracks, numbered 1 up, with `plays` and an album's `cover`; empty
     /// for an artist whose music was not played.
     in property <[LibraryRow]> popular;
-    /// Whether artists' pages show what Last.fm says of them, which is then told their names.
-    /// Kept between runs.
+    /// Whether a scan asks Last.fm what it says of artists who lack it, telling it their
+    /// names; their pages show what was kept. Kept between runs.
     in property <bool> artist-bios-online: true;
-    /// Whether artists' pages show the opening of their Wikipedia article, found by their
-    /// MusicBrainz id, before what Last.fm says. Kept between runs.
+    /// Whether a scan asks Wikipedia for the opening of artists' articles, found by their
+    /// MusicBrainz id, which their pages show before what Last.fm says. Kept between runs.
     in property <bool> artist-wikipedia-online: true;
-    /// The user's personal fanart.tv API key, for wide pictures of artists; empty for none.
-    /// Kept between runs.
+    /// The user's personal fanart.tv API key, for a scan to ask for pictures of artists who
+    /// lack them; empty for none. Kept between runs.
     in property <string> fanart-key;
     /// The row of the track playing or paused, or -1 when it is not among the rows.
     in property <int> playing-row: -1;
@@ -319,8 +319,8 @@ export global Library {
     /// How the artists are shown: "grid" (layout "grid": a picture of each, from `cover`) or
     /// "list". Kept between runs.
     in property <string> artist-view: "grid";
-    /// Whether pictures of artists without one of their own may come from Deezer, which is
-    /// then told the artists' names. Kept between runs.
+    /// Whether a scan may ask Deezer for pictures of artists who lack one, telling it their
+    /// names. A picture an artist has stays theirs. Kept between runs.
     in property <bool> artist-pictures-online: true;
     /// True while an artist's albums are shown, which `album-sort` and `album-view` apply to.
     in property <bool> album-options;

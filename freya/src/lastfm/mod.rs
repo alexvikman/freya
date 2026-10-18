@@ -14,7 +14,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime};
 
-pub use api::{ArtistInfo, Client, Credentials, Scrobble, Track};
+pub use api::{Client, Credentials, Scrobble, Track};
 use queue::Queue;
 
 /// While the user decides on Last.fm's page, Freya asks this often whether they have allowed it.

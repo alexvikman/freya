@@ -7,6 +7,7 @@
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 /// A picture newer than this is kept even when the library does not name it yet: it was
@@ -43,12 +44,20 @@ impl Pictures {
         }
         let dir = file.parent().unwrap_or(&self.dir);
         create_private_dir(dir)?;
-        let partial = dir.join(format!("{checksum}.partial"));
+        // Each write its own: threads may keep the same picture at once.
+        static WRITES: AtomicU64 = AtomicU64::new(0);
+        let write = WRITES.fetch_add(1, Ordering::Relaxed);
+        let partial = dir.join(format!("{checksum}.{}-{write}.partial", std::process::id()));
         let mut out = std::fs::File::create(&partial)?;
         out.write_all(bytes)?;
         out.sync_all()?;
         drop(out);
-        std::fs::rename(&partial, &file)?;
+        if let Err(e) = std::fs::rename(&partial, &file) {
+            let _ = std::fs::remove_file(&partial);
+            if !file.is_file() {
+                return Err(e);
+            }
+        }
         Ok(checksum)
     }
 
@@ -141,6 +150,20 @@ mod tests {
         std::fs::write(pictures.path(&b), b"damaged").unwrap();
         assert_eq!(pictures.read(&b), None);
         assert_eq!(pictures.read("0000"), None);
+        let _ = std::fs::remove_dir_all(pictures.dir());
+    }
+
+    #[test]
+    fn keeps_one_picture_written_by_many_threads_at_once() {
+        let pictures = Pictures::new(temp_dir("threads"));
+        let checksums: Vec<String> = std::thread::scope(|threads| {
+            let handles: Vec<_> = (0..8)
+                .map(|_| threads.spawn(|| pictures.put(&[7u8; 100_000]).unwrap()))
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        assert!(checksums.windows(2).all(|pair| pair[0] == pair[1]));
+        assert_eq!(pictures.read(&checksums[0]).unwrap().len(), 100_000);
         let _ = std::fs::remove_dir_all(pictures.dir());
     }
 

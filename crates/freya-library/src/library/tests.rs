@@ -830,7 +830,7 @@ fn a_scan_makes_each_albums_cover_once_and_again_when_its_pictures_change() {
     let pictures = crate::pictures::Pictures::new(dir.join("pictures"));
     let options = ScanOptions {
         pictures: Some(pictures.clone()),
-        rescan: false,
+        ..ScanOptions::default()
     };
     let folders = [dir.join("music")];
     let mut library = Library::open_in_memory().unwrap();
@@ -870,5 +870,129 @@ fn a_scan_makes_each_albums_cover_once_and_again_when_its_pictures_change() {
             .contains(&checksum)
     );
     assert_eq!(scan(&mut library), 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_scan_takes_in_the_pictures_in_artists_folders() {
+    let dir = temp_dir("folder-pictures");
+    let artist = dir.join("music").join("Freya");
+    let album = artist.join("Album");
+    std::fs::create_dir_all(&album).unwrap();
+    std::fs::copy(fixtures().join("sine.mp3"), album.join("sine.mp3")).unwrap();
+    image::RgbImage::from_pixel(2000, 2000, image::Rgb([0, 120, 0]))
+        .save(artist.join("artist.jpg"))
+        .unwrap();
+    let pictures = crate::pictures::Pictures::new(dir.join("pictures"));
+    let options = ScanOptions {
+        pictures: Some(pictures.clone()),
+        ..ScanOptions::default()
+    };
+    let folders = [dir.join("music")];
+    let mut library = Library::open_in_memory().unwrap();
+    let scan = |library: &mut Library| {
+        scan_with(library, &folders, &options, &AtomicBool::new(false), |_| {}).unwrap();
+    };
+    scan(&mut library);
+    let name = library.artists().unwrap()[0].name.clone().unwrap();
+    let portrait = library
+        .artist_picture(&name, PictureKind::Portrait)
+        .unwrap()
+        .unwrap();
+    assert_eq!(portrait.source, "folder");
+    let checksum = portrait.picture.unwrap();
+    let made = image::load_from_memory(&pictures.read(&checksum).unwrap()).unwrap();
+    assert_eq!((made.width(), made.height()), (1400, 1400));
+
+    // Theirs it stays: another picture in the folder does not replace it, nor its going.
+    image::RgbImage::from_pixel(500, 500, image::Rgb([0, 0, 200]))
+        .save(artist.join("artist.jpg"))
+        .unwrap();
+    scan(&mut library);
+    let kept = library
+        .artist_picture(&name, PictureKind::Portrait)
+        .unwrap()
+        .unwrap();
+    assert_eq!(kept.picture.as_deref(), Some(checksum.as_str()));
+    std::fs::remove_file(artist.join("artist.jpg")).unwrap();
+    scan(&mut library);
+    assert!(
+        library
+            .artist_picture(&name, PictureKind::Portrait)
+            .unwrap()
+            .is_some()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Last.fm as a test has it: what it says of each artist, and who it was asked about.
+struct FakeLastFm {
+    asked: std::sync::Mutex<Vec<String>>,
+}
+
+impl LastFm for FakeLastFm {
+    fn artist_text(
+        &self,
+        name: &str,
+        _mbid: Option<&str>,
+    ) -> std::result::Result<ArtistText, String> {
+        self.asked.lock().unwrap().push(name.to_owned());
+        if name == "Unknown" {
+            return Err("no such artist".into());
+        }
+        Ok(ArtistText {
+            summary: format!("{name}, a band."),
+            ..ArtistText::default()
+        })
+    }
+}
+
+#[test]
+fn a_scan_asks_the_internet_only_for_what_artists_lack() {
+    let dir = temp_dir("fetch");
+    let album = dir.join("music").join("Artist").join("Album");
+    std::fs::create_dir_all(&album).unwrap();
+    std::fs::copy(fixtures().join("sine.mp3"), album.join("sine.mp3")).unwrap();
+    let lastfm = std::sync::Arc::new(FakeLastFm {
+        asked: std::sync::Mutex::new(Vec::new()),
+    });
+    let options = ScanOptions {
+        pictures: Some(crate::pictures::Pictures::new(dir.join("pictures"))),
+        online: Online {
+            lastfm: Some(lastfm.clone()),
+            ..Online::default()
+        },
+        ..ScanOptions::default()
+    };
+    let folders = [dir.join("music")];
+    let mut library = Library::open_in_memory().unwrap();
+    let scan = |library: &mut Library| {
+        let mut artists = 0;
+        scan_with(library, &folders, &options, &AtomicBool::new(false), |e| {
+            if let ScanEvent::Artists { total, .. } = e {
+                artists = total;
+            }
+        })
+        .unwrap();
+        artists
+    };
+    assert_eq!(scan(&mut library), 1);
+    let name = library.artists().unwrap()[0].name.clone().unwrap();
+    assert_eq!(
+        library.artist_text(&name).unwrap().unwrap().answer.summary,
+        format!("{name}, a band.")
+    );
+    // Kept: not asked again, by this scan or any later.
+    assert_eq!(scan(&mut library), 0);
+    assert_eq!(lastfm.asked.lock().unwrap().len(), 1);
+
+    // An artist the internet could not tell about is asked at the next scan.
+    library
+        .db
+        .execute("UPDATE tracks SET album_artist = 'Unknown'", [])
+        .unwrap();
+    assert_eq!(scan(&mut library), 1);
+    assert_eq!(scan(&mut library), 1);
+    assert!(library.artist_text("Unknown").unwrap().is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }

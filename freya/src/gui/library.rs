@@ -7,19 +7,15 @@ use std::time::{Duration, Instant, SystemTime};
 
 use freya_library::cue::Part;
 use freya_library::library::{
-    Album, AlbumMatch, Artist, ArtistEdit, ArtistOrder, CHOSEN, Genre, PictureKind, PictureRow,
-    Played, ScanEvent, ScanOptions, Scanner, Track, plain_name, split_artist,
+    Album, AlbumMatch, Artist, ArtistEdit, ArtistOrder, CHOSEN, Genre, Online, PictureKind,
+    PictureRow, Played, ScanEvent, ScanOptions, Scanner, Track, plain_name, split_artist,
 };
 use freya_library::pictures::Pictures;
-use freya_library::thumbnails::{
-    ArtistSource, BackdropSource, Downloaded, Fetched, Thumbnail, Thumbnails,
-};
+use freya_library::thumbnails::{ArtistSource, Thumbnail, Thumbnails};
 use freya_library::{Entry, Library};
 use slint::{Image, ModelRc, VecModel};
 use slint_interpreter::{Struct, Value};
 
-use super::articles::Articles;
-use super::artist_info::ArtistInfos;
 use super::match_finder::{AlbumFinder, MatchFinder};
 use super::picture_finder::{Found, Pick, PictureFinder, Request};
 use super::skin_state::{ModelRows, format_time, string};
@@ -197,12 +193,12 @@ pub struct LibraryPanel {
     draft_shown: Option<Vec<PathBuf>>,
     /// Album covers for grids; `None` without a cache folder.
     thumbnails: Option<Thumbnails>,
-    /// For each album shown, by its cover's key, a track to take the cover from.
-    cover_tracks: HashMap<String, PathBuf>,
+    /// Each album's cover as the last scan made it, by the album's key; and each artist's
+    /// pictures, square and wide, as kept, by the artist.
+    made_covers: HashMap<String, freya_library::library::AlbumCover>,
+    portraits: HashMap<String, String>,
+    backdrops: HashMap<String, String>,
     recent_covers: RecentCovers,
-    /// What the internet said of artists, until the library is free to keep it: written
-    /// while a scan writes, it would hold up the window.
-    fetched: Vec<Fetched>,
     /// Pictures to make ahead of their being shown.
     prepare: VecDeque<Prepare>,
     /// `Library.covers-ready`: goes up as covers are made.
@@ -215,11 +211,17 @@ pub struct LibraryPanel {
     album_list: bool,
     /// A scan was started and its end not yet taken in.
     scanning: bool,
-    /// The folder a scan looks through or reads now, and how far it is with albums' covers.
+    /// The folder a scan looks through or reads now, and how far it is with albums' covers
+    /// and with asking the internet about artists.
     scan_folder: Option<PathBuf>,
     covers_progress: Option<(usize, usize)>,
-    /// Whether the covers in the library changed since they were last read.
-    album_covers_stale: bool,
+    artists_progress: Option<(usize, usize)>,
+    /// Whether the covers and pictures in the library changed since they were last read.
+    pictures_stale: bool,
+    /// Artists to ask the internet about once the scan running ends; all of them when
+    /// `fetch_all_later`.
+    fetch_later: Vec<String>,
+    fetch_all_later: bool,
     /// The track playing, by its file and where in it it starts, and its row, or -1.
     playing: Option<(PathBuf, Duration)>,
     playing_row: i32,
@@ -230,19 +232,16 @@ pub struct LibraryPanel {
     reveal_row: i32,
     reveals: i32,
     /// How artists are ordered, whether they show as a list rather than a grid of pictures,
-    /// and whether pictures of them may come from Deezer.
+    /// and whether a scan may ask Deezer for pictures of them.
     artist_order: ArtistOrder,
     artist_list: bool,
     online_pictures: bool,
     /// The artists shown, by their picture's key.
     artist_keys: HashMap<String, Option<String>>,
-    /// While an artist's albums are shown, the page over them; and what Last.fm says of
-    /// artists, if it may be asked.
+    /// While an artist's albums are shown, the page over them; and whether a scan may ask
+    /// Last.fm and Wikipedia what they say of artists.
     artist_page: Option<ArtistPage>,
-    artist_infos: ArtistInfos,
     online_bios: bool,
-    /// What Wikipedia says of artists, if it may be asked.
-    articles: Articles,
     online_wikipedia: bool,
     /// What the user changed about artists, by the tags' name for them.
     edits: HashMap<String, ArtistEdit>,
@@ -307,8 +306,6 @@ struct ArtistPage {
     /// Their picture large, uncut.
     picture_full: Option<Image>,
     color: Option<[u8; 3]>,
-    /// A track of each of their albums, which their pictures can be made from.
-    album_tracks: Vec<PathBuf>,
     summary: String,
     biography: String,
     tags: String,
@@ -320,7 +317,8 @@ struct ArtistPage {
 /// A picture to make ahead of its being shown.
 enum Prepare {
     Artist(Option<String>),
-    Album(Album),
+    /// An album's cover, by its checksum.
+    Cover(String),
 }
 
 /// Pictures handed to the threads to make ahead, each time the library is polled.
@@ -481,16 +479,20 @@ impl LibraryPanel {
             thumbnails: covers
                 .zip(pictures.clone())
                 .map(|(covers, pictures)| Thumbnails::new(covers, Pictures::new(pictures))),
-            fetched: Vec::new(),
             prepare: VecDeque::new(),
-            cover_tracks: HashMap::new(),
+            made_covers: HashMap::new(),
+            portraits: HashMap::new(),
+            backdrops: HashMap::new(),
             recent_covers: RecentCovers::default(),
             covers_ready: 0,
             plays: Vec::new(),
             scanning: false,
             scan_folder: None,
             covers_progress: None,
-            album_covers_stale: true,
+            artists_progress: None,
+            pictures_stale: true,
+            fetch_later: Vec::new(),
+            fetch_all_later: false,
             album_sort: AlbumSort::ReleaseDate,
             album_list: false,
             playing: None,
@@ -505,8 +507,6 @@ impl LibraryPanel {
             online_pictures: true,
             artist_keys: HashMap::new(),
             artist_page: None,
-            artist_infos: ArtistInfos::new(),
-            articles: Articles::new(),
             online_wikipedia: true,
             edits: HashMap::new(),
             draft: None,
@@ -633,6 +633,7 @@ impl LibraryPanel {
             let options = ScanOptions {
                 pictures: self.thumbnails.as_ref().map(|t| t.pictures().clone()),
                 rescan: false,
+                online: self.online(),
             };
             self.scanner.start(path.clone(), folders.to_vec(), options);
             self.scanning = true;
@@ -641,9 +642,6 @@ impl LibraryPanel {
 
     /// Handles scan progress and covers made. Returns true when the rows changed.
     pub fn poll(&mut self) -> bool {
-        if let Some(thumbnails) = &mut self.thumbnails {
-            thumbnails.save_index(false);
-        }
         // Made again: what was read of them is old.
         for key in self
             .thumbnails
@@ -661,10 +659,6 @@ impl LibraryPanel {
         {
             for key in thumbnails.take_remade() {
                 self.recent_covers.remove(&key);
-            }
-            self.fetched.extend(thumbnails.take_fetched());
-            if !self.scanning {
-                self.write_fetched();
             }
             self.covers_ready += 1;
             self.color_album_page();
@@ -714,12 +708,6 @@ impl LibraryPanel {
                 self.show_choices();
             }
         }
-        if self.articles.poll() | self.artist_infos.poll() {
-            if !self.scanning {
-                self.write_fetched();
-            }
-            self.show_artist_info();
-        }
         // Asked before the events are read: a scan that had ended by then has sent them all.
         let ended = !self.scanner.is_running();
         let mut finished = false;
@@ -734,7 +722,12 @@ impl LibraryPanel {
                     self.covers_progress = Some((done, total));
                     self.scan_folder = None;
                     // Shown as they come.
-                    self.album_covers_stale = true;
+                    self.pictures_stale = true;
+                }
+                ScanEvent::Artists { done, total } => {
+                    self.artists_progress = Some((done, total));
+                    self.scan_folder = None;
+                    self.pictures_stale = true;
                 }
                 ScanEvent::Finished(summary) => {
                     self.progress = None;
@@ -751,6 +744,12 @@ impl LibraryPanel {
                 }
             }
         }
+        // Covers and pictures found so far show as they come; and what was said of the artist
+        // on the page.
+        if self.pictures_stale {
+            self.load_pictures();
+            self.show_artist_info();
+        }
         // A scan whose thread ended without saying so is over all the same.
         if ended && self.scanning {
             self.scanning = false;
@@ -759,15 +758,22 @@ impl LibraryPanel {
         if !self.scanning {
             self.scan_folder = None;
             self.covers_progress = None;
+            self.artists_progress = None;
         }
         // Plays noted while the scan wrote.
         if finished && self.write_plays() && self.shows_plays() {
             self.stale = true;
         }
         if finished {
-            self.write_fetched();
             self.keep_named_pictures();
             self.prepare_all();
+            if std::mem::take(&mut self.fetch_all_later) {
+                self.fetch_later.clear();
+                self.fetch(None);
+            } else if !self.fetch_later.is_empty() {
+                let artists = std::mem::take(&mut self.fetch_later);
+                self.fetch(Some(artists));
+            }
         }
         if self.stale && (finished || self.reloaded.elapsed() >= RELOAD_INTERVAL) {
             self.reload();
@@ -798,42 +804,39 @@ impl LibraryPanel {
     /// Writes the plays noted, waiting for a scan if one is running. For when Freya quits.
     pub fn save(&mut self) {
         self.write_plays();
-        self.write_fetched();
-        if let Some(thumbnails) = &mut self.thumbnails {
-            thumbnails.save_index(true);
+    }
+
+    /// What a scan may ask of the internet about artists, as the user allows.
+    fn online(&self) -> Online {
+        Online {
+            deezer: self.online_pictures,
+            fanart_key: self.fanart_key.clone(),
+            lastfm: self.online_bios.then(super::artist_info::lastfm).flatten(),
+            wikipedia: self.online_wikipedia,
         }
     }
 
-    /// Keeps what the internet said of artists.
-    fn write_fetched(&mut self) {
-        let Some(db) = &self.db else {
+    /// Asks the internet what `artists` lack, every artist when none, once no scan runs:
+    /// after the user matched them to another artist or allowed another service.
+    fn fetch(&mut self, artists: Option<Vec<String>>) {
+        if self.scanning {
+            match artists {
+                Some(artists) => self.fetch_later.extend(artists),
+                None => self.fetch_all_later = true,
+            }
+            return;
+        }
+        let (Some(path), Some(_), Some(thumbnails)) = (&self.path, &self.db, &self.thumbnails)
+        else {
             return;
         };
-        self.artist_infos.save(db);
-        self.articles.save(db);
-        let now = SystemTime::now();
-        for fetched in std::mem::take(&mut self.fetched) {
-            let Some(db) = &self.db else {
-                return;
-            };
-            let written = match &fetched {
-                // Asked by an id the artist no longer has: of another artist.
-                Fetched::Picture { artist, mbid, .. } if self.stale(artist, mbid) => continue,
-                Fetched::Picture {
-                    artist,
-                    kind,
-                    source,
-                    picture,
-                    ..
-                } => db.set_artist_picture(artist, *kind, source, picture.as_deref(), now),
-                Fetched::ArtistId { artist, mbid } => {
-                    db.set_searched_artist_id(artist, mbid.as_deref(), now)
-                }
-            };
-            if let Err(e) = written {
-                log::warn!("could not keep {fetched:?}: {e}");
-            }
+        let online = self.online();
+        if !online.any() {
+            return;
         }
+        let pictures = thumbnails.pictures().clone();
+        self.scanner.fetch(path.clone(), artists, online, pictures);
+        self.scanning = true;
     }
 
     /// Takes away the downloaded pictures no artist has any longer.
@@ -841,9 +844,6 @@ impl LibraryPanel {
         let (Some(db), Some(thumbnails)) = (&self.db, &self.thumbnails) else {
             return;
         };
-        if !self.fetched.is_empty() {
-            return;
-        }
         let kept = db
             .artist_picture_checksums()
             .map_err(|e| e.to_string())
@@ -860,110 +860,21 @@ impl LibraryPanel {
         }
     }
 
-    /// Whether an answer about `artist` asked by the MusicBrainz id `mbid` is of another
-    /// artist than theirs now.
-    fn stale(&self, artist: &str, mbid: &Option<String>) -> bool {
-        mbid.is_some() && self.known_mbid(Some(artist)) != *mbid
-    }
-
-    /// What the library knows of the artist's picture from the internet: noted just now, or
-    /// kept.
-    fn downloaded(&self, artist: Option<&str>, kind: PictureKind) -> Downloaded {
-        let Some(artist) = artist else {
-            return Downloaded::Missing;
-        };
-        let noted = self.fetched.iter().rev().find_map(|fetched| match fetched {
-            Fetched::Picture {
-                artist: a,
-                kind: k,
-                picture,
-                mbid,
-                ..
-            } if a == artist && *k == kind && !self.stale(a, mbid) => Some(picture.clone()),
-            _ => None,
-        });
-        let kept = || {
-            let row = self.db.as_ref()?.artist_picture(artist, kind).ok()??;
-            match row.picture {
-                // The user chose one, or none: the internet is not asked.
-                _ if row.chosen() => Some(None),
-                Some(checksum) => Some(Some(checksum)),
-                None if row.recent() => Some(None),
-                None => None,
-            }
-        };
-        match noted.or_else(kept) {
-            Some(Some(checksum)) => Downloaded::Kept(checksum),
-            Some(None) => Downloaded::Missing,
-            None => Downloaded::Unknown,
-        }
-    }
-
-    /// The picture the user chose for the artist, or that they chose none.
-    fn chosen(&self, artist: Option<&str>, kind: PictureKind) -> Option<Downloaded> {
-        let row = self.db.as_ref()?.artist_picture(artist?, kind).ok()??;
-        if !row.chosen() {
-            return None;
-        }
-        Some(match row.picture {
-            Some(checksum) => Downloaded::Kept(checksum),
-            None => Downloaded::Missing,
-        })
-    }
-
-    /// Where the wide picture of the artist on the page can come from, as the library knows it
-    /// now.
-    fn backdrop_source(&self, page: &ArtistPage) -> BackdropSource {
-        let name = page.name.as_deref();
-        let edited = name.and_then(|n| self.edits.get(n)?.mbid.clone());
-        let (mbid, search) = match edited {
-            Some(mbid) => (Some(mbid), false),
-            None => self.found_mbid(name),
-        };
-        BackdropSource {
-            name: page.name.clone(),
-            album_tracks: page.album_tracks.clone(),
-            mbid,
-            search,
-            fanart_key: self.fanart_key.clone(),
-            fanart: self.downloaded(name, PictureKind::Backdrop),
-            chosen: self.chosen(name, PictureKind::Backdrop),
-        }
-    }
-
     /// The artist's MusicBrainz id as Freya knows it: the user's match, the tags', or what
     /// MusicBrainz's search found.
     fn known_mbid(&self, name: Option<&str>) -> Option<String> {
         name.and_then(|n| self.edits.get(n)?.mbid.clone())
-            .or_else(|| self.found_mbid(name).0)
+            .or_else(|| self.found_mbid(name))
     }
 
     /// The artist's MusicBrainz id but for the user's: the tags', else what MusicBrainz's
-    /// search found; and whether to search for it, when it found none long ago or was never
-    /// asked.
-    fn found_mbid(&self, name: Option<&str>) -> (Option<String>, bool) {
-        let tagged = self
-            .db
-            .as_ref()
-            .and_then(|db| db.artist_mbid(name).ok().flatten());
-        let noted = self.fetched.iter().rev().find_map(|fetched| match fetched {
-            Fetched::ArtistId { artist, mbid } if Some(artist.as_str()) == name => {
-                Some(mbid.clone())
-            }
-            _ => None,
-        });
-        let searched = noted.map(|mbid| (mbid, true)).or_else(|| {
-            let asked = self.db.as_ref()?.searched_artist_id(name?).ok()??;
-            let recent = asked.recent();
-            Some((asked.answer, recent))
-        });
-        match (tagged, searched) {
-            (Some(mbid), _) => (Some(mbid), false),
-            (None, Some((Some(mbid), _))) => (Some(mbid), false),
-            // MusicBrainz found none lately: not searched again yet.
-            (None, Some((None, recent))) => (None, !recent),
-            (None, None) => (None, true),
-        }
+    /// search found.
+    fn found_mbid(&self, name: Option<&str>) -> Option<String> {
+        let db = self.db.as_ref()?;
+        db.artist_mbid(name)
+            .ok()
+            .flatten()
+            .or_else(|| db.searched_artist_id(name?).ok()??.answer)
     }
 
     /// Writes the plays noted. Returns true when any were written.
@@ -1131,7 +1042,6 @@ impl LibraryPanel {
             track: first.path.clone(),
         };
         let cover = cover_key(&cover_album);
-        self.cover_tracks.insert(cover.clone(), first.path.clone());
         let mut detail = Vec::new();
         if let Some(year) = tracks.iter().filter_map(|t| t.year).min() {
             detail.push(year.to_string());
@@ -1176,10 +1086,6 @@ impl LibraryPanel {
                 detail.push(long_time(s.duration));
             }
         }
-        let album_tracks = db
-            .albums(artist.as_deref())
-            .map(|albums| albums.into_iter().map(|a| a.track).collect())
-            .unwrap_or_default();
         let picture = Thumbnails::artist_key(artist.as_deref());
         self.artist_keys.insert(picture.clone(), artist.clone());
         self.artist_page = Some(ArtistPage {
@@ -1195,7 +1101,6 @@ impl LibraryPanel {
             portrait_large: false,
             picture_full: None,
             color: None,
-            album_tracks,
             summary: String::new(),
             biography: String::new(),
             tags: String::new(),
@@ -1216,7 +1121,11 @@ impl LibraryPanel {
         let key = page.picture.clone();
         let needs_banner = page.banner.is_none();
         let needs_portrait = !page.portrait_large;
-        let backdrop = self.backdrop_source(page);
+        let backdrop = page
+            .name
+            .as_ref()
+            .and_then(|name| self.backdrops.get(name))
+            .cloned();
         // Made, or asked to be made, as for the grid.
         self.cover(&key);
         let Some(thumbnails) = &mut self.thumbnails else {
@@ -1227,7 +1136,8 @@ impl LibraryPanel {
                 .ok()
                 .map(|i| freya_library::cover::page_color(i.thumbnail(64, 64).to_rgb8().as_raw()))
         };
-        let banner = match needs_banner.then(|| thumbnails.get_backdrop(&key, &backdrop)) {
+        let banner = match needs_banner.then(|| thumbnails.get_backdrop(&key, backdrop.as_deref()))
+        {
             Some(Thumbnail::Ready(file)) => Image::load_from_path(&file)
                 .ok()
                 .map(|image| (image, color_of(&file))),
@@ -1267,12 +1177,12 @@ impl LibraryPanel {
         }
     }
 
-    /// What Last.fm says of the artist, once it has; asking it the first time.
+    /// What is said of the artist on the page, as kept.
     fn show_artist_info(&mut self) {
         let Some(name) = self.artist_page.as_ref().and_then(|p| p.name.clone()) else {
             return;
         };
-        let (summary, biography, tags, from) = self.biography_of(&name, true);
+        let (summary, biography, tags, from) = self.biography_of(&name);
         let own = self.edits.get(&name).is_some_and(|e| e.biography.is_some());
         if let Some(page) = &mut self.artist_page {
             page.own_biography = own;
@@ -1285,36 +1195,24 @@ impl LibraryPanel {
 
     /// What is said of the artist `name`: their summary, whole biography, tags, and where
     /// from. The user's own goes before Wikipedia's article, found by their id, which goes
-    /// before what Last.fm says; those not known are asked for when `ask` and allowed.
-    fn biography_of(&mut self, name: &str, ask: bool) -> (String, String, String, String) {
-        // The user's own replaces the internet's, which is then not asked.
+    /// before what Last.fm says; each as a scan kept it.
+    fn biography_of(&self, name: &str) -> (String, String, String, String) {
         if let Some(own) = self.edits.get(name).and_then(|e| e.biography.clone()) {
             let summary = own.split("\n\n").next().unwrap_or(&own).trim().to_owned();
             return (summary, own, String::new(), String::new());
         }
-        // Which artist of the name: the user's match, else the tags'; Wikipedia also takes
-        // what MusicBrainz's search found.
-        let matched = self
-            .edits
-            .get(name)
-            .and_then(|e| e.mbid.clone())
-            .or_else(|| self.db.as_ref()?.artist_mbid(Some(name)).ok()?);
-        let known = self.known_mbid(Some(name));
-        let article = known.and_then(|mbid| {
-            let online = ask && self.online_wikipedia;
-            self.articles
-                .get(name, &mbid, online, self.db.as_ref())
-                .cloned()
-        });
-        let info = self
-            .artist_infos
-            .get(
-                name,
-                matched.as_deref(),
-                ask && self.online_bios,
-                self.db.as_ref(),
-            )
-            .cloned();
+        let Some(db) = &self.db else {
+            return Default::default();
+        };
+        // Of the artist they are now: found by their id now.
+        let mbid = self.known_mbid(Some(name));
+        let article = db
+            .artist_article(name)
+            .ok()
+            .flatten()
+            .filter(|(id, _)| Some(id) == mbid.as_ref())
+            .and_then(|(_, kept)| kept.answer);
+        let info = db.artist_text(name).ok().flatten().map(|kept| kept.answer);
         let tags = info
             .as_ref()
             .map(|info| {
@@ -1354,8 +1252,6 @@ impl LibraryPanel {
                                 track: played.track.path.clone(),
                             };
                             let key = cover_key(&album);
-                            self.cover_tracks
-                                .insert(key.clone(), played.track.path.clone());
                             s.set_field("cover".into(), string(key));
                         }
                         row
@@ -1387,25 +1283,33 @@ impl LibraryPanel {
         self.show_popular();
     }
 
-    /// The user's personal fanart.tv key, or none: a new one looks again for wide pictures
-    /// it had none of.
+    /// The user's personal fanart.tv key, or none: with a new one, fanart.tv is asked for
+    /// the pictures artists lack.
     pub fn set_fanart_key(&mut self, key: Option<String>) {
         if self.fanart_key != key {
             self.fanart_key = key;
-            if let Some(thumbnails) = &mut self.thumbnails {
-                thumbnails.forget_missing_backdrops();
+            if self.fanart_key.is_some() {
+                self.fetch(None);
             }
-            self.show_artist_picture();
         }
     }
 
-    /// Whether Wikipedia may be asked for articles on artists.
+    /// Whether a scan may ask Wikipedia for articles on artists: allowed, it is asked now for
+    /// those who lack one.
     pub fn set_online_wikipedia(&mut self, online: bool) {
+        if online && !self.online_wikipedia {
+            self.online_wikipedia = true;
+            self.fetch(None);
+        }
         self.online_wikipedia = online;
     }
 
-    /// Whether Last.fm may be asked what it says of artists.
+    /// Whether a scan may ask Last.fm what it says of artists; as for Wikipedia.
     pub fn set_online_bios(&mut self, online: bool) {
+        if online && !self.online_bios {
+            self.online_bios = true;
+            self.fetch(None);
+        }
         self.online_bios = online;
     }
 
@@ -1417,21 +1321,14 @@ impl LibraryPanel {
         if page.color.is_some() {
             return;
         }
-        let (Some(thumbnails), Some(track)) =
-            (&mut self.thumbnails, self.cover_tracks.get(&page.cover))
-        else {
-            return;
-        };
-        let color = match thumbnails.get(&page.cover, track) {
-            Thumbnail::Ready(file) => image::open(&file)
-                .map(|image| freya_library::cover::page_color(image.to_rgb8().as_raw()))
-                .ok(),
-            // No cover: the page is grey, as for a cover of grey.
-            Thumbnail::None => Some(freya_library::cover::page_color(&[])),
-            Thumbnail::Pending => None,
-        };
+        // As the scan made it; no cover, or none made yet: grey, as for a cover of grey.
+        let color = self
+            .made_covers
+            .get(&page.cover)
+            .and_then(|made| made.color)
+            .unwrap_or_else(|| freya_library::cover::page_color(&[]));
         if let Some(page) = &mut self.album_page {
-            page.color = color;
+            page.color = Some(color);
         }
     }
 
@@ -1444,7 +1341,7 @@ impl LibraryPanel {
                 .edits
                 .get_mut(&name)
                 .and_then(|edit| edit.biography.take());
-            let (_, biography, _, from) = self.biography_of(&name, false);
+            let (_, biography, _, from) = self.biography_of(&name);
             if let Some(edit) = self.edits.get_mut(&name) {
                 edit.biography = own;
             }
@@ -1458,10 +1355,8 @@ impl LibraryPanel {
         self.picked_before.clear();
         self.picture_error.clear();
         self.finder.stop();
-        if let Some(page) = &self.artist_page
-            && let Some(name) = page.name.clone()
-        {
-            let (request, picked) = self.picture_request(page, &name);
+        if let Some(name) = self.artist_page.as_ref().and_then(|p| p.name.clone()) {
+            let (request, picked) = self.picture_request(&name);
             self.picked_before.clone_from(&picked);
             self.picked = picked;
             self.finder.find(request);
@@ -1470,34 +1365,15 @@ impl LibraryPanel {
     }
 
     /// What to look for to choose an artist's pictures from, and what is chosen now.
-    fn picture_request(
-        &self,
-        page: &ArtistPage,
-        name: &str,
-    ) -> (Request, HashMap<PictureKind, Pick>) {
+    fn picture_request(&self, name: &str) -> (Request, HashMap<PictureKind, Pick>) {
         let mut picked = HashMap::new();
-        let mut folder = Vec::new();
-        if let Some(file) = freya_library::artist_image::local(&page.album_tracks) {
-            folder.push((PictureKind::Portrait, file));
-        }
-        if let Some(file) = freya_library::artist_image::local_backdrop(&page.album_tracks) {
-            folder.push((PictureKind::Backdrop, file));
-        }
         let mut kept = Vec::new();
         for kind in [PictureKind::Portrait, PictureKind::Backdrop] {
             let row = self
                 .db
                 .as_ref()
                 .and_then(|db| db.artist_picture(name, kind).ok().flatten());
-            let in_folder = folder.iter().any(|(k, _)| *k == kind);
-            // As the pictures are made: the user's choice, else the folder's, else the
-            // internet's.
             let pick = match &row {
-                Some(row) if row.chosen() => match &row.picture {
-                    Some(checksum) => Pick::Kept(checksum.clone()),
-                    None => Pick::Nothing,
-                },
-                _ if in_folder => Pick::Folder,
                 Some(PictureRow {
                     picture: Some(checksum),
                     ..
@@ -1513,22 +1389,21 @@ impl LibraryPanel {
                 let source = match source.as_str() {
                     "deezer" => "Deezer",
                     "fanart.tv" => "fanart.tv",
+                    freya_library::library::FOLDER => "Folder",
                     _ => "Chosen before",
                 };
                 kept.push((kind, checksum, source.to_owned()));
             }
             picked.insert(kind, pick);
         }
-        let backdrop = self.backdrop_source(page);
         let request = Request {
             name: freya_library::library::plain_name(name).to_owned(),
             deezer: self.online_pictures,
-            mbid: backdrop.mbid,
-            search: backdrop.search,
+            mbid: self.known_mbid(Some(name)),
+            search: true,
             fanart_key: self.fanart_key.clone(),
-            folder,
             kept,
-            album_tracks: page.album_tracks.clone(),
+            covers: self.artist_source(Some(name)).covers,
         };
         (request, picked)
     }
@@ -1621,7 +1496,7 @@ impl LibraryPanel {
             .edits
             .get(&tagged)
             .and_then(|e| e.mbid.clone())
-            .or_else(|| self.found_mbid(Some(&tagged)).0);
+            .or_else(|| self.found_mbid(Some(&tagged)));
         // An artist without an id yet is the one matched; one with another, another artist.
         let key = theirs
             .as_deref()
@@ -1779,7 +1654,7 @@ impl LibraryPanel {
         let Some(Some(artist)) = self.artist_match.clone() else {
             return;
         };
-        let found = self.found_mbid(Some(&artist)).0;
+        let found = self.found_mbid(Some(&artist));
         let mbid = Some(mbid.trim())
             .filter(|mbid| !mbid.is_empty() && found.as_deref() != Some(*mbid))
             .map(str::to_owned);
@@ -1831,7 +1706,7 @@ impl LibraryPanel {
         let mbid = artist
             .as_deref()
             .and_then(|a| self.edits.get(a)?.mbid.clone());
-        let found = self.found_mbid(artist.as_deref()).0;
+        let found = self.found_mbid(artist.as_deref());
         Value::Struct(Struct::from_iter([
             (
                 "artist".to_owned(),
@@ -2029,8 +1904,6 @@ impl LibraryPanel {
                 continue;
             }
             let kept = match picked {
-                // No choice of theirs: the folder's comes first then.
-                Pick::Folder => db.forget_artist_picture(artist, kind),
                 Pick::Nothing => {
                     db.set_artist_picture(artist, kind, CHOSEN, None, SystemTime::now())
                 }
@@ -2058,7 +1931,7 @@ impl LibraryPanel {
             .and_then(|a| self.edits.get(a).cloned())
             .unwrap_or_default();
         // Without the user's: the tags', else what MusicBrainz's search found.
-        let found_mbid = self.found_mbid(artist.as_deref()).0.unwrap_or_default();
+        let found_mbid = self.found_mbid(artist.as_deref()).unwrap_or_default();
         let text = |value: Option<String>| string(value.unwrap_or_default());
         // Theirs, else Last.fm's to start from.
         let found = edit.biography.is_none() && !self.found_biography.is_empty();
@@ -2132,29 +2005,27 @@ impl LibraryPanel {
         self.reload();
     }
 
-    /// Forgets what the internet gave for `artist`, but for the pictures the user chose, so
-    /// it is asked again: after they were matched to another artist of the name.
+    /// Forgets what the internet gave for `artist`, and asks it again: after they were
+    /// matched to another artist of the name. What the user chose, and the pictures in their
+    /// folder, stay.
     fn forget_found(&mut self, artist: &str) {
         if let Some(db) = &self.db {
             for kind in [PictureKind::Portrait, PictureKind::Backdrop] {
-                let chosen = db
+                let found = db
                     .artist_picture(artist, kind)
                     .ok()
                     .flatten()
-                    .is_some_and(|row| row.chosen());
-                if !chosen && let Err(e) = db.forget_artist_picture(artist, kind) {
+                    .is_some_and(|row| row.from_internet());
+                if found && let Err(e) = db.forget_artist_picture(artist, kind) {
                     log::warn!("could not forget the pictures of {artist}: {e}");
                 }
             }
+            if let Err(e) = db.forget_artist_text(artist) {
+                log::warn!("could not forget what Last.fm said of {artist}: {e}");
+            }
         }
-        let key = Thumbnails::artist_key(Some(artist));
-        if let Some(thumbnails) = &mut self.thumbnails {
-            thumbnails.forget_artist(&key);
-        }
-        self.recent_covers.remove(&key);
-        self.covers_ready += 1;
-        // And Last.fm is asked about the artist now matched.
-        self.artist_infos.forget(artist, self.db.as_ref());
+        self.pictures_stale = true;
+        self.fetch(Some(vec![artist.to_owned()]));
     }
 
     /// The name an artist is shown by: the one the user gave them, else the tags'.
@@ -2319,6 +2190,7 @@ impl LibraryPanel {
         if std::mem::take(&mut self.stale) {
             self.stats = None;
         }
+        self.load_pictures();
         self.reloaded = Instant::now();
         let Some(db) = &self.db else {
             return;
@@ -2342,21 +2214,13 @@ impl LibraryPanel {
         let (title, subtitle) = self.heading();
         self.title = title;
         self.subtitle = subtitle;
-        self.cover_tracks.clear();
         self.artist_keys.clear();
         for item in &self.items {
-            match item {
-                Item::Album(album) => {
-                    self.cover_tracks
-                        .insert(cover_key(album), album.track.clone());
-                }
-                Item::Artist(artist) => {
-                    self.artist_keys.insert(
-                        Thumbnails::artist_key(artist.name.as_deref()),
-                        artist.name.clone(),
-                    );
-                }
-                _ => {}
+            if let Item::Artist(artist) = item {
+                self.artist_keys.insert(
+                    Thumbnails::artist_key(artist.name.as_deref()),
+                    artist.name.clone(),
+                );
             }
         }
         self.load_album_page();
@@ -2517,13 +2381,17 @@ impl LibraryPanel {
                     None => return Image::default(),
                 }
             }
+            // An album's cover, as the scan made it; none made yet shows none.
             (None, ..) => {
-                let (Some(thumbnails), Some(track)) =
-                    (&mut self.thumbnails, self.cover_tracks.get(key))
-                else {
+                let (Some(thumbnails), Some(checksum)) = (
+                    &mut self.thumbnails,
+                    self.made_covers
+                        .get(key)
+                        .and_then(|made| made.cover.as_deref()),
+                ) else {
                     return Image::default();
                 };
-                thumbnails.get(key, track)
+                thumbnails.get_picture(checksum)
             }
         };
         let Thumbnail::Ready(file) = state else {
@@ -2541,31 +2409,96 @@ impl LibraryPanel {
         }
     }
 
-    /// Where the artist `name`'s picture can come from, as the library knows it now.
+    /// Reads the albums' covers and the artists' pictures from the library, when a scan or the
+    /// user changed them; what was shown of those that changed is made and read anew.
+    fn load_pictures(&mut self) {
+        if !std::mem::take(&mut self.pictures_stale) {
+            return;
+        }
+        let Some(db) = &self.db else {
+            return;
+        };
+        let covers = db.album_covers().unwrap_or_else(|e| {
+            log::warn!("could not read the albums' covers: {e}");
+            HashMap::new()
+        });
+        for (key, made) in &covers {
+            if self.made_covers.get(key).map(|old| &old.cover) != Some(&made.cover) {
+                self.recent_covers.remove(key);
+            }
+        }
+        self.made_covers = covers;
+        let read = |kind| {
+            db.artist_pictures(kind).unwrap_or_else(|e| {
+                log::warn!("could not read the artists' pictures: {e}");
+                HashMap::new()
+            })
+        };
+        let (portraits, backdrops) = (read(PictureKind::Portrait), read(PictureKind::Backdrop));
+        let changed: Vec<String> = portraits
+            .iter()
+            .filter(|(artist, picture)| self.portraits.get(*artist) != Some(*picture))
+            .chain(
+                backdrops
+                    .iter()
+                    .filter(|(artist, picture)| self.backdrops.get(*artist) != Some(*picture)),
+            )
+            .map(|(artist, _)| artist.clone())
+            .chain(
+                self.portraits
+                    .keys()
+                    .filter(|a| !portraits.contains_key(*a))
+                    .cloned(),
+            )
+            .chain(
+                self.backdrops
+                    .keys()
+                    .filter(|a| !backdrops.contains_key(*a))
+                    .cloned(),
+            )
+            .collect();
+        self.portraits = portraits;
+        self.backdrops = backdrops;
+        let shown = self.artist_page.as_ref().and_then(|p| p.name.clone());
+        for artist in changed {
+            let key = Thumbnails::artist_key(Some(&artist));
+            if let Some(thumbnails) = &mut self.thumbnails {
+                thumbnails.forget_artist(&key);
+            }
+            self.recent_covers.remove(&key);
+            if shown.as_ref() == Some(&artist)
+                && let Some(page) = &mut self.artist_page
+            {
+                page.banner = None;
+                page.portrait_large = false;
+                page.color = None;
+            }
+        }
+        self.covers_ready += 1;
+        self.color_album_page();
+        self.show_artist_picture();
+    }
+
+    /// What is kept of the artist `name`'s picture: theirs, and their albums' covers.
     fn artist_source(&self, name: Option<&str>) -> ArtistSource {
-        let album_tracks = self
+        let covers = self
             .db
             .as_ref()
             .and_then(|db| db.albums(name).ok())
-            .map(|albums| albums.into_iter().map(|a| a.track).collect())
-            .unwrap_or_default();
-        // By their id, when Freya knows it, without searching for it.
-        let fanart = self
-            .fanart_key
-            .clone()
-            .and_then(|key| Some((self.known_mbid(name)?, key)));
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|album| self.made_covers.get(&cover_key(album))?.cover.clone())
+            .collect();
         ArtistSource {
-            name: name.map(str::to_owned),
-            album_tracks,
-            online: self.online_pictures,
-            fanart,
-            deezer: self.downloaded(name, PictureKind::Portrait),
-            chosen: self.chosen(name, PictureKind::Portrait),
+            picture: name.and_then(|name| self.portraits.get(name)).cloned(),
+            covers,
         }
     }
 
     /// Lines up every artist's and album's picture to be made ahead of its being shown.
     fn prepare_all(&mut self) {
+        self.pictures_stale = true;
+        self.load_pictures();
         let Some(db) = &self.db else {
             return;
         };
@@ -2574,9 +2507,12 @@ impl LibraryPanel {
             self.prepare
                 .extend(artists.into_iter().map(|a| Prepare::Artist(a.name)));
         }
-        if let Ok(albums) = db.all_albums() {
-            self.prepare.extend(albums.into_iter().map(Prepare::Album));
-        }
+        let covers = self
+            .made_covers
+            .values()
+            .filter_map(|made| made.cover.clone())
+            .map(Prepare::Cover);
+        self.prepare.extend(covers);
     }
 
     /// Hands a few of the pictures lined up to the threads: the window is not held up.
@@ -2593,9 +2529,9 @@ impl LibraryPanel {
                         thumbnails.prepare_artist(&key, &source);
                     }
                 }
-                Prepare::Album(album) => {
+                Prepare::Cover(checksum) => {
                     if let Some(thumbnails) = &mut self.thumbnails {
-                        thumbnails.prepare(&cover_key(&album), &album.track);
+                        thumbnails.prepare_picture(&checksum);
                     }
                 }
             }
@@ -2606,16 +2542,21 @@ impl LibraryPanel {
     pub fn activities(&self) -> Vec<(String, String)> {
         let mut activities = Vec::new();
         if self.scanning {
-            let what = match (self.covers_progress, self.progress) {
-                (Some((done, total)), _) => format!(
+            let what = match (self.artists_progress, self.covers_progress, self.progress) {
+                (Some((done, total)), ..) => format!(
+                    "Asking the internet about artists: {} of {}",
+                    thousands(done),
+                    thousands(total)
+                ),
+                (None, Some((done, total)), _) => format!(
                     "Making album covers: {} of {}",
                     thousands(done),
                     thousands(total)
                 ),
-                (None, Some((done, total))) => {
+                (None, None, Some((done, total))) => {
                     format!("Reading {} of {} files", thousands(done), thousands(total))
                 }
-                (None, None) => "Checking the music folders for changes".to_owned(),
+                (None, None, None) => "Checking the music folders for changes".to_owned(),
             };
             let folder = self.scan_folder.as_deref().map(folder_name);
             activities.push((what, folder.unwrap_or_default()));
@@ -2626,16 +2567,6 @@ impl LibraryPanel {
                 "Making covers and pictures".to_owned(),
                 count(pending, "picture"),
             ));
-        }
-        for (source, waiting) in [
-            ("Last.fm", self.artist_infos.waiting().collect::<Vec<_>>()),
-            ("Wikipedia", self.articles.waiting().collect()),
-        ] {
-            let mut asked: Vec<&str> = waiting.into_iter().map(plain_name).collect();
-            if !asked.is_empty() {
-                asked.sort_unstable();
-                activities.push((format!("Asking {source} about artists"), asked.join(", ")));
-            }
         }
         let page_name = || {
             self.artist_page
@@ -3084,82 +3015,64 @@ mod tests {
     use super::*;
 
     #[test]
-    fn knows_what_the_internet_said_before_and_just_now() {
+    fn shows_what_a_scan_kept_of_an_artist() {
         let mut panel = LibraryPanel::new(None, None, None);
-        panel.db = Some(Library::open_in_memory().unwrap());
-        let portrait = PictureKind::Portrait;
-        assert_eq!(
-            panel.downloaded(Some("Ghost"), portrait),
-            Downloaded::Unknown
-        );
-        assert_eq!(panel.downloaded(None, portrait), Downloaded::Missing);
-
-        // Noted while a scan wrote: known before it is kept.
-        panel.fetched.push(Fetched::Picture {
-            artist: "Ghost".into(),
-            kind: portrait,
-            source: "deezer",
-            picture: Some("aaa".into()),
-            mbid: None,
-        });
-        panel.fetched.push(Fetched::ArtistId {
-            artist: "Ghost".into(),
-            mbid: None,
-        });
-        assert_eq!(
-            panel.downloaded(Some("Ghost"), portrait),
-            Downloaded::Kept("aaa".into())
-        );
-        panel.write_fetched();
-        assert!(panel.fetched.is_empty());
-        assert_eq!(
-            panel.downloaded(Some("Ghost"), portrait),
-            Downloaded::Kept("aaa".into())
-        );
-
-        // MusicBrainz found no id lately, and fanart.tv was never asked.
-        let page = ArtistPage {
-            name: Some("Ghost".into()),
-            shown_name: "Ghost".into(),
-            own_biography: false,
-            biography_from: String::new(),
-            detail: String::new(),
-            genres: String::new(),
-            picture: String::new(),
-            banner: None,
-            portrait: None,
-            portrait_large: false,
-            picture_full: None,
-            color: None,
-            album_tracks: Vec::new(),
-            summary: String::new(),
-            biography: String::new(),
-            tags: String::new(),
-            popular: Vec::new(),
-            more: false,
-        };
-        let source = panel.backdrop_source(&page);
-        assert_eq!((source.mbid, source.search), (None, false));
-        assert_eq!(source.fanart, Downloaded::Unknown);
-
-        // An answer of none from long ago is asked again.
-        let db = panel.db.as_ref().unwrap();
-        let long_ago = SystemTime::UNIX_EPOCH;
-        db.set_artist_picture("Ghost", PictureKind::Backdrop, "fanart.tv", None, long_ago)
-            .unwrap();
-        db.set_searched_artist_id("Ghost", None, long_ago).unwrap();
-        let source = panel.backdrop_source(&page);
-        assert!(source.search);
-        assert_eq!(source.fanart, Downloaded::Unknown);
+        let db = Library::open_in_memory().unwrap();
         db.set_artist_picture(
-            "Ghost",
+            "Shining",
+            PictureKind::Portrait,
+            "deezer",
+            Some("square"),
+            SystemTime::now(),
+        )
+        .unwrap();
+        db.set_artist_picture(
+            "Shining",
             PictureKind::Backdrop,
             "fanart.tv",
             None,
             SystemTime::now(),
         )
         .unwrap();
-        assert_eq!(panel.backdrop_source(&page).fanart, Downloaded::Missing);
+        db.set_artist_edit(
+            "Shining",
+            &ArtistEdit {
+                mbid: Some("swedish".into()),
+                ..ArtistEdit::default()
+            },
+        )
+        .unwrap();
+        let article = freya_library::wikipedia::Article {
+            title: "Shining (Swedish band)".into(),
+            summary: "A Swedish band.".into(),
+            biography: "A Swedish band.".into(),
+            url: String::new(),
+        };
+        db.set_artist_article("Shining", "swedish", Some(&article), SystemTime::now())
+            .unwrap();
+        panel.db = Some(db);
+        panel.reload();
+        let source = panel.artist_source(Some("Shining"));
+        assert_eq!(source.picture.as_deref(), Some("square"));
+        assert!(panel.backdrops.is_empty(), "fanart.tv had none");
+        let (summary, _, _, from) = panel.biography_of("Shining");
+        assert_eq!(
+            (summary.as_str(), from.as_str()),
+            ("A Swedish band.", "Wikipedia")
+        );
+
+        // Matched to another artist of the name: not theirs.
+        let db = panel.db.as_ref().unwrap();
+        db.set_artist_edit(
+            "Shining",
+            &ArtistEdit {
+                mbid: Some("norwegian".into()),
+                ..ArtistEdit::default()
+            },
+        )
+        .unwrap();
+        panel.reload();
+        assert_eq!(panel.biography_of("Shining").3, "");
     }
 
     #[test]
@@ -3243,7 +3156,7 @@ mod tests {
         assert!(page.own_biography);
         assert_eq!(page.summary, "First part.");
         assert_eq!(
-            panel.backdrop_source(page).mbid.as_deref(),
+            panel.known_mbid(page.name.as_deref()).as_deref(),
             Some("0000-mbid")
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -3305,7 +3218,10 @@ mod tests {
             None
         );
         let page = panel.artist_page.as_ref().unwrap();
-        assert_eq!(panel.backdrop_source(page).mbid.as_deref(), Some("own-id"));
+        assert_eq!(
+            panel.known_mbid(page.name.as_deref()).as_deref(),
+            Some("own-id")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3323,7 +3239,17 @@ mod tests {
             .unwrap();
         let mut db = Library::open_in_memory().unwrap();
         let cancel = std::sync::atomic::AtomicBool::new(false);
-        freya_library::library::scan(&mut db, &[dir.join("music")], &cancel, |_| {}).unwrap();
+        let options = ScanOptions {
+            pictures: Some(Pictures::new(dir.join("pictures"))),
+            ..ScanOptions::default()
+        };
+        freya_library::library::scan_with(&mut db, &[dir.join("music")], &options, &cancel, |_| {})
+            .unwrap();
+        let folder = db
+            .artist_picture("Freya", PictureKind::Backdrop)
+            .unwrap()
+            .and_then(|row| row.picture)
+            .expect("the folder's, taken in by the scan");
         let mut panel = LibraryPanel::new(None, None, Some(dir.join("pictures")));
         panel.db = Some(db);
         panel.online_pictures = false;
@@ -3346,8 +3272,8 @@ mod tests {
         };
         panel.edit_artist();
         finish(&mut panel);
-        // The folder's wide picture, chosen as Freya takes it first; none square.
-        assert_eq!(panel.picked[&PictureKind::Backdrop], Pick::Folder);
+        // The folder's wide picture, as the scan took it in; none square.
+        assert_eq!(panel.picked[&PictureKind::Backdrop], Pick::Kept(folder));
         assert_eq!(panel.picked[&PictureKind::Portrait], Pick::Nothing);
         let chosen = |rows: &ModelRows| -> Vec<bool> {
             let Value::Model(model) = rows.model_value() else {
@@ -3393,17 +3319,10 @@ mod tests {
         assert!(square.chosen() && square.picture.is_some());
         assert!(panel.choices.is_empty(), "the dialog is done");
 
-        // The folder's again: no choice of the user's.
+        // Chosen: it stays.
         panel.edit_artist();
         finish(&mut panel);
         assert_eq!(panel.picked[&PictureKind::Backdrop], Pick::Nothing);
-        panel.choose_picture("backdrop", 1);
-        panel.save_artist(&ArtistEdit::default());
-        let db = panel.db.as_ref().unwrap();
-        assert_eq!(
-            db.artist_picture("Freya", PictureKind::Backdrop).unwrap(),
-            None
-        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3513,50 +3432,6 @@ mod tests {
         };
         assert_eq!(page.get_field("note"), Some(&string("Norwegian group")));
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn forgets_a_late_answer_about_another_artist_of_the_name() {
-        let mut panel = LibraryPanel::new(None, None, None);
-        let db = Library::open_in_memory().unwrap();
-        db.set_artist_edit(
-            "Shining",
-            &ArtistEdit {
-                mbid: Some("swedish".into()),
-                ..ArtistEdit::default()
-            },
-        )
-        .unwrap();
-        panel.db = Some(db);
-        panel.reload();
-        let answer = |mbid: &str| Fetched::Picture {
-            artist: "Shining".into(),
-            kind: PictureKind::Backdrop,
-            source: "fanart.tv",
-            picture: Some(format!("{mbid}-picture")),
-            mbid: Some(mbid.into()),
-        };
-        // Asked while they were matched to the Norwegian band, answered after.
-        panel.fetched.push(answer("norwegian"));
-        assert_eq!(
-            panel.downloaded(Some("Shining"), PictureKind::Backdrop),
-            Downloaded::Unknown
-        );
-        panel.write_fetched();
-        let db = panel.db.as_ref().unwrap();
-        assert_eq!(
-            db.artist_picture("Shining", PictureKind::Backdrop).unwrap(),
-            None
-        );
-
-        panel.fetched.push(answer("swedish"));
-        panel.write_fetched();
-        let db = panel.db.as_ref().unwrap();
-        let row = db
-            .artist_picture("Shining", PictureKind::Backdrop)
-            .unwrap()
-            .unwrap();
-        assert_eq!(row.picture.as_deref(), Some("swedish-picture"));
     }
 
     #[test]
