@@ -23,7 +23,29 @@ impl Clone for SkinWindow {
     }
 }
 
+/// A handle to a skin's window that does not keep it open, as for the window's own callbacks.
+pub enum WeakSkinWindow {
+    Builtin(slint::Weak<super::builtin_skin::FreyaSkin>),
+    Loaded(slint::Weak<ComponentInstance>),
+}
+
+impl WeakSkinWindow {
+    pub fn upgrade(&self) -> Option<SkinWindow> {
+        match self {
+            Self::Builtin(ui) => Builtin::upgrade(ui).map(SkinWindow::Builtin),
+            Self::Loaded(ui) => ui.upgrade().map(SkinWindow::Loaded),
+        }
+    }
+}
+
 impl SkinWindow {
+    pub fn downgrade(&self) -> WeakSkinWindow {
+        match self {
+            Self::Builtin(ui) => WeakSkinWindow::Builtin(ui.as_weak()),
+            Self::Loaded(ui) => WeakSkinWindow::Loaded(ui.as_weak()),
+        }
+    }
+
     pub fn load(source: &SkinSource) -> Result<Self, freya_skin::Error> {
         match source {
             SkinSource::Builtin => Ok(Self::Builtin(Builtin::new()?)),

@@ -9,16 +9,20 @@
               window that is open, on the main thread"
 )]
 
-use std::ffi::CString;
+use std::cell::Cell;
+use std::ffi::{CString, c_void};
 
 use objc2::encode::Encode;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool, Imp, Sel};
-use objc2::{MainThreadMarker, msg_send, sel};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSButton, NSView, NSWindow, NSWindowButton, NSWindowStyleMask, NSWindowTitleVisibility,
 };
-use objc2_foundation::{NSPoint, NSString, NSUserDefaults};
+use objc2_foundation::{
+    NSKeyValueObservingOptions, NSObject, NSObjectNSKeyValueObserverRegistration, NSPoint,
+    NSString, NSUserDefaults,
+};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use slint::winit_030::winit::event::WindowEvent;
 use slint::winit_030::{EventResult, WinitWindowAccessor};
@@ -90,6 +94,7 @@ pub fn buttons_width(window: &slint::Window, height: f32) -> f32 {
     if ns_window.styleMask().0 & full_screen != 0 {
         return 0.0;
     }
+    lay_out_now(&ns_window);
     if moved(&ns_window, f64::from(height)) {
         place_buttons(&ns_window, f64::from(height));
     }
@@ -188,15 +193,136 @@ fn place_buttons(ns_window: &NSWindow, height: f64) {
     }
 }
 
-/// Whether the buttons are no longer where `place_buttons` put them.
+/// What a `TitleObserver` knows: the top bar's height, and the window, to look at again on
+/// the next pass of the event loop.
+pub struct ObserverIvars {
+    height: Cell<f64>,
+    window: Retained<NSWindow>,
+}
+
+define_class!(
+    // SAFETY: NSObject has no subclassing requirements, and `TitleObserver` has no `Drop`.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "FreyaTitleObserver"]
+    #[ivars = ObserverIvars]
+    pub struct TitleObserver;
+
+    impl TitleObserver {
+        /// The window's title changed: AppKit lays the buttons out again for it.
+        #[unsafe(method(observeValueForKeyPath:ofObject:change:context:))]
+        fn observe(
+            &self,
+            _key: Option<&NSString>,
+            _object: Option<&AnyObject>,
+            _change: Option<&AnyObject>,
+            _context: *mut c_void,
+        ) {
+            self.put_back();
+            // And once more when the event loop comes round, should AppKit lay them out only
+            // after this notification.
+            let _: () = unsafe {
+                msg_send![self, performSelector: sel!(putBack), withObject: None::<&AnyObject>, afterDelay: 0.0f64]
+            };
+        }
+
+        #[unsafe(method(putBack))]
+        fn put_back_later(&self) {
+            self.put_back();
+        }
+    }
+);
+
+impl TitleObserver {
+    fn put_back(&self) {
+        let ivars = self.ivars();
+        // The system's own title bar again, or full screen: AppKit's layout stands.
+        if ivars.height.get() <= 0.0
+            || ivars.window.styleMask().0 & NSWindowStyleMask::FullScreen.0 != 0
+        {
+            return;
+        }
+        lay_out_now(&ivars.window);
+        if moved(&ivars.window, ivars.height.get()) {
+            place_buttons(&ivars.window, ivars.height.get());
+        }
+    }
+}
+
+/// Puts the window buttons back as soon as the window's title changes, which AppKit lays them
+/// out again for, before the window shows them out of place. Stops when dropped.
+pub struct TitleWatch {
+    observer: Retained<TitleObserver>,
+}
+
+const TITLE: &str = "title";
+
+impl TitleWatch {
+    pub fn new(window: &slint::Window, height: f32) -> Option<Self> {
+        let ns_window = ns_window(window)?;
+        let mtm = MainThreadMarker::new()?;
+        let observer = TitleObserver::alloc(mtm).set_ivars(ObserverIvars {
+            height: Cell::new(f64::from(height)),
+            window: ns_window.clone(),
+        });
+        // SAFETY: NSObject's own initializer.
+        let observer: Retained<TitleObserver> = unsafe { msg_send![super(observer), init] };
+        // SAFETY: the observer answers observeValueForKeyPath, and is taken off again in
+        // `drop`, while it still holds the window.
+        unsafe {
+            ns_window.addObserver_forKeyPath_options_context(
+                &observer,
+                &NSString::from_str(TITLE),
+                NSKeyValueObservingOptions::empty(),
+                std::ptr::null_mut(),
+            );
+        }
+        Some(Self { observer })
+    }
+
+    pub fn set_height(&self, height: f32) {
+        self.observer.ivars().height.set(f64::from(height));
+    }
+}
+
+impl Drop for TitleWatch {
+    fn drop(&mut self) {
+        let window = &self.observer.ivars().window;
+        // SAFETY: added in `new`, for this key path.
+        unsafe { window.removeObserver_forKeyPath(&self.observer, &NSString::from_str(TITLE)) };
+    }
+}
+
+/// Lays out now what AppKit would lay out of the title bar before the screen is next drawn,
+/// so the buttons are put back after that and not undone by it.
+fn lay_out_now(ns_window: &NSWindow) {
+    if let Some([close, ..]) = buttons(ns_window)
+        && let Some(container) = unsafe { close.superview().and_then(|bar| bar.superview()) }
+    {
+        container.layoutSubtreeIfNeeded();
+    }
+}
+
+/// Whether the buttons are no longer where `place_buttons` put them. AppKit may move them
+/// down or up alone, keeping them where they were across: it lays them out again when the
+/// window's title changes, which it does with every track.
 fn moved(ns_window: &NSWindow, height: f64) -> bool {
     let Some([close, ..]) = buttons(ns_window) else {
         return false;
     };
     // SAFETY: views of an open window, on the main thread.
-    let container = unsafe { close.superview().and_then(|bar| bar.superview()) };
+    let title_bar = unsafe { close.superview() };
+    let container = title_bar
+        .as_ref()
+        .and_then(|bar| unsafe { bar.superview() });
     let container_height = container.map_or(height, |c| c.frame().size.height);
-    (close.frame().origin.x - BUTTONS_X).abs() > 0.5 || (container_height - height).abs() > 0.5
+    let frame = close.frame();
+    let centred = title_bar.map_or(frame.origin.y, |bar| {
+        ((bar.frame().size.height - frame.size.height) / 2.0).round()
+    });
+    (frame.origin.x - BUTTONS_X).abs() > 0.5
+        || (frame.origin.y - centred).abs() > 0.5
+        || (container_height - height).abs() > 0.5
 }
 
 fn buttons(ns_window: &NSWindow) -> Option<[Retained<NSButton>; 3]> {

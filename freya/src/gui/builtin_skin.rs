@@ -41,6 +41,16 @@ impl Builtin {
         self.ui.window()
     }
 
+    /// A handle that does not keep the window open.
+    pub fn as_weak(&self) -> slint::Weak<FreyaSkin> {
+        self.ui.as_weak()
+    }
+
+    /// The window `as_weak` was made from, while it is open.
+    pub fn upgrade(weak: &slint::Weak<FreyaSkin>) -> Option<Self> {
+        weak.upgrade().map(|ui| Self { ui })
+    }
+
     pub fn show(&self) -> Result<(), slint::PlatformError> {
         self.ui.show()
     }

@@ -73,6 +73,7 @@ pub struct Options {
 
 pub fn run(options: Options) -> anyhow::Result<()> {
     let started = Instant::now();
+    let _ = app::STARTED.set(started);
     let window_events = WindowEvents::default();
     app_icon::set_name();
     select_backend(options.renderer, &window_events)?;
@@ -224,28 +225,6 @@ pub fn run(options: Options) -> anyhow::Result<()> {
         });
     }) {
         log::warn!("could not install signal handler: {e}");
-    }
-
-    // Logs the time to the first frame, and with debug logging how many frames are drawn.
-    let mut first = true;
-    let mut frames = 0u32;
-    let mut counted_since = Instant::now();
-    let notified = ui.window().set_rendering_notifier(move |state, _| {
-        if !matches!(state, slint::RenderingState::AfterRendering) {
-            return;
-        }
-        if std::mem::take(&mut first) {
-            log::info!("first frame after {:?}", started.elapsed());
-        }
-        frames += 1;
-        if counted_since.elapsed() >= Duration::from_secs(5) {
-            let seconds = counted_since.elapsed().as_secs_f32();
-            log::debug!("{:.1} frames per second", frames as f32 / seconds);
-            (frames, counted_since) = (0, Instant::now());
-        }
-    });
-    if let Err(e) = notified {
-        log::debug!("frames are not counted: {e}");
     }
 
     ui.show().context("could not show the window")?;

@@ -115,6 +115,7 @@ impl View {
             title_bar: TitleBar::default(),
             icon_set: false,
         };
+        watch_frames(&view.ui, view.title_bar.after_frame());
         if view.playlist_out.available {
             let _ = view
                 .ui
@@ -234,6 +235,40 @@ fn save_cover_file(track: &Path, cover: &Cover) -> Option<PathBuf> {
             log::debug!("could not save the cover for Now Playing: {e}");
             None
         }
+    }
+}
+
+/// When Freya started, for the time to its first frame.
+pub static STARTED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+/// After each frame of `ui`'s window: `after_frame`, and with debug logging, how many frames
+/// are drawn; after the first frame of all, how long Freya took to show it.
+fn watch_frames(ui: &SkinWindow, after_frame: impl Fn(&slint::Window) + 'static) {
+    static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+    let weak = ui.downgrade();
+    let mut frames = 0u32;
+    let mut counted_since = Instant::now();
+    let notified = ui.window().set_rendering_notifier(move |state, _| {
+        if !matches!(state, slint::RenderingState::AfterRendering) {
+            return;
+        }
+        if let Some(ui) = weak.upgrade() {
+            after_frame(ui.window());
+        }
+        if FIRST.swap(false, std::sync::atomic::Ordering::Relaxed)
+            && let Some(started) = STARTED.get()
+        {
+            log::info!("first frame after {:?}", started.elapsed());
+        }
+        frames += 1;
+        if counted_since.elapsed() >= Duration::from_secs(5) {
+            let seconds = counted_since.elapsed().as_secs_f32();
+            log::debug!("{:.1} frames per second", frames as f32 / seconds);
+            (frames, counted_since) = (0, Instant::now());
+        }
+    });
+    if let Err(e) = notified {
+        log::debug!("frames are not watched: {e}");
     }
 }
 
