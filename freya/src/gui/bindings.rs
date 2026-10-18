@@ -67,7 +67,7 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
         "toggle-pause",
         Box::new(|app, _| app.toggle_pause()),
     );
-    bind("Player", "stop", Box::new(|app, _| app.player.stop()));
+    bind("Player", "stop", Box::new(|app, _| app.stop()));
     bind("Player", "next", Box::new(|app, _| app.step(true)));
     bind("Player", "previous", Box::new(|app, _| app.step(false)));
     bind(

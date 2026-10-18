@@ -1,5 +1,6 @@
 //! The app's state, and the skin window it is shown in.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -37,7 +38,16 @@ const COVER_SIZE: u32 = 512;
 const SKIN_WATCH_INTERVAL: Duration = Duration::from_secs(1);
 
 /// A downloaded station playlist, or why it could not be read.
-type StationList = Result<Vec<Entry>, String>;
+/// `path` from the root, as the working folder makes it; addresses are kept as they are.
+fn absolute(path: &Path) -> PathBuf {
+    if freya_audio::is_url(&path.to_string_lossy()) {
+        return path.to_owned();
+    }
+    std::path::absolute(path).unwrap_or_else(|_| path.to_owned())
+}
+
+/// A station list downloaded, by its address: the streams it lists, or why it could not be read.
+type StationList = (String, Result<Vec<Entry>, String>);
 
 /// Everything tied to one skin window. Replaced as a whole when the skin changes.
 /// How long after starting Freya first looks for an update on its own.
@@ -238,8 +248,8 @@ pub struct App {
     pub shown_playlist: Option<usize>,
     /// Why the last playlist could not be made or renamed.
     pub playlists_error: String,
-    /// The address of the station played last, while a stream from it may still play.
-    station_playing: Option<String>,
+    /// The stream each station list (`.pls`, `.m3u`) led to, by the list's address.
+    station_streams: HashMap<String, String>,
     /// Why the last station could not be saved.
     pub radio_error: String,
     pub view: View,
@@ -265,6 +275,17 @@ pub struct App {
     pub updater: Updater,
     started: Instant,
     pub lastfm: LastFm,
+    /// The entry asked to play, by its id, until it starts or fails: an error about any other
+    /// (one from before Stop, say) does not move playback on.
+    requested: Option<u64>,
+    /// The entry queued to follow gaplessly.
+    armed: Option<u64>,
+    /// A queued entry that could not be opened: once what plays now has ended, playback goes
+    /// on with the entry after it.
+    skip_after: Option<u64>,
+    /// Entries that failed to open since the last that played, so that a playlist where none
+    /// can be played (a drive unplugged, with repeat on) is not tried round and round.
+    failures: usize,
     /// The play Last.fm hears about, if the track may be scrobbled at all.
     lastfm_play: Option<LastFmPlay>,
     /// Whether something played at the last tick, so a resume can tell Last.fm again.
@@ -324,7 +345,7 @@ impl App {
             playlists,
             shown_playlist: None,
             playlists_error: String::new(),
-            station_playing: None,
+            station_streams: HashMap::new(),
             radio_error: String::new(),
             view: View::new(ui),
             skin,
@@ -339,6 +360,10 @@ impl App {
             updater: Updater::new(),
             started: Instant::now(),
             lastfm,
+            requested: None,
+            armed: None,
+            skip_after: None,
+            failures: 0,
             lastfm_play: None,
             lastfm_was_playing: false,
         };
@@ -373,10 +398,20 @@ impl App {
             return;
         };
         let media = media(entry);
+        self.requested = Some(media.id);
+        self.skip_after = None;
         self.playlist.set_current(Some(index));
         self.covers.request(&media.path);
         self.player.play(media);
         self.playlist_dirty = true;
+        // What follows this entry, not the one queued after the last.
+        self.queue_next();
+    }
+
+    pub fn stop(&mut self) {
+        self.requested = None;
+        self.skip_after = None;
+        self.player.stop();
     }
 
     pub fn play(&mut self) {
@@ -442,6 +477,7 @@ impl App {
             .peek_next(self.settings.shuffle, self.settings.repeat)
             .and_then(|i| self.playlist.get(i))
             .map(media);
+        self.armed = next.as_ref().map(|m| m.id);
         self.player.set_next(next);
     }
 
@@ -459,6 +495,9 @@ impl App {
     pub fn add_paths(&mut self, paths: &[PathBuf]) {
         let mut entries = Vec::new();
         for path in paths {
+            // Up Next is saved and restored, maybe from another folder: a path relative to
+            // where Freya was started from would not find its file then.
+            let path = &absolute(path);
             if path.is_file() && playlist_file::is_playlist(path) {
                 match playlist_file::load(path) {
                     Ok(loaded) => entries.extend(loaded),
@@ -500,7 +539,8 @@ impl App {
         if playlist_file::is_playlist_url(&url) {
             let results = self.station_lists.0.clone();
             std::thread::spawn(move || {
-                let _ = results.send(playlist_file::fetch(&url).map_err(|e| format!("{url}: {e}")));
+                let entries = playlist_file::fetch(&url).map_err(|e| format!("{url}: {e}"));
+                let _ = results.send((url, entries));
             });
             return;
         }
@@ -513,26 +553,37 @@ impl App {
             return;
         };
         let url = station.url.clone();
-        let entry = self
-            .playlist
-            .entries()
-            .iter()
-            .position(|entry| entry.path.to_string_lossy() == url);
-        match entry {
+        let stream = self.station_streams.get(&url).unwrap_or(&url).clone();
+        match self.entry_for(&stream) {
             Some(index) => self.play_index(index),
             None => self.add_url(&url),
         }
-        self.station_playing = Some(url);
     }
 
-    /// The address of the station playing: the one played last, while a stream plays.
-    fn playing_station(&self) -> Option<&str> {
-        let streaming = self.player.status().state != PlaybackState::Stopped
-            && self
-                .playlist
-                .current_entry()
-                .is_some_and(|entry| freya_audio::is_url(&entry.path.to_string_lossy()));
-        self.station_playing.as_deref().filter(|_| streaming)
+    /// The first entry for `url` in Up Next.
+    fn entry_for(&self, url: &str) -> Option<usize> {
+        self.playlist
+            .entries()
+            .iter()
+            .position(|entry| entry.path.to_string_lossy() == url)
+    }
+
+    /// The address of the saved station playing, if a stream of one plays.
+    pub fn playing_station(&self) -> Option<String> {
+        if self.player.status().state == PlaybackState::Stopped {
+            return None;
+        }
+        let playing = self.playlist.current_entry()?.path.to_string_lossy();
+        self.stations
+            .iter()
+            .find(|station| {
+                station.url == playing
+                    || self
+                        .station_streams
+                        .get(&station.url)
+                        .is_some_and(|stream| *stream == playing)
+            })
+            .map(|station| station.url.clone())
     }
 
     /// Appends entries and plays the first of them.
@@ -744,8 +795,16 @@ impl App {
             match event {
                 Event::TrackStarted(track) => {
                     self.error.clear();
+                    self.failures = 0;
+                    if self.requested == Some(track.id) {
+                        self.requested = None;
+                    }
                     self.name_station(&track);
-                    self.playlist.set_current_track(&track.path, track.start);
+                    // By its id: another entry may play the same file.
+                    match self.playlist.index_of(track.id) {
+                        Some(i) => self.playlist.set_current(Some(i)),
+                        None => self.playlist.set_current_track(&track.path, track.start),
+                    }
                     self.listening.start(self.countable(&track), track.duration);
                     self.lastfm_started(&track);
                     self.covers.request(&track.path);
@@ -753,21 +812,54 @@ impl App {
                     self.playlist_dirty = true;
                     self.queue_next();
                 }
-                Event::Finished => {}
+                Event::Finished => {
+                    // The entry queued next could not be opened: go on with the one after it.
+                    if let Some(i) = self
+                        .skip_after
+                        .take()
+                        .and_then(|id| self.playlist.index_of(id))
+                    {
+                        self.playlist.set_current(Some(i));
+                        self.step(true);
+                    }
+                }
+                Event::Unplayable(id, msg) => {
+                    log::warn!("{msg}");
+                    self.error = msg;
+                    self.failures += 1;
+                    if self.failures >= self.playlist.len().max(1) {
+                        // None of them plays: stop rather than try them round and round.
+                        self.requested = None;
+                        self.skip_after = None;
+                    } else if self.requested == Some(id) {
+                        // Asked to play, and nothing plays: skip to the entry after it.
+                        self.requested = None;
+                        if let Some(i) = self.playlist.index_of(id) {
+                            self.playlist.set_current(Some(i));
+                            self.step(true);
+                        }
+                    } else if self.armed == Some(id) {
+                        self.skip_after = Some(id);
+                    }
+                }
                 Event::Error(msg) => {
                     log::warn!("{msg}");
                     self.error = msg;
-                    // A track that fails to open leaves the engine stopped; skip it.
-                    if self.player.status().state == PlaybackState::Stopped {
-                        self.step(true);
-                    }
                 }
             }
         }
 
-        while let Ok(result) = self.station_lists.1.try_recv() {
+        while let Ok((list, result)) = self.station_lists.1.try_recv() {
             match result {
-                Ok(entries) => self.add_and_play(entries),
+                Ok(entries) => {
+                    let stream = entries[0].path.to_string_lossy().into_owned();
+                    // Played before, from this list or another way: not added again.
+                    match self.entry_for(&stream) {
+                        Some(index) => self.play_index(index),
+                        None => self.add_and_play(entries),
+                    }
+                    self.station_streams.insert(list, stream);
+                }
                 Err(e) => {
                     log::warn!("could not read station playlist {e}");
                     self.error = format!("Could not read the station list: {e}");
@@ -943,7 +1035,7 @@ impl App {
             MediaRequest::Toggle => self.toggle_pause(),
             MediaRequest::Next => self.step(true),
             MediaRequest::Previous => self.step(false),
-            MediaRequest::Stop => self.player.stop(),
+            MediaRequest::Stop => self.stop(),
             MediaRequest::SeekBy(seconds) => self.seek_by(seconds),
             MediaRequest::SetPosition(position) => self.player.seek(position),
             MediaRequest::SetVolume(volume) => {
@@ -984,7 +1076,7 @@ impl App {
 
     /// Writes current state into the skin.
     pub fn refresh(&mut self) {
-        let station_rows = self.stations.rows(self.playing_station());
+        let station_rows = self.stations.rows(self.playing_station().as_deref());
         let view = &mut self.view;
         let ui = &view.ui;
         let status = self.player.status();
@@ -1220,7 +1312,10 @@ fn show_cover(ui: &SkinWindow, image: Option<slint::Image>) {
 /// part of the file the track is, with the track's own tags.
 fn media(entry: &Entry) -> Media {
     let Some(part) = entry.part else {
-        return Media::from(&entry.path);
+        return Media {
+            id: entry.id,
+            ..Media::from(&entry.path)
+        };
     };
     Media {
         path: entry.path.clone(),
@@ -1231,5 +1326,6 @@ fn media(entry: &Entry) -> Media {
             artist: entry.artist.clone(),
             album: entry.album.clone(),
         },
+        id: entry.id,
     }
 }

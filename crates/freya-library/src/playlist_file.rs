@@ -97,17 +97,18 @@ fn has_extension(path: &Path, ext: &str) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case(ext))
 }
 
-/// UTF-8 (with or without BOM), falling back to Latin-1 like old `.m3u` files use.
+/// UTF-8 or UTF-16 by their byte order marks, UTF-8 when valid, and otherwise the Windows
+/// code page old `.m3u` files were written in, as for CUE sheets.
 fn decode_text(bytes: &[u8]) -> String {
-    let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
-    match std::str::from_utf8(bytes) {
-        Ok(s) => s.to_owned(),
-        Err(_) => bytes.iter().map(|&b| b as char).collect(),
-    }
+    crate::cue::encoding::decode(bytes)
 }
 
-/// Resolves a path from a playlist relative to the playlist's folder. URLs are kept as is.
+/// Resolves a path from a playlist relative to the playlist's folder. `file://` addresses
+/// become the paths they name; other URLs are kept as is.
 fn resolve(entry: &str, base: &Path) -> PathBuf {
+    if let Some(path) = file_url_path(entry) {
+        return path;
+    }
     if entry.contains("://") {
         return PathBuf::from(entry);
     }
@@ -123,6 +124,51 @@ fn resolve(entry: &str, base: &Path) -> PathBuf {
     } else {
         base.join(path)
     }
+}
+
+/// The path a `file://` address names, as players like VLC and Rhythmbox write them:
+/// `file:///home/me/Song%20One.mp3`, or `file:///C:/Music/x.mp3` on Windows.
+fn file_url_path(entry: &str) -> Option<PathBuf> {
+    let scheme = entry.get(..7)?;
+    if !scheme.eq_ignore_ascii_case("file://") {
+        return None;
+    }
+    let rest = &entry[7..];
+    // The host is empty or "localhost"; the path starts at the next slash.
+    let path = &rest[rest.find('/')?..];
+    let path = percent_decode(path);
+    // "/C:/Music" on Windows is "C:/Music".
+    let bytes = path.as_bytes();
+    let drive =
+        bytes.len() >= 3 && bytes[0] == b'/' && bytes[1].is_ascii_alphabetic() && bytes[2] == b':';
+    Some(PathBuf::from(if drive && cfg!(windows) {
+        &path[1..]
+    } else {
+        &path[..]
+    }))
+}
+
+/// `%XX` escapes as the bytes they stand for, read as UTF-8.
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| char::from(b).to_digit(16);
+        if bytes[i] == b'%'
+            && let (Some(hi), Some(lo)) = (
+                bytes.get(i + 1).copied().and_then(hex),
+                bytes.get(i + 2).copied().and_then(hex),
+            )
+        {
+            out.push((hi * 16 + lo) as u8);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Sets an entry's title from a playlist. Files get "Artist - Title" split as Winamp writes
@@ -404,5 +450,49 @@ mod tests {
     #[test]
     fn decodes_latin1() {
         assert_eq!(decode_text(b"caf\xe9"), "café");
+    }
+
+    #[test]
+    fn decodes_the_windows_code_page_and_utf16() {
+        // Windows players wrote curly quotes and dashes from 0x80 to 0x9F, which Latin-1
+        // turned into control characters.
+        assert_eq!(decode_text(b"Don\x92t Stop \x96 Live"), "Don’t Stop – Live");
+        // Some write UTF-16, which came out as bytes with zeros between.
+        let utf16: Vec<u8> = [0xFF, 0xFE]
+            .into_iter()
+            .chain(
+                "#EXTM3U\nsång.mp3"
+                    .encode_utf16()
+                    .flat_map(u16::to_le_bytes),
+            )
+            .collect();
+        assert_eq!(decode_text(&utf16), "#EXTM3U\nsång.mp3");
+    }
+
+    #[test]
+    fn file_addresses_are_the_files_they_name() {
+        // As VLC and Rhythmbox write them; they were kept as addresses, which do not play.
+        let text =
+            "#EXTM3U\nfile:///home/me/Music/Song%20One%20%C3%A5.mp3\nfile://localhost/srv/b.flac\n";
+        let paths: Vec<PathBuf> = parse_m3u(text, Path::new("/elsewhere"))
+            .into_iter()
+            .map(|e| e.path)
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                PathBuf::from("/home/me/Music/Song One å.mp3"),
+                PathBuf::from("/srv/b.flac")
+            ]
+        );
+        assert_eq!(
+            file_url_path("FILE:///C:/Music/x.mp3"),
+            Some(PathBuf::from(if cfg!(windows) {
+                "C:/Music/x.mp3"
+            } else {
+                "/C:/Music/x.mp3"
+            }))
+        );
+        assert_eq!(percent_decode("100%"), "100%");
     }
 }

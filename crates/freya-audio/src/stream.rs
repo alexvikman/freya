@@ -123,14 +123,32 @@ impl Stream {
             .user_agent(concat!("Freya/", env!("CARGO_PKG_VERSION")))
             .build()
             .into();
-        let response = agent
-            .get(url)
-            .header("Icy-MetaData", "1")
-            .call()
+        // Connecting can take the timeouts twice over; on its own thread, so playing something
+        // else, stopping or quitting need not wait for it.
+        let (sender, receiver) = crossbeam_channel::bounded(1);
+        let request = agent.get(url).header("Icy-MetaData", "1");
+        std::thread::Builder::new()
+            .name("freya-connect".into())
+            .spawn(move || {
+                let _ = sender.send(request.call());
+            })
             .map_err(|e| fail(e.to_string()))?;
+        let response = loop {
+            if interrupt.is_raised() {
+                return Err(Error::Interrupted);
+            }
+            match receiver.recv_timeout(WAIT_STEP) {
+                Ok(response) => break response,
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                    return Err(fail("the connection was lost".into()));
+                }
+            }
+        };
         if interrupt.is_raised() {
             return Err(Error::Interrupted);
         }
+        let response = response.map_err(|e| fail(e.to_string()))?;
 
         let header = |name: &str| {
             response
@@ -253,9 +271,10 @@ impl Read for Stream {
         if n > 0 {
             return Ok(n);
         }
-        // Only reached when the stream has ended: otherwise there was audio to read.
-        match state.ended.take() {
-            Some(Err(e)) => Err(std::io::Error::other(e)),
+        // Only reached when the stream has ended: otherwise there was audio to read. Kept
+        // for every later read too, as a decoder may read on after the end in a frame.
+        match &state.ended {
+            Some(Err(e)) => Err(std::io::Error::other(e.clone())),
             _ => Ok(0),
         }
     }

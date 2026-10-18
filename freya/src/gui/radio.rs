@@ -68,6 +68,10 @@ impl Stations {
         self.list.get(index)
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = &Station> {
+        self.list.iter()
+    }
+
     /// Saves a station at the end. `url` may leave out "http://"; without a name, the station
     /// is named after its address's host.
     pub fn add(&mut self, name: &str, url: &str) -> Result<(), String> {

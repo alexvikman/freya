@@ -27,6 +27,8 @@ pub(crate) enum Command {
     SetNext(Option<Media>),
     Seek(Duration),
     Stop,
+    /// Playback was resumed: the engine may have stopped waking up while paused.
+    Resume,
     Quit,
 }
 
@@ -37,7 +39,11 @@ pub enum Event {
     TrackStarted(Arc<TrackInfo>),
     /// The last track finished and nothing was queued.
     Finished,
-    /// A track could not be opened or decoded. Playback continues with the next one, if any.
+    /// The media with this [`Media::id`] could not be opened, whether asked to play or queued
+    /// next; the engine plays nothing in its place, so the caller decides what comes instead.
+    Unplayable(u64, String),
+    /// Something went wrong while a track played, like a damaged part of it: the engine goes
+    /// on with what is queued next, if anything.
     Error(String),
 }
 
@@ -115,8 +121,9 @@ impl Engine {
             let wake = if busy {
                 self.poll_command()
             } else if self.shared.timeline().has_end() {
-                // Everything is decoded; wait for the last audio to play out.
-                self.wait_command(Some(POLL))
+                // Everything is decoded; wait for the last audio to play out, or, while paused,
+                // for playback to resume.
+                self.wait_command((!self.paused()).then_some(POLL))
             } else {
                 self.wait_command(None)
             };
@@ -135,8 +142,10 @@ impl Engine {
             }
 
             if !self.push_pending() {
-                // Ring buffer full: sleep until there is room or a command arrives.
-                match self.wait_command(Some(self.refill_wait())) {
+                // Ring buffer full: sleep until there is room or a command arrives. Paused,
+                // nothing makes room until playback resumes, which sends a command.
+                let wait = (!self.paused()).then(|| self.refill_wait());
+                match self.wait_command(wait) {
                     Wake::Command(cmd) => {
                         if !self.handle(cmd) {
                             return;
@@ -151,6 +160,10 @@ impl Engine {
                 self.decode_step();
             }
         }
+    }
+
+    fn paused(&self) -> bool {
+        self.shared.paused.load(Ordering::Acquire)
     }
 
     fn poll_command(&self) -> Wake {
@@ -188,6 +201,7 @@ impl Engine {
                 self.reset_output();
                 self.current = None;
             }
+            Command::Resume => {}
             Command::Quit => return false,
         }
         true
@@ -207,7 +221,7 @@ impl Engine {
                 );
                 self.current = Some(cur);
             }
-            Err(e) => self.emit_error(&e),
+            Err(e) => self.emit_unplayable(media, &e),
         }
     }
 
@@ -220,6 +234,16 @@ impl Engine {
         let Some(playing) = self.shared.timeline().current(consumed) else {
             return;
         };
+        // To the end or past it, as holding → does: the track is over. The reader would refuse
+        // the position, and what is buffered was already dropped by then.
+        if playing
+            .track
+            .duration
+            .is_some_and(|length| position >= length)
+        {
+            self.skip_to_next();
+            return;
+        }
 
         // With gapless playback the decoder may already be on the next track. The seek
         // applies to the one being heard, so reopen it and put the other one back in the queue.
@@ -230,7 +254,9 @@ impl Engine {
             match self.open(&playing.track.media(), Some(playing.serial)) {
                 Ok(cur) => self.current = Some(cur),
                 Err(e) => {
+                    // Nothing could go on decoding it: go on with what follows.
                     self.emit(Event::Error(e.to_string()));
+                    self.skip_to_next();
                     return;
                 }
             }
@@ -244,12 +270,26 @@ impl Engine {
         let serial = cur.serial;
         self.replace_timeline(position, serial, &info);
         let cur = self.current.as_mut().expect("opened above");
-        let actual = cur.source.seek(position).unwrap_or_else(|e| {
-            log::warn!("seek failed: {e}");
-            playing.position
-        });
-        if actual != position {
-            self.replace_timeline(actual, serial, &info);
+        match cur.source.seek(position) {
+            Ok(actual) if actual != position => self.replace_timeline(actual, serial, &info),
+            Ok(_) => {}
+            // Where the reader is now is not known, so the position shown would drift from
+            // what is heard: go on with what follows instead.
+            Err(e) => {
+                log::warn!("seek failed: {e}");
+                self.skip_to_next();
+            }
+        }
+    }
+
+    /// Ends the track being heard at once: what is queued next plays, or playback finishes.
+    fn skip_to_next(&mut self) {
+        self.reset_output();
+        self.current = None;
+        self.announced = None;
+        match self.next.take() {
+            Some(media) => self.play(&media),
+            None => self.emit(Event::Finished),
         }
     }
 
@@ -390,7 +430,7 @@ impl Engine {
                     self.current = Some(cur);
                     return;
                 }
-                Err(e) => self.emit_error(&e),
+                Err(e) => self.emit_unplayable(&media, &e),
             }
         }
         self.shared.timeline().set_end(boundary);
@@ -473,10 +513,10 @@ impl Engine {
         }
     }
 
-    /// Reports an error, unless it only means a command cut a wait short.
-    fn emit_error(&self, error: &Error) {
+    /// Reports that `media` could not be opened, unless a command only cut the wait short.
+    fn emit_unplayable(&self, media: &Media, error: &Error) {
         if !matches!(error, Error::Interrupted) {
-            self.emit(Event::Error(error.to_string()));
+            self.emit(Event::Unplayable(media.id, error.to_string()));
         }
     }
 

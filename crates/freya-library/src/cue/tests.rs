@@ -57,6 +57,14 @@ fn parses_a_sheet() {
 }
 
 #[test]
+fn times_too_large_for_a_duration_are_none() {
+    // These overflowed and panicked.
+    assert_eq!(parse_time("99999999999999999:00:00"), None);
+    assert_eq!(parse_time("0:0:18446744073709551615"), None);
+    assert_eq!(parse_time("1:02:03"), Some(ms(62_040)));
+}
+
+#[test]
 fn tracks_take_the_sheets_tags_where_they_have_none() {
     let sheet = Sheet::parse(ALBUM);
     let part = Part {

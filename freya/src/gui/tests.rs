@@ -585,3 +585,189 @@ export component W inherits Window { Text { text: Player.title; } }
         app.borrow_mut().tick();
     }
 }
+
+/// An app on the built-in skin with a silent player, which plays in real time.
+fn silent_app(name: &str) -> Rc<RefCell<App>> {
+    freya_skin::render::init_headless().unwrap();
+    let ui = SkinWindow::load(&SkinSource::Builtin).unwrap();
+    let app = Rc::new(RefCell::new(App::new(
+        ui.clone(),
+        SkinSource::Builtin,
+        Player::silent(48_000),
+        Settings::default(),
+        WindowEvents::default(),
+        app::Collections {
+            library: library::LibraryPanel::new(None, None),
+            stations: radio::Stations::load(Some(temp_dir(name).join("stations.m3u8"))),
+            playlists: playlists::Playlists::load(Some(temp_dir(name).join("playlists"))),
+        },
+    )));
+    bindings::connect(&ui, &app);
+    app
+}
+
+/// Plays Up Next from its first entry until nothing plays, and returns the rows that started,
+/// in order.
+fn rows_played(app: &Rc<RefCell<App>>, limit: Duration) -> Vec<usize> {
+    app.borrow_mut().play_index(0);
+    let started = std::time::Instant::now();
+    let mut played: Vec<usize> = Vec::new();
+    let mut shown = None;
+    let mut quiet_since = None;
+    while started.elapsed() < limit {
+        let mut app = app.borrow_mut();
+        app.tick();
+        let status = app.player.status();
+        let current = status.track.as_ref().and_then(|_| app.playlist.current());
+        if let Some(row) = current
+            && current != shown
+        {
+            played.push(row);
+        }
+        shown = current;
+        if status.state == freya_audio::PlaybackState::Stopped {
+            let since = *quiet_since.get_or_insert_with(std::time::Instant::now);
+            if since.elapsed() > Duration::from_millis(600) {
+                break;
+            }
+        } else {
+            quiet_since = None;
+        }
+        drop(app);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    played
+}
+
+#[test]
+fn duplicate_entries_play_in_order() {
+    // Once, the second A was taken for the first, and Up Next went A, B, A, B, ... for ever.
+    let app = silent_app("duplicates");
+    app.borrow_mut().add_paths(&[
+        fixture("sine.flac"),
+        fixture("mono-22k.wav"),
+        fixture("sine.flac"),
+        fixture("sine.ogg"),
+    ]);
+    assert_eq!(rows_played(&app, Duration::from_secs(12)), [0, 1, 2, 3]);
+}
+
+#[test]
+fn an_unplayable_entry_is_skipped_and_hopeless_lists_stop() {
+    // The entry queued next fails to open: playback goes on with the one after it.
+    let app = silent_app("unplayable");
+    let missing = temp_dir("unplayable").join("missing.flac");
+    app.borrow_mut()
+        .add_paths(&[fixture("sine.flac"), missing.clone(), fixture("sine.ogg")]);
+    assert_eq!(rows_played(&app, Duration::from_secs(10)), [0, 2]);
+
+    // Nothing can be played, repeat on: Freya tries each once, then stops.
+    let app = silent_app("hopeless");
+    app.borrow_mut().settings.repeat = true;
+    app.borrow_mut().add_paths(&[missing.clone(), missing]);
+    let started = std::time::Instant::now();
+    assert_eq!(
+        rows_played(&app, Duration::from_secs(10)),
+        Vec::<usize>::new()
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "it stopped trying"
+    );
+}
+
+/// A radio station on localhost: `/radio.pls` lists `/stream`, which sends a short MP3.
+fn station_with_list() -> String {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let stream = format!("{base}/stream");
+    let audio = std::fs::read(fixture("sine.mp3")).unwrap();
+    std::thread::spawn(move || {
+        for connection in listener.incoming() {
+            let Ok(connection) = connection else { return };
+            let mut reader = BufReader::new(connection);
+            let mut request = String::new();
+            let _ = reader.read_line(&mut request);
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            let mut connection = reader.into_inner();
+            if request.contains(".pls") {
+                let body = format!("[playlist]\nFile1={stream}\nTitle1=Test\nNumberOfEntries=1\n");
+                let _ = write!(
+                    connection,
+                    "HTTP/1.0 200 OK\r\nContent-Type: audio/x-scpls\r\n\r\n{body}"
+                );
+            } else {
+                let _ =
+                    connection.write_all(b"HTTP/1.0 200 OK\r\nContent-Type: audio/mpeg\r\n\r\n");
+                // Slowly, so it plays for a while.
+                for piece in audio.chunks(1024) {
+                    let _ = connection.write_all(piece);
+                    std::thread::sleep(Duration::from_millis(30));
+                }
+            }
+        }
+    });
+    format!("{base}/radio.pls")
+}
+
+#[test]
+fn a_station_list_is_played_again_without_adding_it_again() {
+    let app = silent_app("station-list");
+    let list = station_with_list();
+    app.borrow_mut().stations.add("Test", &list).unwrap();
+    let index = app
+        .borrow()
+        .stations
+        .iter()
+        .position(|s| s.url == list)
+        .unwrap();
+    let wait_until = |what: &str, done: &dyn Fn(&App) -> bool| {
+        let started = std::time::Instant::now();
+        loop {
+            app.borrow_mut().tick();
+            if done(&app.borrow()) {
+                break;
+            }
+            assert!(started.elapsed() < Duration::from_secs(10), "{what}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    for _ in 0..2 {
+        app.borrow_mut().play_station(index);
+        wait_until("the station plays", &|app| {
+            app.player.status().state == freya_audio::PlaybackState::Playing
+        });
+        // The station is the one shown playing, though Up Next has its stream's address.
+        assert_eq!(app.borrow().playing_station(), Some(list.clone()));
+    }
+    // Time for a second download of the list to come back, were there one.
+    let started = std::time::Instant::now();
+    while started.elapsed() < Duration::from_millis(500) {
+        app.borrow_mut().tick();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(app.borrow().playlist.len(), 1);
+    app.borrow_mut().stop();
+}
+
+#[test]
+fn relative_paths_are_kept_from_the_root() {
+    // `freya song.mp3` saved "song.mp3", which a later start from another folder could not
+    // find. Tests run in the crate's folder.
+    let app = silent_app("relative-paths");
+    let relative = PathBuf::from("../crates/freya-audio/tests/fixtures/sine.wav");
+    app.borrow_mut().add_paths(std::slice::from_ref(&relative));
+    let app = app.borrow();
+    let path = &app.playlist.entries()[0].path;
+    assert!(path.is_absolute(), "{}", path.display());
+    assert_eq!(
+        path.canonicalize().unwrap(),
+        relative.canonicalize().unwrap()
+    );
+}

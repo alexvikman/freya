@@ -36,7 +36,7 @@ pub fn run(paths: &[PathBuf]) -> anyhow::Result<()> {
                     print_track(&track);
                     shown_title = track.display_title();
                 }
-                Event::Error(msg) => {
+                Event::Unplayable(_, msg) => {
                     print_line(&format!("error: {msg}"));
                     // A failed `play` leaves the engine stopped; move on to the next file.
                     if player.status().state == PlaybackState::Stopped {
@@ -46,6 +46,7 @@ pub fn run(paths: &[PathBuf]) -> anyhow::Result<()> {
                         }
                     }
                 }
+                Event::Error(msg) => print_line(&format!("error: {msg}")),
                 Event::Finished => match queue.after_requested() {
                     // The queued next track failed to open; try the one after it.
                     Some(path) => player.play(path),

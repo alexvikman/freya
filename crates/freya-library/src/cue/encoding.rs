@@ -1,5 +1,5 @@
-//! Turning the bytes of a CUE sheet into text. Sheets are usually ASCII or UTF-8, but older
-//! rippers wrote them in the Windows code page of the machine, mostly Western European
+//! Turning the bytes of a CUE sheet or a playlist into text. They are usually ASCII or UTF-8,
+//! but older rippers and players wrote them in the Windows code page of the machine, mostly Western European
 //! (Windows-1252) or Cyrillic (Windows-1251), and some write UTF-16.
 
 /// Decodes a CUE sheet: UTF-8 or UTF-16 when it says so with a byte order mark, UTF-8 when it

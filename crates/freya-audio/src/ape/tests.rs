@@ -12,6 +12,7 @@ use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::units::Timestamp;
 
+use super::ApeDecoder;
 use super::header::Header;
 use crate::source::{CODECS, PROBE};
 
@@ -197,10 +198,59 @@ fn a_damaged_frame_fails_its_check() {
 }
 
 #[test]
+fn a_damaged_24_bit_frame_leaves_the_rest_alone() {
+    // A frame that failed its check was taken for one from an early encoder, and the frames
+    // after it were decoded with that encoder's rounding, which turns loud passages into
+    // noise. Here the second frame's stored CRC is wrong, so only the check fails.
+    let mut bytes = std::fs::read(fixture("ape/stereo-24-insane.ape")).unwrap();
+    let header = Header::read(&mut Cursor::new(&bytes)).unwrap();
+    // The frames are one stream of little-endian words read from the top byte down, so the
+    // CRC's top byte is the last of its word.
+    let (first, start) = (header.frame_offsets[0], header.frame_offsets[1]);
+    let skip = (start - first) % 4;
+    bytes[(start - skip + (skip ^ 3)) as usize] ^= 0x02;
+    let mss = MediaSourceStream::new(Box::new(Cursor::new(bytes)), Default::default());
+    let mut hint = Hint::new();
+    hint.with_extension("ape");
+    let mut format = PROBE
+        .probe(
+            &hint,
+            mss,
+            FormatOptions::default(),
+            MetadataOptions::default(),
+        )
+        .unwrap();
+    let track = format.default_track(TrackType::Audio).unwrap();
+    let params = track
+        .codec_params
+        .as_ref()
+        .unwrap()
+        .audio()
+        .unwrap()
+        .clone();
+    let mut decoder = ApeDecoder::try_new(&params, &AudioDecoderOptions::default()).unwrap();
+    let results: Vec<bool> = std::iter::from_fn(|| format.next_packet().unwrap())
+        .map(|packet| decoder.decode(&packet).is_ok())
+        .collect();
+    let first_bad = results.iter().position(|ok| !ok).expect("damage found");
+    assert!(results[first_bad + 1..].iter().all(|ok| *ok), "{results:?}");
+    assert!(!decoder.interim_rounding());
+}
+
+#[test]
 fn refuses_files_before_version_3_95() {
     let mut bytes = b"MAC ".to_vec();
     bytes.extend_from_slice(&3930u16.to_le_bytes());
     bytes.resize(64, 0);
+    assert!(Header::read(&mut Cursor::new(bytes)).is_err());
+}
+
+#[test]
+fn refuses_frame_data_larger_than_any_file() {
+    // The descriptor's 64-bit frame data length, at bytes 24 to 32, overflowed the end offset.
+    let mut bytes = std::fs::read(fixture("ape/stereo-16-normal.ape")).unwrap();
+    assert_eq!(&bytes[..4], b"MAC ");
+    bytes[24..32].fill(0xff);
     assert!(Header::read(&mut Cursor::new(bytes)).is_err());
 }
 

@@ -28,7 +28,7 @@ fn main() {
                     info.bitrate_kbps,
                     info.sample_rate
                 ),
-                Event::Error(e) => println!("error: {e}"),
+                Event::Error(e) | Event::Unplayable(_, e) => println!("error: {e}"),
                 Event::Finished => println!("finished"),
             }
         }

@@ -15,7 +15,7 @@ mod source;
 mod state;
 mod stream;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -61,6 +61,9 @@ const BUFFER_SECONDS: f64 = 0.25;
 /// audio service can rest. Long enough that pausing for a moment does not stop it.
 const DEVICE_IDLE: Duration = Duration::from_secs(5);
 
+/// How often a lost audio device is tried to be replaced.
+const DEVICE_RETRY: Duration = Duration::from_secs(1);
+
 pub struct Player {
     commands: Sender<Command>,
     interrupt: Interrupt,
@@ -69,7 +72,15 @@ pub struct Player {
     events: Receiver<Event>,
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
-    stream: Option<cpal::Stream>,
+    stream: RefCell<Option<cpal::Stream>>,
+    /// Where the renderer comes back to from a stream that is dropped, and the renderer
+    /// while no stream has it.
+    handoff: output::Handoff,
+    spare: RefCell<Option<Renderer>>,
+    /// The format the engine plays in, which a new device must take.
+    format: output::DeviceFormat,
+    /// When a lost device was last tried to be replaced.
+    last_recovery: Cell<Option<Instant>>,
     /// Whether the device is running, and since when nothing has been playing.
     stream_running: Cell<bool>,
     idle_since: Cell<Option<Instant>>,
@@ -81,8 +92,8 @@ impl Player {
     pub fn new() -> Result<Self, Error> {
         let output = Output::open_default()?;
         let format = output.format();
-        let (mut player, renderer) = Self::spawn(format.sample_rate, format.channels);
-        player.stream = Some(output.start(renderer)?);
+        let (player, renderer) = Self::spawn(format.sample_rate, format.channels);
+        *player.stream.borrow_mut() = Some(output.start(renderer, &player.handoff)?);
         player.stream_running.set(true);
         Ok(player)
     }
@@ -140,7 +151,14 @@ impl Player {
             events: ev_rx,
             shared,
             thread: Some(thread),
-            stream: None,
+            stream: RefCell::new(None),
+            handoff: output::Handoff::new(),
+            spare: RefCell::new(None),
+            format: output::DeviceFormat {
+                sample_rate,
+                channels,
+            },
+            last_recovery: Cell::new(None),
             stream_running: Cell::new(false),
             idle_since: Cell::new(None),
             _null_output: None,
@@ -171,12 +189,17 @@ impl Player {
         if !paused {
             self.wake_device();
         }
-        self.shared.paused.store(paused, Ordering::Relaxed);
+        let was = self.shared.paused.swap(paused, Ordering::AcqRel);
+        if was && !paused {
+            self.send(Command::Resume);
+        }
     }
 
     pub fn toggle_pause(&self) {
         self.wake_device();
-        self.shared.paused.fetch_xor(true, Ordering::Relaxed);
+        if self.shared.paused.fetch_xor(true, Ordering::AcqRel) {
+            self.send(Command::Resume);
+        }
     }
 
     /// Volume from 0.0 to 1.0.
@@ -245,19 +268,21 @@ impl Player {
         &self.events
     }
 
-    /// Stops the audio device after a while with nothing playing, and notes when playing
-    /// starts again. Call it regularly, e.g. a few times a second; commands start the device
-    /// again by themselves.
+    /// Stops the audio device after a while with nothing playing, starts it when something
+    /// plays, and replaces it when it is gone. Call it regularly, e.g. a few times a second;
+    /// commands start the device again by themselves.
     pub fn rest_device_when_idle(&self) {
+        self.replace_lost_device();
         if self.status().state == PlaybackState::Playing {
-            self.idle_since.set(None);
+            // A track that took long to open may start after the device was stopped.
+            self.wake_device();
             return;
         }
         let since = self.idle_since.get().unwrap_or_else(Instant::now);
         self.idle_since.set(Some(since));
         if since.elapsed() >= DEVICE_IDLE
             && self.stream_running.get()
-            && let Some(stream) = &self.stream
+            && let Some(stream) = &*self.stream.borrow()
         {
             match stream.pause() {
                 Ok(()) => {
@@ -275,11 +300,56 @@ impl Player {
     fn wake_device(&self) {
         self.idle_since.set(None);
         if !self.stream_running.get()
-            && let Some(stream) = &self.stream
+            && let Some(stream) = &*self.stream.borrow()
         {
             match stream.play() {
                 Ok(()) => self.stream_running.set(true),
                 Err(e) => log::warn!("could not restart the audio device: {e}"),
+            }
+        }
+    }
+
+    /// Builds the stream again, on the default device, when the device it played on is gone,
+    /// as when a USB device is unplugged. Tries once a second until a device takes it.
+    fn replace_lost_device(&self) {
+        if !self.shared.device_lost.load(Ordering::Acquire)
+            || self
+                .last_recovery
+                .get()
+                .is_some_and(|at| at.elapsed() < DEVICE_RETRY)
+        {
+            return;
+        }
+        self.last_recovery.set(Some(Instant::now()));
+        if let Some(stream) = self.stream.borrow_mut().take() {
+            drop(stream);
+            self.stream_running.set(false);
+            *self.spare.borrow_mut() = self.handoff.take();
+        }
+        if self.spare.borrow().is_none() {
+            log::error!("audio device lost, and its renderer with it");
+            self.shared.device_lost.store(false, Ordering::Release);
+            return;
+        }
+        let output = match Output::open_default_in(&self.format) {
+            Ok(output) => output,
+            Err(e) => {
+                log::warn!("no audio device to replace the lost one: {e}");
+                return;
+            }
+        };
+        let renderer = self.spare.borrow_mut().take().expect("renderer");
+        self.shared.device_lost.store(false, Ordering::Release);
+        match output.start(renderer, &self.handoff) {
+            Ok(stream) => {
+                log::info!("audio device replaced");
+                *self.stream.borrow_mut() = Some(stream);
+                self.stream_running.set(true);
+            }
+            Err(e) => {
+                log::warn!("the new audio device would not start: {e}");
+                *self.spare.borrow_mut() = self.handoff.take();
+                self.shared.device_lost.store(true, Ordering::Release);
             }
         }
     }

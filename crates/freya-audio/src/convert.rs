@@ -16,9 +16,19 @@ pub fn map_channels(input: &[f32], src_ch: usize, dst_ch: usize, out: &mut Vec<f
             (1, _) => out.extend(std::iter::repeat_n(frame[0], dst_ch)),
             // Down to mono: average of all channels.
             (_, 1) => out.push(frame.iter().sum::<f32>() / src_ch as f32),
-            // More source channels than output (e.g. 5.1 to stereo): the first channels are
-            // front left/right in all common layouts. The rest is mixed into all outputs at a
-            // lower level.
+            // Surround to stereo: each channel to its side, the centre to both.
+            (3..=8, 2) => {
+                let weights = STEREO_DOWNMIX[src_ch - 3];
+                let (mut left, mut right) = (0.0, 0.0);
+                for (sample, (l, r)) in frame.iter().zip(weights) {
+                    left += sample * l;
+                    right += sample * r;
+                }
+                out.extend([left, right]);
+            }
+            // Other layouts with more channels than the output: the first channels are the
+            // front ones in all common layouts. The rest is mixed into all outputs at a lower
+            // level.
             (_, _) if src_ch > dst_ch => {
                 let extra: f32 = frame[dst_ch..].iter().sum::<f32>() / src_ch as f32;
                 out.extend(frame[..dst_ch].iter().map(|s| s * 0.7 + extra * 0.3));
@@ -31,6 +41,36 @@ pub fn map_channels(input: &[f32], src_ch: usize, dst_ch: usize, out: &mut Vec<f
         }
     }
 }
+
+/// Half the power: how much of the centre goes to each side, and of a surround channel to
+/// its side (ITU-R BS.775).
+const HALF: f32 = std::f32::consts::FRAC_1_SQRT_2;
+
+/// Each output side's share of the full front, centre and one surround channel, so the loudest
+/// mix stays below clipping.
+const NORMALIZE: f32 = 1.0 / (1.0 + 2.0 * HALF);
+
+/// Left and right weights of each source channel, for 3 to 8 channels in the order decoders
+/// give them (WAVE's): front left and right, centre, low frequency, then the surrounds. The
+/// low-frequency channel is left out, as stereo downmixes do.
+const STEREO_DOWNMIX: [&[(f32, f32)]; 6] = {
+    const L: (f32, f32) = (NORMALIZE, 0.0);
+    const R: (f32, f32) = (0.0, NORMALIZE);
+    const C: (f32, f32) = (HALF * NORMALIZE, HALF * NORMALIZE);
+    const LS: (f32, f32) = (HALF * NORMALIZE, 0.0);
+    const RS: (f32, f32) = (0.0, HALF * NORMALIZE);
+    const LFE: (f32, f32) = (0.0, 0.0);
+    // A single back channel, half to each side.
+    const BC: (f32, f32) = (0.5 * NORMALIZE, 0.5 * NORMALIZE);
+    [
+        &[L, R, C],
+        &[L, R, LS, RS],
+        &[L, R, C, LS, RS],
+        &[L, R, C, LFE, LS, RS],
+        &[L, R, C, LFE, BC, LS, RS],
+        &[L, R, C, LFE, LS, RS, LS, RS],
+    ]
+};
 
 const CHUNK_FRAMES: usize = 1024;
 
@@ -155,6 +195,33 @@ mod tests {
         let mut out = Vec::new();
         map_channels(&[0.2, 0.4], 2, 1, &mut out);
         assert!((out[0] - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn surround_downmixes_to_its_sides() {
+        // 5.1: each channel alone, at full level.
+        let mix = |channel: usize| {
+            let mut frame = [0.0; 6];
+            frame[channel] = 1.0;
+            let mut out = Vec::new();
+            map_channels(&frame, 6, 2, &mut out);
+            (out[0], out[1])
+        };
+        let db = |gain: f32| 20.0 * gain.log10();
+        let (front_left, right) = mix(0);
+        assert_eq!(right, 0.0);
+        // The centre, 3 dB below a front channel, on both sides; it was 23 dB down.
+        let (centre_left, centre_right) = mix(2);
+        assert_eq!(centre_left, centre_right);
+        assert!((db(front_left) - db(centre_left) - 3.0).abs() < 0.1);
+        // The surrounds stay on their side; they used to go to both.
+        assert_eq!(mix(4).1, 0.0);
+        assert_eq!(mix(5).0, 0.0);
+        assert_eq!(mix(3), (0.0, 0.0));
+        // Everything at full level does not clip.
+        let mut out = Vec::new();
+        map_channels(&[1.0; 6], 6, 2, &mut out);
+        assert!(out.iter().all(|s| *s <= 1.0 + 1e-6), "{out:?}");
     }
 
     #[test]

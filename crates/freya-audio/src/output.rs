@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
@@ -134,13 +135,31 @@ pub(crate) struct Output {
 
 impl Output {
     pub fn open_default() -> Result<Self, Error> {
-        let host = cpal::default_host();
-        let device = host
-            .default_output_device()
-            .ok_or_else(|| Error::Output("no output device".into()))?;
-        let config = device
-            .default_output_config()
-            .map_err(|e| Error::Output(e.to_string()))?;
+        let (device, config) = default_device()?;
+        log::info!("output: {device} {config:?}");
+        Ok(Self { device, config })
+    }
+
+    /// The default output device, in `format`: for a new device when the one the engine plays
+    /// for is gone, as the engine keeps its rate and channels.
+    pub fn open_default_in(format: &DeviceFormat) -> Result<Self, Error> {
+        let (device, config) = default_device()?;
+        let channels = u16::try_from(format.channels).unwrap_or(0);
+        let config = if config.sample_rate() == format.sample_rate && config.channels() == channels
+        {
+            Some(config)
+        } else {
+            let ranges = device
+                .supported_output_configs()
+                .map_err(|e| Error::Output(e.to_string()))?;
+            matching_config(ranges, format.sample_rate, channels)
+        }
+        .ok_or_else(|| {
+            Error::Output(format!(
+                "{device} cannot play {} Hz in {} channels",
+                format.sample_rate, format.channels
+            ))
+        })?;
         log::info!("output: {device} {config:?}");
         Ok(Self { device, config })
     }
@@ -152,22 +171,107 @@ impl Output {
         }
     }
 
-    pub fn start(self, renderer: Renderer) -> Result<cpal::Stream, Error> {
+    /// Starts a stream that `renderer` plays into. When the stream is dropped, or cannot be
+    /// started, `handoff` gets the renderer back.
+    pub fn start(self, renderer: Renderer, handoff: &Handoff) -> Result<cpal::Stream, Error> {
         let format = self.config.sample_format();
-        let buffer_size = buffer_size(self.config.buffer_size());
-        let mut config: cpal::StreamConfig = self.config.into();
-        config.buffer_size = buffer_size;
-        let stream = match format {
-            SampleFormat::F32 => build::<f32>(&self.device, config, renderer),
-            SampleFormat::F64 => build::<f64>(&self.device, config, renderer),
-            SampleFormat::I16 => build::<i16>(&self.device, config, renderer),
-            SampleFormat::I32 => build::<i32>(&self.device, config, renderer),
-            SampleFormat::U16 => build::<u16>(&self.device, config, renderer),
-            SampleFormat::U8 => build::<u8>(&self.device, config, renderer),
-            other => return Err(Error::Output(format!("unsupported sample format {other}"))),
-        }?;
+        let preferred = buffer_size(self.config.buffer_size());
+        let config: cpal::StreamConfig = self.config.into();
+        let shared = Arc::clone(&renderer.shared);
+        let mut renderer = Some(renderer);
+        // Some devices list the preferred size and then refuse it at the rate they run at.
+        let sizes = [preferred, cpal::BufferSize::Default];
+        let mut result = Err(Error::Output("no buffer size".into()));
+        for (i, size) in sizes.iter().enumerate() {
+            if i > 0 && *size == preferred {
+                break;
+            }
+            let Some(renderer) = renderer.take().or_else(|| handoff.take()) else {
+                break;
+            };
+            let config = cpal::StreamConfig {
+                buffer_size: *size,
+                ..config
+            };
+            let back = Handback {
+                renderer: Some(renderer),
+                back: handoff.sender.clone(),
+            };
+            result = match format {
+                SampleFormat::F32 => build::<f32>(&self.device, config, back, &shared),
+                SampleFormat::F64 => build::<f64>(&self.device, config, back, &shared),
+                SampleFormat::I16 => build::<i16>(&self.device, config, back, &shared),
+                SampleFormat::I32 => build::<i32>(&self.device, config, back, &shared),
+                SampleFormat::U16 => build::<u16>(&self.device, config, back, &shared),
+                SampleFormat::U8 => build::<u8>(&self.device, config, back, &shared),
+                other => return Err(Error::Output(format!("unsupported sample format {other}"))),
+            };
+            match &result {
+                Ok(_) => break,
+                Err(e) => log::warn!("output with buffer {size:?}: {e}"),
+            }
+        }
+        let stream = result?;
         stream.play().map_err(|e| Error::Output(e.to_string()))?;
         Ok(stream)
+    }
+}
+
+fn default_device() -> Result<(cpal::Device, cpal::SupportedStreamConfig), Error> {
+    let device = cpal::default_host()
+        .default_output_device()
+        .ok_or_else(|| Error::Output("no output device".into()))?;
+    let config = device
+        .default_output_config()
+        .map_err(|e| Error::Output(e.to_string()))?;
+    Ok((device, config))
+}
+
+/// A configuration of `ranges` at `rate` with `channels`, in 32-bit float where offered.
+fn matching_config(
+    ranges: impl Iterator<Item = cpal::SupportedStreamConfigRange>,
+    rate: u32,
+    channels: u16,
+) -> Option<cpal::SupportedStreamConfig> {
+    let mut found: Vec<_> = ranges
+        .filter(|r| r.channels() == channels)
+        .filter_map(|r| r.try_with_sample_rate(rate))
+        .collect();
+    found.sort_by_key(|c| c.sample_format() != SampleFormat::F32);
+    found.into_iter().next()
+}
+
+/// Where a renderer comes back to when the stream that played it is gone, so the next
+/// stream can take it over, with the ring buffer the engine fills.
+pub(crate) struct Handoff {
+    sender: crossbeam_channel::Sender<Renderer>,
+    receiver: crossbeam_channel::Receiver<Renderer>,
+}
+
+impl Handoff {
+    pub fn new() -> Self {
+        let (sender, receiver) = crossbeam_channel::bounded(1);
+        Self { sender, receiver }
+    }
+
+    /// The renderer of a stream just dropped. Backends drop the callback with the stream, or
+    /// soon after on their own thread.
+    pub fn take(&self) -> Option<Renderer> {
+        self.receiver.recv_timeout(Duration::from_secs(1)).ok()
+    }
+}
+
+/// Owns the renderer in the audio callback, and sends it back when the callback is dropped.
+struct Handback {
+    renderer: Option<Renderer>,
+    back: crossbeam_channel::Sender<Renderer>,
+}
+
+impl Drop for Handback {
+    fn drop(&mut self) {
+        if let Some(renderer) = self.renderer.take() {
+            let _ = self.back.try_send(renderer);
+        }
     }
 }
 
@@ -188,16 +292,37 @@ fn buffer_size(supported: &cpal::SupportedBufferSize) -> cpal::BufferSize {
 fn build<T: SizedSample + FromSample<f32>>(
     device: &cpal::Device,
     config: cpal::StreamConfig,
-    mut renderer: Renderer,
+    mut back: Handback,
+    shared: &Arc<Shared>,
 ) -> Result<cpal::Stream, Error> {
+    let shared = Arc::clone(shared);
     device
         .build_output_stream(
             config,
-            move |data: &mut [T], _| renderer.render(data),
-            |err| log::error!("audio stream: {err}"),
+            move |data: &mut [T], _| {
+                if let Some(renderer) = &mut back.renderer {
+                    renderer.render(data);
+                }
+            },
+            move |err| {
+                log::error!("audio stream: {err}");
+                if is_lost(err.kind()) {
+                    shared.device_lost.store(true, Ordering::Release);
+                }
+            },
             None,
         )
         .map_err(|e| Error::Output(e.to_string()))
+}
+
+/// Whether a stream that reported `kind` has stopped for good and must be built again.
+fn is_lost(kind: cpal::ErrorKind) -> bool {
+    matches!(
+        kind,
+        cpal::ErrorKind::DeviceNotAvailable
+            | cpal::ErrorKind::StreamInvalidated
+            | cpal::ErrorKind::HostUnavailable
+    )
 }
 
 #[cfg(test)]
@@ -288,5 +413,65 @@ mod tests {
         renderer.render(&mut out);
         assert_eq!(out, [0.0; 8]);
         assert_eq!(producer.slots(), 64 - 8);
+    }
+
+    #[test]
+    fn a_dropped_callback_hands_its_renderer_back() {
+        // A stream built again after its device is lost goes on with the same ring buffer.
+        let (mut producer, consumer) = RingBuffer::new(64);
+        let shared = Arc::new(Shared::new(48_000));
+        let renderer = Renderer::new(consumer, shared, 48_000, 2, RingBuffer::new(64).0);
+        let handoff = Handoff::new();
+        drop(Handback {
+            renderer: Some(renderer),
+            back: handoff.sender.clone(),
+        });
+        producer.push_entire_slice(&[0.5; 4]).unwrap();
+        let mut renderer = handoff.take().expect("renderer back");
+        let mut out = [0.0f32; 4];
+        renderer.render(&mut out);
+        assert_eq!(out, [0.5; 4]);
+    }
+
+    #[test]
+    fn a_new_device_is_asked_for_the_engines_format() {
+        use cpal::{SupportedBufferSize, SupportedStreamConfigRange};
+        let range = |channels, min, max, format| {
+            SupportedStreamConfigRange::new(
+                channels,
+                min,
+                max,
+                SupportedBufferSize::Unknown,
+                format,
+            )
+        };
+        let ranges = [
+            range(2, 44_100, 44_100, SampleFormat::F32),
+            range(2, 8_000, 192_000, SampleFormat::I16),
+            range(2, 8_000, 96_000, SampleFormat::F32),
+            range(6, 8_000, 192_000, SampleFormat::F32),
+        ];
+        let config = matching_config(ranges.into_iter(), 48_000, 2).unwrap();
+        assert_eq!(
+            (
+                config.sample_rate(),
+                config.channels(),
+                config.sample_format()
+            ),
+            (48_000, 2, SampleFormat::F32)
+        );
+        // Only 16-bit goes this high.
+        let config = matching_config(ranges.into_iter(), 192_000, 2).unwrap();
+        assert_eq!(config.sample_format(), SampleFormat::I16);
+        assert!(matching_config(ranges.into_iter(), 48_000, 1).is_none());
+    }
+
+    #[test]
+    fn only_a_gone_device_rebuilds_the_stream() {
+        assert!(is_lost(cpal::ErrorKind::DeviceNotAvailable));
+        assert!(is_lost(cpal::ErrorKind::StreamInvalidated));
+        // Rerouted by the backend, or a glitch: the stream plays on.
+        assert!(!is_lost(cpal::ErrorKind::DeviceChanged));
+        assert!(!is_lost(cpal::ErrorKind::Xrun));
     }
 }

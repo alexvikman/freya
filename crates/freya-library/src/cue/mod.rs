@@ -6,7 +6,7 @@
 //! as `REM` lines. The gap before a track (`INDEX 00`) is played at the end of the track
 //! before, as most players do.
 
-mod encoding;
+pub(crate) mod encoding;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -389,8 +389,15 @@ fn parse_time(text: &str) -> Option<Duration> {
     ) else {
         return None;
     };
-    let frames = (minutes * 60 + seconds) * 75 + frames;
-    Some(Duration::from_millis((frames * 1000 + 37) / 75))
+    // Damaged sheets can hold any number; one too large for a duration is no time at all.
+    let frames = minutes
+        .checked_mul(60)?
+        .checked_add(seconds)?
+        .checked_mul(75)?
+        .checked_add(frames)?;
+    Some(Duration::from_millis(
+        frames.checked_mul(1000)?.checked_add(37)? / 75,
+    ))
 }
 
 /// The number a value starts with, as in `2004` or `"1/2"`.

@@ -161,6 +161,7 @@ fn part(path: &Path, start_ms: u64, end_ms: Option<u64>) -> Media {
         start: Duration::from_millis(start_ms),
         end: end_ms.map(Duration::from_millis),
         tags: MediaTags::default(),
+        id: 0,
     }
 }
 
@@ -267,8 +268,50 @@ fn seeking_in_a_part_counts_from_its_start() {
 #[test]
 fn missing_file_reports_error() {
     let (player, _out) = headless(48_000);
-    player.play("/nonexistent/file.mp3");
-    assert!(matches!(next_event(&player), Event::Error(_)));
+    player.play(Media {
+        id: 7,
+        ..Media::from("/nonexistent/file.mp3")
+    });
+    // With the id asked for, so the caller knows which of its entries failed.
+    assert!(matches!(next_event(&player), Event::Unplayable(7, _)));
+    assert_eq!(player.status().state, PlaybackState::Stopped);
+}
+
+#[test]
+fn a_file_without_a_sample_rate_is_unplayable() {
+    // A WAV header claiming 0 Hz made the rate converter panic, which killed the engine.
+    let bad = write_wav("zero-rate", 0, 100);
+    let good = write_wav("after-zero-rate", 48_000, 4_800);
+    let (player, _out) = headless(48_000);
+    player.play(Media {
+        id: 3,
+        ..Media::from(&bad)
+    });
+    assert!(matches!(next_event(&player), Event::Unplayable(3, _)));
+    // The engine is still there to play the next file.
+    player.play(&good);
+    assert_eq!(started_name(next_event(&player)), file_name(&good));
+}
+
+#[test]
+fn seeking_past_the_end_goes_on_with_the_next_track() {
+    // Holding → near the end once dropped what was buffered, kept the old position, and could
+    // even replay the track from its start.
+    let a = write_wav("past-end-a", 48_000, 48_000 * 2);
+    let b = write_wav("past-end-b", 48_000, 48_000);
+    let (player, _out) = headless(48_000);
+    player.play(&a);
+    assert_eq!(started_name(next_event(&player)), file_name(&a));
+    player.set_next(Some(Media::from(&b)));
+    player.seek(Duration::from_secs(5));
+    assert_eq!(started_name(next_event(&player)), file_name(&b));
+    assert!(matches!(next_event(&player), Event::Finished));
+
+    // With nothing after it, playback finishes.
+    player.play(&a);
+    assert_eq!(started_name(next_event(&player)), file_name(&a));
+    player.seek(Duration::from_secs(9));
+    assert!(matches!(next_event(&player), Event::Finished));
     assert_eq!(player.status().state, PlaybackState::Stopped);
 }
 
@@ -528,4 +571,79 @@ fn plays_real_files_in_parts_without_a_gap() {
         assert_eq!(consumed(&player), part_ms * RATE / 1000, "{path:?}");
         eprintln!("{path:?}: {parts} parts, {total} frames");
     }
+}
+
+/// The frames a file plays, through the source.
+fn frames_played(path: &Path) -> u64 {
+    let mut source = crate::source::Source::open(&path.into(), &Default::default()).unwrap();
+    let mut frames = 0;
+    while let Some(chunk) = source.next_chunk().unwrap() {
+        frames += (chunk.samples.len() / chunk.channels) as u64;
+    }
+    frames
+}
+
+#[test]
+fn a_damaged_packet_plays_as_silence_of_its_length() {
+    // It was left out, so all after it came early: a CUE track then started off its mark.
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ape/stereo-16-normal.ape");
+    let mut bytes = std::fs::read(&fixture).unwrap();
+    let pos = bytes.len() / 2;
+    bytes[pos] ^= 0x10;
+    let damaged = std::env::temp_dir().join(format!("freya-{}-damaged.ape", std::process::id()));
+    std::fs::write(&damaged, bytes).unwrap();
+    assert_eq!(frames_played(&damaged), frames_played(&fixture));
+    let _ = std::fs::remove_file(damaged);
+}
+
+#[test]
+fn connecting_to_a_station_can_be_cut_short() {
+    // The connection used to block for its timeouts, so Stop, another station or quitting
+    // waited up to 20 s, and Stop then came back as an error that skipped to the next entry.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/stream", listener.local_addr().unwrap());
+    // Accepts and never answers.
+    std::thread::spawn(move || {
+        let _connection = listener.accept();
+        std::thread::sleep(Duration::from_secs(30));
+    });
+    let interrupt = crate::stream::Interrupt::default();
+    let raise = interrupt.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        raise.raise();
+    });
+    let started = Instant::now();
+    let result = crate::source::Source::open(&url.as_str().into(), &interrupt);
+    assert!(matches!(result, Err(crate::Error::Interrupted)));
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn a_stream_stays_ended_for_every_read() {
+    // The end was reported once; a decoder reading again, in the middle of a frame, waited
+    // for the station for 15 s.
+    use std::io::Read;
+    let url = radio_station(
+        "HTTP/1.0 200 OK\r\nContent-Type: audio/mpeg\r\n\r\n",
+        vec![0x55; 1000],
+    );
+    let (mut stream, _, _) =
+        crate::stream::Stream::open(&url, crate::stream::Interrupt::default()).unwrap();
+    let mut out = [0; 4096];
+    while stream.read(&mut out).unwrap() > 0 {}
+    let started = Instant::now();
+    for _ in 0..3 {
+        assert_eq!(stream.read(&mut out).unwrap(), 0);
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
 }

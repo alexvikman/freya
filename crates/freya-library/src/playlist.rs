@@ -6,8 +6,12 @@ use std::time::Duration;
 use crate::cue::Part;
 use crate::tags::TagInfo;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Entry {
+    /// Names this entry in its playlist, unique there and kept through every edit, so a track
+    /// that plays can be told from another entry for the same file. Given by
+    /// [`Playlist::insert`]; 0 outside a playlist. Not part of what makes entries equal.
+    pub id: u64,
     pub path: PathBuf,
     /// The part of the file this entry plays, for a track of a CUE sheet.
     pub part: Option<Part>,
@@ -20,9 +24,46 @@ pub struct Entry {
     pub tags_loaded: bool,
 }
 
+impl PartialEq for Entry {
+    fn eq(&self, other: &Self) -> bool {
+        // Everything but `id`.
+        let Self {
+            id: _,
+            path,
+            part,
+            title,
+            artist,
+            album,
+            duration,
+            selected,
+            tags_loaded,
+        } = self;
+        (
+            path,
+            part,
+            title,
+            artist,
+            album,
+            duration,
+            selected,
+            tags_loaded,
+        ) == (
+            &other.path,
+            &other.part,
+            &other.title,
+            &other.artist,
+            &other.album,
+            &other.duration,
+            &other.selected,
+            &other.tags_loaded,
+        )
+    }
+}
+
 impl Entry {
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
+            id: 0,
             path: path.into(),
             part: None,
             title: None,
@@ -128,6 +169,11 @@ pub struct Playlist {
     /// Play order while shuffling; a permutation of all indices.
     shuffle_order: Vec<usize>,
     rng: u64,
+    /// The last [`Entry::id`] given.
+    last_id: u64,
+    /// Where the current entry was when it was removed: playback goes on from there, not
+    /// from the top. Cleared when another entry becomes current.
+    removed_at: Option<usize>,
 }
 
 impl Playlist {
@@ -170,7 +216,15 @@ impl Playlist {
         self.current.and_then(|i| self.entries.get(i))
     }
 
+    /// Where the entry with `id` is now.
+    pub fn index_of(&self, id: u64) -> Option<usize> {
+        (id != 0)
+            .then(|| self.entries.iter().position(|e| e.id == id))
+            .flatten()
+    }
+
     pub fn set_current(&mut self, index: Option<usize>) {
+        self.removed_at = None;
         self.current = index.filter(|&i| i < self.entries.len());
     }
 
@@ -188,7 +242,14 @@ impl Playlist {
     /// Inserts entries at `at` (or the end) and returns the index of the first one.
     pub fn insert(&mut self, at: Option<usize>, entries: impl IntoIterator<Item = Entry>) -> usize {
         let at = at.unwrap_or(self.entries.len()).min(self.entries.len());
-        let new: Vec<Entry> = entries.into_iter().collect();
+        let new: Vec<Entry> = entries
+            .into_iter()
+            .map(|mut entry| {
+                self.last_id += 1;
+                entry.id = self.last_id;
+                entry
+            })
+            .collect();
         let count = new.len();
         self.entries.splice(at..at, new);
         if let Some(c) = self.current
@@ -212,19 +273,28 @@ impl Playlist {
     fn retain(&mut self, mut keep: impl FnMut(&Entry) -> bool) {
         let current = self.current;
         let mut new_current = None;
+        // The entry that plays was removed: the next one is the first kept after it.
+        let mut removed_at = None;
         let mut index = 0;
         let mut kept = 0;
         self.entries.retain(|e| {
             let k = keep(e);
-            if k {
-                if Some(index) == current {
+            if Some(index) == current {
+                if k {
                     new_current = Some(kept);
+                } else {
+                    removed_at = Some(kept);
                 }
+            }
+            if k {
                 kept += 1;
             }
             index += 1;
             k
         });
+        if removed_at.is_some() {
+            self.removed_at = removed_at;
+        }
         self.current = new_current;
         self.anchor = None;
         self.cursor = None;
@@ -398,7 +468,7 @@ impl Playlist {
     /// Total length of the given entries, and whether every length was known.
     fn duration_of<'a>(entries: impl Iterator<Item = &'a Entry>) -> (Duration, bool) {
         entries.fold((Duration::ZERO, true), |(sum, all), e| match e.duration {
-            Some(d) => (sum + d, all),
+            Some(d) => (sum.saturating_add(d), all),
             None => (sum, false),
         })
     }
@@ -426,6 +496,16 @@ impl Playlist {
             return None;
         }
         let Some(current) = self.current else {
+            // Where a removed current entry was: the first kept after it comes next.
+            if let Some(at) = self.removed_at.filter(|_| delta > 0 && !shuffle) {
+                return if at < len {
+                    Some(at)
+                } else if repeat {
+                    Some(0)
+                } else {
+                    None
+                };
+            }
             return Some(if shuffle { self.shuffled()[0] } else { 0 });
         };
         if shuffle {
@@ -438,10 +518,11 @@ impl Playlist {
             if !repeat {
                 return None;
             }
-            // Start a fresh random order for the next round.
+            // A fresh random order for the next round, which starts from the current entry:
+            // asked again, it gives the same next one.
             self.shuffle_order.clear();
             let order = self.shuffled().to_vec();
-            return order.into_iter().find(|&i| i != current || len == 1);
+            return order.get(1).or(order.first()).copied();
         }
         let target = current as isize + delta;
         if (0..len as isize).contains(&target) {
@@ -453,12 +534,21 @@ impl Playlist {
         }
     }
 
+    /// The play order while shuffling. A new one, made after an edit or for a new round,
+    /// starts with the current entry, so that everything else follows it: placed at random,
+    /// the current entry would cut off the part of the order before it.
     fn shuffled(&mut self) -> &[usize] {
         if self.shuffle_order.len() != self.entries.len() {
             let mut order: Vec<usize> = (0..self.entries.len()).collect();
             for i in (1..order.len()).rev() {
                 let j = (self.next_random() % (i as u64 + 1)) as usize;
                 order.swap(i, j);
+            }
+            if let Some(at) = self
+                .current
+                .and_then(|c| order.iter().position(|&i| i == c))
+            {
+                order.swap(0, at);
             }
             self.shuffle_order = order;
         }
@@ -508,6 +598,64 @@ mod tests {
         }
         seen.sort();
         assert_eq!(seen, (0..10).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn shuffle_from_a_chosen_track_plays_all_the_rest() {
+        // Started at entry 0 (Play on an album), a new order must not put it in the middle:
+        // only what came after it would play.
+        for seed in 1..50 {
+            let mut p = list(10);
+            p.rng = seed;
+            p.set_current(Some(0));
+            let mut seen = vec![0];
+            while let Some(next) = p.peek_next(true, false) {
+                p.set_current(Some(next));
+                seen.push(next);
+            }
+            seen.sort();
+            assert_eq!(seen, (0..10).collect::<Vec<_>>(), "seed {seed}");
+        }
+    }
+
+    #[test]
+    fn repeat_round_boundary_is_stable() {
+        let mut p = list(5);
+        p.set_current(Some(0));
+        let mut last = 0;
+        while let Some(next) = p.peek_next(true, false) {
+            p.set_current(Some(next));
+            last = next;
+        }
+        p.set_current(Some(last));
+        let first = p.peek_next(true, true);
+        assert_eq!(
+            p.peek_next(true, true),
+            first,
+            "asking again changes nothing"
+        );
+        assert_ne!(first, Some(last));
+    }
+
+    #[test]
+    fn removing_the_playing_entry_goes_on_after_it() {
+        let mut p = list(5);
+        p.set_current(Some(2));
+        p.click(2, SelectMode::Single);
+        p.remove_selected();
+        assert_eq!(p.current(), None);
+        let next = p.peek_next(false, false).unwrap();
+        assert_eq!(p.get(next).unwrap().path, Path::new("/music/3.mp3"));
+
+        // With rows before it removed too, it is still the one after it.
+        let mut p = list(6);
+        p.set_current(Some(3));
+        p.click(0, SelectMode::Single);
+        p.click(1, SelectMode::Toggle);
+        p.click(3, SelectMode::Toggle);
+        p.remove_selected();
+        let next = p.peek_next(false, false).unwrap();
+        assert_eq!(p.get(next).unwrap().path, Path::new("/music/4.mp3"));
     }
 
     #[test]
@@ -645,5 +793,21 @@ mod tests {
             },
         );
         assert_eq!(p.total_duration(), (Duration::from_secs(60), false));
+    }
+
+    #[test]
+    fn huge_durations_add_up_without_overflowing() {
+        // A damaged file's tags can claim any length; two such summed past Duration::MAX.
+        let mut p = list(2);
+        for i in 0..2 {
+            p.apply_tags(
+                Path::new(&format!("/music/{i}.mp3")),
+                &TagInfo {
+                    duration: Some(Duration::MAX),
+                    ..Default::default()
+                },
+            );
+        }
+        assert_eq!(p.total_duration(), (Duration::MAX, true));
     }
 }

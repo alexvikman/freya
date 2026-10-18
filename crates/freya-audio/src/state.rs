@@ -34,6 +34,8 @@ pub(crate) struct Shared {
     pub eq: SharedEq,
     /// Whether the audio callback copies played samples for visualization.
     pub visualize: AtomicBool,
+    /// Set by the audio stream when its device is gone and the stream must be built again.
+    pub device_lost: AtomicBool,
     timeline: Mutex<Timeline>,
 }
 
@@ -47,6 +49,7 @@ impl Shared {
             consumed: AtomicU64::new(0),
             eq: SharedEq::new(),
             visualize: AtomicBool::new(false),
+            device_lost: AtomicBool::new(false),
             timeline: Mutex::new(Timeline::new(sample_rate)),
         }
     }

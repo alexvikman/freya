@@ -48,6 +48,10 @@ pub struct Media {
     /// What to show instead of the file's tags, which describe the whole file rather than
     /// the part played.
     pub tags: MediaTags,
+    /// The caller's name for this request, handed back in [`TrackInfo::id`] and
+    /// [`crate::Event::Unplayable`], so it can tell which of its entries plays or failed even
+    /// when two play the same file. 0 when it has none.
+    pub id: u64,
 }
 
 /// Tags that replace a file's. One left out keeps the file's.
@@ -70,6 +74,8 @@ impl<P: Into<PathBuf>> From<P> for Media {
 /// Description of a track, as known when the file is opened.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TrackInfo {
+    /// The [`Media::id`] this track was opened for.
+    pub id: u64,
     pub path: PathBuf,
     /// The part of the file played, as in [`Media`]. Position and `duration` count from
     /// `start`.
@@ -102,6 +108,7 @@ impl TrackInfo {
                 artist: self.artist.clone(),
                 album: self.album.clone(),
             },
+            id: self.id,
         }
     }
 
@@ -219,6 +226,12 @@ impl Source {
         let track_id = track.id;
         let time_base = track.time_base;
         let sample_rate = params.sample_rate.unwrap_or(0);
+        let channel_count = params.channels.as_ref().map_or(0, |c| c.count());
+        if !valid_rate(sample_rate) || channel_count == 0 {
+            return Err(open_err(format!(
+                "unplayable format ({sample_rate} Hz, {channel_count} channels)"
+            )));
+        }
         let duration = match (time_base, track.duration, track.num_frames) {
             (Some(tb), Some(dur), _) => tb.calc_duration(dur).map(time_to_duration),
             (_, _, Some(frames)) if sample_rate > 0 => Some(Duration::from_secs_f64(
@@ -236,7 +249,7 @@ impl Source {
         let mut info = TrackInfo {
             path: path.to_owned(),
             sample_rate,
-            channels: params.channels.as_ref().map_or(0, |c| c.count()),
+            channels: channel_count,
             codec: decoder.codec_info().short_name.to_owned(),
             bitrate_kbps,
             station: station.and_then(|s| s.name),
@@ -282,6 +295,7 @@ impl Source {
     fn play_part(&mut self, media: &Media) {
         self.end_frame = media.end.map(|end| self.frame_at(end));
         let info = &mut self.info;
+        info.id = media.id;
         info.start = media.start;
         info.end = media.end;
         info.duration = media
@@ -417,7 +431,12 @@ impl Source {
             let decoded = match self.decoder.decode(&packet) {
                 Ok(decoded) => decoded,
                 Err(SymError::DecodeError(msg)) => {
-                    log::warn!("skipping corrupt packet: {msg}");
+                    log::warn!("silencing corrupt packet: {msg}");
+                    // Silence in its place keeps the position, and the parts of a CUE sheet,
+                    // where they are.
+                    if self.silence(packet.dur.get()) && self.start_buffer() {
+                        return Ok(true);
+                    }
                     continue;
                 }
                 Err(SymError::IoError(e)) => {
@@ -428,17 +447,43 @@ impl Source {
             };
 
             let channels = decoded.spec().channels().count().max(1);
+            if !valid_rate(decoded.spec().rate()) {
+                return Err(Error::Decode(format!(
+                    "unplayable sample rate {} Hz",
+                    decoded.spec().rate()
+                )));
+            }
             self.buf_rate = decoded.spec().rate();
             self.buf_channels = channels;
             decoded.copy_to_vec_interleaved(&mut self.buf);
-
-            let skip = self.skip_frames.min(self.buf.len() / channels);
-            self.skip_frames -= skip;
-            self.buf_pos = skip * channels;
-            if self.buf_pos < self.buf.len() {
+            if self.start_buffer() {
                 return Ok(true);
             }
         }
+    }
+
+    /// Fills `buf` with `frames` of silence, in the format of the audio around it. Returns
+    /// `false` for a length no packet has, from a damaged file.
+    fn silence(&mut self, frames: u64) -> bool {
+        if self.buf_rate == 0 {
+            self.buf_rate = self.info.sample_rate;
+            self.buf_channels = self.info.channels.max(1);
+        }
+        if frames == 0 || frames > u64::from(self.buf_rate) * 10 {
+            return false;
+        }
+        self.buf.clear();
+        self.buf.resize(frames as usize * self.buf_channels, 0.0);
+        true
+    }
+
+    /// Skips what a seek asked to past the start of the new `buf`. Returns whether any of it
+    /// is left to play.
+    fn start_buffer(&mut self) -> bool {
+        let skip = self.skip_frames.min(self.buf.len() / self.buf_channels);
+        self.skip_frames -= skip;
+        self.buf_pos = skip * self.buf_channels;
+        self.buf_pos < self.buf.len()
     }
 
     /// Seeks to `position` in the part played and returns the position actually reached.
@@ -473,6 +518,14 @@ impl Source {
         self.position = self.frame_at(required);
         Ok(required.saturating_sub(self.info.start))
     }
+}
+
+/// The highest sample rate played. Files claiming more (or none) are damaged or not audio,
+/// and would only make the rate converter fail.
+const MAX_SAMPLE_RATE: u32 = 768_000;
+
+fn valid_rate(rate: u32) -> bool {
+    (1..=MAX_SAMPLE_RATE).contains(&rate)
 }
 
 fn time_to_duration(time: Time) -> Duration {

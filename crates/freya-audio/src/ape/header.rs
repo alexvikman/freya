@@ -86,6 +86,9 @@ impl Header {
         reader.seek(SeekFrom::Start(start + seek_table))?;
         let frame_offsets = read_seek_table(reader, seek_table_bytes / 4, total_frames)?;
         let frames_start = seek_table + u64::from(seek_table_bytes) + u64::from(wav_header_bytes);
+        let Some(data_end) = frames_start.checked_add(frame_data_bytes) else {
+            return decode_error("ape: frame data larger than any file");
+        };
 
         Ok(Self {
             version,
@@ -97,7 +100,7 @@ impl Header {
             final_frame_blocks,
             total_frames,
             frame_offsets,
-            data_end: Some(frames_start + frame_data_bytes),
+            data_end: Some(data_end),
         })
     }
 

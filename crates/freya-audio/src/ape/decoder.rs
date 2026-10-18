@@ -62,6 +62,7 @@ pub fn first_part(frame_blocks: u32, bytes: impl Iterator<Item = u8>) -> Box<[u8
 pub struct ApeDecoder {
     params: AudioCodecParameters,
     version: u16,
+    compression: u16,
     bits: u32,
     predictors: Vec<Predictor>,
     /// Set for good once a 24-bit frame only checks out with an early encoder's rounding.
@@ -77,12 +78,14 @@ struct Frame {
     content: Content,
     stored_crc: u32,
     crc: Crc32,
+    blocks: usize,
     blocks_left: usize,
     residuals: [Residual; 2],
     /// The last mid sample, which the difference channel is predicted from.
     last_x: i32,
 }
 
+#[derive(Clone, Copy)]
 enum Content {
     /// All channels silent: nothing is coded.
     Silent,
@@ -115,6 +118,7 @@ impl ApeDecoder {
         Ok(Self {
             params: params.clone(),
             version,
+            compression,
             bits,
             predictors,
             interim: false,
@@ -157,6 +161,7 @@ impl ApeDecoder {
             content,
             stored_crc,
             crc: Crc32::new(),
+            blocks: u32::from_le_bytes(*blocks) as usize,
             blocks_left: u32::from_le_bytes(*blocks) as usize,
             residuals: [Residual::new(self.version), Residual::new(self.version)],
             last_x: 0,
@@ -204,13 +209,67 @@ impl ApeDecoder {
         if frame.crc.finish() >> 1 == frame.stored_crc {
             return Ok(());
         }
-        // A few early 24-bit encoders kept more precision in the predictor. This frame was
-        // decoded without it, but the rest of the file will be right.
-        if self.bits == 24 && !self.interim {
+        // A few early 24-bit encoders kept more precision in the predictor. If the frame
+        // checks out with it, it was decoded without it, but the rest of the file will be
+        // right. If not, the frame is damaged, and the rest stays as it was.
+        if self.bits == 24 && !self.interim && self.checks_out_with_interim(&frame) {
             log::warn!("ape: CRC mismatch, decoding on with the rounding of early encoders");
             self.interim = true;
         }
         decode_error("ape: frame CRC mismatch")
+    }
+
+    /// Whether `frame`, just decoded, checks out when decoded again from the start with the
+    /// rounding of early 24-bit encoders. Its data is still in the coder.
+    fn checks_out_with_interim(&self, frame: &Frame) -> bool {
+        let mut coder = RangeDecoder {
+            data: self.coder.data.clone(),
+            ..Default::default()
+        };
+        if coder.read_u32() & 0x8000_0000 != 0 {
+            coder.read_u32();
+        }
+        if !matches!(frame.content, Content::Silent) {
+            coder.start();
+        }
+        let mut predictors: Vec<Predictor> = self
+            .predictors
+            .iter()
+            .map(|_| Predictor::new(self.compression, self.version))
+            .collect();
+        let mut trial = Frame {
+            crc: Crc32::new(),
+            blocks_left: frame.blocks,
+            residuals: [Residual::new(self.version), Residual::new(self.version)],
+            last_x: 0,
+            ..*frame
+        };
+        let mut buf = AudioBuffer::new(self.buf.spec().clone(), PART_BLOCKS as usize);
+        while trial.blocks_left > 0 {
+            let blocks = trial.blocks_left.min(PART_BLOCKS as usize);
+            buf.clear();
+            buf.render_uninit(Some(blocks));
+            let decoded = decode_samples(
+                &mut trial,
+                &mut coder,
+                &mut predictors,
+                &mut buf,
+                blocks,
+                true,
+            );
+            if decoded.is_err() {
+                return false;
+            }
+            update_crc(&mut trial.crc, &buf, self.bits);
+            trial.blocks_left -= blocks;
+        }
+        trial.crc.finish() >> 1 == trial.stored_crc
+    }
+
+    /// Whether frames are decoded with the rounding of early 24-bit encoders.
+    #[cfg(test)]
+    pub fn interim_rounding(&self) -> bool {
+        self.interim
     }
 }
 
@@ -468,7 +527,7 @@ impl Residual {
         }
         // Odd values are positive, even ones zero or negative.
         Ok(if value & 1 != 0 {
-            (value >> 1) as i32 + 1
+            ((value >> 1) as i32).wrapping_add(1)
         } else {
             -((value >> 1) as i32)
         })
