@@ -4,7 +4,7 @@
 // contrast against the background it is drawn on (WCAG AA), light and dark mode follow the
 // system.
 
-import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, LastFm, PlaybackState, Shortcuts, TrackRow, LibraryRow, AlbumPage, ArtistPage, ArtistDraft, PictureChoice, MatchChoice, AlbumMatchDraft, AlbumMatchChoice, PlaylistRow, StationRow, NativeSpectrum, NativeOscilloscope, NativeHologram } from "@freya/v1.slint";
+import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, LastFm, PlaybackState, Shortcuts, TrackRow, LibraryRow, AlbumPage, ArtistPage, ArtistDraft, PictureChoice, MatchChoice, AlbumMatchDraft, AlbumMatchChoice, ArtistMatchDraft, PlaylistRow, StationRow, NativeSpectrum, NativeOscilloscope, NativeHologram } from "@freya/v1.slint";
 import { AboutSlint, ListView, Palette, ScrollView } from "std-widgets.slint";
 
 // Every skin re-exports the API globals so the app can reach them.
@@ -1902,6 +1902,8 @@ component ArtistPageHead inherits Rectangle {
     callback show-picture();
     /// Change their name, picture and biography.
     callback edit();
+    /// Match them to the artist in MusicBrainz they are.
+    callback fix-match();
 
     property <length> pad: 24px;
 
@@ -2042,6 +2044,30 @@ component ArtistPageHead inherits Rectangle {
                     label: "Edit " + root.page.name;
                     tooltip: "Edit";
                     clicked => { root.edit(); }
+                }
+                artist-more := IconButton {
+                    y: (parent.height - self.height) / 2;
+                    icon: Icons.more;
+                    size: 44px;
+                    label: "More for " + root.page.name;
+                    tooltip: "More";
+                    clicked => { artist-menu.show(); }
+                }
+            }
+            artist-menu := PopupWindow {
+                x: artist-more.absolute-position.x - root.absolute-position.x;
+                y: artist-more.height;
+                width: 220px;
+
+                MenuSurface {
+                    VerticalLayout {
+                        padding: 6px;
+
+                        MenuItem {
+                            text: "Fix Match…";
+                            activated => { root.fix-match(); }
+                        }
+                    }
                 }
             }
         }
@@ -2598,7 +2624,8 @@ component LibraryPanel inherits FocusScope {
     /// The dialog for changing the artist whose page is shown, at a page of it: "general"
     /// or "match".
     callback edit-artist(string);
-    /// The dialog for matching the album shown.
+    /// The dialogs for matching the artist or the album shown.
+    callback match-artist();
     callback match-album();
 
     /// Back and forward: how far down the list shown is scrolled, and scrolling it back there.
@@ -2887,6 +2914,7 @@ component LibraryPanel inherits FocusScope {
                 page: Library.artist-page;
                 options => { options-menu.show(); }
                 edit => { root.edit-artist("general"); }
+                fix-match => { root.match-artist(); }
                 read-more => { bio-popup.show(); }
                 show-picture => { picture-popup.show(); }
             }
@@ -2968,6 +2996,7 @@ component LibraryPanel inherits FocusScope {
                 page: Library.artist-page;
                 options => { options-menu.show(); }
                 edit => { root.edit-artist("general"); }
+                fix-match => { root.match-artist(); }
                 read-more => { bio-popup.show(); }
                 show-picture => { picture-popup.show(); }
             }
@@ -3253,7 +3282,7 @@ component LibraryPanel inherits FocusScope {
                     text: "Fix Match…";
                     activated => {
                         root.activate(root.menu-row);
-                        root.edit-artist("match");
+                        root.match-artist();
                     }
                 }
             }
@@ -4264,85 +4293,6 @@ component MatchRow inherits Rectangle {
     }
 }
 
-/// Which of the artists of a name the one changed is, as MusicBrainz knows them: `mbid` is the
-/// user's match, empty for Freya's own, `found-mbid`.
-component MatchPage inherits VerticalLayout {
-    in-out property <string> mbid;
-    in property <string> found-mbid;
-    /// What to search for at first: their name.
-    in property <string> query;
-
-    property <string> shown: root.mbid != "" ? root.mbid : root.found-mbid;
-
-    HorizontalLayout {
-        padding: 14px;
-        padding-left: 20px;
-        padding-right: 20px;
-        spacing: 8px;
-
-        search := FormField {
-            horizontal-stretch: 1;
-            placeholder: "An artist's name";
-            text: root.query;
-            accepted => { Library.find-matches(self.text); }
-        }
-        VerticalLayout {
-            alignment: end;
-
-            TextButton {
-                text: "Search";
-                clicked => { Library.find-matches(search.text); }
-            }
-        }
-    }
-    HorizontalLayout {
-        padding-left: 20px;
-        padding-right: 20px;
-        padding-bottom: 10px;
-        spacing: 8px;
-
-        Text {
-            horizontal-stretch: 1;
-            text: Library.match-error != "" ? Library.match-error
-                : Library.finding-matches ? "Asking MusicBrainz…"
-                : root.mbid != "" ? "Matched by you. Pictures and the biography are of this artist."
-                : root.found-mbid != "" ? "Matched by Freya, from the tags or the name."
-                : "Not matched yet: Freya matches by the name.";
-            font-size: 12px;
-            color: Library.match-error != "" ? Theme.danger : Theme.text-secondary;
-            wrap: word-wrap;
-        }
-        if root.mbid != "": LinkText {
-            text: "Auto Match";
-            font-size: 12px;
-            font-weight: 600;
-            color: Theme.accent-text;
-            label: "Let Freya match this artist again";
-            clicked => { root.mbid = ""; }
-        }
-    }
-    Rectangle {
-        height: 1px;
-        background: Theme.divider;
-    }
-    ScrollView {
-        vertical-stretch: 1;
-
-        VerticalLayout {
-            padding: 20px;
-            spacing: 10px;
-            alignment: start;
-
-            for choice in Library.artist-matches: MatchRow {
-                choice: choice;
-                chosen: choice.mbid == root.shown;
-                // Freya's own match is no choice of the user's.
-                clicked => { root.mbid = choice.mbid == root.found-mbid ? "" : choice.mbid; }
-            }
-        }
-    }
-}
-
 /// An album MusicBrainz found, with the artist who made it; ringed when it is the match.
 component AlbumMatchRow inherits Rectangle {
     in property <AlbumMatchChoice> choice;
@@ -4446,15 +4396,168 @@ component AlbumMatchRow inherits Rectangle {
     }
 }
 
+/// Matching an artist to the one in MusicBrainz they are, among those of their name: so their
+/// pictures and biography are theirs.
+component ArtistMatchForm inherits MenuSurface {
+    callback closed();
+
+    property <ArtistMatchDraft> draft: Library.artist-match;
+    /// The match chosen, kept on Save: an id, or empty for Freya's own.
+    property <string> picked: draft.mbid;
+    property <string> shown: picked != "" ? picked : draft.found-mbid;
+
+    public function cancel() {
+        Library.cancel-artist-match();
+        root.closed();
+    }
+
+    function save() {
+        Library.save-artist-match(root.picked);
+        root.closed();
+    }
+
+    VerticalLayout {
+        HorizontalLayout {
+            padding: 20px;
+            padding-right: 12px;
+            spacing: 12px;
+
+            Icon {
+                width: 22px;
+                height: 22px;
+                y: (parent.height - self.height) / 2;
+                data: Icons.search;
+                stroked: true;
+                color: Theme.text-secondary;
+            }
+            Text {
+                horizontal-stretch: 1;
+                text: "Fix Match: " + root.draft.artist;
+                font-size: 20px;
+                font-weight: 600;
+                color: Theme.text;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            IconButton {
+                icon: Icons.close;
+                stroked: true;
+                size: 32px;
+                label: "Close";
+                clicked => { root.cancel(); }
+            }
+        }
+        Rectangle {
+            height: 1px;
+            background: Theme.divider;
+        }
+        HorizontalLayout {
+            padding: 14px;
+            padding-left: 20px;
+            padding-right: 20px;
+            spacing: 8px;
+
+            search := FormField {
+                horizontal-stretch: 1;
+                label: "Name";
+                text: root.draft.artist;
+                accepted => { Library.find-matches(self.text); }
+            }
+            VerticalLayout {
+                alignment: end;
+
+                TextButton {
+                    text: "Search";
+                    clicked => { Library.find-matches(search.text); }
+                }
+            }
+        }
+        HorizontalLayout {
+            padding-left: 20px;
+            padding-right: 20px;
+            padding-bottom: 10px;
+            spacing: 8px;
+
+            Text {
+                horizontal-stretch: 1;
+                text: Library.match-error != "" ? Library.match-error
+                    : Library.finding-matches ? "Asking MusicBrainz…"
+                    : root.picked != "" ? "Matched by you: their pictures and biography are of this artist."
+                    : root.draft.found-mbid != "" ? "Matched by Freya, from the tags or the name. Choose another if it is someone else."
+                    : "Not matched yet: Freya matches by the name.";
+                font-size: 12px;
+                color: Library.match-error != "" ? Theme.danger : Theme.text-secondary;
+                wrap: word-wrap;
+            }
+            if root.picked != "": LinkText {
+                text: "Auto Match";
+                font-size: 12px;
+                font-weight: 600;
+                color: Theme.accent-text;
+                label: "Let Freya match this artist again";
+                clicked => { root.picked = ""; }
+            }
+        }
+        Rectangle {
+            height: 1px;
+            background: Theme.divider;
+        }
+        ScrollView {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                padding: 20px;
+                spacing: 10px;
+                alignment: start;
+
+                for choice in Library.artist-matches: MatchRow {
+                    choice: choice;
+                    chosen: choice.mbid == root.shown;
+                    // Freya's own match is no choice of the user's.
+                    clicked => { root.picked = choice.mbid == root.draft.found-mbid ? "" : choice.mbid; }
+                }
+            }
+        }
+        Rectangle {
+            height: 1px;
+            background: Theme.divider;
+        }
+        HorizontalLayout {
+            padding: 14px;
+            padding-left: 20px;
+            padding-right: 20px;
+            spacing: 8px;
+            alignment: end;
+
+            TextButton {
+                text: "Cancel";
+                clicked => { root.cancel(); }
+            }
+            TextButton {
+                text: "Save";
+                primary: true;
+                clicked => { root.save(); }
+            }
+        }
+    }
+}
+
 /// Matching an album to the one in MusicBrainz it is, and so to the artist who made it: any
 /// of the same name too.
 component AlbumMatchForm inherits MenuSurface {
     callback closed();
 
     property <AlbumMatchDraft> draft: Library.album-draft;
+    /// The match chosen, kept on Save: a release group, or empty to file it as its tags say.
+    property <string> picked: draft.release-group;
 
     public function cancel() {
         Library.cancel-album-match();
+        root.closed();
+    }
+
+    function save() {
+        Library.save-album-match(root.picked);
         root.closed();
     }
 
@@ -4543,22 +4646,19 @@ component AlbumMatchForm inherits MenuSurface {
                 horizontal-stretch: 1;
                 text: Library.album-match-error != "" ? Library.album-match-error
                     : Library.finding-album-matches ? "Asking MusicBrainz…"
-                    : root.draft.release-group != "" ? "Matched by you: filed under the artist who made it."
+                    : root.picked != "" ? "Matched by you: filed under the artist who made it."
                     : "Filed as its tags say. Choose the album it is to file it under the artist who made it.";
                 font-size: 12px;
                 color: Library.album-match-error != "" ? Theme.danger : Theme.text-secondary;
                 wrap: word-wrap;
             }
-            if root.draft.release-group != "": LinkText {
+            if root.picked != "": LinkText {
                 text: "Auto Match";
                 font-size: 12px;
                 font-weight: 600;
                 color: Theme.accent-text;
                 label: "File the album as its tags say again";
-                clicked => {
-                    Library.unmatch-album();
-                    root.closed();
-                }
+                clicked => { root.picked = ""; }
             }
         }
         Rectangle {
@@ -4573,13 +4673,10 @@ component AlbumMatchForm inherits MenuSurface {
                 spacing: 10px;
                 alignment: start;
 
-                for choice[i] in Library.album-matches: AlbumMatchRow {
+                for choice in Library.album-matches: AlbumMatchRow {
                     choice: choice;
-                    chosen: choice.release-group == root.draft.release-group;
-                    clicked => {
-                        Library.choose-album-match(i);
-                        root.closed();
-                    }
+                    chosen: choice.release-group == root.picked;
+                    clicked => { root.picked = choice.release-group; }
                 }
             }
         }
@@ -4591,11 +4688,17 @@ component AlbumMatchForm inherits MenuSurface {
             padding: 14px;
             padding-left: 20px;
             padding-right: 20px;
+            spacing: 8px;
             alignment: end;
 
             TextButton {
                 text: "Cancel";
                 clicked => { root.cancel(); }
+            }
+            TextButton {
+                text: "Save";
+                primary: true;
+                clicked => { root.save(); }
             }
         }
     }
@@ -4606,7 +4709,7 @@ component AlbumMatchForm inherits MenuSurface {
 component ArtistEditForm inherits MenuSurface {
     callback closed();
 
-    /// The page shown: "general", "match", "picture" or "background".
+    /// The page shown: "general", "picture" or "background".
     in-out property <string> tab: "general";
     property <ArtistDraft> draft: Library.artist-draft;
     property <string> name: draft.name;
@@ -4624,19 +4727,7 @@ component ArtistEditForm inherits MenuSurface {
         root.closed();
     }
 
-    init => {
-        if (root.tab == "match") {
-            root.show-match();
-        }
-    }
 
-    /// The Match page, searching for their name the first time.
-    public function show-match() {
-        root.tab = "match";
-        if (Library.artist-matches.length == 0 && !Library.finding-matches) {
-            Library.find-matches(root.draft.artist);
-        }
-    }
 
     VerticalLayout {
         HorizontalLayout {
@@ -4689,12 +4780,6 @@ component ArtistEditForm inherits MenuSurface {
                     clicked => { root.tab = "general"; }
                 }
                 FormTab {
-                    text: "Match";
-                    icon: Icons.search;
-                    selected: root.tab == "match";
-                    clicked => { root.show-match(); }
-                }
-                FormTab {
                     text: "Picture";
                     icon: Icons.artist;
                     selected: root.tab == "picture";
@@ -4710,12 +4795,6 @@ component ArtistEditForm inherits MenuSurface {
             Rectangle {
                 width: 1px;
                 background: Theme.divider;
-            }
-            if root.tab == "match": MatchPage {
-                horizontal-stretch: 1;
-                mbid <=> root.mbid;
-                found-mbid: root.draft.found-mbid;
-                query: root.draft.artist;
             }
             if root.tab == "picture": PicturePage {
                 horizontal-stretch: 1;
@@ -6435,10 +6514,12 @@ component Toolbar inherits HorizontalLayout {
         icon: Icons.activity;
         stroked: true;
         size: 36px;
-        // In the accent color while Freya is busy.
-        checked: Library.scanning || Updates.state == "downloading";
+        // In the accent color while Freya does something in the background.
+        checked: App.activities.length > 0;
         label: "Activity";
-        tooltip: self.checked ? "Activity: " + (Library.scanning ? Library.status : "downloading an update") : "Activity";
+        tooltip: App.activities.length == 0 ? "Activity"
+            : App.activities.length == 1 ? App.activities[0].title
+            : App.activities[0].title + ", and " + (App.activities.length - 1) + " more";
         clicked => { activity-popup.show(); }
     }
     more := IconButton {
@@ -6460,21 +6541,14 @@ component Toolbar inherits HorizontalLayout {
             VerticalLayout {
                 padding: 6px;
 
-                MenuHeading { text: "Library"; }
-                ActivityRow {
-                    text: Library.scanning ? Library.status : "Up to date";
-                    detail: Library.scanning ? Library.scan-folder : Library.status;
-                    busy: Library.scanning;
-                }
-                if !Library.scanning: MenuItem {
-                    text: "Check for Changes";
-                    activated => { Library.rescan(); }
-                }
-                if Updates.state == "downloading": MenuDivider { }
-                if Updates.state == "downloading": MenuHeading { text: "Updates"; }
-                if Updates.state == "downloading": ActivityRow {
-                    text: "Downloading Freya " + Updates.version;
+                MenuHeading { text: "Activity"; }
+                for doing in App.activities: ActivityRow {
+                    text: doing.title;
+                    detail: doing.detail;
                     busy: true;
+                }
+                if App.activities.length == 0: ActivityRow {
+                    text: "Nothing is running in the background";
                 }
             }
         }
@@ -6832,6 +6906,10 @@ export component FreyaSkin inherits Window {
                                     Library.match-album();
                                     album-match-popup.show();
                                 }
+                                match-artist => {
+                                    Library.match-artist();
+                                    artist-match-popup.show();
+                                }
                             }
                             if root.view == "playlist": PlaylistView {
                                 width: 100%;
@@ -6910,6 +6988,38 @@ export component FreyaSkin inherits Window {
                     x: (parent.width - self.width) / 2;
                     y: max(24px, (parent.height - self.preferred-height) / 3);
                     closed => { folders-popup.close(); }
+                }
+            }
+        }
+    }
+
+    // As the artist's dialog.
+    artist-match-popup := PopupWindow {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        close-policy: no-auto-close;
+
+        FocusScope {
+            init => { self.focus(); }
+            key-pressed(event) => {
+                if (event.text == Key.Escape) {
+                    artist-match-form.cancel();
+                    return accept;
+                }
+                reject
+            }
+
+            Rectangle {
+                background: #00000059;
+
+                artist-match-form := ArtistMatchForm {
+                    width: min(720px, parent.width - 48px);
+                    height: min(620px, parent.height - 48px);
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    closed => { artist-match-popup.close(); }
                 }
             }
         }

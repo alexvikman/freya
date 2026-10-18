@@ -252,7 +252,9 @@ pub struct LibraryPanel {
     picture_error: String,
     portrait_rows: ModelRows,
     backdrop_rows: ModelRows,
-    /// And the artists MusicBrainz found by their name, with pictures by their id.
+    /// While the user matches an artist: who; and the artists MusicBrainz found by their name,
+    /// with pictures by their id.
+    artist_match: Option<Option<String>>,
     match_finder: MatchFinder,
     matches: Vec<freya_library::artist_image::ArtistMatch>,
     match_pictures: HashMap<String, Image>,
@@ -491,6 +493,7 @@ impl LibraryPanel {
             picture_error: String::new(),
             portrait_rows: ModelRows::new(),
             backdrop_rows: ModelRows::new(),
+            artist_match: None,
             match_finder: MatchFinder::new(),
             matches: Vec::new(),
             match_pictures: HashMap::new(),
@@ -633,7 +636,7 @@ impl LibraryPanel {
                 self.show_album_matches();
             }
         }
-        if self.draft.is_some() {
+        if self.artist_match.is_some() {
             let found = self.match_finder.poll();
             if let Some(failed) = found.failed {
                 self.match_error = failed;
@@ -648,6 +651,8 @@ impl LibraryPanel {
             if changed {
                 self.show_matches();
             }
+        }
+        if self.draft.is_some() {
             let (found, failed) = self.finder.poll();
             if let Some(failed) = failed {
                 self.picture_error = failed;
@@ -745,13 +750,19 @@ impl LibraryPanel {
         };
         self.artist_infos.save(db);
         let now = SystemTime::now();
-        for fetched in self.fetched.drain(..) {
+        for fetched in std::mem::take(&mut self.fetched) {
+            let Some(db) = &self.db else {
+                return;
+            };
             let written = match &fetched {
+                // Asked by an id the artist no longer has: of another artist.
+                Fetched::Picture { artist, mbid, .. } if self.stale(artist, mbid) => continue,
                 Fetched::Picture {
                     artist,
                     kind,
                     source,
                     picture,
+                    ..
                 } => db.set_artist_picture(artist, *kind, source, picture.as_deref(), now),
                 Fetched::ArtistId { artist, mbid } => {
                     db.set_searched_artist_id(artist, mbid.as_deref(), now)
@@ -787,6 +798,12 @@ impl LibraryPanel {
         }
     }
 
+    /// Whether an answer about `artist` asked by the MusicBrainz id `mbid` is of another
+    /// artist than theirs now.
+    fn stale(&self, artist: &str, mbid: &Option<String>) -> bool {
+        mbid.is_some() && self.known_mbid(Some(artist)) != *mbid
+    }
+
     /// What the library knows of the artist's picture from the internet: noted just now, or
     /// kept.
     fn downloaded(&self, artist: Option<&str>, kind: PictureKind) -> Downloaded {
@@ -798,8 +815,9 @@ impl LibraryPanel {
                 artist: a,
                 kind: k,
                 picture,
+                mbid,
                 ..
-            } if a == artist && *k == kind => Some(picture.clone()),
+            } if a == artist && *k == kind && !self.stale(a, mbid) => Some(picture.clone()),
             _ => None,
         });
         let kept = || {
@@ -849,6 +867,13 @@ impl LibraryPanel {
             fanart: self.downloaded(name, PictureKind::Backdrop),
             chosen: self.chosen(name, PictureKind::Backdrop),
         }
+    }
+
+    /// The artist's MusicBrainz id as Freya knows it: the user's match, the tags', or what
+    /// MusicBrainz's search found.
+    fn known_mbid(&self, name: Option<&str>) -> Option<String> {
+        name.and_then(|n| self.edits.get(n)?.mbid.clone())
+            .or_else(|| self.found_mbid(name).0)
     }
 
     /// The artist's MusicBrainz id but for the user's: the tags', else what MusicBrainz's
@@ -1454,10 +1479,29 @@ impl LibraryPanel {
         self.show_album_matches();
     }
 
+    /// Matches the album being matched to the one found of the release group `group`; empty
+    /// files it as its tags say again.
+    pub fn save_album_match(&mut self, group: &str) {
+        let group = group.trim();
+        if group.is_empty() {
+            self.unmatch_album();
+            return;
+        }
+        match self
+            .album_candidates
+            .iter()
+            .position(|album| album.release_group == group)
+        {
+            Some(index) => self.choose_album_match(index),
+            // The match it had: nothing changes.
+            None => self.cancel_album_match(),
+        }
+    }
+
     /// Matches the album being matched to the `index`th album found. Made by another artist
     /// than the one it is filed under, even one of the same name, it is filed under that
     /// artist, who is given their name, id and MusicBrainz's words for them.
-    pub fn choose_album_match(&mut self, index: usize) {
+    fn choose_album_match(&mut self, index: usize) {
         let (Some((Some(filed), Some(album))), Some(chosen)) = (
             self.album_draft.clone(),
             self.album_candidates.get(index).cloned(),
@@ -1527,7 +1571,7 @@ impl LibraryPanel {
     }
 
     /// Files the album being matched as its tags say again.
-    pub fn unmatch_album(&mut self) {
+    fn unmatch_album(&mut self) {
         let Some((Some(filed), Some(album))) = self.album_draft.clone() else {
             return;
         };
@@ -1620,10 +1664,89 @@ impl LibraryPanel {
         self.album_rows.sync(rows);
     }
 
-    /// Searches MusicBrainz for the artists named `query`, to say which is the one changed.
+    /// Starts matching the artist whose page is shown, searching MusicBrainz by their name.
+    pub fn start_artist_match(&mut self) {
+        self.forget_matches();
+        self.artist_match = self.artist_page.as_ref().map(|page| page.name.clone());
+        if let Some(Some(name)) = &self.artist_match {
+            let name = plain_name(name).to_owned();
+            self.match_finder.find(name, self.fanart_key.clone());
+        }
+    }
+
+    /// Matches the artist being matched to the one with the MusicBrainz id `mbid`; empty, or
+    /// Freya's own match, lets Freya match them again.
+    pub fn save_artist_match(&mut self, mbid: &str) {
+        let Some(Some(artist)) = self.artist_match.clone() else {
+            return;
+        };
+        let found = self.found_mbid(Some(&artist)).0;
+        let mbid = Some(mbid.trim())
+            .filter(|mbid| !mbid.is_empty() && found.as_deref() != Some(*mbid))
+            .map(str::to_owned);
+        let before = self.edits.get(&artist).cloned().unwrap_or_default();
+        // MusicBrainz's words for them: from the search, else as kept.
+        let note = mbid.as_ref().and_then(|mbid| {
+            let searched = self.matches.iter().find(|m| m.mbid == *mbid);
+            match searched {
+                Some(found) => Some(found.disambiguation.clone()),
+                None => before
+                    .note
+                    .clone()
+                    .filter(|_| before.mbid.as_ref() == Some(mbid)),
+            }
+        });
+        self.set_artist_mbid(&artist, mbid, note);
+    }
+
+    pub fn cancel_artist_match(&mut self) {
+        self.artist_match = None;
+        self.forget_matches();
+    }
+
+    /// Keeps the user's match of `artist`, ending the matching, and shows what comes of it.
+    fn set_artist_mbid(&mut self, artist: &str, mbid: Option<String>, note: Option<String>) {
+        self.cancel_artist_match();
+        let Some(db) = &self.db else {
+            return;
+        };
+        let before = self.edits.get(artist).cloned().unwrap_or_default();
+        let edit = ArtistEdit {
+            mbid,
+            note,
+            ..before.clone()
+        };
+        if let Err(e) = db.set_artist_edit(artist, &edit) {
+            log::warn!("could not keep the match of {artist}: {e}");
+            return;
+        }
+        if edit.mbid != before.mbid {
+            self.forget_found(artist);
+        }
+        self.reload();
+    }
+
+    /// The artist being matched, as `artist-match` gives it.
+    fn artist_match_value(&self) -> Value {
+        let artist = self.artist_match.clone().flatten();
+        let mbid = artist
+            .as_deref()
+            .and_then(|a| self.edits.get(a)?.mbid.clone());
+        let found = self.found_mbid(artist.as_deref()).0;
+        Value::Struct(Struct::from_iter([
+            (
+                "artist".to_owned(),
+                string(artist.as_deref().map(plain_name).unwrap_or_default()),
+            ),
+            ("mbid".to_owned(), string(mbid.unwrap_or_default())),
+            ("found-mbid".to_owned(), string(found.unwrap_or_default())),
+        ]))
+    }
+
+    /// Searches MusicBrainz for the artists named `query`, to say which is the one matched.
     pub fn find_matches(&mut self, query: &str) {
         let query = query.trim();
-        if self.draft.is_none() || query.is_empty() {
+        if self.artist_match.is_none() || query.is_empty() {
             return;
         }
         self.match_error.clear();
@@ -1897,20 +2020,35 @@ impl LibraryPanel {
         }
         self.choices.clear();
         self.show_choices();
-        let Some(db) = &self.db else {
-            return;
-        };
         if kept.mbid != before.mbid {
-            if let Err(e) = db.forget_artist_picture(&artist, PictureKind::Backdrop) {
-                log::warn!("could not forget the wide picture of {artist}: {e}");
-            }
-            if let Some(thumbnails) = &mut self.thumbnails {
-                thumbnails.forget_backdrop(&Thumbnails::artist_key(Some(&artist)));
-            }
-            // And Last.fm is asked about the artist now matched.
-            self.artist_infos.forget(&artist, self.db.as_ref());
+            self.forget_found(&artist);
         }
         self.reload();
+    }
+
+    /// Forgets what the internet gave for `artist`, but for the pictures the user chose, so
+    /// it is asked again: after they were matched to another artist of the name.
+    fn forget_found(&mut self, artist: &str) {
+        if let Some(db) = &self.db {
+            for kind in [PictureKind::Portrait, PictureKind::Backdrop] {
+                let chosen = db
+                    .artist_picture(artist, kind)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|row| row.chosen());
+                if !chosen && let Err(e) = db.forget_artist_picture(artist, kind) {
+                    log::warn!("could not forget the pictures of {artist}: {e}");
+                }
+            }
+        }
+        let key = Thumbnails::artist_key(Some(artist));
+        if let Some(thumbnails) = &mut self.thumbnails {
+            thumbnails.forget_artist(&key);
+        }
+        self.recent_covers.remove(&key);
+        self.covers_ready += 1;
+        // And Last.fm is asked about the artist now matched.
+        self.artist_infos.forget(artist, self.db.as_ref());
     }
 
     /// The name an artist is shown by: the one the user gave them, else the tags'.
@@ -2267,10 +2405,16 @@ impl LibraryPanel {
                     .albums(name.as_deref())
                     .map(|albums| albums.into_iter().map(|a| a.track).collect())
                     .unwrap_or_default();
+                // By their id, when Freya knows it, without searching for it.
+                let fanart = self
+                    .fanart_key
+                    .clone()
+                    .and_then(|key| Some((self.known_mbid(name.as_deref())?, key)));
                 let source = ArtistSource {
                     name: name.clone(),
                     album_tracks,
                     online: self.online_pictures,
+                    fanart,
                     deezer: self.downloaded(name.as_deref(), PictureKind::Portrait),
                     chosen: self.chosen(name.as_deref(), PictureKind::Portrait),
                 };
@@ -2301,6 +2445,54 @@ impl LibraryPanel {
                 Image::default()
             }
         }
+    }
+
+    /// What the library is doing in the background, for the user to see: what, and of what.
+    pub fn activities(&self) -> Vec<(String, String)> {
+        let mut activities = Vec::new();
+        if self.scanning {
+            let what = match self.progress {
+                Some((done, total)) => {
+                    format!("Reading {} of {} files", thousands(done), thousands(total))
+                }
+                None => "Checking the music folders for changes".to_owned(),
+            };
+            let folder = self.scan_folder.as_deref().map(folder_name);
+            activities.push((what, folder.unwrap_or_default()));
+        }
+        let pending = self.thumbnails.as_ref().map_or(0, Thumbnails::pending);
+        if pending > 0 {
+            activities.push((
+                "Making covers and pictures".to_owned(),
+                count(pending, "picture"),
+            ));
+        }
+        let mut asked: Vec<&str> = self.artist_infos.waiting().map(plain_name).collect();
+        if !asked.is_empty() {
+            asked.sort_unstable();
+            activities.push(("Asking Last.fm about artists".to_owned(), asked.join(", ")));
+        }
+        let page_name = || {
+            self.artist_page
+                .as_ref()
+                .map(|p| p.shown_name.clone())
+                .unwrap_or_default()
+        };
+        if self.draft.is_some() && self.finder.searching() {
+            activities.push(("Looking for pictures".to_owned(), page_name()));
+        }
+        if self.match_finder.searching() {
+            activities.push(("Asking MusicBrainz about an artist".to_owned(), page_name()));
+        }
+        if self.album_finder.searching() {
+            let title = self
+                .album_draft
+                .clone()
+                .and_then(|(_, album)| album)
+                .unwrap_or_default();
+            activities.push(("Asking MusicBrainz about an album".to_owned(), title));
+        }
+        activities
     }
 
     /// Values for the `Library` global, except the rows and folders.
@@ -2369,6 +2561,7 @@ impl LibraryPanel {
             ),
             ("match-error", string(&self.match_error)),
             ("album-draft", self.album_draft_value()),
+            ("artist-match", self.artist_match_value()),
             (
                 "finding-album-matches",
                 Value::Bool(self.album_finder.searching()),
@@ -2734,6 +2927,7 @@ mod tests {
             kind: portrait,
             source: "deezer",
             picture: Some("aaa".into()),
+            mbid: None,
         });
         panel.fetched.push(Fetched::ArtistId {
             artist: "Ghost".into(),
@@ -3099,6 +3293,96 @@ mod tests {
         let db = panel.db.as_ref().unwrap();
         assert_eq!(db.albums(Some(&split)).unwrap().len(), 0);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn matches_an_artist_from_the_form() {
+        let dir = std::env::temp_dir().join(format!("freya-artist-match-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fixtures =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-audio/tests/fixtures");
+        std::fs::copy(fixtures.join("sine.mp3"), dir.join("sine.mp3")).unwrap();
+        let mut db = Library::open_in_memory().unwrap();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        freya_library::library::scan(&mut db, std::slice::from_ref(&dir), &cancel, |_| {}).unwrap();
+        db.set_searched_artist_id("Freya", Some("se"), SystemTime::now())
+            .unwrap();
+        let mut panel = LibraryPanel::new(None, None, None);
+        panel.db = Some(db);
+        panel.online_bios = false;
+        panel.opened = vec![
+            Level::Artists,
+            Level::ArtistAlbums {
+                artist: Some("Freya".into()),
+            },
+        ];
+        panel.reload();
+        panel.edit_artist();
+        panel.matches = vec![freya_library::artist_image::ArtistMatch {
+            mbid: "no".into(),
+            name: "Freya".into(),
+            disambiguation: "Norwegian group".into(),
+            ..Default::default()
+        }];
+        panel.save_artist(&ArtistEdit {
+            mbid: Some("no".into()),
+            ..ArtistEdit::default()
+        });
+        assert_eq!(panel.edits["Freya"].mbid.as_deref(), Some("no"));
+        assert_eq!(
+            panel.edits["Freya"].note.as_deref(),
+            Some("Norwegian group")
+        );
+        let Value::Struct(page) = panel.artist_page_value() else {
+            panic!("a struct");
+        };
+        assert_eq!(page.get_field("note"), Some(&string("Norwegian group")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn forgets_a_late_answer_about_another_artist_of_the_name() {
+        let mut panel = LibraryPanel::new(None, None, None);
+        let db = Library::open_in_memory().unwrap();
+        db.set_artist_edit(
+            "Shining",
+            &ArtistEdit {
+                mbid: Some("swedish".into()),
+                ..ArtistEdit::default()
+            },
+        )
+        .unwrap();
+        panel.db = Some(db);
+        panel.reload();
+        let answer = |mbid: &str| Fetched::Picture {
+            artist: "Shining".into(),
+            kind: PictureKind::Backdrop,
+            source: "fanart.tv",
+            picture: Some(format!("{mbid}-picture")),
+            mbid: Some(mbid.into()),
+        };
+        // Asked while they were matched to the Norwegian band, answered after.
+        panel.fetched.push(answer("norwegian"));
+        assert_eq!(
+            panel.downloaded(Some("Shining"), PictureKind::Backdrop),
+            Downloaded::Unknown
+        );
+        panel.write_fetched();
+        let db = panel.db.as_ref().unwrap();
+        assert_eq!(
+            db.artist_picture("Shining", PictureKind::Backdrop).unwrap(),
+            None
+        );
+
+        panel.fetched.push(answer("swedish"));
+        panel.write_fetched();
+        let db = panel.db.as_ref().unwrap();
+        let row = db
+            .artist_picture("Shining", PictureKind::Backdrop)
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.picture.as_deref(), Some("swedish-picture"));
     }
 
     #[test]

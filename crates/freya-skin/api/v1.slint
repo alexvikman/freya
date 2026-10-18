@@ -155,6 +155,15 @@ export struct ArtistDraft {
     biography-from-lastfm: bool,
 }
 
+/// The artist being matched: see `Library.match-artist`.
+export struct ArtistMatchDraft {
+    artist: string,
+    /// Their MusicBrainz id as the user matched it, and as Freya has it without that, from
+    /// the tags or a search; each empty when there is none.
+    mbid: string,
+    found-mbid: string,
+}
+
 /// An artist MusicBrainz knows, to say which one of a name the user's is: see
 /// `Library.artist-matches`.
 export struct MatchChoice {
@@ -394,14 +403,20 @@ export global Library {
     /// and choose it.
     callback pick-picture-file(string);
     callback picture-from-url(string, string);
-    /// While the artist is changed: the artists MusicBrainz finds for the words given to
-    /// `find-matches`, best matches first, for the user to say which is theirs, by its id in
-    /// `save-artist`. More come while `finding-matches`.
+    /// Match the artist whose page is shown to the one in MusicBrainz they are: Freya sets
+    /// `artist-match` and lists in `artist-matches` the artists MusicBrainz finds by their
+    /// name, or by the words given to `find-matches`, best matches first; more come while
+    /// `finding-matches`. `save-artist-match` keeps the one with the id given, or Freya's own
+    /// for an empty one, and ends the matching, as `cancel-artist-match` does.
+    in property <ArtistMatchDraft> artist-match;
     in property <[MatchChoice]> artist-matches;
     in property <bool> finding-matches;
     /// Why the search did not work; empty when it did.
     in property <string> match-error;
+    callback match-artist();
     callback find-matches(string);
+    callback save-artist-match(string);
+    callback cancel-artist-match();
     /// Match the album shown to the album in MusicBrainz it is, and so to the artist who made
     /// it: Freya sets `album-draft` and searches by its title and artist. Albums of another
     /// artist of the same name are then filed under an artist of their own.
@@ -412,10 +427,10 @@ export global Library {
     callback match-album();
     /// Search again, by a title and an artist.
     callback find-album-matches(string, string);
-    /// Match the album to the `index`th found, or to none, filing it as its tags say; either
-    /// ends the matching, as does `cancel-album-match`.
-    callback choose-album-match(int);
-    callback unmatch-album();
+    /// Match the album to the one found of the release group given, or to none for an empty
+    /// one, filing it as its tags say; either ends the matching, as `cancel-album-match`
+    /// does.
+    callback save-album-match(string);
     callback cancel-album-match();
     /// Change `artist-sort`, `artist-view` or `artist-pictures-online`.
     callback set-artist-sort(string);
@@ -753,7 +768,19 @@ export component NativeSpectrum inherits Rectangle {
 }
 
 /// The application. Optional.
+/// Something Freya does in the background: see `App.activities`.
+export struct Activity {
+    /// "Reading 1,234 of 5,000 files".
+    title: string,
+    /// Of what: "Peter Gabriel / So"; may be empty.
+    detail: string,
+}
+
 export global App {
+    /// What Freya does in the background now: reading the music folders, making and
+    /// downloading pictures, asking the internet about artists, sending plays to Last.fm,
+    /// downloading an update. Empty when it does nothing.
+    in property <[Activity]> activities;
     in property <string> version;
     /// When this copy of Freya was built, as "2026-10-17"; empty when unknown.
     in property <string> build-date;

@@ -48,6 +48,9 @@ pub struct ArtistSource {
     pub album_tracks: Vec<PathBuf>,
     /// Whether Deezer may be asked, and its picture shown.
     pub online: bool,
+    /// Their MusicBrainz id and the user's fanart.tv key, when both are known: fanart.tv is
+    /// asked first then, as it knows which artist of a name they are.
+    pub fanart: Option<(String, String)>,
     /// What Deezer gave before.
     pub deezer: Downloaded,
     /// The picture the user chose, or that they chose none (their album covers); before
@@ -82,6 +85,9 @@ pub enum Fetched {
         kind: PictureKind,
         source: &'static str,
         picture: Option<String>,
+        /// The MusicBrainz id it was asked for by, for fanart.tv: the answer is of no use once
+        /// the artist is matched to another.
+        mbid: Option<String>,
     },
     /// MusicBrainz's search was asked for the artist's id just now.
     ArtistId {
@@ -105,8 +111,14 @@ enum ArtistJob {
     Local(PathBuf),
     /// One kept among the downloaded pictures: the user's choice.
     Kept(String),
-    /// Deezer's: the one kept when there is one, else asked for.
-    Deezer { name: String, kept: Option<String> },
+    /// From the internet: the one kept when there is one, else asked of fanart.tv by their
+    /// MusicBrainz id and key, then of Deezer by their name when it may be.
+    Online {
+        name: String,
+        kept: Option<String>,
+        deezer: bool,
+        fanart: Option<(String, String)>,
+    },
     /// Their album covers.
     Collage,
 }
@@ -237,12 +249,13 @@ impl Thumbnails {
             .clone()
             .filter(|chosen| *chosen != Downloaded::Unknown);
         let local = artist_image::local(&source.album_tracks).filter(|_| chosen.is_none());
+        let online = source.online || source.fanart.is_some();
         let deezer = match (&source.name, &source.deezer) {
             _ if chosen.is_some() => None,
-            (Some(name), Downloaded::Kept(checksum)) if source.online => {
+            (Some(name), Downloaded::Kept(checksum)) if online => {
                 Some((name.clone(), Some(checksum.clone())))
             }
-            (Some(name), Downloaded::Unknown) if source.online && !self.asked.contains(key) => {
+            (Some(name), Downloaded::Unknown) if online && !self.asked.contains(key) => {
                 Some((name.clone(), None))
             }
             _ => None,
@@ -281,16 +294,23 @@ impl Thumbnails {
                 let thumbnail = self.file(&format!("{checksum}-{SIZE}"));
                 let large = self.file(&format!("{checksum}-large"));
                 let made = thumbnail.exists() && large.exists();
-                let job = ArtistJob::Deezer {
+                let job = ArtistJob::Online {
                     name,
                     kept: Some(checksum),
+                    deezer: source.online,
+                    fanart: source.fanart.clone(),
                 };
                 (thumbnail, Some(large), (!made).then_some(job))
             }
             (None, None, Some((name, None))) => {
                 self.asked.insert(key.to_owned());
-                let job = ArtistJob::Deezer { name, kept: None };
-                // Its name is known once Deezer answered.
+                let job = ArtistJob::Online {
+                    name,
+                    kept: None,
+                    deezer: source.online,
+                    fanart: source.fanart.clone(),
+                };
+                // Its name is known once the internet answered.
                 (PathBuf::new(), None, Some(job))
             }
         };
@@ -436,6 +456,14 @@ impl Thumbnails {
         state
     }
 
+    /// How many covers and pictures are being made or downloaded.
+    pub fn pending(&self) -> usize {
+        self.known
+            .values()
+            .filter(|state| **state == Thumbnail::Pending)
+            .count()
+    }
+
     /// The file shown for `key`, once made.
     pub fn ready(&self, key: &str) -> Option<&Path> {
         match self.known.get(key) {
@@ -570,16 +598,19 @@ fn make_artist(
             // Gone: their covers stand in.
             None => (None, String::new()),
         },
-        ArtistJob::Deezer { name, kept } => {
-            match deezer_picture(pictures, name, kept.as_deref(), fetched) {
-                Ok(Some((checksum, picture))) => (Some(picture), checksum),
-                Ok(None) => (None, String::new()),
-                Err(e) => {
-                    log::debug!("no picture of {name} from Deezer: {e}");
-                    (None, String::new())
-                }
+        ArtistJob::Online {
+            name,
+            kept,
+            deezer,
+            fanart,
+        } => match online_portrait(pictures, name, kept.as_deref(), *deezer, fanart, fetched) {
+            Ok(Some((checksum, picture))) => (Some(picture), checksum),
+            Ok(None) => (None, String::new()),
+            Err(e) => {
+                log::debug!("no picture of {name} from the internet: {e}");
+                (None, String::new())
             }
-        }
+        },
         ArtistJob::Collage => (None, String::new()),
     };
     let Some(picture) = picture else {
@@ -612,12 +643,16 @@ fn make_artist(
     Ok(true)
 }
 
-/// Deezer's picture of the artist `name` and its checksum: the one kept as `kept`, else asked
-/// for and kept. What Deezer said goes into `fetched`; none when it has no picture of them.
-fn deezer_picture(
+/// A picture of the artist `name` from the internet and its checksum: the one kept as
+/// `kept`, else fanart.tv's best liked, by their id, else Deezer's when `deezer`; kept among
+/// the downloaded pictures. What was said goes into `fetched`; none when no source has a
+/// picture of them.
+fn online_portrait(
     pictures: &Pictures,
     name: &str,
     kept: Option<&str>,
+    deezer: bool,
+    fanart: &Option<(String, String)>,
     fetched: &mut Vec<Fetched>,
 ) -> Result<Option<(String, image::DynamicImage)>, String> {
     if let Some(checksum) = kept
@@ -626,24 +661,55 @@ fn deezer_picture(
         let picture = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
         return Ok(Some((checksum.to_owned(), picture)));
     }
-    // By their name, without the id of an artist split off.
-    let online = artist_image::deezer(crate::library::plain_name(name));
-    // Deezer allows 50 requests in 5 seconds; this stays well below.
-    std::thread::sleep(std::time::Duration::from_millis(150));
-    let picture = match online? {
-        artist_image::Online::Picture(bytes) => {
+    let mut asked = None;
+    let mut bytes = None;
+    if let Some((mbid, key)) = fanart {
+        let found = artist_image::fanart_urls(mbid, key).and_then(|urls| {
+            urls.portraits
+                .first()
+                .map(|url| artist_image::download(url))
+                .transpose()
+        });
+        match found {
+            Ok(found) => {
+                asked = Some("fanart.tv");
+                bytes = found;
+            }
+            // Deezer, then; fanart.tv is asked again next run.
+            Err(e) => log::debug!("no picture of {name} from fanart.tv: {e}"),
+        }
+    }
+    if bytes.is_none() && deezer {
+        asked = Some("deezer");
+        // By their name, without the id of an artist split off.
+        let online = artist_image::deezer(crate::library::plain_name(name));
+        // Deezer allows 50 requests in 5 seconds; this stays well below.
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        if let artist_image::Online::Picture(found) = online? {
+            bytes = Some(found);
+        }
+    }
+    let picture = match bytes {
+        Some(bytes) => {
             let picture = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
             let checksum = pictures.put(&bytes).map_err(|e| e.to_string())?;
             Some((checksum, picture))
         }
-        artist_image::Online::NoPicture => None,
+        None => None,
     };
-    fetched.push(Fetched::Picture {
-        artist: name.to_owned(),
-        kind: PictureKind::Portrait,
-        source: "deezer",
-        picture: picture.as_ref().map(|(checksum, _)| checksum.clone()),
-    });
+    if let Some(source) = asked {
+        let mbid = fanart
+            .as_ref()
+            .filter(|_| source == "fanart.tv")
+            .map(|(mbid, _)| mbid.clone());
+        fetched.push(Fetched::Picture {
+            artist: name.to_owned(),
+            kind: PictureKind::Portrait,
+            source,
+            picture: picture.as_ref().map(|(checksum, _)| checksum.clone()),
+            mbid,
+        });
+    }
     Ok(picture)
 }
 
@@ -713,6 +779,7 @@ fn make_backdrop(
                         kind: PictureKind::Backdrop,
                         source: "fanart.tv",
                         picture: kept.as_ref().map(|(checksum, _)| checksum.clone()),
+                        mbid: mbid.clone(),
                     });
                     match kept {
                         Some(kept) => kept,
@@ -878,6 +945,7 @@ mod tests {
             name: Some("Shores Of Null".into()),
             album_tracks: vec![track],
             online: false,
+            fanart: None,
             deezer: Downloaded::Unknown,
             chosen: None,
         };
@@ -931,6 +999,7 @@ mod tests {
             name: Some("Ghost".into()),
             album_tracks: vec![track],
             online: true,
+            fanart: None,
             deezer: Downloaded::Kept(checksum.clone()),
             chosen: None,
         };
@@ -988,6 +1057,7 @@ mod tests {
             name: Some("Ghost".into()),
             album_tracks: vec![track],
             online: false,
+            fanart: None,
             deezer: Downloaded::Unknown,
             chosen: Some(Downloaded::Kept(checksum)),
         };

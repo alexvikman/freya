@@ -307,6 +307,42 @@ impl Convert for LibraryRow {
     }
 }
 
+impl Convert for Activity {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            title: field(&s, "title"),
+            detail: field(&s, "detail"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("title", self.title.to_value()),
+            ("detail", self.detail.to_value()),
+        ])
+    }
+}
+
+impl Convert for ArtistMatchDraft {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            artist: field(&s, "artist"),
+            mbid: field(&s, "mbid"),
+            found_mbid: field(&s, "found-mbid"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("artist", self.artist.to_value()),
+            ("mbid", self.mbid.to_value()),
+            ("found-mbid", self.found_mbid.to_value()),
+        ])
+    }
+}
+
 impl Convert for AlbumMatchDraft {
     fn from_value(value: Value) -> Option<Self> {
         let Value::Struct(s) = value else { return None };
@@ -732,6 +768,7 @@ skin_api! {
         Library."backdrop-choices" => set_backdrop_choices, get_backdrop_choices;
         Library."finding-pictures" => set_finding_pictures, get_finding_pictures;
         Library."picture-error" => set_picture_error, get_picture_error;
+        Library."artist-match" => set_artist_match, get_artist_match;
         Library."artist-matches" => set_artist_matches, get_artist_matches;
         Library."finding-matches" => set_finding_matches, get_finding_matches;
         Library."match-error" => set_match_error, get_match_error;
@@ -772,6 +809,7 @@ skin_api! {
         App."version" => set_version, get_version;
         App."build-date" => set_build_date, get_build_date;
         App."theme" => set_theme, get_theme;
+        App."activities" => set_activities, get_activities;
         App."equalizer-visible" => set_equalizer_visible, get_equalizer_visible;
         App."title-bar-height" => set_title_bar_height, get_title_bar_height;
         App."window-buttons-width" => set_window_buttons_width, get_window_buttons_width;
@@ -860,11 +898,13 @@ skin_api! {
         Library."choose-picture" => on_choose_picture, invoke_choose_picture(kind: SharedString, index: i32);
         Library."pick-picture-file" => on_pick_picture_file, invoke_pick_picture_file(kind: SharedString);
         Library."picture-from-url" => on_picture_from_url, invoke_picture_from_url(kind: SharedString, url: SharedString);
+        Library."match-artist" => on_match_artist, invoke_match_artist();
         Library."find-matches" => on_find_matches, invoke_find_matches(query: SharedString);
+        Library."save-artist-match" => on_save_artist_match, invoke_save_artist_match(mbid: SharedString);
+        Library."cancel-artist-match" => on_cancel_artist_match, invoke_cancel_artist_match();
         Library."match-album" => on_match_album, invoke_match_album();
         Library."find-album-matches" => on_find_album_matches, invoke_find_album_matches(title: SharedString, artist: SharedString);
-        Library."choose-album-match" => on_choose_album_match, invoke_choose_album_match(index: i32);
-        Library."unmatch-album" => on_unmatch_album, invoke_unmatch_album();
+        Library."save-album-match" => on_save_album_match, invoke_save_album_match(release_group: SharedString);
         Library."cancel-album-match" => on_cancel_album_match, invoke_cancel_album_match();
         Library."set-artist-sort" => on_set_artist_sort, invoke_set_artist_sort(sort: SharedString);
         Library."set-artist-view" => on_set_artist_view, invoke_set_artist_view(view: SharedString);

@@ -10,13 +10,15 @@ use freya_library::library::ArtistText;
 
 use crate::lastfm::{ArtistInfo, Client, Credentials};
 
-/// What Last.fm said of an artist, by their name.
-type Answer = (String, ArtistInfo);
+/// What Last.fm said of an artist, by their name; none when it could not be asked.
+type Answer = (String, Option<ArtistInfo>);
 
 pub struct ArtistInfos {
     known: HashMap<String, ArtistInfo>,
-    /// Artists asked about while this runs, so each is asked once.
+    /// Artists asked about while this runs, so each is asked once, and those Last.fm has not
+    /// answered about yet.
     asked: HashSet<String>,
+    waiting: HashSet<String>,
     results: (Sender<Answer>, Receiver<Answer>),
     /// Answers not kept in the library yet, and when they came.
     unsaved: Vec<(String, ArtistInfo, SystemTime)>,
@@ -27,6 +29,7 @@ impl ArtistInfos {
         Self {
             known: HashMap::new(),
             asked: HashSet::new(),
+            waiting: HashSet::new(),
             results: channel(),
             unsaved: Vec::new(),
         }
@@ -62,6 +65,7 @@ impl ArtistInfos {
     pub fn forget(&mut self, name: &str, db: Option<&Library>) {
         self.known.remove(name);
         self.asked.remove(name);
+        self.waiting.remove(name);
         self.unsaved.retain(|(n, _, _)| n != name);
         if let Some(db) = db
             && let Err(e) = db.forget_artist_text(name)
@@ -74,6 +78,11 @@ impl ArtistInfos {
     pub fn poll(&mut self) -> bool {
         let mut any = false;
         while let Ok((name, info)) = self.results.1.try_recv() {
+            self.waiting.remove(&name);
+            // Asked again next run.
+            let Some(info) = info else {
+                continue;
+            };
             self.unsaved
                 .push((name.clone(), info.clone(), SystemTime::now()));
             self.known.insert(name, info);
@@ -97,10 +106,16 @@ impl ArtistInfos {
         }
     }
 
-    fn ask(&self, name: &str, mbid: Option<&str>) {
+    /// The artists Last.fm is being asked about.
+    pub fn waiting(&self) -> impl Iterator<Item = &str> {
+        self.waiting.iter().map(String::as_str)
+    }
+
+    fn ask(&mut self, name: &str, mbid: Option<&str>) {
         let Some(credentials) = Credentials::of_build() else {
             return;
         };
+        self.waiting.insert(name.to_owned());
         let results = self.results.0.clone();
         let (name, mbid) = (name.to_owned(), mbid.map(str::to_owned));
         let started = std::thread::Builder::new()
@@ -110,10 +125,12 @@ impl ArtistInfos {
                     .artist_info(freya_library::library::plain_name(&name), mbid.as_deref())
                 {
                     Ok(info) => {
-                        let _ = results.send((name, info));
+                        let _ = results.send((name, Some(info)));
                     }
-                    // Asked again next run.
-                    Err(e) => log::debug!("no Last.fm information on {name}: {e:?}"),
+                    Err(e) => {
+                        log::debug!("no Last.fm information on {name}: {e:?}");
+                        let _ = results.send((name, None));
+                    }
                 }
             });
         if let Err(e) = started {
@@ -148,7 +165,7 @@ mod tests {
         infos
             .results
             .0
-            .send(("Ane Brun".into(), info.clone()))
+            .send(("Ane Brun".into(), Some(info.clone())))
             .unwrap();
         assert!(infos.poll());
         assert_eq!(infos.get("Ane Brun", None, false, Some(&db)), Some(&info));

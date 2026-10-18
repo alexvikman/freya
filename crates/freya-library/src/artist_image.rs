@@ -21,6 +21,8 @@ const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png"];
 const BACKDROP_FILES: &[&str] = &["fanart", "backdrop", "background"];
 
 const DEEZER_SEARCH: &str = "https://api.deezer.com/search/artist";
+/// In the address of Deezer's picture for an artist without one.
+const NO_PICTURE: &str = "d41d8cd98f00b204e9800998ecf8427e";
 const MUSICBRAINZ_SEARCH: &str = "https://musicbrainz.org/ws/2/artist/";
 const MUSICBRAINZ_ALBUMS: &str = "https://musicbrainz.org/ws/2/release-group/";
 const FANART: &str = "https://webservice.fanart.tv/v3/music";
@@ -434,8 +436,9 @@ fn picture_urls(answer: &serde_json::Value, name: &str) -> Vec<String> {
                 .iter()
                 .find_map(|key| artist.get(key)?.as_str())
         })
-        // Artists without a picture have one whose name in the address is empty.
-        .filter(|url| !url.contains("/artist//"))
+        // Artists without a picture have one whose name in the address is empty, or the
+        // MD5 of nothing: a grey figure.
+        .filter(|url| !url.contains("/artist//") && !url.contains(NO_PICTURE))
         .map(str::to_owned)
         .collect()
 }
@@ -528,6 +531,16 @@ mod tests {
         assert!(
             picture_urls(&blank, "Opeth").is_empty(),
             "Deezer's empty picture"
+        );
+        let figure = serde_json::json!({ "data": [
+            { "name": "Shining",
+              "picture_xl": "https://x/images/artist/d41d8cd98f00b204e9800998ecf8427e/1000x1000.jpg" },
+            { "name": "Shining", "picture_xl": "https://x/images/artist/abae37bc/1000x1000.jpg" },
+        ]});
+        assert_eq!(
+            picture_urls(&figure, "Shining"),
+            ["https://x/images/artist/abae37bc/1000x1000.jpg"],
+            "Deezer's grey figure"
         );
         assert_eq!(comparable("AC/DC"), comparable("ac dc"));
     }

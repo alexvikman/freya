@@ -81,6 +81,7 @@ pub struct View {
     lastfm_out: GlobalWriter,
     playlist_list_rows: ModelRows,
     playlist_track_rows: ModelRows,
+    activity_rows: ModelRows,
     /// The playlists' version and the playlist shown when their rows were last given to the
     /// skin; rows are only rebuilt when either changes.
     playlists_synced: Option<(u64, Option<usize>)>,
@@ -109,6 +110,7 @@ impl View {
             lastfm_out: GlobalWriter::new(&ui, "LastFm"),
             playlist_list_rows: ModelRows::new(),
             playlist_track_rows: ModelRows::new(),
+            activity_rows: ModelRows::new(),
             playlists_synced: None,
             eq_bands_shown: None,
             visualizer: Visualizer::new(&ui),
@@ -138,6 +140,11 @@ impl View {
                 "tracks",
                 view.playlist_track_rows.model_value(),
             );
+        }
+        if view.app_out.available {
+            let _ =
+                view.ui
+                    .set_global_property("App", "activities", view.activity_rows.model_value());
         }
         let version = skin_state::string(env!("CARGO_PKG_VERSION"));
         let built = skin_state::string(skin_state::build_date().unwrap_or_default());
@@ -1459,6 +1466,10 @@ impl App {
             ));
             view.updates_out.write(ui, values);
         }
+        let activities = self.activities();
+        let view = &mut self.view;
+        let ui = &view.ui;
+        view.activity_rows.sync(activities);
         view.app_out.write(
             ui,
             vec![
@@ -1475,6 +1486,32 @@ impl App {
                 ("can-go-forward", Value::Bool(self.history.can_go_forward())),
             ],
         );
+    }
+
+    /// What Freya does in the background, for `App.activities`.
+    fn activities(&self) -> Vec<Value> {
+        let mut activities = self.library.activities();
+        let lastfm = self.lastfm.status();
+        if lastfm.waiting > 0 {
+            let detail = if lastfm.error.is_empty() {
+                format!("{} waiting", lastfm.waiting)
+            } else {
+                lastfm.error.clone()
+            };
+            activities.push(("Sending plays to Last.fm".to_owned(), detail));
+        }
+        if let update::State::Downloading { release, .. } = self.updater.state() {
+            activities.push(("Downloading an update".to_owned(), release.tag_name.clone()));
+        }
+        activities
+            .into_iter()
+            .map(|(title, detail)| {
+                Value::Struct(slint_interpreter::Struct::from_iter([
+                    ("title".to_owned(), skin_state::string(title)),
+                    ("detail".to_owned(), skin_state::string(detail)),
+                ]))
+            })
+            .collect()
     }
 
     /// Whether the app has things to follow closely: the library is being read.

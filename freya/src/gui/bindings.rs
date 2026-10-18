@@ -354,6 +354,25 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     );
     bind(
         "Library",
+        "match-artist",
+        Box::new(|app, _| app.library.start_artist_match()),
+    );
+    bind(
+        "Library",
+        "save-artist-match",
+        Box::new(|app, args| {
+            if let Some(Value::String(mbid)) = args.first() {
+                app.library.save_artist_match(mbid);
+            }
+        }),
+    );
+    bind(
+        "Library",
+        "cancel-artist-match",
+        Box::new(|app, _| app.library.cancel_artist_match()),
+    );
+    bind(
+        "Library",
         "match-album",
         Box::new(|app, _| app.library.start_album_match()),
     );
@@ -370,17 +389,12 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     );
     bind(
         "Library",
-        "choose-album-match",
+        "save-album-match",
         Box::new(|app, args| {
-            if let Some(Value::Number(index)) = args.first() {
-                app.library.choose_album_match(*index as usize);
+            if let Some(Value::String(group)) = args.first() {
+                app.library.save_album_match(group);
             }
         }),
-    );
-    bind(
-        "Library",
-        "unmatch-album",
-        Box::new(|app, _| app.library.unmatch_album()),
     );
     bind(
         "Library",
