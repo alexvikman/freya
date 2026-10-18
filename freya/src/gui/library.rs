@@ -19,6 +19,7 @@ use slint::{Image, ModelRc, VecModel};
 use slint_interpreter::{Struct, Value};
 
 use super::artist_info::ArtistInfos;
+use super::match_finder::MatchFinder;
 use super::picture_finder::{Found, Pick, PictureFinder, Request};
 use super::skin_state::{ModelRows, format_time, string};
 use super::skin_window::SkinWindow;
@@ -251,6 +252,12 @@ pub struct LibraryPanel {
     picture_error: String,
     portrait_rows: ModelRows,
     backdrop_rows: ModelRows,
+    /// And the artists MusicBrainz found by their name, with pictures by their id.
+    match_finder: MatchFinder,
+    matches: Vec<freya_library::artist_image::ArtistMatch>,
+    match_pictures: HashMap<String, Image>,
+    match_error: String,
+    match_rows: ModelRows,
     /// The user's personal fanart.tv key, for wide pictures of artists.
     fanart_key: Option<String>,
     popular_rows: ModelRows,
@@ -297,6 +304,20 @@ struct Choice {
     image: Image,
     /// Where it goes among those found.
     order: usize,
+}
+
+/// What tells an artist MusicBrainz knows from others: "Group · Norway · 1999–".
+fn match_facts(artist: &freya_library::artist_image::ArtistMatch) -> String {
+    let years = match (artist.begin.get(..4), artist.end.get(..4)) {
+        (Some(begin), Some(end)) if begin == end => begin.to_owned(),
+        (Some(begin), end) => format!("{begin}–{}", end.unwrap_or("")),
+        (None, _) => String::new(),
+    };
+    [artist.kind.as_str(), artist.area.as_str(), years.as_str()]
+        .into_iter()
+        .filter(|fact| !fact.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 /// A kind of picture by its name in the skin API.
@@ -462,6 +483,11 @@ impl LibraryPanel {
             picture_error: String::new(),
             portrait_rows: ModelRows::new(),
             backdrop_rows: ModelRows::new(),
+            match_finder: MatchFinder::new(),
+            matches: Vec::new(),
+            match_pictures: HashMap::new(),
+            match_error: String::new(),
+            match_rows: ModelRows::new(),
             online_bios: true,
             fanart_key: None,
             popular_rows: ModelRows::new(),
@@ -486,6 +512,7 @@ impl LibraryPanel {
             "backdrop-choices",
             self.backdrop_rows.model_value(),
         );
+        let _ = ui.set_global_property("Library", "artist-matches", self.match_rows.model_value());
         self.folders_shown = None;
         self.draft_shown = None;
         if self.db.is_some() {
@@ -576,6 +603,20 @@ impl LibraryPanel {
             self.show_artist_picture();
         }
         if self.draft.is_some() {
+            let found = self.match_finder.poll();
+            if let Some(failed) = found.failed {
+                self.match_error = failed;
+            }
+            let changed = found.matches.is_some() || !found.pictures.is_empty();
+            if let Some(matches) = found.matches {
+                self.matches = matches;
+            }
+            for (mbid, picture) in found.pictures {
+                self.match_pictures.insert(mbid, Image::from_rgba8(picture));
+            }
+            if changed {
+                self.show_matches();
+            }
             let (found, failed) = self.finder.poll();
             if let Some(failed) = failed {
                 self.picture_error = failed;
@@ -1124,9 +1165,15 @@ impl LibraryPanel {
             page.tags.clear();
             return;
         }
-        if let Some(info) = self
-            .artist_infos
-            .get(name, self.online_bios, self.db.as_ref())
+        // Which artist of the name: the user's match, else the tags'.
+        let mbid = self
+            .edits
+            .get(name)
+            .and_then(|e| e.mbid.clone())
+            .or_else(|| self.db.as_ref()?.artist_mbid(Some(name)).ok()?);
+        if let Some(info) =
+            self.artist_infos
+                .get(name, mbid.as_deref(), self.online_bios, self.db.as_ref())
         {
             page.summary.clone_from(&info.summary);
             page.biography.clone_from(&info.biography);
@@ -1243,12 +1290,15 @@ impl LibraryPanel {
         let name = self.draft.clone().flatten();
         self.lastfm_biography = name
             .and_then(|name| {
-                let info = self.artist_infos.get(&name, false, self.db.as_ref())?;
+                let info = self
+                    .artist_infos
+                    .get(&name, None, false, self.db.as_ref())?;
                 Some(info.biography.clone())
             })
             .unwrap_or_default();
         self.choices.clear();
         self.none_shown.clear();
+        self.forget_matches();
         self.picked.clear();
         self.picked_before.clear();
         self.picture_error.clear();
@@ -1334,6 +1384,54 @@ impl LibraryPanel {
         self.finder.stop();
         self.choices.clear();
         self.show_choices();
+        self.forget_matches();
+    }
+
+    /// Searches MusicBrainz for the artists named `query`, to say which is the one changed.
+    pub fn find_matches(&mut self, query: &str) {
+        let query = query.trim();
+        if self.draft.is_none() || query.is_empty() {
+            return;
+        }
+        self.match_error.clear();
+        self.matches.clear();
+        self.show_matches();
+        self.match_finder
+            .find(query.to_owned(), self.fanart_key.clone());
+    }
+
+    fn forget_matches(&mut self) {
+        self.match_finder.stop();
+        self.matches.clear();
+        self.match_pictures.clear();
+        self.match_error.clear();
+        self.show_matches();
+    }
+
+    /// Gives the skin the artists MusicBrainz found.
+    fn show_matches(&mut self) {
+        let rows = self
+            .matches
+            .iter()
+            .map(|m| {
+                Value::Struct(Struct::from_iter([
+                    ("mbid".to_owned(), string(&m.mbid)),
+                    ("name".to_owned(), string(&m.name)),
+                    ("detail".to_owned(), string(&m.disambiguation)),
+                    ("facts".to_owned(), string(match_facts(m))),
+                    (
+                        "picture".to_owned(),
+                        Value::Image(
+                            self.match_pictures
+                                .get(&m.mbid)
+                                .cloned()
+                                .unwrap_or_default(),
+                        ),
+                    ),
+                ]))
+            })
+            .collect();
+        self.match_rows.sync(rows);
     }
 
     /// Chooses the `index`th picture of `kind` ("portrait" or "backdrop"); the first is none.
@@ -1542,6 +1640,7 @@ impl LibraryPanel {
         }
         let kept = db.artist_edit(&artist).unwrap_or_default();
         self.finder.stop();
+        self.forget_matches();
         if self.keep_picked(&artist) {
             let key = Thumbnails::artist_key(Some(&artist));
             if let Some(thumbnails) = &mut self.thumbnails {
@@ -1562,6 +1661,8 @@ impl LibraryPanel {
             if let Some(thumbnails) = &mut self.thumbnails {
                 thumbnails.forget_backdrop(&Thumbnails::artist_key(Some(&artist)));
             }
+            // And Last.fm is asked about the artist now matched.
+            self.artist_infos.forget(&artist, self.db.as_ref());
         }
         self.reload();
     }
@@ -2016,6 +2117,11 @@ impl LibraryPanel {
             ("artist-draft", self.draft_value()),
             ("finding-pictures", Value::Bool(self.finder.searching())),
             ("picture-error", string(&self.picture_error)),
+            (
+                "finding-matches",
+                Value::Bool(self.match_finder.searching()),
+            ),
+            ("match-error", string(&self.match_error)),
             (
                 "artist-options",
                 Value::Bool(!self.searching() && *self.level() == Level::Artists),
@@ -2671,6 +2777,28 @@ mod tests {
             None
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tells_what_sets_an_artist_apart() {
+        let artist = |kind: &str, area: &str, begin: &str, end: &str| {
+            freya_library::artist_image::ArtistMatch {
+                kind: kind.into(),
+                area: area.into(),
+                begin: begin.into(),
+                end: end.into(),
+                ..Default::default()
+            }
+        };
+        assert_eq!(
+            match_facts(&artist("Group", "Norway", "1999", "")),
+            "Group · Norway · 1999–"
+        );
+        assert_eq!(
+            match_facts(&artist("Person", "", "1943-02-25", "2001-11-29")),
+            "Person · 1943–2001"
+        );
+        assert_eq!(match_facts(&artist("", "Sweden", "", "")), "Sweden");
     }
 
     #[test]

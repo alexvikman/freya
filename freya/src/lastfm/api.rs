@@ -198,8 +198,21 @@ impl Client {
     }
 
     /// What Last.fm says of the artist `name`; empty for one it does not know. Needs no user.
-    pub fn artist_info(&self, name: &str) -> Result<ArtistInfo, Error> {
-        match self.get("artist.getInfo", &[("artist", name), ("autocorrect", "1")]) {
+    /// What Last.fm says of the artist with the MusicBrainz id `mbid`, which tells apart
+    /// artists of one name; else of the artist named `name`.
+    pub fn artist_info(&self, name: &str, mbid: Option<&str>) -> Result<ArtistInfo, Error> {
+        if let Some(mbid) = mbid {
+            let info = self.ask_artist_info(&[("mbid", mbid)])?;
+            // Last.fm does not know every id.
+            if info != ArtistInfo::default() {
+                return Ok(info);
+            }
+        }
+        self.ask_artist_info(&[("artist", name), ("autocorrect", "1")])
+    }
+
+    fn ask_artist_info(&self, by: &[(&str, &str)]) -> Result<ArtistInfo, Error> {
+        match self.get("artist.getInfo", by) {
             Ok(answer) => Ok(artist_info(&answer)),
             // "The artist you supplied could not be found."
             Err(Error::Api(6, _)) => Ok(ArtistInfo::default()),

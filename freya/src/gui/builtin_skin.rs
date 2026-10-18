@@ -307,6 +307,29 @@ impl Convert for LibraryRow {
     }
 }
 
+impl Convert for MatchChoice {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            mbid: field(&s, "mbid"),
+            name: field(&s, "name"),
+            detail: field(&s, "detail"),
+            facts: field(&s, "facts"),
+            picture: field(&s, "picture"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("mbid", self.mbid.to_value()),
+            ("name", self.name.to_value()),
+            ("detail", self.detail.to_value()),
+            ("facts", self.facts.to_value()),
+            ("picture", self.picture.to_value()),
+        ])
+    }
+}
+
 impl Convert for PictureChoice {
     fn from_value(value: Value) -> Option<Self> {
         let Value::Struct(s) = value else { return None };
@@ -661,6 +684,9 @@ skin_api! {
         Library."backdrop-choices" => set_backdrop_choices, get_backdrop_choices;
         Library."finding-pictures" => set_finding_pictures, get_finding_pictures;
         Library."picture-error" => set_picture_error, get_picture_error;
+        Library."artist-matches" => set_artist_matches, get_artist_matches;
+        Library."finding-matches" => set_finding_matches, get_finding_matches;
+        Library."match-error" => set_match_error, get_match_error;
         Library."artist-sort" => set_artist_sort, get_artist_sort;
         Library."artist-view" => set_artist_view, get_artist_view;
         Library."artist-pictures-online" => set_artist_pictures_online, get_artist_pictures_online;
@@ -782,6 +808,7 @@ skin_api! {
         Library."choose-picture" => on_choose_picture, invoke_choose_picture(kind: SharedString, index: i32);
         Library."pick-picture-file" => on_pick_picture_file, invoke_pick_picture_file(kind: SharedString);
         Library."picture-from-url" => on_picture_from_url, invoke_picture_from_url(kind: SharedString, url: SharedString);
+        Library."find-matches" => on_find_matches, invoke_find_matches(query: SharedString);
         Library."set-artist-sort" => on_set_artist_sort, invoke_set_artist_sort(sort: SharedString);
         Library."set-artist-view" => on_set_artist_view, invoke_set_artist_view(view: SharedString);
         Library."set-artist-pictures-online" => on_set_artist_pictures_online, invoke_set_artist_pictures_online(online: bool);

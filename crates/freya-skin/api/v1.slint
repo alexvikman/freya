@@ -155,6 +155,19 @@ export struct ArtistDraft {
     biography-from-lastfm: bool,
 }
 
+/// An artist MusicBrainz knows, to say which one of a name the user's is: see
+/// `Library.artist-matches`.
+export struct MatchChoice {
+    mbid: string,
+    name: string,
+    /// MusicBrainz's words to tell them apart: "Norwegian jazz/metal/rock group".
+    detail: string,
+    /// "Group · Norway · 1999–".
+    facts: string,
+    /// A small picture of them, when fanart.tv has one.
+    picture: image,
+}
+
 /// A picture to choose for an artist: see `Library.portrait-choices`.
 export struct PictureChoice {
     /// Empty for the choice of none.
@@ -354,6 +367,14 @@ export global Library {
     /// and choose it.
     callback pick-picture-file(string);
     callback picture-from-url(string, string);
+    /// While the artist is changed: the artists MusicBrainz finds for the words given to
+    /// `find-matches`, best matches first, for the user to say which is theirs, by its id in
+    /// `save-artist`. More come while `finding-matches`.
+    in property <[MatchChoice]> artist-matches;
+    in property <bool> finding-matches;
+    /// Why the search did not work; empty when it did.
+    in property <string> match-error;
+    callback find-matches(string);
     /// Change `artist-sort`, `artist-view` or `artist-pictures-online`.
     callback set-artist-sort(string);
     callback set-artist-view(string);

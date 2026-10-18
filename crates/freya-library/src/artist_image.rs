@@ -156,11 +156,48 @@ pub fn download(url: &str) -> Result<Vec<u8>, String> {
 pub fn musicbrainz_id(name: &str) -> Result<Option<String>, String> {
     // Quoted, as Lucene reads a query, so a name is not taken for its syntax.
     let escaped = name.replace('\\', "\\\\").replace('"', "\\\"");
+    let answer = musicbrainz_search(&format!("artist:\"{escaped}\""))?;
+    Ok(artist_id(&answer, name))
+}
+
+/// An artist MusicBrainz knows, with what tells them from others of the same name.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ArtistMatch {
+    pub mbid: String,
+    pub name: String,
+    /// MusicBrainz's words to tell them apart: "Norwegian jazz/metal/rock group".
+    pub disambiguation: String,
+    /// "Group", "Person".
+    pub kind: String,
+    /// Where they are from: "Norway".
+    pub area: String,
+    /// When they began, and ended, as MusicBrainz has it: "1999", "1999-05".
+    pub begin: String,
+    pub end: String,
+}
+
+/// The artists MusicBrainz finds for the words in `query`, the best matches first.
+pub fn musicbrainz_artists(query: &str) -> Result<Vec<ArtistMatch>, String> {
+    // Every character Lucene would read as syntax is escaped.
+    let escaped: String = query
+        .chars()
+        .flat_map(|c| {
+            let special = "+-&|!(){}[]^\"~*?:\\/".contains(c);
+            special
+                .then_some('\\')
+                .into_iter()
+                .chain(std::iter::once(c))
+        })
+        .collect();
+    Ok(artist_matches(&musicbrainz_search(escaped.trim())?))
+}
+
+fn musicbrainz_search(query: &str) -> Result<serde_json::Value, String> {
     let agent = agent();
     let text = call_patiently(|| {
         agent
             .get(MUSICBRAINZ_SEARCH)
-            .query("query", format!("artist:\"{escaped}\""))
+            .query("query", query)
             .query("fmt", "json")
             .query("limit", "10")
             .call()
@@ -171,8 +208,34 @@ pub fn musicbrainz_id(name: &str) -> Result<Option<String>, String> {
     .limit(MAX_ANSWER_BYTES)
     .read_to_string()
     .map_err(|e| e.to_string())?;
-    let answer: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-    Ok(artist_id(&answer, name))
+    serde_json::from_str(&text).map_err(|e| e.to_string())
+}
+
+fn artist_matches(answer: &serde_json::Value) -> Vec<ArtistMatch> {
+    let text = |value: Option<&serde_json::Value>| {
+        value
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    answer
+        .get("artists")
+        .and_then(|a| a.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|artist| {
+            let life = artist.get("life-span");
+            Some(ArtistMatch {
+                mbid: artist.get("id")?.as_str()?.to_owned(),
+                name: text(artist.get("name")),
+                disambiguation: text(artist.get("disambiguation")),
+                kind: text(artist.get("type")),
+                area: text(artist.get("area").and_then(|a| a.get("name"))),
+                begin: text(life.and_then(|l| l.get("begin"))),
+                end: text(life.and_then(|l| l.get("end"))),
+            })
+        })
+        .collect()
 }
 
 /// The id of the best matching artist named `name` in a MusicBrainz search answer, which
@@ -434,6 +497,23 @@ mod tests {
             Some("bbb")
         );
         assert_eq!(artist_id(&answer, "Opeth"), None);
+    }
+
+    #[test]
+    fn tells_artists_of_one_name_apart() {
+        let answer = serde_json::json!({ "artists": [
+            { "id": "se", "name": "Shining", "type": "Group",
+              "disambiguation": "Swedish doom / depressive black metal band",
+              "area": { "name": "Sweden" }, "life-span": { "begin": "1996", "ended": null } },
+            { "id": "no", "name": "Shining", "area": { "name": "Norway" } },
+            { "name": "Without an id" },
+        ]});
+        let matches = artist_matches(&answer);
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].area, "Sweden");
+        assert_eq!(matches[0].begin, "1996");
+        assert_eq!(matches[1].disambiguation, "");
+        assert_eq!(matches[1].mbid, "no");
     }
 
     #[test]

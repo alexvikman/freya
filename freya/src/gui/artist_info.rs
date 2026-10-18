@@ -35,7 +35,14 @@ impl ArtistInfos {
     /// What is known of `name`: kept in `db` from before, or once Last.fm answered. Asks
     /// Last.fm when it is not known or is old, if `online` and this build has Freya's Last.fm
     /// key.
-    pub fn get(&mut self, name: &str, online: bool, db: Option<&Library>) -> Option<&ArtistInfo> {
+    /// `mbid`, their MusicBrainz id when known, tells Last.fm which artist of the name.
+    pub fn get(
+        &mut self,
+        name: &str,
+        mbid: Option<&str>,
+        online: bool,
+        db: Option<&Library>,
+    ) -> Option<&ArtistInfo> {
         if !self.known.contains_key(name)
             && let Some(kept) = db.and_then(|db| db.artist_text(name).ok().flatten())
         {
@@ -45,9 +52,22 @@ impl ArtistInfos {
             self.known.insert(name.to_owned(), info_of(kept.answer));
         }
         if online && self.asked.insert(name.to_owned()) {
-            self.ask(name);
+            self.ask(name, mbid);
         }
         self.known.get(name)
+    }
+
+    /// Forgets what Last.fm said of `name`, here and in `db`, so it is asked again: after
+    /// another artist of the name was matched.
+    pub fn forget(&mut self, name: &str, db: Option<&Library>) {
+        self.known.remove(name);
+        self.asked.remove(name);
+        self.unsaved.retain(|(n, _, _)| n != name);
+        if let Some(db) = db
+            && let Err(e) = db.forget_artist_text(name)
+        {
+            log::warn!("could not forget what Last.fm said of {name}: {e}");
+        }
     }
 
     /// Takes in answers that came. Returns whether any did.
@@ -77,21 +97,23 @@ impl ArtistInfos {
         }
     }
 
-    fn ask(&self, name: &str) {
+    fn ask(&self, name: &str, mbid: Option<&str>) {
         let Some(credentials) = Credentials::of_build() else {
             return;
         };
         let results = self.results.0.clone();
-        let name = name.to_owned();
+        let (name, mbid) = (name.to_owned(), mbid.map(str::to_owned));
         let started = std::thread::Builder::new()
             .name("freya-artist-info".into())
-            .spawn(move || match Client::new(credentials).artist_info(&name) {
-                Ok(info) => {
-                    let _ = results.send((name, info));
-                }
-                // Asked again next run.
-                Err(e) => log::debug!("no Last.fm information on {name}: {e:?}"),
-            });
+            .spawn(
+                move || match Client::new(credentials).artist_info(&name, mbid.as_deref()) {
+                    Ok(info) => {
+                        let _ = results.send((name, info));
+                    }
+                    // Asked again next run.
+                    Err(e) => log::debug!("no Last.fm information on {name}: {e:?}"),
+                },
+            );
         if let Err(e) = started {
             log::warn!("could not ask Last.fm: {e}");
         }
@@ -120,20 +142,20 @@ mod tests {
             ..ArtistInfo::default()
         };
         let mut infos = ArtistInfos::new();
-        assert!(infos.get("Ane Brun", false, Some(&db)).is_none());
+        assert!(infos.get("Ane Brun", None, false, Some(&db)).is_none());
         infos
             .results
             .0
             .send(("Ane Brun".into(), info.clone()))
             .unwrap();
         assert!(infos.poll());
-        assert_eq!(infos.get("Ane Brun", false, Some(&db)), Some(&info));
+        assert_eq!(infos.get("Ane Brun", None, false, Some(&db)), Some(&info));
         assert!(db.artist_text("Ane Brun").unwrap().is_none(), "not yet");
         infos.save(&db);
 
         // A new run reads it back, and counts it as fresh: Last.fm is not asked again.
         let mut again = ArtistInfos::new();
-        assert_eq!(again.get("Ane Brun", true, Some(&db)), Some(&info));
+        assert_eq!(again.get("Ane Brun", None, true, Some(&db)), Some(&info));
         assert!(again.asked.contains("Ane Brun"));
     }
 }

@@ -10,6 +10,7 @@ mod history;
 mod hologram;
 mod library;
 mod listening;
+mod match_finder;
 mod native_oscilloscope;
 mod native_spectrum;
 mod picture_finder;

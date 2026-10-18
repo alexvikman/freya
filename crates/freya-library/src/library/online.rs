@@ -222,6 +222,14 @@ impl Library {
             .optional()
     }
 
+    /// Forgets what Last.fm said of the artist, so it is asked again.
+    pub fn forget_artist_text(&self, artist: &str) -> Result<()> {
+        self.db
+            .prepare_cached("DELETE FROM artist_info WHERE artist = ?1")?
+            .execute([artist])?;
+        Ok(())
+    }
+
     pub fn set_artist_text(
         &self,
         artist: &str,

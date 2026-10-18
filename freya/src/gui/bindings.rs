@@ -354,6 +354,15 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     );
     bind(
         "Library",
+        "find-matches",
+        Box::new(|app, args| {
+            if let Some(Value::String(query)) = args.first() {
+                app.library.find_matches(query);
+            }
+        }),
+    );
+    bind(
+        "Library",
         "picture-from-url",
         Box::new(|app, args| {
             if let (Some(Value::String(kind)), Some(Value::String(url))) =
