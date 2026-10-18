@@ -6,6 +6,7 @@
 //! track was played, is kept in a table of its own that a rebuild leaves alone.
 
 mod edits;
+mod matches;
 mod online;
 mod scan;
 
@@ -19,6 +20,7 @@ use crate::cue::Part;
 use crate::tags::TagInfo;
 
 pub use edits::ArtistEdit;
+pub use matches::{AlbumMatch, plain_name, split_artist};
 pub use online::{ASK_AGAIN_AFTER, ArtistText, Asked, CHOSEN, PictureKind, PictureRow};
 pub use rusqlite::Error;
 pub use scan::{ScanEvent, ScanSummary, Scanner, scan};
@@ -289,6 +291,8 @@ impl Library {
         db.execute_batch(HISTORY)?;
         db.execute_batch(online::SCHEMA)?;
         db.execute_batch(edits::SCHEMA)?;
+        edits::migrate(&db)?;
+        db.execute_batch(matches::SCHEMA)?;
         Ok(Self { db })
     }
 
@@ -660,7 +664,13 @@ fn put(
         return Ok(());
     };
     let tags = &track.tags;
-    let album_artist = tags.album_artist.as_ref().or(tags.artist.as_ref());
+    let tagged = tags.album_artist.as_ref().or(tags.artist.as_ref());
+    // Matched to another artist by the user: filed under them.
+    let filed = match (tagged, &tags.album) {
+        (Some(artist), Some(album)) => matches::filed_under(db, artist, album)?,
+        _ => None,
+    };
+    let album_artist = filed.as_ref().or(tagged);
     let millis = |d: Duration| d.as_millis() as i64;
     let id: i64 = db
         .prepare_cached(

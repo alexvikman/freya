@@ -354,6 +354,41 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     );
     bind(
         "Library",
+        "match-album",
+        Box::new(|app, _| app.library.start_album_match()),
+    );
+    bind(
+        "Library",
+        "find-album-matches",
+        Box::new(|app, args| {
+            if let (Some(Value::String(title)), Some(Value::String(artist))) =
+                (args.first(), args.get(1))
+            {
+                app.library.find_album_matches(title, artist);
+            }
+        }),
+    );
+    bind(
+        "Library",
+        "choose-album-match",
+        Box::new(|app, args| {
+            if let Some(Value::Number(index)) = args.first() {
+                app.library.choose_album_match(*index as usize);
+            }
+        }),
+    );
+    bind(
+        "Library",
+        "unmatch-album",
+        Box::new(|app, _| app.library.unmatch_album()),
+    );
+    bind(
+        "Library",
+        "cancel-album-match",
+        Box::new(|app, _| app.library.cancel_album_match()),
+    );
+    bind(
+        "Library",
         "find-matches",
         Box::new(|app, args| {
             if let Some(Value::String(query)) = args.first() {
@@ -402,6 +437,8 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
                 sort_name: text(1),
                 mbid: text(2),
                 biography: text(3),
+                // Of the match: the library knows it.
+                note: None,
             };
             app.library.save_artist(&edit);
         }),

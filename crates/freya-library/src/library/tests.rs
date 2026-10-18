@@ -744,3 +744,79 @@ fn artists_sort_and_show_by_what_the_user_changed() {
     // Sorted by the sort name, else the name shown.
     assert_eq!(names(&library), ["Abba", "The Beatles", "The Cardigans"]);
 }
+
+#[test]
+fn an_album_matched_to_another_artist_of_the_name_is_filed_under_them() {
+    let mut library = Library::open_in_memory().unwrap();
+    add(
+        &mut library,
+        "/m/1.mp3",
+        &tags("Shining", "V - Halmstad", "A", 1),
+    );
+    add(
+        &mut library,
+        "/m/2.mp3",
+        &tags("Shining", "Blackjazz", "B", 1),
+    );
+    add(
+        &mut library,
+        "/m/3.mp3",
+        &tags("Shining", "Blackjazz", "C", 2),
+    );
+    // Another band's album of the same name, without an artist: left alone.
+    add(
+        &mut library,
+        "/m/4.mp3",
+        &TagInfo {
+            artist: None,
+            ..tags("x", "Blackjazz", "D", 1)
+        },
+    );
+    assert_eq!(library.artists().unwrap().len(), 2);
+
+    let norwegian = split_artist("Shining", "no-id");
+    let matched = AlbumMatch {
+        album_artist: "Shining".into(),
+        album: "Blackjazz".into(),
+        release_group: Some("rg".into()),
+        artist_mbid: "no-id".into(),
+        artist_key: Some(norwegian.clone()),
+    };
+    library.match_album(&matched).unwrap();
+    let names: Vec<Option<String>> = library
+        .artists()
+        .unwrap()
+        .into_iter()
+        .map(|a| a.name)
+        .collect();
+    assert_eq!(
+        names,
+        [Some("Shining".to_owned()), Some(norwegian.clone()), None]
+    );
+    assert_eq!(library.albums(Some(&norwegian)).unwrap()[0].tracks, 2);
+    assert_eq!(
+        library.album_match(&norwegian, "Blackjazz").unwrap(),
+        Some(matched.clone())
+    );
+    assert_eq!(
+        library.albums(None).unwrap().len(),
+        1,
+        "the untagged one stays"
+    );
+
+    // A scan reads the file again: still filed under the artist matched.
+    let tx = library.transaction().unwrap();
+    remove(&tx, Path::new("/m/2.mp3")).unwrap();
+    tx.commit().unwrap();
+    add(
+        &mut library,
+        "/m/2.mp3",
+        &tags("Shining", "Blackjazz", "B", 1),
+    );
+    assert_eq!(library.albums(Some(&norwegian)).unwrap()[0].tracks, 2);
+
+    library.unmatch_album("Shining", "Blackjazz").unwrap();
+    assert_eq!(library.artists().unwrap().len(), 2);
+    assert_eq!(library.albums(Some("Shining")).unwrap().len(), 2);
+    assert_eq!(library.album_match(&norwegian, "Blackjazz").unwrap(), None);
+}

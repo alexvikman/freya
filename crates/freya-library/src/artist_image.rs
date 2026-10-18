@@ -22,6 +22,7 @@ const BACKDROP_FILES: &[&str] = &["fanart", "backdrop", "background"];
 
 const DEEZER_SEARCH: &str = "https://api.deezer.com/search/artist";
 const MUSICBRAINZ_SEARCH: &str = "https://musicbrainz.org/ws/2/artist/";
+const MUSICBRAINZ_ALBUMS: &str = "https://musicbrainz.org/ws/2/release-group/";
 const FANART: &str = "https://webservice.fanart.tv/v3/music";
 /// MusicBrainz asks for at most one request a second, and for a way to reach the program's
 /// makers in its user agent.
@@ -192,11 +193,76 @@ pub fn musicbrainz_artists(query: &str) -> Result<Vec<ArtistMatch>, String> {
     Ok(artist_matches(&musicbrainz_search(escaped.trim())?))
 }
 
+/// An album MusicBrainz knows (a release group), with the artist who made it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AlbumCandidate {
+    pub release_group: String,
+    pub title: String,
+    /// "Album", "EP", "Single".
+    pub kind: String,
+    /// When it first came out: "2010-01-18".
+    pub date: String,
+    pub artist: ArtistMatch,
+}
+
+/// The albums MusicBrainz finds titled `title`, by an artist named `artist` when it is not
+/// empty, the best matches first.
+pub fn musicbrainz_albums(title: &str, artist: &str) -> Result<Vec<AlbumCandidate>, String> {
+    let quoted = |text: &str| {
+        let escaped = text.trim().replace('\\', "\\\\").replace('"', "\\\"");
+        format!("\"{escaped}\"")
+    };
+    let mut query = format!("releasegroup:{}", quoted(title));
+    if !artist.trim().is_empty() {
+        query = format!("{query} AND artist:{}", quoted(artist));
+    }
+    Ok(album_candidates(&musicbrainz_query(
+        MUSICBRAINZ_ALBUMS,
+        &query,
+    )?))
+}
+
+fn album_candidates(answer: &serde_json::Value) -> Vec<AlbumCandidate> {
+    let text = |value: Option<&serde_json::Value>| {
+        value
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    answer
+        .get("release-groups")
+        .and_then(|g| g.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|group| {
+            // The first credited artist: the one the album is filed under.
+            let credit = group.get("artist-credit")?.as_array()?.first()?;
+            let artist = credit.get("artist")?;
+            Some(AlbumCandidate {
+                release_group: group.get("id")?.as_str()?.to_owned(),
+                title: text(group.get("title")),
+                kind: text(group.get("primary-type")),
+                date: text(group.get("first-release-date")),
+                artist: ArtistMatch {
+                    mbid: artist.get("id")?.as_str()?.to_owned(),
+                    name: text(artist.get("name")),
+                    disambiguation: text(artist.get("disambiguation")),
+                    ..ArtistMatch::default()
+                },
+            })
+        })
+        .collect()
+}
+
 fn musicbrainz_search(query: &str) -> Result<serde_json::Value, String> {
+    musicbrainz_query(MUSICBRAINZ_SEARCH, query)
+}
+
+fn musicbrainz_query(address: &str, query: &str) -> Result<serde_json::Value, String> {
     let agent = agent();
     let text = call_patiently(|| {
         agent
-            .get(MUSICBRAINZ_SEARCH)
+            .get(address)
             .query("query", query)
             .query("fmt", "json")
             .query("limit", "10")
@@ -497,6 +563,26 @@ mod tests {
             Some("bbb")
         );
         assert_eq!(artist_id(&answer, "Opeth"), None);
+    }
+
+    #[test]
+    fn reads_albums_with_the_artist_who_made_them() {
+        let answer = serde_json::json!({ "release-groups": [
+            { "id": "rg", "title": "Blackjazz", "primary-type": "Album",
+              "first-release-date": "2010-01-18",
+              "artist-credit": [{ "name": "Shining", "artist": {
+                  "id": "no", "name": "Shining",
+                  "disambiguation": "Norwegian jazz/metal/rock group" } }] },
+            { "id": "no-credit", "title": "Lost" },
+        ]});
+        let albums = album_candidates(&answer);
+        assert_eq!(albums.len(), 1);
+        assert_eq!(albums[0].artist.mbid, "no");
+        assert_eq!(albums[0].date, "2010-01-18");
+        assert_eq!(
+            albums[0].artist.disambiguation,
+            "Norwegian jazz/metal/rock group"
+        );
     }
 
     #[test]

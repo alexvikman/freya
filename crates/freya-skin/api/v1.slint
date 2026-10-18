@@ -168,6 +168,30 @@ export struct MatchChoice {
     picture: image,
 }
 
+/// The album being matched: see `Library.match-album`.
+export struct AlbumMatchDraft {
+    title: string,
+    artist: string,
+    /// Where its files are.
+    folder: string,
+    /// The MusicBrainz release group the user matched it to; empty when Freya files it as
+    /// its tags say.
+    release-group: string,
+}
+
+/// An album MusicBrainz knows, with the artist who made it: see `Library.album-matches`.
+export struct AlbumMatchChoice {
+    release-group: string,
+    title: string,
+    /// "Album · 2010".
+    facts: string,
+    artist: string,
+    /// MusicBrainz's words to tell the artist from others of the name.
+    detail: string,
+    /// Its cover, from the Cover Art Archive, when it has one.
+    picture: image,
+}
+
 /// A picture to choose for an artist: see `Library.portrait-choices`.
 export struct PictureChoice {
     /// Empty for the choice of none.
@@ -209,6 +233,9 @@ export struct ArtistPage {
     tags: string,
     /// Whether `summary` and `biography` are the user's own text rather than Last.fm's.
     own-biography: bool,
+    /// What tells them from others of the name, once matched in MusicBrainz: "Norwegian
+    /// jazz/metal/rock group".
+    note: string,
     /// Whether `Library.popular` shows all ten tracks rather than five, and how many there
     /// are in all.
     more: bool,
@@ -375,6 +402,21 @@ export global Library {
     /// Why the search did not work; empty when it did.
     in property <string> match-error;
     callback find-matches(string);
+    /// Match the album shown to the album in MusicBrainz it is, and so to the artist who made
+    /// it: Freya sets `album-draft` and searches by its title and artist. Albums of another
+    /// artist of the same name are then filed under an artist of their own.
+    in property <AlbumMatchDraft> album-draft;
+    in property <[AlbumMatchChoice]> album-matches;
+    in property <bool> finding-album-matches;
+    in property <string> album-match-error;
+    callback match-album();
+    /// Search again, by a title and an artist.
+    callback find-album-matches(string, string);
+    /// Match the album to the `index`th found, or to none, filing it as its tags say; either
+    /// ends the matching, as does `cancel-album-match`.
+    callback choose-album-match(int);
+    callback unmatch-album();
+    callback cancel-album-match();
     /// Change `artist-sort`, `artist-view` or `artist-pictures-online`.
     callback set-artist-sort(string);
     callback set-artist-view(string);

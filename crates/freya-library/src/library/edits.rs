@@ -16,9 +16,19 @@ pub(super) const SCHEMA: &str = "
         name TEXT,
         sort_name TEXT,
         mbid TEXT,
-        biography TEXT
+        biography TEXT,
+        -- MusicBrainz's words to tell them from others of the name, with the id.
+        note TEXT
     );
 ";
+
+/// Adds what came after the table was first made, to a library from before.
+pub(super) fn migrate(db: &rusqlite::Connection) -> Result<()> {
+    if db.prepare("SELECT note FROM artist_edits LIMIT 0").is_err() {
+        db.execute_batch("ALTER TABLE artist_edits ADD COLUMN note TEXT;")?;
+    }
+    Ok(())
+}
 
 /// What the user changed about an artist; `None` where they changed nothing.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -31,6 +41,8 @@ pub struct ArtistEdit {
     pub mbid: Option<String>,
     /// Their biography, in place of what Last.fm says.
     pub biography: Option<String>,
+    /// What tells them from others of the name, as MusicBrainz has it for `mbid`.
+    pub note: Option<String>,
 }
 
 impl ArtistEdit {
@@ -47,10 +59,13 @@ impl ArtistEdit {
                 .filter(|v| !v.is_empty())
                 .map(str::to_owned)
         };
+        let mbid = field(&self.mbid);
         Self {
             name: field(&self.name),
             sort_name: field(&self.sort_name),
-            mbid: field(&self.mbid),
+            // Of the id, and gone with it.
+            note: field(&self.note).filter(|_| mbid.is_some()),
+            mbid,
             biography: field(&self.biography),
         }
     }
@@ -62,7 +77,7 @@ impl Library {
         Ok(self
             .db
             .prepare_cached(
-                "SELECT name, sort_name, mbid, biography FROM artist_edits WHERE artist = ?1",
+                "SELECT name, sort_name, mbid, biography, note FROM artist_edits WHERE artist = ?1",
             )?
             .query_row([artist], edit_from_row)
             .optional()?
@@ -71,9 +86,9 @@ impl Library {
 
     /// Every artist the user changed something about.
     pub fn artist_edits(&self) -> Result<HashMap<String, ArtistEdit>> {
-        let mut statement = self
-            .db
-            .prepare_cached("SELECT artist, name, sort_name, mbid, biography FROM artist_edits")?;
+        let mut statement = self.db.prepare_cached(
+            "SELECT artist, name, sort_name, mbid, biography, note FROM artist_edits",
+        )?;
         let rows = statement.query_map([], |row| {
             Ok((
                 row.get(0)?,
@@ -82,6 +97,7 @@ impl Library {
                     sort_name: row.get(2)?,
                     mbid: row.get(3)?,
                     biography: row.get(4)?,
+                    note: row.get(5)?,
                 },
             ))
         })?;
@@ -100,15 +116,17 @@ impl Library {
         }
         self.db
             .prepare_cached(
-                "INSERT OR REPLACE INTO artist_edits (artist, name, sort_name, mbid, biography)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT OR REPLACE INTO artist_edits
+                     (artist, name, sort_name, mbid, biography, note)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             )?
             .execute(params![
                 artist,
                 edit.name,
                 edit.sort_name,
                 edit.mbid,
-                edit.biography
+                edit.biography,
+                edit.note
             ])?;
         Ok(())
     }
@@ -120,12 +138,47 @@ fn edit_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArtistEdit> {
         sort_name: row.get(1)?,
         mbid: row.get(2)?,
         biography: row.get(3)?,
+        note: row.get(4)?,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adds_the_note_to_a_library_from_before() {
+        let dir = std::env::temp_dir().join(format!("freya-edits-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("library.sqlite3");
+        drop(Library::open(&path).unwrap());
+        {
+            let db = rusqlite::Connection::open(&path).unwrap();
+            db.execute_batch(
+                "DROP TABLE artist_edits;
+                 CREATE TABLE artist_edits (artist TEXT NOT NULL PRIMARY KEY, name TEXT,
+                     sort_name TEXT, mbid TEXT, biography TEXT);
+                 INSERT INTO artist_edits (artist, name) VALUES ('Opeth', 'OPETH');",
+            )
+            .unwrap();
+        }
+        let library = Library::open(&path).unwrap();
+        let edit = library.artist_edit("Opeth").unwrap();
+        assert_eq!((edit.name.as_deref(), edit.note), (Some("OPETH"), None));
+        let noted = ArtistEdit {
+            mbid: Some("id".into()),
+            note: Some("Swedish band".into()),
+            ..edit
+        };
+        library.set_artist_edit("Opeth", &noted).unwrap();
+        assert_eq!(
+            library.artist_edit("Opeth").unwrap().note.as_deref(),
+            Some("Swedish band")
+        );
+        drop(library);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn keeps_what_the_user_changed_and_forgets_it_when_cleared() {

@@ -307,6 +307,52 @@ impl Convert for LibraryRow {
     }
 }
 
+impl Convert for AlbumMatchDraft {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            title: field(&s, "title"),
+            artist: field(&s, "artist"),
+            folder: field(&s, "folder"),
+            release_group: field(&s, "release-group"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("title", self.title.to_value()),
+            ("artist", self.artist.to_value()),
+            ("folder", self.folder.to_value()),
+            ("release-group", self.release_group.to_value()),
+        ])
+    }
+}
+
+impl Convert for AlbumMatchChoice {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            release_group: field(&s, "release-group"),
+            title: field(&s, "title"),
+            facts: field(&s, "facts"),
+            artist: field(&s, "artist"),
+            detail: field(&s, "detail"),
+            picture: field(&s, "picture"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("release-group", self.release_group.to_value()),
+            ("title", self.title.to_value()),
+            ("facts", self.facts.to_value()),
+            ("artist", self.artist.to_value()),
+            ("detail", self.detail.to_value()),
+            ("picture", self.picture.to_value()),
+        ])
+    }
+}
+
 impl Convert for MatchChoice {
     fn from_value(value: Value) -> Option<Self> {
         let Value::Struct(s) = value else { return None };
@@ -398,6 +444,7 @@ impl Convert for ArtistPage {
             biography: field(&s, "biography"),
             tags: field(&s, "tags"),
             own_biography: field(&s, "own-biography"),
+            note: field(&s, "note"),
             more: field(&s, "more"),
             popular_count: field(&s, "popular-count"),
         })
@@ -418,6 +465,7 @@ impl Convert for ArtistPage {
             ("biography", self.biography.to_value()),
             ("tags", self.tags.to_value()),
             ("own-biography", self.own_biography.to_value()),
+            ("note", self.note.to_value()),
             ("more", self.more.to_value()),
             ("popular-count", self.popular_count.to_value()),
         ])
@@ -687,6 +735,10 @@ skin_api! {
         Library."artist-matches" => set_artist_matches, get_artist_matches;
         Library."finding-matches" => set_finding_matches, get_finding_matches;
         Library."match-error" => set_match_error, get_match_error;
+        Library."album-draft" => set_album_draft, get_album_draft;
+        Library."album-matches" => set_album_matches, get_album_matches;
+        Library."finding-album-matches" => set_finding_album_matches, get_finding_album_matches;
+        Library."album-match-error" => set_album_match_error, get_album_match_error;
         Library."artist-sort" => set_artist_sort, get_artist_sort;
         Library."artist-view" => set_artist_view, get_artist_view;
         Library."artist-pictures-online" => set_artist_pictures_online, get_artist_pictures_online;
@@ -809,6 +861,11 @@ skin_api! {
         Library."pick-picture-file" => on_pick_picture_file, invoke_pick_picture_file(kind: SharedString);
         Library."picture-from-url" => on_picture_from_url, invoke_picture_from_url(kind: SharedString, url: SharedString);
         Library."find-matches" => on_find_matches, invoke_find_matches(query: SharedString);
+        Library."match-album" => on_match_album, invoke_match_album();
+        Library."find-album-matches" => on_find_album_matches, invoke_find_album_matches(title: SharedString, artist: SharedString);
+        Library."choose-album-match" => on_choose_album_match, invoke_choose_album_match(index: i32);
+        Library."unmatch-album" => on_unmatch_album, invoke_unmatch_album();
+        Library."cancel-album-match" => on_cancel_album_match, invoke_cancel_album_match();
         Library."set-artist-sort" => on_set_artist_sort, invoke_set_artist_sort(sort: SharedString);
         Library."set-artist-view" => on_set_artist_view, invoke_set_artist_view(view: SharedString);
         Library."set-artist-pictures-online" => on_set_artist_pictures_online, invoke_set_artist_pictures_online(online: bool);

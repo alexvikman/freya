@@ -1,11 +1,11 @@
-//! Artists MusicBrainz knows by a name, for the user to say which one theirs is: on a thread
-//! of its own, each with a small picture from fanart.tv when the user has a key, to tell
-//! artists of one name apart.
+//! Artists and albums MusicBrainz knows, for the user to say which one theirs is: on threads
+//! of their own, each with a small picture, from fanart.tv for an artist when the user has a
+//! key, from the Cover Art Archive for an album, to tell those of one name apart.
 
 use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use freya_library::artist_image::{self, ArtistMatch};
+use freya_library::artist_image::{self, AlbumCandidate, ArtistMatch};
 use slint::{Rgba8Pixel, SharedPixelBuffer};
 
 /// Pictures asked of fanart.tv at once.
@@ -154,4 +154,133 @@ fn picture(mbid: &str, key: &str) -> Result<Option<SharedPixelBuffer<Rgba8Pixel>
         picture.width(),
         picture.height(),
     )))
+}
+
+/// Albums MusicBrainz knows by a title and an artist, for the user to say which one theirs
+/// is, and so which artist made it: each with its cover from the Cover Art Archive.
+pub struct AlbumFinder {
+    generation: u64,
+    searching: bool,
+    results: (Sender<AlbumMessage>, Receiver<AlbumMessage>),
+}
+
+enum AlbumMessage {
+    Albums(u64, Vec<AlbumCandidate>),
+    Cover(u64, String, SharedPixelBuffer<Rgba8Pixel>),
+    Done(u64),
+    Failed(u64, String),
+}
+
+/// What an album search found since the last poll.
+#[derive(Default)]
+pub struct AlbumsFound {
+    pub albums: Option<Vec<AlbumCandidate>>,
+    /// Covers, by the album's release group.
+    pub covers: Vec<(String, SharedPixelBuffer<Rgba8Pixel>)>,
+    pub failed: Option<String>,
+}
+
+const COVER_ART: &str = "https://coverartarchive.org/release-group";
+
+impl AlbumFinder {
+    pub fn new() -> Self {
+        Self {
+            generation: 0,
+            searching: false,
+            results: channel(),
+        }
+    }
+
+    /// Searches MusicBrainz for albums titled `title` by `artist`, forgetting an earlier
+    /// search.
+    pub fn find(&mut self, title: String, artist: String) {
+        self.generation += 1;
+        self.searching = true;
+        let (generation, results) = (self.generation, self.results.0.clone());
+        let started = std::thread::Builder::new()
+            .name("freya-album-finder".into())
+            .spawn(move || {
+                let albums = match artist_image::musicbrainz_albums(&title, &artist) {
+                    Ok(albums) => albums,
+                    Err(e) => {
+                        let _ = results.send(AlbumMessage::Failed(
+                            generation,
+                            format!("MusicBrainz could not be asked: {e}"),
+                        ));
+                        let _ = results.send(AlbumMessage::Done(generation));
+                        return;
+                    }
+                };
+                let _ = results.send(AlbumMessage::Albums(generation, albums.clone()));
+                let queue = Mutex::new(
+                    albums
+                        .iter()
+                        .map(|a| a.release_group.clone())
+                        .collect::<Vec<_>>(),
+                );
+                std::thread::scope(|scope| {
+                    for _ in 0..WORKERS.min(albums.len()) {
+                        scope.spawn(|| {
+                            // The lock goes with the closure, before the download.
+                            while let Some(group) = queue.lock().ok().and_then(|mut q| q.pop()) {
+                                if let Ok(cover) = cover(&group) {
+                                    let _ =
+                                        results.send(AlbumMessage::Cover(generation, group, cover));
+                                }
+                            }
+                        });
+                    }
+                });
+                let _ = results.send(AlbumMessage::Done(generation));
+            });
+        if let Err(e) = started {
+            log::warn!("could not look for albums: {e}");
+            self.searching = false;
+        }
+    }
+
+    pub fn stop(&mut self) {
+        self.generation += 1;
+        self.searching = false;
+    }
+
+    pub fn searching(&self) -> bool {
+        self.searching
+    }
+
+    pub fn poll(&mut self) -> AlbumsFound {
+        let mut found = AlbumsFound::default();
+        while let Ok(message) = self.results.1.try_recv() {
+            match message {
+                AlbumMessage::Albums(generation, albums) if generation == self.generation => {
+                    found.albums = Some(albums);
+                }
+                AlbumMessage::Cover(generation, group, cover) if generation == self.generation => {
+                    found.covers.push((group, cover));
+                }
+                AlbumMessage::Failed(generation, e) if generation == self.generation => {
+                    found.failed = Some(e);
+                }
+                AlbumMessage::Done(generation) if generation == self.generation => {
+                    self.searching = false;
+                }
+                _ => {}
+            }
+        }
+        found
+    }
+}
+
+/// The cover of the album `group` from the Cover Art Archive, small.
+fn cover(group: &str) -> Result<SharedPixelBuffer<Rgba8Pixel>, String> {
+    let bytes = artist_image::download(&format!("{COVER_ART}/{group}/front-250"))?;
+    let cover = image::load_from_memory(&bytes)
+        .map_err(|e| e.to_string())?
+        .resize_to_fill(PICTURE, PICTURE, image::imageops::FilterType::Triangle)
+        .to_rgba8();
+    Ok(SharedPixelBuffer::clone_from_slice(
+        cover.as_raw(),
+        cover.width(),
+        cover.height(),
+    ))
 }

@@ -626,7 +626,8 @@ fn deezer_picture(
         let picture = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
         return Ok(Some((checksum.to_owned(), picture)));
     }
-    let online = artist_image::deezer(name);
+    // By their name, without the id of an artist split off.
+    let online = artist_image::deezer(crate::library::plain_name(name));
     // Deezer allows 50 requests in 5 seconds; this stays well below.
     std::thread::sleep(std::time::Duration::from_millis(150));
     let picture = match online? {
@@ -741,7 +742,7 @@ fn search_artist_id(name: &str, searched: &mut Option<Instant>) -> Result<Option
         std::thread::sleep(wait);
     }
     *searched = Some(Instant::now());
-    artist_image::musicbrainz_id(name)
+    artist_image::musicbrainz_id(crate::library::plain_name(name))
 }
 
 /// Writes `picture` as `name`, under another name first and then renamed, so a half-written

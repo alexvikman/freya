@@ -105,15 +105,17 @@ impl ArtistInfos {
         let (name, mbid) = (name.to_owned(), mbid.map(str::to_owned));
         let started = std::thread::Builder::new()
             .name("freya-artist-info".into())
-            .spawn(
-                move || match Client::new(credentials).artist_info(&name, mbid.as_deref()) {
+            .spawn(move || {
+                match Client::new(credentials)
+                    .artist_info(freya_library::library::plain_name(&name), mbid.as_deref())
+                {
                     Ok(info) => {
                         let _ = results.send((name, info));
                     }
                     // Asked again next run.
                     Err(e) => log::debug!("no Last.fm information on {name}: {e:?}"),
-                },
-            );
+                }
+            });
         if let Err(e) = started {
             log::warn!("could not ask Last.fm: {e}");
         }

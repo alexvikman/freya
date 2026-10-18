@@ -7,8 +7,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use freya_library::cue::Part;
 use freya_library::library::{
-    Album, Artist, ArtistEdit, ArtistOrder, CHOSEN, Genre, PictureKind, PictureRow, Played,
-    ScanEvent, Scanner, Track,
+    Album, AlbumMatch, Artist, ArtistEdit, ArtistOrder, CHOSEN, Genre, PictureKind, PictureRow,
+    Played, ScanEvent, Scanner, Track, plain_name, split_artist,
 };
 use freya_library::pictures::Pictures;
 use freya_library::thumbnails::{
@@ -19,7 +19,7 @@ use slint::{Image, ModelRc, VecModel};
 use slint_interpreter::{Struct, Value};
 
 use super::artist_info::ArtistInfos;
-use super::match_finder::MatchFinder;
+use super::match_finder::{AlbumFinder, MatchFinder};
 use super::picture_finder::{Found, Pick, PictureFinder, Request};
 use super::skin_state::{ModelRows, format_time, string};
 use super::skin_window::SkinWindow;
@@ -258,6 +258,14 @@ pub struct LibraryPanel {
     match_pictures: HashMap<String, Image>,
     match_error: String,
     match_rows: ModelRows,
+    /// While the user matches an album: which, by the artist it is filed under and its title;
+    /// and the albums MusicBrainz found, with covers by their release group.
+    album_draft: Option<(Option<String>, Option<String>)>,
+    album_finder: AlbumFinder,
+    album_candidates: Vec<freya_library::artist_image::AlbumCandidate>,
+    album_covers: HashMap<String, Image>,
+    album_match_error: String,
+    album_rows: ModelRows,
     /// The user's personal fanart.tv key, for wide pictures of artists.
     fanart_key: Option<String>,
     popular_rows: ModelRows,
@@ -488,6 +496,12 @@ impl LibraryPanel {
             match_pictures: HashMap::new(),
             match_error: String::new(),
             match_rows: ModelRows::new(),
+            album_draft: None,
+            album_finder: AlbumFinder::new(),
+            album_candidates: Vec::new(),
+            album_covers: HashMap::new(),
+            album_match_error: String::new(),
+            album_rows: ModelRows::new(),
             online_bios: true,
             fanart_key: None,
             popular_rows: ModelRows::new(),
@@ -513,6 +527,7 @@ impl LibraryPanel {
             self.backdrop_rows.model_value(),
         );
         let _ = ui.set_global_property("Library", "artist-matches", self.match_rows.model_value());
+        let _ = ui.set_global_property("Library", "album-matches", self.album_rows.model_value());
         self.folders_shown = None;
         self.draft_shown = None;
         if self.db.is_some() {
@@ -601,6 +616,22 @@ impl LibraryPanel {
             self.covers_ready += 1;
             self.color_album_page();
             self.show_artist_picture();
+        }
+        if self.album_draft.is_some() {
+            let found = self.album_finder.poll();
+            if let Some(failed) = found.failed {
+                self.album_match_error = failed;
+            }
+            let changed = found.albums.is_some() || !found.covers.is_empty();
+            if let Some(albums) = found.albums {
+                self.album_candidates = albums;
+            }
+            for (group, cover) in found.covers {
+                self.album_covers.insert(group, Image::from_rgba8(cover));
+            }
+            if changed {
+                self.show_album_matches();
+            }
         }
         if self.draft.is_some() {
             let found = self.match_finder.poll();
@@ -1366,7 +1397,7 @@ impl LibraryPanel {
         }
         let backdrop = self.backdrop_source(page);
         let request = Request {
-            name: name.to_owned(),
+            name: freya_library::library::plain_name(name).to_owned(),
             deezer: self.online_pictures,
             mbid: backdrop.mbid,
             search: backdrop.search,
@@ -1385,6 +1416,208 @@ impl LibraryPanel {
         self.choices.clear();
         self.show_choices();
         self.forget_matches();
+    }
+
+    /// Starts matching the album shown, searching MusicBrainz by its title and artist.
+    pub fn start_album_match(&mut self) {
+        let Level::AlbumTracks { artist, album } = self.level().clone() else {
+            return;
+        };
+        self.album_draft = Some((artist.clone(), album.clone()));
+        self.album_candidates.clear();
+        self.album_covers.clear();
+        self.album_match_error.clear();
+        self.show_album_matches();
+        if let Some(title) = album {
+            let artist = artist.as_deref().map(plain_name).unwrap_or_default();
+            self.album_finder.find(title, artist.to_owned());
+        }
+    }
+
+    /// Searches MusicBrainz again for the album being matched, by `title` and `artist`.
+    pub fn find_album_matches(&mut self, title: &str, artist: &str) {
+        if self.album_draft.is_none() || title.trim().is_empty() {
+            return;
+        }
+        self.album_match_error.clear();
+        self.album_candidates.clear();
+        self.show_album_matches();
+        self.album_finder
+            .find(title.trim().to_owned(), artist.trim().to_owned());
+    }
+
+    pub fn cancel_album_match(&mut self) {
+        self.album_draft = None;
+        self.album_finder.stop();
+        self.album_candidates.clear();
+        self.album_covers.clear();
+        self.show_album_matches();
+    }
+
+    /// Matches the album being matched to the `index`th album found. Made by another artist
+    /// than the one it is filed under, even one of the same name, it is filed under that
+    /// artist, who is given their name, id and MusicBrainz's words for them.
+    pub fn choose_album_match(&mut self, index: usize) {
+        let (Some((Some(filed), Some(album))), Some(chosen)) = (
+            self.album_draft.clone(),
+            self.album_candidates.get(index).cloned(),
+        ) else {
+            return;
+        };
+        let Some(db) = &self.db else {
+            return;
+        };
+        // As the tags name it.
+        let tagged = db
+            .album_match(&filed, &album)
+            .ok()
+            .flatten()
+            .map_or_else(|| filed.clone(), |m| m.album_artist);
+        let mbid = &chosen.artist.mbid;
+        let theirs = self
+            .edits
+            .get(&tagged)
+            .and_then(|e| e.mbid.clone())
+            .or_else(|| self.found_mbid(Some(&tagged)).0);
+        // An artist without an id yet is the one matched; one with another, another artist.
+        let key = theirs
+            .as_deref()
+            .is_some_and(|theirs| theirs != mbid)
+            .then(|| split_artist(&tagged, mbid));
+        let matched = AlbumMatch {
+            album_artist: tagged.clone(),
+            album: album.clone(),
+            release_group: Some(chosen.release_group.clone()),
+            artist_mbid: mbid.clone(),
+            artist_key: key.clone(),
+        };
+        let Some(db) = &mut self.db else {
+            return;
+        };
+        if let Err(e) = db.match_album(&matched) {
+            log::warn!("could not match {album}: {e}");
+            return;
+        }
+        let named = match &key {
+            Some(key) if !self.edits.contains_key(key) => Some((
+                key.clone(),
+                ArtistEdit {
+                    name: Some(chosen.artist.name.clone()),
+                    ..ArtistEdit::default()
+                },
+            )),
+            None if theirs.is_none() => Some((
+                tagged.clone(),
+                self.edits.get(&tagged).cloned().unwrap_or_default(),
+            )),
+            _ => None,
+        };
+        if let Some((artist, edit)) = named {
+            let edit = ArtistEdit {
+                mbid: Some(mbid.clone()),
+                note: Some(chosen.artist.disambiguation.clone()),
+                ..edit
+            };
+            if let Err(e) = db.set_artist_edit(&artist, &edit) {
+                log::warn!("could not keep who made {album}: {e}");
+            }
+        }
+        self.cancel_album_match();
+        self.show_album(Some(key.unwrap_or(tagged)), Some(album));
+    }
+
+    /// Files the album being matched as its tags say again.
+    pub fn unmatch_album(&mut self) {
+        let Some((Some(filed), Some(album))) = self.album_draft.clone() else {
+            return;
+        };
+        let Some(db) = &mut self.db else {
+            return;
+        };
+        let tagged = match db.album_match(&filed, &album) {
+            Ok(Some(matched)) => matched.album_artist,
+            _ => filed,
+        };
+        if let Err(e) = db.unmatch_album(&tagged, &album) {
+            log::warn!("could not unmatch {album}: {e}");
+        }
+        self.cancel_album_match();
+        self.show_album(Some(tagged), Some(album));
+    }
+
+    /// Opens the album `album` filed under `artist`, under their page.
+    fn show_album(&mut self, artist: Option<String>, album: Option<String>) {
+        self.opened = vec![
+            Level::Artists,
+            Level::ArtistAlbums {
+                artist: artist.clone(),
+            },
+            Level::AlbumTracks { artist, album },
+        ];
+        self.query.clear();
+        self.reload();
+    }
+
+    /// The album being matched, as `album-draft` gives it.
+    fn album_draft_value(&self) -> Value {
+        let (artist, title) = self.album_draft.clone().unwrap_or_default();
+        let matched = match (&self.db, &artist, &title) {
+            (Some(db), Some(artist), Some(title)) => db.album_match(artist, title).ok().flatten(),
+            _ => None,
+        };
+        let folder = self
+            .items
+            .iter()
+            .find_map(Item::track)
+            .and_then(|t| t.path.parent())
+            .map(|p| p.display().to_string())
+            .filter(|_| self.album_draft.is_some())
+            .unwrap_or_default();
+        Value::Struct(Struct::from_iter([
+            ("title".to_owned(), string(title.unwrap_or_default())),
+            (
+                "artist".to_owned(),
+                string(self.shown_artist(artist.as_deref())),
+            ),
+            ("folder".to_owned(), string(folder)),
+            (
+                "release-group".to_owned(),
+                string(matched.and_then(|m| m.release_group).unwrap_or_default()),
+            ),
+        ]))
+    }
+
+    /// Gives the skin the albums MusicBrainz found.
+    fn show_album_matches(&mut self) {
+        let rows = self
+            .album_candidates
+            .iter()
+            .map(|album| {
+                let year = album.date.get(..4).unwrap_or_default();
+                let facts = [album.kind.as_str(), year]
+                    .into_iter()
+                    .filter(|f| !f.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+                Value::Struct(Struct::from_iter([
+                    ("release-group".to_owned(), string(&album.release_group)),
+                    ("title".to_owned(), string(&album.title)),
+                    ("facts".to_owned(), string(facts)),
+                    ("artist".to_owned(), string(&album.artist.name)),
+                    ("detail".to_owned(), string(&album.artist.disambiguation)),
+                    (
+                        "picture".to_owned(),
+                        Value::Image(
+                            self.album_covers
+                                .get(&album.release_group)
+                                .cloned()
+                                .unwrap_or_default(),
+                        ),
+                    ),
+                ]))
+            })
+            .collect();
+        self.album_rows.sync(rows);
     }
 
     /// Searches MusicBrainz for the artists named `query`, to say which is the one changed.
@@ -1612,7 +1845,10 @@ impl LibraryPanel {
             .clone()
             .unwrap_or_else(|| self.lastfm_biography.clone());
         Value::Struct(Struct::from_iter([
-            ("artist".to_owned(), text(artist)),
+            (
+                "artist".to_owned(),
+                text(artist.map(|a| freya_library::library::plain_name(&a).to_owned())),
+            ),
             ("name".to_owned(), text(edit.name)),
             ("sort-name".to_owned(), text(edit.sort_name)),
             ("mbid".to_owned(), text(edit.mbid)),
@@ -1631,6 +1867,16 @@ impl LibraryPanel {
         let before = self.edits.get(&artist).cloned().unwrap_or_default();
         // Last.fm's, saved unchanged, stays Last.fm's: it is not the user's own.
         let mut edit = edit.clone();
+        // MusicBrainz's words for the artist matched, kept with the id.
+        let mbid = edit.mbid.as_deref().map(str::trim);
+        edit.note = if mbid == before.mbid.as_deref() {
+            before.note.clone()
+        } else {
+            self.matches
+                .iter()
+                .find(|m| Some(m.mbid.as_str()) == mbid)
+                .map(|m| m.disambiguation.clone())
+        };
         if edit.biography.as_deref().map(str::trim) == Some(self.lastfm_biography.trim()) {
             edit.biography = None;
         }
@@ -2122,6 +2368,12 @@ impl LibraryPanel {
                 Value::Bool(self.match_finder.searching()),
             ),
             ("match-error", string(&self.match_error)),
+            ("album-draft", self.album_draft_value()),
+            (
+                "finding-album-matches",
+                Value::Bool(self.album_finder.searching()),
+            ),
+            ("album-match-error", string(&self.album_match_error)),
             (
                 "artist-options",
                 Value::Bool(!self.searching() && *self.level() == Level::Artists),
@@ -2176,6 +2428,13 @@ impl LibraryPanel {
             (
                 "own-biography".to_owned(),
                 Value::Bool(page.is_some_and(|p| p.own_biography)),
+            ),
+            (
+                "note".to_owned(),
+                string(
+                    page.and_then(|p| self.edits.get(p.name.as_deref()?)?.note.clone())
+                        .unwrap_or_default(),
+                ),
             ),
             ("detail".to_owned(), text(|p| p.detail.clone())),
             ("genres".to_owned(), text(|p| p.genres.clone())),
@@ -2403,7 +2662,8 @@ fn cover_key(album: &Album) -> String {
 }
 
 fn artist_name(name: Option<&str>) -> String {
-    name.unwrap_or("Unknown artist").to_owned()
+    name.map_or("Unknown artist", freya_library::library::plain_name)
+        .to_owned()
 }
 
 fn album_name(name: Option<&str>) -> String {
@@ -2776,6 +3036,68 @@ mod tests {
             db.artist_picture("Freya", PictureKind::Backdrop).unwrap(),
             None
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn files_an_album_under_the_artist_it_is_matched_to() {
+        let dir = std::env::temp_dir().join(format!("freya-album-match-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fixtures =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-audio/tests/fixtures");
+        std::fs::copy(fixtures.join("sine.mp3"), dir.join("sine.mp3")).unwrap();
+        let mut db = Library::open_in_memory().unwrap();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        freya_library::library::scan(&mut db, std::slice::from_ref(&dir), &cancel, |_| {}).unwrap();
+        let album = db.all_albums().unwrap()[0].name.clone();
+        let mut panel = LibraryPanel::new(None, None, None);
+        panel.db = Some(db);
+        panel.online_bios = false;
+        let candidate = |mbid: &str| freya_library::artist_image::AlbumCandidate {
+            release_group: format!("rg-{mbid}"),
+            title: "Sines".into(),
+            artist: freya_library::artist_image::ArtistMatch {
+                mbid: mbid.into(),
+                name: "Freya".into(),
+                disambiguation: format!("the {mbid} one"),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let matching = |panel: &mut LibraryPanel, artist: &str, mbid: &str| {
+            panel.show_album(Some(artist.to_owned()), album.clone());
+            panel.album_draft = Some((Some(artist.to_owned()), album.clone()));
+            panel.album_candidates = vec![candidate(mbid)];
+            panel.choose_album_match(0);
+        };
+
+        // Freya had no id for the artist: the first match is theirs, and nothing splits.
+        matching(&mut panel, "Freya", "first");
+        assert_eq!(panel.edits["Freya"].mbid.as_deref(), Some("first"));
+        assert_eq!(panel.edits["Freya"].note.as_deref(), Some("the first one"));
+        assert!(
+            matches!(panel.level(), Level::AlbumTracks { artist: Some(a), .. } if a == "Freya")
+        );
+        assert!(panel.album_draft.is_none(), "matching is done");
+
+        // Matched to another artist of the name: filed under them, shown as "Freya".
+        matching(&mut panel, "Freya", "other");
+        let split = split_artist("Freya", "other");
+        assert!(matches!(panel.level(), Level::AlbumTracks { artist: Some(a), .. } if *a == split));
+        assert_eq!(panel.edits[&split].name.as_deref(), Some("Freya"));
+        assert_eq!(panel.edits[&split].note.as_deref(), Some("the other one"));
+        assert_eq!(panel.title, album_name(album.as_deref()));
+        assert_eq!(panel.album_page.as_ref().unwrap().artist, "Freya");
+
+        // Back as the tags say.
+        panel.album_draft = Some((Some(split.clone()), album.clone()));
+        panel.unmatch_album();
+        assert!(
+            matches!(panel.level(), Level::AlbumTracks { artist: Some(a), .. } if a == "Freya")
+        );
+        let db = panel.db.as_ref().unwrap();
+        assert_eq!(db.albums(Some(&split)).unwrap().len(), 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
