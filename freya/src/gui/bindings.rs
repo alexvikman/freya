@@ -211,6 +211,26 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     );
     bind(
         "Library",
+        "edit-genre",
+        Box::new(|app, _| app.library.edit_genre()),
+    );
+    bind(
+        "Library",
+        "clear-genre-picture",
+        Box::new(|app, args| app.library.clear_genre_picture(&text_arg(args, 0))),
+    );
+    bind(
+        "Library",
+        "save-genre",
+        Box::new(|app, args| app.library.save_genre(&text_arg(args, 0))),
+    );
+    bind(
+        "Library",
+        "cancel-genre",
+        Box::new(|app, _| app.library.cancel_genre()),
+    );
+    bind(
+        "Library",
         "set-search-filter",
         Box::new(|app, args| app.library.set_search_filter(&text_arg(args, 0))),
     );
@@ -459,6 +479,20 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     // The file is picked before the app is borrowed: the dialog runs the event loop.
     {
         let app = weak.clone();
+        let genre_app = app.clone();
+        let _ = ui.set_global_callback("Library", "pick-genre-picture", move |args| {
+            let Some(Value::String(kind)) = args.first() else {
+                return Value::Void;
+            };
+            if let Some(file) = pick_picture()
+                && let Some(app) = genre_app.upgrade()
+                && let Ok(mut app) = app.try_borrow_mut()
+            {
+                app.library.pick_genre_picture(kind, &file);
+                app.refresh();
+            }
+            Value::Void
+        });
         let _ = ui.set_global_callback("Playlists", "pick-picture", move |args| {
             let Some(Value::String(kind)) = args.first() else {
                 return Value::Void;

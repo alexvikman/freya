@@ -87,7 +87,7 @@ pub(super) struct PlaylistDraft {
 }
 
 /// The picture `checksum` among Freya's, small enough for the dialog.
-fn preview(thumbnails: Option<&Thumbnails>, checksum: Option<&String>) -> Image {
+pub(super) fn preview(thumbnails: Option<&Thumbnails>, checksum: Option<&String>) -> Image {
     let small = || {
         let bytes = thumbnails?.pictures().read(checksum?)?;
         let rgb = image::load_from_memory(&bytes)

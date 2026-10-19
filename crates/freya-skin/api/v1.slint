@@ -159,6 +159,19 @@ export struct ArtistDraft {
     header: string,
 }
 
+/// The genre being changed: see `Library.edit-genre`.
+export struct GenreDraft {
+    shown: bool,
+    name: string,
+    /// Its description: the user's own, else the internet's to start from.
+    description: string,
+    /// Its picture and wide picture as chosen so far; empty for none.
+    picture: image,
+    backdrop: image,
+    /// Why a picture could not be used.
+    error: string,
+}
+
 /// The artist being matched: see `Library.match-artist`.
 export struct ArtistMatchDraft {
     artist: string,
@@ -219,8 +232,11 @@ export struct PictureChoice {
 
 /// An artist's own page, over their albums: see `Library.artist-page`.
 export struct ArtistPage {
-    /// True while an artist's albums are shown.
+    /// True while an artist's albums are shown, or a genre's.
     shown: bool,
+    /// "artist", or "genre": then `picture` is the genre's picture, square, `portrait` empty,
+    /// and Fix Match is not for it.
+    kind: string,
     name: string,
     /// "4 albums · 52 tracks · 3 h 41 min".
     detail: string,
@@ -453,6 +469,16 @@ export global Library {
     callback save-artist(string, string, string, string, string);
     /// Leave the artist as they were.
     callback cancel-artist();
+    /// Change the genre whose page is shown: `edit-genre` starts, filling `genre-draft`;
+    /// `pick-genre-picture` asks for a file and `clear-genre-picture` takes one away, "picture"
+    /// or "backdrop"; `save-genre` keeps the description given with the pictures chosen,
+    /// `cancel-genre` none of it.
+    in property <GenreDraft> genre-draft;
+    callback edit-genre();
+    callback pick-genre-picture(string);
+    callback clear-genre-picture(string);
+    callback save-genre(string);
+    callback cancel-genre();
     /// While the artist is changed: pictures to choose from, square and wide, the first of
     /// each meaning none; more come while `finding-pictures`. `choose-picture` chooses one of
     /// a kind, "portrait" or "backdrop", by its index; the choice is kept by `save-artist`.

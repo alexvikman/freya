@@ -200,7 +200,9 @@ impl Library {
             "SELECT picture FROM artist_pictures WHERE picture IS NOT NULL
              UNION SELECT cover FROM album_covers WHERE cover IS NOT NULL
              UNION SELECT picture FROM playlist_info WHERE picture IS NOT NULL
-             UNION SELECT backdrop FROM playlist_info WHERE backdrop IS NOT NULL",
+             UNION SELECT backdrop FROM playlist_info WHERE backdrop IS NOT NULL
+             UNION SELECT picture FROM genre_info WHERE picture IS NOT NULL
+             UNION SELECT backdrop FROM genre_info WHERE backdrop IS NOT NULL",
         )?;
         let rows = statement.query_map([], |row| row.get(0))?;
         rows.collect()

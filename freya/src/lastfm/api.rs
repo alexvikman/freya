@@ -220,6 +220,16 @@ impl Client {
         }
     }
 
+    /// What Last.fm says of the tag `name`, a genre: its wiki's opening and whole; empty for
+    /// one it knows nothing of.
+    pub fn tag_info(&self, name: &str) -> Result<ArtistInfo, Error> {
+        match self.get("tag.getInfo", &[("tag", name)]) {
+            Ok(answer) => Ok(tag_info(&answer)),
+            Err(Error::Api(6, _)) => Ok(ArtistInfo::default()),
+            Err(e) => Err(e),
+        }
+    }
+
     /// An unsigned GET, for what anyone may read, answered in JSON.
     fn get(&self, method: &str, params: &[(&str, &str)]) -> Result<Value, Error> {
         let mut request = self
@@ -289,6 +299,18 @@ fn artist_info(answer: &Value) -> ArtistInfo {
             .filter_map(|t| t["name"].as_str().map(str::to_owned))
             .collect(),
         url: artist["url"].as_str().unwrap_or("").to_owned(),
+    }
+}
+
+/// A tag.getInfo answer as plain text.
+fn tag_info(answer: &Value) -> ArtistInfo {
+    let tag = &answer["tag"];
+    let text = |value: &Value| plain_text(value.as_str().unwrap_or(""));
+    ArtistInfo {
+        summary: text(&tag["wiki"]["summary"]),
+        biography: text(&tag["wiki"]["content"]),
+        tags: Vec::new(),
+        url: String::new(),
     }
 }
 

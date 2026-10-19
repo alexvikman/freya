@@ -416,8 +416,7 @@ mod tests {
         std::fs::copy(fixtures.join("sine.mp3"), dir.join("sine.mp3")).unwrap();
         let mut db = Library::open_in_memory().unwrap();
         let cancel = std::sync::atomic::AtomicBool::new(false);
-        freya_library::library::scan(&mut db, std::slice::from_ref(&dir), &cancel, |_| {})
-            .unwrap();
+        freya_library::library::scan(&mut db, std::slice::from_ref(&dir), &cancel, |_| {}).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         let mut panel = LibraryPanel::new(None, None, None);
         panel.db = Some(db);
@@ -448,7 +447,10 @@ mod tests {
         panel.set_search_filter("all");
         panel.search("reya");
         assert!(
-            !panel.items.iter().any(|item| matches!(item, Item::Artist(_))),
+            !panel
+                .items
+                .iter()
+                .any(|item| matches!(item, Item::Artist(_))),
             "not the start of a word"
         );
     }

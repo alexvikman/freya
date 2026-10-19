@@ -1752,7 +1752,10 @@ component AlbumTile inherits Rectangle {
             if root.cover-image.width == 0: Icon {
                 width: root.size * 0.3;
                 height: self.width;
-                data: root.entry.kind == "artist" ? Icons.artist : Icons.note;
+                data: root.entry.kind == "artist" ? Icons.artist
+                    : root.entry.kind == "genre" ? Icons.genre
+                    : root.entry.kind == "playlist" ? Icons.playlist
+                    : Icons.note;
                 stroked: true;
                 color: Theme.text-secondary;
             }
@@ -1773,7 +1776,7 @@ component AlbumTile inherits Rectangle {
         }
         // In an artist's albums the artist is the heading; the year and size say more.
         Text {
-            text: root.entry.artist == Library.title ? root.entry.detail : root.entry.artist;
+            text: root.entry.kind == "genre" || root.entry.kind == "playlist" || root.entry.artist == Library.title ? root.entry.detail : root.entry.artist;
             font-size: 12px;
             color: Theme.text-secondary;
             overflow: elide;
@@ -1946,8 +1949,37 @@ component ArtistPageHead inherits Rectangle {
                 padding: root.pad;
                 spacing: 24px;
 
+                // A genre's picture, square, beside its name.
+                if !root.page.has-banner && root.page.kind == "genre": VerticalLayout {
+                    alignment: end;
+
+                    genre-picture := Rectangle {
+                        property <image> picture: Library.cover(root.page.picture, Library.covers-ready);
+
+                        width: 232px;
+                        height: 232px;
+                        background: self.picture.width > 0 ? transparent : #ffffff1a;
+                        drop-shadow-blur: 24px;
+                        drop-shadow-color: #00000066;
+
+                        if genre-picture.picture.width > 0: Image {
+                            width: parent.width;
+                            height: parent.height;
+                            source: genre-picture.picture;
+                            image-fit: cover;
+                            image-rendering: smooth;
+                        }
+                        if genre-picture.picture.width == 0: Icon {
+                            width: 64px;
+                            height: 64px;
+                            data: Icons.genre;
+                            stroked: true;
+                            color: #ffffffb3;
+                        }
+                    }
+                }
                 // At the foot, beside their name; cut round by Freya.
-                if !root.page.has-banner: VerticalLayout {
+                if !root.page.has-banner && root.page.kind != "genre": VerticalLayout {
                     alignment: end;
 
                     Rectangle {
@@ -1985,7 +2017,8 @@ component ArtistPageHead inherits Rectangle {
                     spacing: 8px;
 
                     Text {
-                        text: root.page.note == "" ? "Artist" : "Artist · " + root.page.note;
+                        text: root.page.kind == "genre" ? "Genre"
+                            : root.page.note == "" ? "Artist" : "Artist · " + root.page.note;
                         font-size: 13px;
                         font-weight: 600;
                         color: #ffffff;
@@ -2055,6 +2088,7 @@ component ArtistPageHead inherits Rectangle {
                     clicked => { root.edit(); }
                 }
                 artist-more := IconButton {
+                    visible: root.page.kind != "genre";
                     y: (parent.height - self.height) / 2;
                     icon: Icons.more;
                     size: 44px;
@@ -3052,6 +3086,8 @@ component LibraryPanel inherits FocusScope {
     /// The dialogs for matching the artist or the album shown.
     callback match-artist();
     callback match-album();
+    /// The dialog for changing the genre whose page is shown.
+    callback edit-genre();
 
     /// Back and forward: how far down the list shown is scrolled, and scrolling it back there.
     property <bool> shown: App.view == "library";
@@ -3368,7 +3404,13 @@ component LibraryPanel inherits FocusScope {
             if line < root.head-lines: ArtistPageHead {
                 page: Library.artist-page;
                 options => { options-menu.show(); }
-                edit => { root.edit-artist("general"); }
+                edit => {
+                    if (Library.artist-page.kind == "genre") {
+                        root.edit-genre();
+                    } else {
+                        root.edit-artist("general");
+                    }
+                }
                 fix-match => { root.match-artist(); }
                 read-more => { bio-popup.show(); }
                 show-picture => { picture-popup.show(); }
@@ -3460,7 +3502,13 @@ component LibraryPanel inherits FocusScope {
             if cell.head: ArtistPageHead {
                 page: Library.artist-page;
                 options => { options-menu.show(); }
-                edit => { root.edit-artist("general"); }
+                edit => {
+                    if (Library.artist-page.kind == "genre") {
+                        root.edit-genre();
+                    } else {
+                        root.edit-artist("general");
+                    }
+                }
                 fix-match => { root.match-artist(); }
                 read-more => { bio-popup.show(); }
                 show-picture => { picture-popup.show(); }
@@ -4587,6 +4635,165 @@ component PlaylistView inherits Rectangle {
             color: Theme.text-secondary;
             horizontal-alignment: center;
             wrap: word-wrap;
+        }
+    }
+}
+
+/// Changing a genre: its picture, wide picture and description. Kept in Freya; the tags are
+/// left as they are.
+component GenreEditForm inherits MenuSurface {
+    callback closed();
+
+    property <string> description: Library.genre-draft.description;
+
+    function save() {
+        Library.save-genre(root.description);
+        root.closed();
+    }
+
+    public function cancel() {
+        Library.cancel-genre();
+        root.closed();
+    }
+
+    VerticalLayout {
+        padding: 24px;
+        spacing: 18px;
+
+        HorizontalLayout {
+            spacing: 12px;
+
+            Icon {
+                y: (parent.height - self.height) / 2;
+                width: 22px;
+                height: 22px;
+                data: Icons.pencil;
+                stroked: true;
+                color: Theme.text-secondary;
+            }
+            Text {
+                text: "Edit " + Library.genre-draft.name;
+                font-size: 22px;
+                font-weight: 700;
+                color: Theme.text;
+                overflow: elide;
+            }
+        }
+        VerticalLayout {
+            spacing: 6px;
+
+            Text {
+                text: "Description";
+                font-size: 13px;
+                color: Theme.text-secondary;
+            }
+            Rectangle {
+                height: 160px;
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: genre-description.has-focus ? Theme.accent : Theme.divider;
+                background: Theme.background;
+                clip: true;
+
+                if genre-description.text == "": Text {
+                    x: 10px;
+                    y: 9px;
+                    text: "What it is";
+                    font-size: 13px;
+                    color: Theme.text-secondary;
+                }
+                genre-description := TextInput {
+                    x: 10px;
+                    y: 9px;
+                    width: parent.width - 20px;
+                    height: parent.height - 18px;
+                    text <=> root.description;
+                    font-size: 13px;
+                    color: Theme.text;
+                    wrap: word-wrap;
+                    single-line: false;
+                }
+            }
+            Text {
+                text: "Empty, it is what the internet says of it.";
+                font-size: 12px;
+                color: Theme.text-secondary;
+            }
+        }
+        HorizontalLayout {
+            spacing: 24px;
+            alignment: start;
+
+            for kind in [
+                { name: "picture", text: "Picture", width: 120px, empty: "Its albums' covers" },
+                { name: "backdrop", text: "Wide picture", width: 213px, empty: "None" },
+            ]: genre-box := VerticalLayout {
+                property <image> shown: kind.name == "backdrop" ? Library.genre-draft.backdrop : Library.genre-draft.picture;
+
+                spacing: 8px;
+
+                Text {
+                    text: kind.text;
+                    font-size: 13px;
+                    color: Theme.text-secondary;
+                }
+                Rectangle {
+                    width: kind.width;
+                    height: 120px;
+                    background: Theme.background;
+                    border-width: 1px;
+                    border-color: Theme.divider;
+                    clip: true;
+
+                    if genre-box.shown.width > 0: Image {
+                        width: parent.width;
+                        height: parent.height;
+                        source: genre-box.shown;
+                        image-fit: cover;
+                    }
+                    if genre-box.shown.width == 0: Text {
+                        text: kind.empty;
+                        font-size: 12px;
+                        color: Theme.text-secondary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+
+                    TextButton {
+                        text: "Choose…";
+                        clicked => { Library.pick-genre-picture(kind.name); }
+                    }
+                    if genre-box.shown.width > 0: TextButton {
+                        text: "Remove";
+                        clicked => { Library.clear-genre-picture(kind.name); }
+                    }
+                }
+            }
+        }
+        if Library.genre-draft.error != "": Text {
+            text: Library.genre-draft.error;
+            font-size: 13px;
+            color: Theme.danger;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: end;
+
+            TextButton {
+                text: "Cancel";
+                clicked => { root.cancel(); }
+            }
+            TextButton {
+                text: "Save";
+                primary: true;
+                clicked => { root.save(); }
+            }
         }
     }
 }
@@ -8214,6 +8421,10 @@ export component FreyaSkin inherits Window {
                                     Library.match-artist();
                                     artist-match-popup.show();
                                 }
+                                edit-genre => {
+                                    Library.edit-genre();
+                                    genre-popup.show();
+                                }
                             }
                             if root.view == "playlist": PlaylistView {
                                 width: 100%;
@@ -8416,6 +8627,37 @@ export component FreyaSkin inherits Window {
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
                     closed => { artist-popup.close(); }
+                }
+            }
+        }
+    }
+
+    // As the folders' dialog.
+    genre-popup := PopupWindow {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        close-policy: no-auto-close;
+
+        DialogFocus {
+            key-pressed(event) => {
+                if (event.text == Key.Escape) {
+                    genre-form.cancel();
+                    return accept;
+                }
+                reject
+            }
+
+            Rectangle {
+                background: #00000059;
+
+                genre-form := GenreEditForm {
+                    width: min(560px, parent.width - 48px);
+                    height: self.preferred-height;
+                    x: (parent.width - self.width) / 2;
+                    y: max(24px, (parent.height - self.preferred-height) / 3);
+                    closed => { genre-popup.close(); }
                 }
             }
         }

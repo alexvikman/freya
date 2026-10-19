@@ -1149,3 +1149,33 @@ fn a_scan_of_one_folder_makes_no_other_albums_covers() {
     assert_eq!(scan(&mut library, vec![music.join("A")]), 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_track_of_many_genres_is_in_each() {
+    assert_eq!(
+        split_genres("Alternative Metal, industrial metal;Power Pop / alternative metal"),
+        ["Alternative Metal", "industrial metal", "Power Pop"]
+    );
+    let mut library = Library::open_in_memory().unwrap();
+    let mut both = tags("A", "Album", "One", 1);
+    both.genre = Some("Black Metal, Ambient".into());
+    let mut black = tags("B", "Other", "Two", 1);
+    black.genre = Some("black metal".into());
+    add(&mut library, "/m/1.mp3", &both);
+    add(&mut library, "/m/2.mp3", &black);
+    add(&mut library, "/m/3.mp3", &tags("C", "Third", "Three", 1));
+    let genres = library.genres().unwrap();
+    let names: Vec<Option<&str>> = genres.iter().map(|g| g.name.as_deref()).collect();
+    assert_eq!(names.len(), 3, "{names:?}");
+    assert_eq!(names[0], Some("Ambient"));
+    assert!(names[1].is_some_and(|n| n.eq_ignore_ascii_case("black metal")));
+    assert_eq!(names[2], None, "untagged last");
+    assert_eq!((genres[1].albums, genres[1].tracks), (2, 2));
+    assert_eq!(library.genre_albums(Some("BLACK METAL")).unwrap().len(), 2);
+    assert_eq!(library.genre_tracks(Some("Ambient")).unwrap().len(), 1);
+    assert_eq!(library.genre_tracks(None).unwrap().len(), 1);
+    assert_eq!(
+        library.artist_summary(Some("A"), 3).unwrap().genres.len(),
+        2
+    );
+}

@@ -426,6 +426,31 @@ impl Convert for SearchSection {
     }
 }
 
+impl Convert for GenreDraft {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            shown: field(&s, "shown"),
+            name: field(&s, "name"),
+            description: field(&s, "description"),
+            picture: field(&s, "picture"),
+            backdrop: field(&s, "backdrop"),
+            error: field(&s, "error"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("shown", self.shown.to_value()),
+            ("name", self.name.to_value()),
+            ("description", self.description.to_value()),
+            ("picture", self.picture.to_value()),
+            ("backdrop", self.backdrop.to_value()),
+            ("error", self.error.to_value()),
+        ])
+    }
+}
+
 impl Convert for LetterJump {
     fn from_value(value: Value) -> Option<Self> {
         let Value::Struct(s) = value else { return None };
@@ -607,6 +632,7 @@ impl Convert for ArtistPage {
         let Value::Struct(s) = value else { return None };
         Some(Self {
             shown: field(&s, "shown"),
+            kind: field(&s, "kind"),
             name: field(&s, "name"),
             detail: field(&s, "detail"),
             genres: field(&s, "genres"),
@@ -630,6 +656,7 @@ impl Convert for ArtistPage {
     fn to_value(self) -> Value {
         structure(vec![
             ("shown", self.shown.to_value()),
+            ("kind", self.kind.to_value()),
             ("name", self.name.to_value()),
             ("detail", self.detail.to_value()),
             ("genres", self.genres.to_value()),
@@ -911,6 +938,7 @@ skin_api! {
         Library."artist-wikipedia-online" => set_artist_wikipedia_online, get_artist_wikipedia_online;
         Library."fanart-key" => set_fanart_key, get_fanart_key;
         Library."artist-draft" => set_artist_draft, get_artist_draft;
+        Library."genre-draft" => set_genre_draft, get_genre_draft;
         Library."portrait-choices" => set_portrait_choices, get_portrait_choices;
         Library."backdrop-choices" => set_backdrop_choices, get_backdrop_choices;
         Library."finding-pictures" => set_finding_pictures, get_finding_pictures;
@@ -1062,6 +1090,11 @@ skin_api! {
         Library."edit-artist" => on_edit_artist, invoke_edit_artist();
         Library."save-artist" => on_save_artist, invoke_save_artist(name: SharedString, sort_name: SharedString, mbid: SharedString, biography: SharedString, header: SharedString);
         Library."cancel-artist" => on_cancel_artist, invoke_cancel_artist();
+        Library."edit-genre" => on_edit_genre, invoke_edit_genre();
+        Library."pick-genre-picture" => on_pick_genre_picture, invoke_pick_genre_picture(kind: SharedString);
+        Library."clear-genre-picture" => on_clear_genre_picture, invoke_clear_genre_picture(kind: SharedString);
+        Library."save-genre" => on_save_genre, invoke_save_genre(description: SharedString);
+        Library."cancel-genre" => on_cancel_genre, invoke_cancel_genre();
         Library."choose-picture" => on_choose_picture, invoke_choose_picture(kind: SharedString, index: i32);
         Library."pick-picture-file" => on_pick_picture_file, invoke_pick_picture_file(kind: SharedString);
         Library."picture-from-url" => on_picture_from_url, invoke_picture_from_url(kind: SharedString, url: SharedString);

@@ -8,6 +8,7 @@
 mod covers;
 mod edits;
 mod fetch;
+mod genres;
 mod matches;
 mod online;
 mod playlists;
@@ -25,6 +26,7 @@ use crate::tags::TagInfo;
 pub use covers::AlbumCover;
 pub use edits::{ArtistEdit, Header};
 pub use fetch::{LastFm, Online};
+pub use genres::{GenreArticle, GenreInfo};
 pub use matches::{AlbumMatch, plain_name, split_artist};
 pub use online::{ASK_AGAIN_AFTER, ArtistText, Asked, CHOSEN, FOLDER, PictureKind, PictureRow};
 pub use playlists::{PlaylistInfo, PlaylistTrack};
@@ -34,7 +36,17 @@ pub use scan::{ScanEvent, ScanOptions, ScanSummary, Scanner, scan, scan_with};
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Bumped whenever the tracks' tables change; they are then rebuilt.
-const SCHEMA_VERSION: i32 = 5;
+const SCHEMA_VERSION: i32 = 6;
+
+/// Each genre a track's tags give, as its own: "Alternative Metal, Industrial Metal" is two.
+const GENRES: &str = "
+    CREATE TABLE IF NOT EXISTS track_genres (
+        track INTEGER NOT NULL,
+        genre TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS track_genres_by_genre ON track_genres (genre COLLATE NOCASE);
+    CREATE INDEX IF NOT EXISTS track_genres_by_track ON track_genres (track);
+";
 
 const SCHEMA: &str = "
     CREATE TABLE tracks (
@@ -72,6 +84,7 @@ const SCHEMA: &str = "
     CREATE INDEX tracks_by_source ON tracks (source);
     CREATE INDEX tracks_by_path ON tracks (path, start_ms);
     CREATE INDEX tracks_by_fingerprint ON tracks (fingerprint);
+    {GENRES}
 
     -- Words to search in, one row per track with the track's id as rowid. Diacritics are
     -- ignored, so \"beyonce\" finds \"Beyoncé\".
@@ -305,15 +318,32 @@ impl Library {
             version = 5;
             db.pragma_update(None, "user_version", version)?;
         }
+        if version == 5 {
+            log::info!("splitting the library's genres");
+            db.execute_batch(GENRES)?;
+            db.execute_batch("DELETE FROM track_genres;")?;
+            let tagged: Vec<(i64, String)> = db
+                .prepare("SELECT id, genre FROM tracks WHERE genre IS NOT NULL")?
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<Result<_>>()?;
+            let tx = db.unchecked_transaction()?;
+            for (track, genre) in &tagged {
+                put_genres(&tx, *track, genre)?;
+            }
+            tx.commit()?;
+            version = 6;
+            db.pragma_update(None, "user_version", version)?;
+        }
         if version != SCHEMA_VERSION {
             if version != 0 {
                 log::info!("rebuilding the library (layout {version} → {SCHEMA_VERSION})");
             }
             db.execute_batch(
                 "DROP TABLE IF EXISTS tracks;
-                 DROP TABLE IF EXISTS search;",
+                 DROP TABLE IF EXISTS search;
+                 DROP TABLE IF EXISTS track_genres;",
             )?;
-            db.execute_batch(SCHEMA)?;
+            db.execute_batch(&SCHEMA.replace("{GENRES}", GENRES))?;
             db.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         db.execute_batch(HISTORY)?;
@@ -323,6 +353,7 @@ impl Library {
         db.execute_batch(matches::SCHEMA)?;
         db.execute_batch(covers::SCHEMA)?;
         db.execute_batch(playlists::SCHEMA)?;
+        db.execute_batch(genres::SCHEMA)?;
         Ok(Self { db })
     }
 
@@ -442,12 +473,21 @@ impl Library {
     /// Every genre, alphabetically, with tracks without one last.
     pub fn genres(&self) -> Result<Vec<Genre>> {
         let mut query = self.db.prepare_cached(
-            "SELECT genre,
-                    count(DISTINCT ifnull(album_artist, '') || char(0) || ifnull(album, '')),
-                    count(*)
-             FROM tracks
-             GROUP BY genre
-             ORDER BY genre IS NULL, genre COLLATE NOCASE",
+            "SELECT name, albums, tracks FROM (
+                 SELECT g.genre AS name,
+                        count(DISTINCT ifnull(album_artist, '') || char(0) || ifnull(album, ''))
+                            AS albums,
+                        count(DISTINCT t.id) AS tracks
+                 FROM track_genres g JOIN tracks t ON t.id = g.track
+                 GROUP BY g.genre COLLATE NOCASE
+                 UNION ALL
+                 SELECT NULL,
+                        count(DISTINCT ifnull(album_artist, '') || char(0) || ifnull(album, '')),
+                        count(*)
+                 FROM tracks WHERE id NOT IN (SELECT track FROM track_genres)
+                 HAVING count(*) > 0
+             )
+             ORDER BY name IS NULL, name COLLATE NOCASE",
         )?;
         query
             .query_map([], |row| {
@@ -465,7 +505,8 @@ impl Library {
         let mut query = self.db.prepare_cached(
             "SELECT album_artist, album, min(year), count(*), min(path)
              FROM tracks
-             WHERE genre IS ?1
+             WHERE CASE WHEN ?1 IS NULL THEN id NOT IN (SELECT track FROM track_genres)
+                   ELSE id IN (SELECT track FROM track_genres WHERE genre = ?1 COLLATE NOCASE) END
              GROUP BY album_artist, album
              ORDER BY album IS NULL, album COLLATE NOCASE, album_artist COLLATE NOCASE",
         )?;
@@ -476,7 +517,8 @@ impl Library {
     pub fn genre_tracks(&self, genre: Option<&str>) -> Result<Vec<Track>> {
         let mut query = self.db.prepare_cached(&format!(
             "SELECT {TRACK_COLUMNS} FROM tracks
-             WHERE genre IS ?1
+             WHERE CASE WHEN ?1 IS NULL THEN id NOT IN (SELECT track FROM track_genres)
+                   ELSE id IN (SELECT track FROM track_genres WHERE genre = ?1 COLLATE NOCASE) END
              ORDER BY {ALBUM_ORDER}"
         ))?;
         query.query_map([genre], Track::from_row)?.collect()
@@ -554,8 +596,10 @@ impl Library {
             |row| Ok((row.get(0)?, row.get(1)?, row.get::<_, i64>(2)?)),
         )?;
         let mut query = self.db.prepare_cached(
-            "SELECT genre FROM tracks WHERE album_artist IS ?1 AND genre IS NOT NULL
-             GROUP BY genre ORDER BY count(*) DESC, genre COLLATE NOCASE LIMIT ?2",
+            "SELECT g.genre FROM track_genres g JOIN tracks t ON t.id = g.track
+             WHERE t.album_artist IS ?1
+             GROUP BY g.genre COLLATE NOCASE ORDER BY count(*) DESC, g.genre COLLATE NOCASE
+             LIMIT ?2",
         )?;
         let genres = query
             .query_map(params![artist, genres as i64], |row| row.get(0))?
@@ -579,6 +623,25 @@ impl Library {
         ))?;
         query
             .query_map(params![artist, limit as i64], |row| {
+                Ok(Played {
+                    track: Track::from_row(row)?,
+                    plays: row.get(12)?,
+                    last: from_epoch_millis(row.get(13)?),
+                })
+            })?
+            .collect()
+    }
+
+    /// The most played tracks in `genre`, at most `limit`.
+    pub fn genre_popular(&self, genre: &str, limit: usize) -> Result<Vec<Played>> {
+        let mut query = self.db.prepare_cached(&format!(
+            "SELECT {TRACK_COLUMNS}, plays.n, plays.last FROM {PLAYED}
+             WHERE tracks.id IN (SELECT track FROM track_genres WHERE genre = ?1 COLLATE NOCASE)
+             ORDER BY plays.n DESC, plays.last DESC
+             LIMIT ?2"
+        ))?;
+        query
+            .query_map(params![genre, limit as i64], |row| {
                 Ok(Played {
                     track: Track::from_row(row)?,
                     plays: row.get(12)?,
@@ -772,7 +835,32 @@ fn put(
     .join(" ");
     db.prepare_cached("INSERT INTO search (rowid, words) VALUES (?1, ?2)")?
         .execute(params![id, words])?;
+    if let Some(genre) = &tags.genre {
+        put_genres(db, id, genre)?;
+    }
     Ok(())
+}
+
+/// Notes each genre `tagged` gives as the track `track`'s.
+fn put_genres(db: &Connection, track: i64, tagged: &str) -> Result<()> {
+    let mut insert =
+        db.prepare_cached("INSERT INTO track_genres (track, genre) VALUES (?1, ?2)")?;
+    for genre in split_genres(tagged) {
+        insert.execute(params![track, genre])?;
+    }
+    Ok(())
+}
+
+/// The genres a tag gives, each once, ignoring case: "Alternative Metal, Industrial Metal" is
+/// two, and so are "Pop/Rock" and "Pop; Rock".
+pub fn split_genres(tagged: &str) -> Vec<String> {
+    let mut genres: Vec<String> = Vec::new();
+    for genre in tagged.split([',', ';', '/']).map(str::trim) {
+        if !genre.is_empty() && !genres.iter().any(|g| g.eq_ignore_ascii_case(genre)) {
+            genres.push(genre.to_owned());
+        }
+    }
+    genres
 }
 
 /// When the tracks read from `source` came into the library, if they are in it.
@@ -784,6 +872,10 @@ fn added(db: &Connection, source: &Path) -> Result<Option<i64>> {
 /// Removes every track read from `source`.
 fn remove(db: &Connection, source: &Path) -> Result<()> {
     let source = source.to_string_lossy();
+    db.prepare_cached(
+        "DELETE FROM track_genres WHERE track IN (SELECT id FROM tracks WHERE source = ?1)",
+    )?
+    .execute([&source])?;
     db.prepare_cached(
         "DELETE FROM search WHERE rowid IN (SELECT id FROM tracks WHERE source = ?1)",
     )?

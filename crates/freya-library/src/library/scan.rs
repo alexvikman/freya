@@ -10,7 +10,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
 
-use super::fetch::{Online, fetch_artists};
+use super::fetch::{Online, fetch_artists, fetch_genres};
 use super::{AlbumCover, FileStamp, Library, NewTrack, Result, added, epoch_millis, put, remove};
 use crate::cover::ARTWORK_FOLDERS;
 use crate::cue::{self, Found};
@@ -44,6 +44,11 @@ pub enum ScanEvent {
     },
     /// The internet was asked what `done` of the `total` artists who lack something lack.
     Artists {
+        done: usize,
+        total: usize,
+    },
+    /// And of the `total` genres it has not said anything of.
+    Genres {
         done: usize,
         total: usize,
     },
@@ -246,6 +251,9 @@ pub fn scan_with(
                 cancel,
                 &mut progress,
             )?;
+        }
+        if !cancel.load(Ordering::Relaxed) {
+            fetch_genres(library, &options.online, cancel, &mut progress)?;
         }
     }
     if !partial && !cancel.load(Ordering::Relaxed) {

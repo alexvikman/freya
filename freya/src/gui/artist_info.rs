@@ -22,6 +22,16 @@ impl LastFm for Texts {
             url: info.url,
         })
     }
+
+    fn tag_text(&self, name: &str) -> Result<ArtistText, String> {
+        let info = self.0.tag_info(name).map_err(|e| e.to_string())?;
+        Ok(ArtistText {
+            summary: info.summary,
+            biography: info.biography,
+            tags: Vec::new(),
+            url: info.url,
+        })
+    }
 }
 
 /// Last.fm for a scan to ask, when this build has Freya's key.

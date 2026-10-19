@@ -9,7 +9,7 @@ use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use super::{ArtistText, Library, PictureKind, Result, ScanEvent, plain_name};
+use super::{ArtistText, GenreArticle, Library, PictureKind, Result, ScanEvent, plain_name};
 use crate::artist_image::{self, Online as Answer};
 use crate::pictures::Pictures;
 use crate::wikipedia::{self, Article};
@@ -32,6 +32,11 @@ pub trait LastFm: Send + Sync {
         name: &str,
         mbid: Option<&str>,
     ) -> std::result::Result<ArtistText, String>;
+
+    /// What Last.fm says of the tag `name`, a genre; empty for one it knows nothing of.
+    fn tag_text(&self, _name: &str) -> std::result::Result<ArtistText, String> {
+        Err("not asked".into())
+    }
 }
 
 /// Which services a scan may ask, as the user allows.
@@ -281,6 +286,83 @@ pub(super) fn fetch_artists(
         }
         Ok(())
     })
+}
+
+/// Asks the internet what each genre lacks: what Wikipedia says of it, else Last.fm. A genre
+/// it found nothing of is asked again after a while. Stops early when `cancel` is set.
+pub(super) fn fetch_genres(
+    library: &Library,
+    online: &Online,
+    cancel: &AtomicBool,
+    progress: &mut impl FnMut(ScanEvent),
+) -> Result<()> {
+    if !online.wikipedia && online.lastfm.is_none() {
+        return Ok(());
+    }
+    let mut lacking = Vec::new();
+    for genre in library.genres()? {
+        let Some(name) = genre.name else {
+            continue;
+        };
+        let kept = library.genre_article(&name)?;
+        if kept.is_none_or(|kept| kept.answer.is_none() && !kept.recent()) {
+            lacking.push(name);
+        }
+    }
+    let total = lacking.len();
+    if total == 0 {
+        return Ok(());
+    }
+    progress(ScanEvent::Genres { done: 0, total });
+    let pace = Pace::new(LASTFM_INTERVAL);
+    let mut told = Instant::now();
+    for (done, name) in (1..).zip(&lacking) {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        pace.wait();
+        let mut asked = false;
+        let mut article = None;
+        if online.wikipedia {
+            match wikipedia::genre_article(name) {
+                Ok(found) => {
+                    asked = true;
+                    article = found.map(|a| GenreArticle {
+                        summary: a.summary,
+                        description: a.biography,
+                        url: a.url,
+                        source: "Wikipedia".into(),
+                    });
+                }
+                Err(e) => log::debug!("no Wikipedia article on the genre {name}: {e}"),
+            }
+        }
+        if article.is_none()
+            && let Some(lastfm) = &online.lastfm
+        {
+            match lastfm.tag_text(name) {
+                Ok(text) => {
+                    asked = true;
+                    article = (!text.summary.is_empty()).then(|| GenreArticle {
+                        summary: text.summary,
+                        description: text.biography,
+                        url: text.url,
+                        source: "Last.fm".into(),
+                    });
+                }
+                Err(e) => log::debug!("nothing from Last.fm on the genre {name}: {e}"),
+            }
+        }
+        // Asked again next scan when no service could be asked.
+        if asked {
+            library.set_genre_article(name, article.as_ref(), SystemTime::now())?;
+        }
+        if told.elapsed() >= TELL_INTERVAL || done == total {
+            told = Instant::now();
+            progress(ScanEvent::Genres { done, total });
+        }
+    }
+    Ok(())
 }
 
 /// Asks the internet what `job` says, each service in its turn.

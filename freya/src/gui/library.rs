@@ -21,6 +21,8 @@ use super::cover_decoder::CoverDecoder;
 pub use playlist_page::PlaylistSort;
 use playlist_page::{PlaylistDraft, PlaylistPage};
 
+#[path = "genre_page.rs"]
+mod genre_page;
 #[path = "playlist_page.rs"]
 mod playlist_page;
 #[path = "search_page.rs"]
@@ -30,6 +32,7 @@ use super::match_finder::{AlbumFinder, MatchFinder};
 use super::picture_finder::{Found, Pick, PictureFinder, Request};
 use super::skin_state::{ModelRows, format_time, string};
 use super::skin_window::SkinWindow;
+use genre_page::GenreDraft;
 use search_page::FoundPlaylist;
 pub use search_page::{Opened, SearchFilter};
 
@@ -108,7 +111,8 @@ impl Level {
             | Self::ArtistAlbums { .. }
             | Self::GenreAlbums { .. } => "grid",
             Self::Songs | Self::RecentlyPlayed | Self::MostPlayed => "table",
-            Self::Artists | Self::Genres | Self::AlbumTracks { .. } => "list",
+            Self::Genres => "grid",
+            Self::Artists | Self::AlbumTracks { .. } => "list",
         }
     }
 }
@@ -261,6 +265,7 @@ pub struct LibraryPanel {
     scan_folder: Option<PathBuf>,
     covers_progress: Option<(usize, usize)>,
     artists_progress: Option<(usize, usize)>,
+    genres_progress: Option<(usize, usize)>,
     /// Whether the covers and pictures in the library changed since they were last read.
     pictures_stale: bool,
     /// Artists to ask the internet about once the scan running ends; all of them when
@@ -339,6 +344,11 @@ pub struct LibraryPanel {
     /// What a search shows: one kind or all, the sections of the page of all and its best
     /// match; a few matches under the search field as the user types; the playlists it can
     /// find; and a playlist a match opened, for the app to show.
+    /// What the user gave genres, by their names in lower case; the genres shown, by their
+    /// pictures' keys; and the one being changed.
+    genre_infos: HashMap<String, freya_library::library::GenreInfo>,
+    genre_keys: HashMap<String, Option<String>>,
+    genre_draft: Option<GenreDraft>,
     search_filter: SearchFilter,
     search_top: Option<usize>,
     search_songs: Option<(usize, usize)>,
@@ -352,8 +362,10 @@ pub struct LibraryPanel {
     album_page: Option<AlbumPage>,
 }
 
-/// What an artist's own page shows over their albums.
+/// What an artist's own page shows over their albums; or a genre's, over its.
 struct ArtistPage {
+    /// A genre's page rather than an artist's.
+    genre: bool,
     name: Option<String>,
     /// The name shown: the one the user gave them, else the tags'.
     shown_name: String,
@@ -631,6 +643,7 @@ impl LibraryPanel {
             scan_folder: None,
             covers_progress: None,
             artists_progress: None,
+            genres_progress: None,
             pictures_stale: true,
             fetch_later: Vec::new(),
             fetch_all_later: false,
@@ -683,6 +696,9 @@ impl LibraryPanel {
             playlist_sort: PlaylistSort::Custom,
             playlist_draft: None,
             playlist_sources: HashMap::new(),
+            genre_infos: HashMap::new(),
+            genre_keys: HashMap::new(),
+            genre_draft: None,
             search_filter: SearchFilter::All,
             search_top: None,
             search_songs: None,
@@ -1065,6 +1081,11 @@ impl LibraryPanel {
                     self.scan_folder = None;
                     self.pictures_stale = true;
                 }
+                ScanEvent::Genres { done, total } => {
+                    self.genres_progress = Some((done, total));
+                    self.scan_folder = None;
+                    self.pictures_stale = true;
+                }
                 ScanEvent::Finished(summary) => {
                     self.progress = None;
                     self.scanning = false;
@@ -1095,6 +1116,7 @@ impl LibraryPanel {
             self.scan_folder = None;
             self.covers_progress = None;
             self.artists_progress = None;
+            self.genres_progress = None;
         }
         // Plays noted while the scan wrote.
         if finished && self.write_plays() && self.shows_plays() {
@@ -1413,14 +1435,21 @@ impl LibraryPanel {
     fn load_artist_page(&mut self) {
         let more = self.artist_page.as_ref().is_some_and(|p| p.more);
         self.artist_page = None;
-        let (Some(db), Level::ArtistAlbums { artist }) = (&self.db, self.level().clone()) else {
-            self.popular_rows.sync(Vec::new());
-            return;
-        };
         if self.searching() {
             self.popular_rows.sync(Vec::new());
             return;
         }
+        if let Level::GenreAlbums { genre: Some(genre) } = self.level().clone() {
+            self.load_genre_page(genre, more);
+            self.show_artist_picture();
+            self.show_artist_info();
+            self.show_popular();
+            return;
+        }
+        let (Some(db), Level::ArtistAlbums { artist }) = (&self.db, self.level().clone()) else {
+            self.popular_rows.sync(Vec::new());
+            return;
+        };
         let summary = db.artist_summary(artist.as_deref(), 3).ok();
         let popular = db
             .artist_popular(artist.as_deref(), POPULAR_MORE)
@@ -1436,6 +1465,7 @@ impl LibraryPanel {
         let picture = Thumbnails::artist_key(artist.as_deref());
         self.artist_keys.insert(picture.clone(), artist.clone());
         self.artist_page = Some(ArtistPage {
+            genre: false,
             shown_name: self.shown_artist(artist.as_deref()),
             own_biography: false,
             biography_from: String::new(),
@@ -1468,11 +1498,8 @@ impl LibraryPanel {
         };
         let key = page.picture.clone();
         let needs_banner = page.banner.is_none();
-        let backdrop = page
-            .name
-            .as_deref()
-            .and_then(|name| shown_backdrop(&self.backdrops, &self.edits, name))
-            .cloned();
+        let backdrop =
+            page_backdrop(page, &self.backdrops, &self.edits, &self.genre_infos).cloned();
         // Their picture shows only without a wide one.
         let needs_portrait = !page.portrait_large && backdrop.is_none();
         // Made, or asked to be made, as for the grid.
@@ -1528,9 +1555,8 @@ impl LibraryPanel {
                 page.portrait_large = portrait.large;
                 page.picture_full = portrait.full.map(Image::from_rgb8);
                 // Without a wide picture: the color of their picture.
-                let wide = page.name.as_deref().is_some_and(|name| {
-                    shown_backdrop(&self.backdrops, &self.edits, name).is_some()
-                });
+                let wide =
+                    page_backdrop(page, &self.backdrops, &self.edits, &self.genre_infos).is_some();
                 if !wide {
                     page.color = Some(portrait.color);
                 }
@@ -1540,11 +1566,19 @@ impl LibraryPanel {
 
     /// What is said of the artist on the page, as kept.
     fn show_artist_info(&mut self) {
-        let Some(name) = self.artist_page.as_ref().and_then(|p| p.name.clone()) else {
+        let Some(page) = &self.artist_page else {
             return;
         };
-        let (summary, biography, tags, from) = self.biography_of(&name);
-        let own = self.edits.get(&name).is_some_and(|e| e.biography.is_some());
+        let Some(name) = page.name.clone() else {
+            return;
+        };
+        let ((summary, biography, tags, from), own) = if page.genre {
+            let (summary, text, from, own) = self.genre_text(&name);
+            ((summary, text, String::new(), from), own)
+        } else {
+            let own = self.edits.get(&name).is_some_and(|e| e.biography.is_some());
+            (self.biography_of(&name), own)
+        };
         if let Some(page) = &mut self.artist_page {
             page.own_biography = own;
             page.summary = summary;
@@ -2611,6 +2645,11 @@ impl LibraryPanel {
                 Item::Playlist(playlist) => {
                     self.cover_order.push(Self::playlist_key(&playlist.name))
                 }
+                Item::Genre(genre) => {
+                    let key = Self::genre_key(genre.name.as_deref());
+                    self.genre_keys.insert(key.clone(), genre.name.clone());
+                    self.cover_order.push(key);
+                }
                 _ => {}
             }
         }
@@ -2659,7 +2698,7 @@ impl LibraryPanel {
         let alphabetical = !self.searching()
             && match self.level() {
                 Level::Artists => self.artist_order == ArtistOrder::Name,
-                Level::Albums => true,
+                Level::Albums | Level::Genres => true,
                 _ => false,
             };
         if !alphabetical {
@@ -2677,6 +2716,7 @@ impl LibraryPanel {
                 .or(artist.name.as_deref())
                 .map(plain_name),
             Item::Album(album) => album.name.as_deref(),
+            Item::Genre(genre) => genre.name.as_deref(),
             _ => None,
         });
         letter_jumps(names)
@@ -2833,6 +2873,14 @@ impl LibraryPanel {
         if let Some(known) = self.thumbnails.as_ref().and_then(|t| t.known(key)) {
             return known;
         }
+        // A genre's picture, or its albums' covers.
+        if let Some(name) = self.genre_keys.get(key).cloned() {
+            let source = self.genre_source(name.as_deref());
+            return match &mut self.thumbnails {
+                Some(thumbnails) => thumbnails.get_artist(key, &source),
+                None => Thumbnail::None,
+            };
+        }
         // A playlist's picture, or its covers.
         if let Some(source) = self.playlist_sources.get(key) {
             return match &mut self.thumbnails {
@@ -2913,6 +2961,10 @@ impl LibraryPanel {
             log::warn!("could not read the albums' covers: {e}");
             HashMap::new()
         });
+        self.load_genre_infos();
+        let Some(db) = &self.db else {
+            return;
+        };
         for (key, made) in &covers {
             if self.made_covers.get(key).map(|old| &old.cover) != Some(&made.cover) {
                 self.recent_covers.remove(key);
@@ -3035,6 +3087,13 @@ impl LibraryPanel {
     fn scan_phase(&self) -> Option<String> {
         if !self.scanning {
             return None;
+        }
+        if let Some((done, total)) = self.genres_progress {
+            return Some(format!(
+                "Asking the internet about genres: {} of {}",
+                thousands(done),
+                thousands(total)
+            ));
         }
         Some(
             match (self.artists_progress, self.covers_progress, self.progress) {
@@ -3176,6 +3235,7 @@ impl LibraryPanel {
                 string(self.fanart_key.clone().unwrap_or_default()),
             ),
             ("artist-draft", self.draft_value()),
+            ("genre-draft", self.genre_draft_value()),
             ("finding-pictures", Value::Bool(self.finder.searching())),
             ("picture-error", string(&self.picture_error)),
             (
@@ -3249,6 +3309,14 @@ impl LibraryPanel {
         let text = |f: fn(&ArtistPage) -> String| string(page.map(f).unwrap_or_default());
         Value::Struct(Struct::from_iter([
             ("shown".to_owned(), Value::Bool(page.is_some())),
+            (
+                "kind".to_owned(),
+                string(if page.is_some_and(|p| p.genre) {
+                    "genre"
+                } else {
+                    "artist"
+                }),
+            ),
             ("name".to_owned(), text(|p| p.shown_name.clone())),
             (
                 "own-biography".to_owned(),
@@ -3276,9 +3344,8 @@ impl LibraryPanel {
                 "has-banner".to_owned(),
                 Value::Bool(page.is_some_and(|p| {
                     p.banner.is_some()
-                        || p.name.as_deref().is_some_and(|n| {
-                            shown_backdrop(&self.backdrops, &self.edits, n).is_some()
-                        })
+                        || page_backdrop(p, &self.backdrops, &self.edits, &self.genre_infos)
+                            .is_some()
                 })),
             ),
             (
@@ -3409,7 +3476,10 @@ fn row_value(
         ),
         Item::Genre(g) => (
             "genre",
-            genre_name(g.name.as_deref()),
+            {
+                cover = LibraryPanel::genre_key(g.name.as_deref());
+                genre_name(g.name.as_deref())
+            },
             format!(
                 "{} · {}",
                 count(g.albums as usize, "album"),
@@ -3477,6 +3547,20 @@ fn row_value(
 }
 
 /// "12 plays", or when the track was played last: "3 days ago".
+/// The wide picture across the top of `page`: an artist's or a genre's.
+fn page_backdrop<'a>(
+    page: &ArtistPage,
+    backdrops: &'a HashMap<String, String>,
+    edits: &HashMap<String, ArtistEdit>,
+    genre_infos: &'a HashMap<String, freya_library::library::GenreInfo>,
+) -> Option<&'a String> {
+    let name = page.name.as_deref()?;
+    if page.genre {
+        return genre_infos.get(&name.to_lowercase())?.backdrop.as_ref();
+    }
+    shown_backdrop(backdrops, edits, name)
+}
+
 /// The wide picture across the top of the artist `name`'s page: theirs, unless the user
 /// wants their picture there.
 fn shown_backdrop<'a>(
@@ -4474,7 +4558,7 @@ mod tests {
         assert_eq!(Level::Albums.layout(), "grid");
         assert_eq!(Level::GenreAlbums { genre: None }.layout(), "grid");
         assert_eq!(Level::Songs.layout(), "table");
-        assert_eq!(Level::Genres.layout(), "list");
+        assert_eq!(Level::Genres.layout(), "grid");
         assert_eq!(Level::RecentlyAdded.layout(), "grid");
         assert_eq!(Level::MostPlayed.layout(), "table");
     }

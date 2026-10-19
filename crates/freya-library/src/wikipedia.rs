@@ -45,6 +45,73 @@ pub fn article_of(mbid: &str) -> Result<Option<Article>, String> {
     else {
         return Ok(None);
     };
+    article_titled(title)
+}
+
+/// The Wikidata item of a music genre.
+const MUSIC_GENRE: &str = "Q188451";
+
+/// The English Wikipedia article on the music genre `name`: the first item Wikidata finds
+/// by the name that is a music genre and has one. None when there is none.
+pub fn genre_article(name: &str) -> Result<Option<Article>, String> {
+    let found = get_json(
+        WIKIDATA,
+        &[
+            ("action", "wbsearchentities"),
+            ("search", name),
+            ("language", "en"),
+            ("type", "item"),
+            ("limit", "7"),
+            ("format", "json"),
+        ],
+    )?;
+    let ids: Vec<&str> = found
+        .get("search")
+        .and_then(|s| s.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("id")?.as_str())
+        .collect();
+    if ids.is_empty() {
+        return Ok(None);
+    }
+    let items = get_json(
+        WIKIDATA,
+        &[
+            ("action", "wbgetentities"),
+            ("ids", &ids.join("|")),
+            ("props", "claims|sitelinks"),
+            ("sitefilter", "enwiki"),
+            ("format", "json"),
+        ],
+    )?;
+    match genre_title(&items, &ids) {
+        Some(title) => article_titled(&title),
+        None => Ok(None),
+    }
+}
+
+/// The English article's title of the first of `ids` that is a music genre.
+fn genre_title(items: &serde_json::Value, ids: &[&str]) -> Option<String> {
+    ids.iter().find_map(|id| {
+        let item = items.pointer(&format!("/entities/{id}"))?;
+        let genre = item
+            .pointer("/claims/P31")?
+            .as_array()?
+            .iter()
+            .any(|claim| {
+                claim
+                    .pointer("/mainsnak/datavalue/value/id")
+                    .and_then(|v| v.as_str())
+                    == Some(MUSIC_GENRE)
+            });
+        let title = item.pointer("/sitelinks/enwiki/title")?.as_str()?;
+        genre.then(|| title.to_owned())
+    })
+}
+
+/// The opening of the English Wikipedia article titled `title`.
+fn article_titled(title: &str) -> Result<Option<Article>, String> {
     let page = get_json(
         WIKIPEDIA,
         &[
@@ -129,6 +196,25 @@ mod tests {
         ]});
         assert_eq!(wikidata_item(&artist).as_deref(), Some("Q763392"));
         assert_eq!(wikidata_item(&serde_json::json!({ "relations": [] })), None);
+    }
+
+    #[test]
+    fn takes_the_first_item_that_is_a_music_genre() {
+        let items = serde_json::json!({ "entities": {
+            "Q804229": {
+                "claims": { "P31": [{ "mainsnak": { "datavalue": { "value": { "id": "Q482994" } } } }] },
+                "sitelinks": { "enwiki": { "title": "Black Metal (album)" } },
+            },
+            "Q132438": {
+                "claims": { "P31": [{ "mainsnak": { "datavalue": { "value": { "id": "Q188451" } } } }] },
+                "sitelinks": { "enwiki": { "title": "Black metal" } },
+            },
+        }});
+        assert_eq!(
+            genre_title(&items, &["Q804229", "Q132438"]).as_deref(),
+            Some("Black metal")
+        );
+        assert_eq!(genre_title(&items, &["Q804229"]), None);
     }
 
     #[test]
