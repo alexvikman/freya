@@ -62,9 +62,18 @@ impl<'a> FolderImages<'a> {
         Self {
             by_name: images
                 .iter()
-                .map(|image| (image.to_string_lossy().to_lowercase(), image.as_path()))
+                .map(|image| (Self::key(image), image.as_path()))
                 .collect(),
         }
+    }
+
+    /// `path` in lower case, its parts apart whichever separator was between them.
+    fn key(path: &Path) -> String {
+        let parts: Vec<_> = path
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect();
+        parts.join("/").to_lowercase()
     }
 
     /// The first of `names`, with any of the image extensions, in `dir`.
@@ -72,7 +81,7 @@ impl<'a> FolderImages<'a> {
         names.iter().find_map(|name| {
             IMAGE_EXTENSIONS.iter().find_map(|ext| {
                 let path = dir.join(format!("{name}.{ext}"));
-                let found = self.by_name.get(&path.to_string_lossy().to_lowercase())?;
+                let found = self.by_name.get(&Self::key(&path))?;
                 Some(found.to_path_buf())
             })
         })
