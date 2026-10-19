@@ -18,7 +18,9 @@ pub(super) const SCHEMA: &str = "
         mbid TEXT,
         biography TEXT,
         -- MusicBrainz's words to tell them from others of the name, with the id.
-        note TEXT
+        note TEXT,
+        -- What the top of their page shows: 'wide' or 'picture'; NULL for what they have.
+        header TEXT
     );
 ";
 
@@ -26,6 +28,12 @@ pub(super) const SCHEMA: &str = "
 pub(super) fn migrate(db: &rusqlite::Connection) -> Result<()> {
     if db.prepare("SELECT note FROM artist_edits LIMIT 0").is_err() {
         db.execute_batch("ALTER TABLE artist_edits ADD COLUMN note TEXT;")?;
+    }
+    if db
+        .prepare("SELECT header FROM artist_edits LIMIT 0")
+        .is_err()
+    {
+        db.execute_batch("ALTER TABLE artist_edits ADD COLUMN header TEXT;")?;
     }
     Ok(())
 }
@@ -43,6 +51,40 @@ pub struct ArtistEdit {
     pub biography: Option<String>,
     /// What tells them from others of the name, as MusicBrainz has it for `mbid`.
     pub note: Option<String>,
+    /// What the top of their page shows: their wide picture, or their picture, whichever
+    /// they have; none for the wide one when they have one.
+    pub header: Option<Header>,
+}
+
+/// What the top of an artist's page shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Header {
+    Wide,
+    Picture,
+}
+
+impl Header {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Wide => "wide",
+            Self::Picture => "picture",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "wide" => Some(Self::Wide),
+            "picture" => Some(Self::Picture),
+            _ => None,
+        }
+    }
+}
+
+impl rusqlite::types::FromSql for Header {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let name = value.as_str()?;
+        Self::from_name(name).ok_or(rusqlite::types::FromSqlError::InvalidType)
+    }
 }
 
 impl ArtistEdit {
@@ -67,6 +109,7 @@ impl ArtistEdit {
             note: field(&self.note).filter(|_| mbid.is_some()),
             mbid,
             biography: field(&self.biography),
+            header: self.header,
         }
     }
 }
@@ -77,7 +120,8 @@ impl Library {
         Ok(self
             .db
             .prepare_cached(
-                "SELECT name, sort_name, mbid, biography, note FROM artist_edits WHERE artist = ?1",
+                "SELECT name, sort_name, mbid, biography, note, header FROM artist_edits
+                 WHERE artist = ?1",
             )?
             .query_row([artist], edit_from_row)
             .optional()?
@@ -87,7 +131,7 @@ impl Library {
     /// Every artist the user changed something about.
     pub fn artist_edits(&self) -> Result<HashMap<String, ArtistEdit>> {
         let mut statement = self.db.prepare_cached(
-            "SELECT artist, name, sort_name, mbid, biography, note FROM artist_edits",
+            "SELECT artist, name, sort_name, mbid, biography, note, header FROM artist_edits",
         )?;
         let rows = statement.query_map([], |row| {
             Ok((
@@ -98,6 +142,7 @@ impl Library {
                     mbid: row.get(3)?,
                     biography: row.get(4)?,
                     note: row.get(5)?,
+                    header: row.get(6)?,
                 },
             ))
         })?;
@@ -117,8 +162,8 @@ impl Library {
         self.db
             .prepare_cached(
                 "INSERT OR REPLACE INTO artist_edits
-                     (artist, name, sort_name, mbid, biography, note)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                     (artist, name, sort_name, mbid, biography, note, header)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             )?
             .execute(params![
                 artist,
@@ -126,7 +171,8 @@ impl Library {
                 edit.sort_name,
                 edit.mbid,
                 edit.biography,
-                edit.note
+                edit.note,
+                edit.header.map(Header::name)
             ])?;
         Ok(())
     }
@@ -139,6 +185,7 @@ fn edit_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArtistEdit> {
         mbid: row.get(2)?,
         biography: row.get(3)?,
         note: row.get(4)?,
+        header: row.get(5)?,
     })
 }
 
@@ -189,6 +236,7 @@ mod tests {
             name: Some("  Anna von Hausswolff ".into()),
             sort_name: Some("".into()),
             biography: Some("A Swedish singer.".into()),
+            header: Some(Header::Picture),
             ..ArtistEdit::default()
         };
         library
@@ -198,6 +246,7 @@ mod tests {
         assert_eq!(kept.name.as_deref(), Some("Anna von Hausswolff"), "trimmed");
         assert_eq!(kept.sort_name, None, "blank is unchanged");
         assert_eq!(kept.biography.as_deref(), Some("A Swedish singer."));
+        assert_eq!(kept.header, Some(Header::Picture));
         assert_eq!(library.artist_edits().unwrap().len(), 1);
 
         library

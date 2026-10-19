@@ -22,7 +22,7 @@ use crate::cue::Part;
 use crate::tags::TagInfo;
 
 pub use covers::AlbumCover;
-pub use edits::ArtistEdit;
+pub use edits::{ArtistEdit, Header};
 pub use fetch::{LastFm, Online};
 pub use matches::{AlbumMatch, plain_name, split_artist};
 pub use online::{ASK_AGAIN_AFTER, ArtistText, Asked, CHOSEN, FOLDER, PictureKind, PictureRow};

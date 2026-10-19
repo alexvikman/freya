@@ -463,6 +463,9 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
                 biography: text(3),
                 // Of the match: the library knows it.
                 note: None,
+                header: text(4)
+                    .as_deref()
+                    .and_then(freya_library::library::Header::from_name),
             };
             app.library.save_artist(&edit);
         }),

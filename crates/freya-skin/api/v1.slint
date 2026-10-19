@@ -154,6 +154,9 @@ export struct ArtistDraft {
     /// unchanged, the internet's stays the internet's.
     biography: string,
     biography-from: string,
+    /// What the top of their page shows: "auto", their wide picture when they have one, else
+    /// their picture; "wide", the same; or "picture", their picture though they have a wide one.
+    header: string,
 }
 
 /// The artist being matched: see `Library.match-artist`.
@@ -416,11 +419,11 @@ export global Library {
     callback set-artist-wikipedia-online(bool);
     callback set-fanart-key(string);
     /// Start changing the artist whose page is shown: Freya sets `artist-draft` to what was
-    /// changed about them before. `save-artist` keeps the name, sort name, MusicBrainz id and
-    /// biography given; empty ones go back to the tags' and the internet's.
+    /// changed about them before. `save-artist` keeps the name, sort name, MusicBrainz id,
+    /// biography and header given; empty ones go back to the tags' and the internet's.
     in property <ArtistDraft> artist-draft;
     callback edit-artist();
-    callback save-artist(string, string, string, string);
+    callback save-artist(string, string, string, string, string);
     /// Leave the artist as they were.
     callback cancel-artist();
     /// While the artist is changed: pictures to choose from, square and wide, the first of

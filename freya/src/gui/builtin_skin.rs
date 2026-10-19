@@ -482,6 +482,7 @@ impl Convert for ArtistDraft {
             found_mbid: field(&s, "found-mbid"),
             biography: field(&s, "biography"),
             biography_from: field(&s, "biography-from"),
+            header: field(&s, "header"),
         })
     }
 
@@ -494,6 +495,7 @@ impl Convert for ArtistDraft {
             ("found-mbid", self.found_mbid.to_value()),
             ("biography", self.biography.to_value()),
             ("biography-from", self.biography_from.to_value()),
+            ("header", self.header.to_value()),
         ])
     }
 }
@@ -940,7 +942,7 @@ skin_api! {
         Library."set-artist-wikipedia-online" => on_set_artist_wikipedia_online, invoke_set_artist_wikipedia_online(online: bool);
         Library."set-fanart-key" => on_set_fanart_key, invoke_set_fanart_key(key: SharedString);
         Library."edit-artist" => on_edit_artist, invoke_edit_artist();
-        Library."save-artist" => on_save_artist, invoke_save_artist(name: SharedString, sort_name: SharedString, mbid: SharedString, biography: SharedString);
+        Library."save-artist" => on_save_artist, invoke_save_artist(name: SharedString, sort_name: SharedString, mbid: SharedString, biography: SharedString, header: SharedString);
         Library."cancel-artist" => on_cancel_artist, invoke_cancel_artist();
         Library."choose-picture" => on_choose_picture, invoke_choose_picture(kind: SharedString, index: i32);
         Library."pick-picture-file" => on_pick_picture_file, invoke_pick_picture_file(kind: SharedString);

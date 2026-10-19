@@ -8,7 +8,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use freya_library::cue::Part;
 use freya_library::library::{
-    Album, AlbumMatch, Artist, ArtistEdit, ArtistOrder, CHOSEN, Genre, Online, PictureKind,
+    Album, AlbumMatch, Artist, ArtistEdit, ArtistOrder, CHOSEN, Genre, Header, Online, PictureKind,
     PictureRow, Played, ScanEvent, ScanOptions, Scanner, Track, plain_name, split_artist,
 };
 use freya_library::pictures::Pictures;
@@ -1413,8 +1413,8 @@ impl LibraryPanel {
         let needs_banner = page.banner.is_none();
         let backdrop = page
             .name
-            .as_ref()
-            .and_then(|name| self.backdrops.get(name))
+            .as_deref()
+            .and_then(|name| shown_backdrop(&self.backdrops, &self.edits, name))
             .cloned();
         // Their picture shows only without a wide one.
         let needs_portrait = !page.portrait_large && backdrop.is_none();
@@ -1468,10 +1468,9 @@ impl LibraryPanel {
                 page.portrait_large = portrait.large;
                 page.picture_full = portrait.full.map(Image::from_rgb8);
                 // Without a wide picture: the color of their picture.
-                let wide = page
-                    .name
-                    .as_ref()
-                    .is_some_and(|name| self.backdrops.contains_key(name));
+                let wide = page.name.as_deref().is_some_and(|name| {
+                    shown_backdrop(&self.backdrops, &self.edits, name).is_some()
+                });
                 if !wide {
                     page.color = Some(portrait.color);
                 }
@@ -2252,6 +2251,10 @@ impl LibraryPanel {
             ("found-mbid".to_owned(), string(found_mbid)),
             ("biography".to_owned(), string(biography)),
             (
+                "header".to_owned(),
+                string(edit.header.map_or("auto", Header::name)),
+            ),
+            (
                 "biography-from".to_owned(),
                 string(if found {
                     self.found_biography_from.as_str()
@@ -2299,6 +2302,15 @@ impl LibraryPanel {
         self.show_choices();
         if kept.mbid != before.mbid {
             self.forget_found(&artist);
+        }
+        // The top of their page shows the other picture: made again.
+        if kept.header != before.header
+            && let Some(page) = &mut self.artist_page
+        {
+            page.banner = None;
+            page.portrait_large = false;
+            page.color = None;
+            page.asked = None;
         }
         self.reload();
     }
@@ -3151,9 +3163,9 @@ impl LibraryPanel {
                 "has-banner".to_owned(),
                 Value::Bool(page.is_some_and(|p| {
                     p.banner.is_some()
-                        || p.name
-                            .as_ref()
-                            .is_some_and(|n| self.backdrops.contains_key(n))
+                        || p.name.as_deref().is_some_and(|n| {
+                            shown_backdrop(&self.backdrops, &self.edits, n).is_some()
+                        })
                 })),
             ),
             (
@@ -3344,6 +3356,19 @@ fn row_value(
 }
 
 /// "12 plays", or when the track was played last: "3 days ago".
+/// The wide picture across the top of the artist `name`'s page: theirs, unless the user
+/// wants their picture there.
+fn shown_backdrop<'a>(
+    backdrops: &'a HashMap<String, String>,
+    edits: &HashMap<String, ArtistEdit>,
+    name: &str,
+) -> Option<&'a String> {
+    let picture = edits
+        .get(name)
+        .is_some_and(|edit| edit.header == Some(Header::Picture));
+    backdrops.get(name).filter(|_| !picture)
+}
+
 /// The letter a name is jumped to by: its first letter, A to Z, or another one as it is, such
 /// as Å; "#" for one that starts with a digit or a sign.
 fn letter_of(name: &str) -> String {
@@ -3940,6 +3965,30 @@ mod tests {
         assert_eq!(thousands(999), "999");
         assert_eq!(thousands(1_000), "1,000");
         assert_eq!(thousands(1_234_567), "1,234,567");
+    }
+
+    #[test]
+    fn an_artists_page_shows_the_picture_the_user_wants_at_its_top() {
+        let backdrops = HashMap::from([("Dido".to_owned(), "wide".to_owned())]);
+        let mut edits = HashMap::new();
+        assert_eq!(
+            shown_backdrop(&backdrops, &edits, "Dido").map(String::as_str),
+            Some("wide")
+        );
+        for (header, shown) in [(Header::Wide, Some("wide")), (Header::Picture, None)] {
+            edits.insert(
+                "Dido".to_owned(),
+                ArtistEdit {
+                    header: Some(header),
+                    ..ArtistEdit::default()
+                },
+            );
+            assert_eq!(
+                shown_backdrop(&backdrops, &edits, "Dido").map(String::as_str),
+                shown
+            );
+        }
+        assert_eq!(shown_backdrop(&backdrops, &edits, "Air"), None);
     }
 
     #[test]
