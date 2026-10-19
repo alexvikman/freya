@@ -4,7 +4,7 @@
 // contrast against the background it is drawn on (WCAG AA), light and dark mode follow the
 // system.
 
-import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, LastFm, PlaybackState, Shortcuts, TrackRow, LibraryRow, AlbumPage, ArtistPage, ArtistDraft, PictureChoice, MatchChoice, AlbumMatchDraft, AlbumMatchChoice, ArtistMatchDraft, PlaylistRow, StationRow, NativeSpectrum, NativeOscilloscope, NativeHologram } from "@freya/v1.slint";
+import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, LastFm, PlaybackState, Shortcuts, TrackRow, LibraryRow, AlbumPage, ArtistPage, ArtistDraft, PictureChoice, MatchChoice, AlbumMatchDraft, AlbumMatchChoice, ArtistMatchDraft, PlaylistRow, PlaylistPage, PlaylistEntryRow, StationRow, NativeSpectrum, NativeOscilloscope, NativeHologram } from "@freya/v1.slint";
 import { AboutSlint, ListView, Palette, ScrollView } from "std-widgets.slint";
 
 // Every skin re-exports the API globals so the app can reach them.
@@ -3765,61 +3765,384 @@ component DeletePlaylistForm inherits MenuSurface {
     }
 }
 
-/// A track of the playlist shown.
-component PlaylistTrackRow inherits Rectangle {
-    in property <TrackRow> entry;
+/// The tracks of the playlist shown; a double-click plays from one.
+/// The top of a playlist's own page: its wide picture, or its picture beside its name; its
+/// description and length; play, shuffle and the rest; and the heading of its tracks.
+component PlaylistPageHead inherits Rectangle {
+    in property <PlaylistPage> page;
+    /// Change its name, description and pictures.
+    callback edit();
+
+    property <length> pad: 24px;
+    property <image> picture: root.page.picture == "" ? @image-url("") : Library.cover(root.page.picture, Library.covers-ready);
+
+    accessible-role: groupbox;
+    accessible-label: root.page.name;
+
+    VerticalLayout {
+        Rectangle {
+            height: 340px;
+            background: root.page.color;
+            clip: true;
+
+            if root.page.banner.width > 0: Image {
+                property <float> aspect: root.page.banner.width / max(1, root.page.banner.height);
+
+                width: max(parent.width, parent.height * self.aspect);
+                height: self.width / self.aspect;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) * 0.3;
+                source: root.page.banner;
+                image-rendering: smooth;
+            }
+            Rectangle {
+                background: @linear-gradient(180deg, #00000000 35%, root.page.color.with-alpha(0.85) 100%);
+            }
+            HorizontalLayout {
+                padding: root.pad;
+                spacing: 24px;
+
+                // Its picture, or its tracks' covers, beside its name.
+                if !root.page.has-banner: VerticalLayout {
+                    alignment: end;
+
+                    Rectangle {
+                        width: 232px;
+                        height: 232px;
+                        background: root.picture.width > 0 ? transparent : #ffffff1a;
+                        drop-shadow-blur: 24px;
+                        drop-shadow-color: #00000066;
+
+                        if root.picture.width > 0: Image {
+                            width: parent.width;
+                            height: parent.height;
+                            source: root.picture;
+                            image-fit: cover;
+                            image-rendering: smooth;
+                        }
+                        if root.picture.width == 0: Icon {
+                            width: 64px;
+                            height: 64px;
+                            data: Icons.playlist;
+                            stroked: true;
+                            color: #ffffffb3;
+                        }
+                    }
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    min-width: 0;
+                    alignment: end;
+                    spacing: 8px;
+
+                    Text {
+                        text: "Playlist";
+                        font-size: 13px;
+                        font-weight: 600;
+                        color: #ffffff;
+                    }
+                    Text {
+                        text: root.page.name;
+                        font-size: root.page.name.character-count <= 14 ? 84px
+                            : root.page.name.character-count <= 24 ? 60px
+                            : 42px;
+                        font-weight: 900;
+                        color: #ffffff;
+                        overflow: elide;
+                    }
+                    if root.page.description != "": Text {
+                        text: root.page.description;
+                        font-size: 15px;
+                        color: #ffffffd9;
+                        wrap: word-wrap;
+                        overflow: elide;
+                        max-height: 44px;
+                    }
+                    Text {
+                        text: root.page.summary;
+                        font-size: 14px;
+                        color: #ffffffd9;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+        // Play, shuffle, add and change it; and how its tracks are ordered.
+        Rectangle {
+            height: 88px;
+            background: @linear-gradient(180deg, root.page.color.with-alpha(0.55) 0%, root.page.color.with-alpha(0) 100%);
+
+            HorizontalLayout {
+                padding-left: root.pad;
+                padding-right: root.pad;
+                spacing: 12px;
+
+                IconButton {
+                    y: (parent.height - self.height) / 2;
+                    icon: Icons.play;
+                    primary: true;
+                    size: 56px;
+                    label: "Play " + root.page.name;
+                    tooltip: "Play";
+                    clicked => { Playlists.play(0); }
+                }
+                IconButton {
+                    y: (parent.height - self.height) / 2;
+                    icon: Icons.shuffle;
+                    stroked: true;
+                    size: 44px;
+                    label: "Shuffle " + root.page.name;
+                    tooltip: "Shuffle";
+                    clicked => { Playlists.shuffle(); }
+                }
+                IconButton {
+                    y: (parent.height - self.height) / 2;
+                    icon: Icons.plus;
+                    stroked: true;
+                    size: 44px;
+                    label: "Add " + root.page.name + " to Up Next";
+                    tooltip: "Add to Up Next";
+                    clicked => { Playlists.enqueue(); }
+                }
+                IconButton {
+                    y: (parent.height - self.height) / 2;
+                    icon: Icons.pencil;
+                    stroked: true;
+                    size: 44px;
+                    label: "Edit " + root.page.name;
+                    tooltip: "Edit";
+                    clicked => { root.edit(); }
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+                sort := HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+
+                    Text {
+                        text: root.page.sort == "title" ? "Title"
+                            : root.page.sort == "artist" ? "Artist"
+                            : root.page.sort == "album" ? "Album"
+                            : root.page.sort == "added" ? "Date added"
+                            : root.page.sort == "duration" ? "Duration"
+                            : "Custom order";
+                        font-size: 14px;
+                        color: sort-touch.has-hover ? Theme.text : Theme.text-secondary;
+                        vertical-alignment: center;
+                    }
+                    Icon {
+                        y: (parent.height - self.height) / 2;
+                        width: 18px;
+                        height: 18px;
+                        data: Icons.list;
+                        stroked: true;
+                        color: sort-touch.has-hover ? Theme.text : Theme.text-secondary;
+                    }
+                    sort-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { sort-menu.show(); }
+                    }
+                }
+            }
+            sort-menu := PopupWindow {
+                x: parent.width - root.pad - 200px;
+                y: parent.height - 16px;
+                width: 200px;
+
+                MenuSurface {
+                    VerticalLayout {
+                        padding: 6px;
+
+                        MenuHeading { text: "Sort by"; }
+                        for choice in [
+                            { name: "custom", text: "Custom order" },
+                            { name: "title", text: "Title" },
+                            { name: "artist", text: "Artist" },
+                            { name: "album", text: "Album" },
+                            { name: "added", text: "Date added" },
+                            { name: "duration", text: "Duration" },
+                        ]: MenuItem {
+                            text: (root.page.sort == choice.name ? "✓ " : "") + choice.text;
+                            activated => { Playlists.set-sort(choice.name); }
+                        }
+                    }
+                }
+            }
+        }
+        // The tracks' heading.
+        HorizontalLayout {
+            height: 36px;
+            padding-left: root.pad;
+            padding-right: root.pad;
+            spacing: 16px;
+
+            Text {
+                width: 32px;
+                text: "#";
+                font-size: 13px;
+                color: Theme.text-secondary;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+            Text {
+                horizontal-stretch: 2;
+                text: "Title";
+                font-size: 13px;
+                color: Theme.text-secondary;
+                vertical-alignment: center;
+            }
+            Text {
+                horizontal-stretch: 1.4;
+                text: "Album";
+                font-size: 13px;
+                color: Theme.text-secondary;
+                vertical-alignment: center;
+            }
+            Text {
+                width: 120px;
+                text: "Date added";
+                font-size: 13px;
+                color: Theme.text-secondary;
+                vertical-alignment: center;
+            }
+            HorizontalLayout {
+                width: 88px;
+                alignment: end;
+                padding-right: 36px;
+
+                Icon {
+                    y: (parent.height - self.height) / 2;
+                    width: 16px;
+                    height: 16px;
+                    data: Icons.clock;
+                    stroked: true;
+                    color: Theme.text-secondary;
+                }
+            }
+        }
+        Rectangle {
+            height: 1px;
+            x: root.pad;
+            width: parent.width - 2 * root.pad;
+            background: Theme.divider;
+        }
+    }
+}
+
+/// A track of a playlist on its page: its cover, title and artist, album, when it was added,
+/// and how long it is. Double-clicked, the playlist plays from it.
+component PlaylistEntryView inherits Rectangle {
+    in property <PlaylistEntryRow> entry;
     in property <int> index;
 
-    height: 34px;
     background: touch.has-hover ? Theme.hover : transparent;
     accessible-role: list-item;
-    accessible-label: entry.title + (entry.duration == "" ? "" : ", " + entry.duration);
+    accessible-label: entry.title + (entry.artist == "" ? "" : ", " + entry.artist) + (entry.duration == "" ? "" : ", " + entry.duration);
     accessible-action-default => { Playlists.play(root.index); }
 
-    // Below the button, so it gets its own clicks.
     touch := TouchArea {
         double-clicked => { Playlists.play(root.index); }
     }
 
     HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 12px;
-        spacing: 10px;
+        padding-left: 24px;
+        padding-right: 24px;
+        spacing: 16px;
 
         Text {
-            width: 36px;
+            width: 32px;
             text: root.entry.number;
-            font-size: 13px;
+            font-size: 14px;
             color: Theme.text-secondary;
             horizontal-alignment: right;
             vertical-alignment: center;
         }
+        HorizontalLayout {
+            horizontal-stretch: 2;
+            min-width: 0;
+            spacing: 12px;
+
+            Rectangle {
+                y: (parent.height - self.height) / 2;
+                width: 40px;
+                height: 40px;
+                background: Theme.track;
+
+                if root.entry.cover != "": Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: Library.cover(root.entry.cover, Library.covers-ready);
+                    image-fit: cover;
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                min-width: 0;
+                spacing: 2px;
+
+                Text {
+                    text: root.entry.title;
+                    font-size: 14px;
+                    color: Theme.text;
+                    overflow: elide;
+                }
+                if root.entry.artist != "": Text {
+                    text: root.entry.artist;
+                    font-size: 13px;
+                    color: Theme.text-secondary;
+                    overflow: elide;
+                }
+            }
+        }
         Text {
-            horizontal-stretch: 1;
-            text: root.entry.title;
-            color: Theme.text;
+            horizontal-stretch: 1.4;
+            min-width: 0;
+            text: root.entry.album;
+            font-size: 13px;
+            color: Theme.text-secondary;
             vertical-alignment: center;
             overflow: elide;
         }
         Text {
-            text: root.entry.duration;
+            width: 120px;
+            text: root.entry.added;
             font-size: 13px;
             color: Theme.text-secondary;
             vertical-alignment: center;
         }
-        IconButton {
-            icon: Icons.trash;
-            stroked: true;
-            size: 28px;
-            label: "Remove from the playlist";
-            clicked => { Playlists.remove(root.index); }
+        HorizontalLayout {
+            width: 88px;
+            spacing: 8px;
+            alignment: end;
+
+            Text {
+                text: root.entry.duration;
+                font-size: 13px;
+                color: Theme.text-secondary;
+                vertical-alignment: center;
+            }
+            IconButton {
+                y: (parent.height - self.height) / 2;
+                icon: Icons.trash;
+                stroked: true;
+                size: 28px;
+                label: "Remove from the playlist";
+                tooltip: "Remove";
+                clicked => { Playlists.remove(root.index); }
+            }
         }
     }
 }
 
-/// The tracks of the playlist shown; a double-click plays from one.
+/// A playlist's own page: its top, then its tracks, scrolling together.
 component PlaylistView inherits Rectangle {
+    /// Change the playlist's name, description and pictures.
+    callback edit();
+
     property <int> restores: App.restores;
+    property <length> head-height: 340px + 88px + 37px;
+    property <length> row-height: 56px;
     init => { root.restore-scroll(); }
     changed restores => { root.restore-scroll(); }
 
@@ -3834,13 +4157,23 @@ component PlaylistView inherits Rectangle {
     tracks := ListView {
         changed content-y => { App.scroll = -self.content-y; }
 
-        for track[i] in Playlists.tracks: PlaylistTrackRow {
-            entry: track;
-            index: i;
+        for index in Playlists.entries.length + 1: Rectangle {
+            height: index == 0 ? root.head-height : root.row-height;
+
+            if index == 0: PlaylistPageHead {
+                page: Playlists.page;
+                edit => { root.edit(); }
+            }
+            if index > 0: PlaylistEntryView {
+                entry: Playlists.entries[index - 1];
+                index: index - 1;
+            }
         }
     }
 
-    if Playlists.tracks.length == 0: VerticalLayout {
+    if Playlists.entries.length == 0: VerticalLayout {
+        y: root.head-height;
+        height: root.height - root.head-height;
         alignment: center;
         padding-left: 32px;
         padding-right: 32px;
@@ -3859,6 +4192,167 @@ component PlaylistView inherits Rectangle {
             color: Theme.text-secondary;
             horizontal-alignment: center;
             wrap: word-wrap;
+        }
+    }
+}
+
+/// Changing a playlist: its name, description, picture and wide picture. Kept in Freya; the
+/// playlist's file holds its tracks only.
+component PlaylistEditForm inherits MenuSurface {
+    callback closed();
+
+    property <string> name: Playlists.draft.name;
+    property <string> description: Playlists.draft.description;
+
+    function save() {
+        Playlists.save-edit(root.name, root.description);
+        if (Playlists.draft.error == "") {
+            root.closed();
+        }
+    }
+
+    public function cancel() {
+        Playlists.cancel-edit();
+        root.closed();
+    }
+
+    VerticalLayout {
+        padding: 24px;
+        spacing: 18px;
+
+        HorizontalLayout {
+            spacing: 12px;
+
+            Icon {
+                y: (parent.height - self.height) / 2;
+                width: 22px;
+                height: 22px;
+                data: Icons.pencil;
+                stroked: true;
+                color: Theme.text-secondary;
+            }
+            Text {
+                text: "Edit " + Playlists.draft.name;
+                font-size: 22px;
+                font-weight: 700;
+                color: Theme.text;
+                overflow: elide;
+            }
+        }
+        FormField {
+            label: "Name";
+            text <=> root.name;
+        }
+        VerticalLayout {
+            spacing: 6px;
+
+            Text {
+                text: "Description";
+                font-size: 13px;
+                color: Theme.text-secondary;
+            }
+            Rectangle {
+                height: 88px;
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: description-input.has-focus ? Theme.accent : Theme.divider;
+                background: Theme.background;
+                clip: true;
+
+                if description-input.text == "": Text {
+                    x: 10px;
+                    y: 9px;
+                    text: "What it is for";
+                    font-size: 13px;
+                    color: Theme.text-secondary;
+                }
+                description-input := TextInput {
+                    x: 10px;
+                    y: 9px;
+                    width: parent.width - 20px;
+                    height: parent.height - 18px;
+                    text <=> root.description;
+                    font-size: 13px;
+                    color: Theme.text;
+                    wrap: word-wrap;
+                    single-line: false;
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: 24px;
+            alignment: start;
+
+            for kind in [
+                { name: "picture", text: "Picture", width: 120px, empty: "Its tracks' covers" },
+                { name: "backdrop", text: "Wide picture", width: 213px, empty: "None" },
+            ]: kind-box := VerticalLayout {
+                property <image> shown: kind.name == "backdrop" ? Playlists.draft.backdrop : Playlists.draft.picture;
+
+                spacing: 8px;
+
+                Text {
+                    text: kind.text;
+                    font-size: 13px;
+                    color: Theme.text-secondary;
+                }
+                Rectangle {
+                    width: kind.width;
+                    height: 120px;
+                    background: Theme.background;
+                    border-width: 1px;
+                    border-color: Theme.divider;
+                    clip: true;
+
+                    if kind-box.shown.width > 0: Image {
+                        width: parent.width;
+                        height: parent.height;
+                        source: kind-box.shown;
+                        image-fit: cover;
+                    }
+                    if kind-box.shown.width == 0: Text {
+                        text: kind.empty;
+                        font-size: 12px;
+                        color: Theme.text-secondary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+
+                    TextButton {
+                        text: "Choose…";
+                        clicked => { Playlists.pick-picture(kind.name); }
+                    }
+                    if kind-box.shown.width > 0: TextButton {
+                        text: "Remove";
+                        clicked => { Playlists.clear-picture(kind.name); }
+                    }
+                }
+            }
+        }
+        if Playlists.draft.error != "": Text {
+            text: Playlists.draft.error;
+            font-size: 13px;
+            color: Theme.danger;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: end;
+
+            TextButton {
+                text: "Cancel";
+                clicked => { root.cancel(); }
+            }
+            TextButton {
+                text: "Save";
+                primary: true;
+                clicked => { root.save(); }
+            }
         }
     }
 }
@@ -7248,7 +7742,7 @@ export component FreyaSkin inherits Window {
                                 title: root.view == "queue" ? "Up Next"
                                     : root.view == "library" ? Library.title
                                     : root.view == "radio" ? "Radio"
-                                    : root.view == "playlist" ? (Playlists.shown >= 0 ? Playlists.playlists[Playlists.shown].name : "Playlist")
+                                    : root.view == "playlist" ? ""
                                     : root.view == "visualizer" ? "Visualizer"
                                     : root.view == "settings" || root.view == "about" || root.view == "activity" ? ""
                                     : "Equalizer";
@@ -7316,6 +7810,10 @@ export component FreyaSkin inherits Window {
                             if root.view == "playlist": PlaylistView {
                                 width: 100%;
                                 height: 100%;
+                                edit => {
+                                    Playlists.edit();
+                                    playlist-popup.show();
+                                }
                             }
                             if root.view == "radio": RadioView {
                                 width: 100%;
@@ -7490,6 +7988,37 @@ export component FreyaSkin inherits Window {
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
                     closed => { artist-popup.close(); }
+                }
+            }
+        }
+    }
+
+    // As the folders' dialog.
+    playlist-popup := PopupWindow {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        close-policy: no-auto-close;
+
+        DialogFocus {
+            key-pressed(event) => {
+                if (event.text == Key.Escape) {
+                    playlist-form.cancel();
+                    return accept;
+                }
+                reject
+            }
+
+            Rectangle {
+                background: #00000059;
+
+                playlist-form := PlaylistEditForm {
+                    width: min(560px, parent.width - 48px);
+                    height: self.preferred-height;
+                    x: (parent.width - self.width) / 2;
+                    y: max(24px, (parent.height - self.preferred-height) / 3);
+                    closed => { playlist-popup.close(); }
                 }
             }
         }

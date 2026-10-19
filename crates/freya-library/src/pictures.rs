@@ -20,6 +20,21 @@ pub struct Pictures {
 }
 
 impl Pictures {
+    /// The picture in `file`, at most `largest` wide or high, kept among these: its checksum.
+    pub fn take_file(&self, file: &Path, largest: u32) -> Result<String, String> {
+        let picture = image::open(file).map_err(|e| e.to_string())?;
+        let picture = if picture.width() > largest || picture.height() > largest {
+            picture.resize(largest, largest, image::imageops::FilterType::Lanczos3)
+        } else {
+            picture
+        };
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 90)
+            .encode_image(&picture.to_rgb8())
+            .map_err(|e| e.to_string())?;
+        self.put(&jpeg).map_err(|e| e.to_string())
+    }
+
     /// Pictures kept in `dir`, which is made when the first one is written.
     pub fn new(dir: PathBuf) -> Self {
         Self { dir }

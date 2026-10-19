@@ -324,6 +324,87 @@ impl Convert for Activity {
     }
 }
 
+impl Convert for PlaylistPage {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            name: field(&s, "name"),
+            description: field(&s, "description"),
+            picture: field(&s, "picture"),
+            banner: field(&s, "banner"),
+            has_banner: field(&s, "has-banner"),
+            color: field(&s, "color"),
+            summary: field(&s, "summary"),
+            sort: field(&s, "sort"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("name", self.name.to_value()),
+            ("description", self.description.to_value()),
+            ("picture", self.picture.to_value()),
+            ("banner", self.banner.to_value()),
+            ("has-banner", self.has_banner.to_value()),
+            ("color", self.color.to_value()),
+            ("summary", self.summary.to_value()),
+            ("sort", self.sort.to_value()),
+        ])
+    }
+}
+
+impl Convert for PlaylistEntryRow {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            number: field(&s, "number"),
+            title: field(&s, "title"),
+            artist: field(&s, "artist"),
+            album: field(&s, "album"),
+            cover: field(&s, "cover"),
+            added: field(&s, "added"),
+            duration: field(&s, "duration"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("number", self.number.to_value()),
+            ("title", self.title.to_value()),
+            ("artist", self.artist.to_value()),
+            ("album", self.album.to_value()),
+            ("cover", self.cover.to_value()),
+            ("added", self.added.to_value()),
+            ("duration", self.duration.to_value()),
+        ])
+    }
+}
+
+impl Convert for PlaylistDraft {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            shown: field(&s, "shown"),
+            name: field(&s, "name"),
+            description: field(&s, "description"),
+            picture: field(&s, "picture"),
+            backdrop: field(&s, "backdrop"),
+            error: field(&s, "error"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("shown", self.shown.to_value()),
+            ("name", self.name.to_value()),
+            ("description", self.description.to_value()),
+            ("picture", self.picture.to_value()),
+            ("backdrop", self.backdrop.to_value()),
+            ("error", self.error.to_value()),
+        ])
+    }
+}
+
 impl Convert for LetterJump {
     fn from_value(value: Value) -> Option<Self> {
         let Value::Struct(s) = value else { return None };
@@ -784,6 +865,9 @@ skin_api! {
         Playlists."tracks" => set_tracks, get_tracks;
         Playlists."summary" => set_summary, get_summary;
         Playlists."error" => set_error, get_error;
+        Playlists."page" => set_page, get_page;
+        Playlists."entries" => set_entries, get_entries;
+        Playlists."draft" => set_draft, get_draft;
 
         Radio."stations" => set_stations, get_stations;
         Radio."error" => set_error, get_error;
@@ -929,6 +1013,13 @@ skin_api! {
         Playlists."remove" => on_remove, invoke_remove(row: i32);
         Playlists."add-queue-selection" => on_add_queue_selection, invoke_add_queue_selection(index: i32);
         Playlists."add-library-row" => on_add_library_row, invoke_add_library_row(index: i32, row: i32);
+        Playlists."shuffle" => on_shuffle, invoke_shuffle();
+        Playlists."set-sort" => on_set_sort, invoke_set_sort(sort: SharedString);
+        Playlists."edit" => on_edit, invoke_edit();
+        Playlists."pick-picture" => on_pick_picture, invoke_pick_picture(kind: SharedString);
+        Playlists."clear-picture" => on_clear_picture, invoke_clear_picture(kind: SharedString);
+        Playlists."save-edit" => on_save_edit, invoke_save_edit(name: SharedString, description: SharedString);
+        Playlists."cancel-edit" => on_cancel_edit, invoke_cancel_edit();
 
         Radio."play" => on_play, invoke_play(row: i32);
         Radio."add" => on_add, invoke_add(name: SharedString, url: SharedString);

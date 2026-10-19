@@ -217,6 +217,9 @@ Playlists the user keeps in Freya, apart from the queue: `Playlist` is what play
 | `tracks` | `[TrackRow]` | The tracks of the playlist shown; `selected` and `current` are false |
 | `summary` | string | "12 tracks · 48:10" for the playlist shown |
 | `error` | string | Why the last `create`, `save-queue` or `rename` failed; empty after one that worked. Freya answers at once, so check it right after |
+| `page` | `PlaylistPage` | The playlist shown as its own page shows it: `name`, `description`, `picture` (for `Library.cover`: the user's picture, else its tracks' covers), `banner` (its wide picture, once decoded) and `has-banner`, `color`, `summary` ("84 tracks · 6 h 9 min") and `sort` |
+| `entries` | `[PlaylistEntryRow]` | Its tracks in the order of `page.sort`: `number`, `title`, `artist`, `album`, `cover` (for `Library.cover`), `added` ("23 Dec 2025") and `duration`. `play`, `remove` and the rest take rows of these |
+| `draft` | `PlaylistDraft` | The playlist being changed: `shown`, `name`, `description`, `picture` and `backdrop` as chosen so far, and `error` |
 
 | Callback | |
 |---|---|
@@ -229,6 +232,10 @@ Playlists the user keeps in Freya, apart from the queue: `Playlist` is what play
 | `remove(row)` | Take a track out of the playlist shown |
 | `add-queue-selection(index)` | Add the selected tracks of the playlist that plays (all of them when none is selected) to a playlist |
 | `add-library-row(index, row)` | Add everything a library row stands for to a playlist |
+| `shuffle()` | The playlist shown becomes the playlist that plays, shuffled |
+| `set-sort(sort)` | Order the tracks shown: "custom" (as the playlist has them), "title", "artist", "album", "added" or "duration" |
+| `edit()`, `save-edit(name, description)`, `cancel-edit()` | Change the playlist shown: its name, description and pictures, kept in Freya beside its file |
+| `pick-picture(kind)`, `clear-picture(kind)` | While changing it, ask the user for a picture file or take one away: "picture" or "backdrop" |
 
 ### `Radio`
 

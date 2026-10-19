@@ -18,6 +18,11 @@ use slint::{Image, ModelRc, VecModel};
 use slint_interpreter::{Struct, Value};
 
 use super::cover_decoder::CoverDecoder;
+pub use playlist_page::PlaylistSort;
+use playlist_page::{PlaylistDraft, PlaylistPage};
+
+#[path = "playlist_page.rs"]
+mod playlist_page;
 use super::folder_watch::FolderWatch;
 use super::match_finder::{AlbumFinder, MatchFinder};
 use super::picture_finder::{Found, Pick, PictureFinder, Request};
@@ -317,6 +322,13 @@ pub struct LibraryPanel {
     popular_rows: ModelRows,
     /// The letters to jump to in the artists or albums shown, for `Library.letters`.
     letter_rows: ModelRows,
+    /// The playlist shown, its tracks' rows for `Playlists.entries` and how they are ordered;
+    /// the one being changed; and each playlist's picture, by its key.
+    playlist_page: Option<PlaylistPage>,
+    playlist_rows: ModelRows,
+    playlist_sort: PlaylistSort,
+    playlist_draft: Option<PlaylistDraft>,
+    playlist_sources: HashMap<String, ArtistSource>,
     /// While an album's tracks are shown: how often each was played, and its page.
     play_counts: HashMap<(PathBuf, Option<Duration>), u32>,
     album_page: Option<AlbumPage>,
@@ -648,6 +660,11 @@ impl LibraryPanel {
             fanart_key: None,
             popular_rows: ModelRows::new(),
             letter_rows: ModelRows::new(),
+            playlist_page: None,
+            playlist_rows: ModelRows::new(),
+            playlist_sort: PlaylistSort::Custom,
+            playlist_draft: None,
+            playlist_sources: HashMap::new(),
         }
     }
 
@@ -660,6 +677,7 @@ impl LibraryPanel {
         let _ = ui.set_global_property("Library", "rows", self.rows.model_value());
         let _ = ui.set_global_property("Library", "popular", self.popular_rows.model_value());
         let _ = ui.set_global_property("Library", "letters", self.letter_rows.model_value());
+        let _ = ui.set_global_property("Playlists", "entries", self.playlist_rows.model_value());
         let _ = ui.set_global_property(
             "Library",
             "portrait-choices",
@@ -947,6 +965,7 @@ impl LibraryPanel {
             self.covers_ready += 1;
             self.color_album_page();
             self.show_artist_picture();
+            self.show_playlist_picture();
         }
         if self.album_draft.is_some() {
             let found = self.album_finder.poll();
@@ -1456,6 +1475,9 @@ impl LibraryPanel {
     /// Shows the page's pictures a thread made, if they are of the artist shown still.
     fn take_page_pictures(&mut self) {
         while let Ok((key, made)) = self.page_pictures.1.try_recv() {
+            let Some(made) = self.take_playlist_pictures(&key, made) else {
+                continue;
+            };
             let Some(page) = self.artist_page.as_mut().filter(|page| page.picture == key) else {
                 continue;
             };
@@ -2753,6 +2775,13 @@ impl LibraryPanel {
         if let Some(known) = self.thumbnails.as_ref().and_then(|t| t.known(key)) {
             return known;
         }
+        // A playlist's picture, or its covers.
+        if let Some(source) = self.playlist_sources.get(key) {
+            return match &mut self.thumbnails {
+                Some(thumbnails) => thumbnails.get_artist(key, source),
+                None => Thumbnail::None,
+            };
+        }
         match (&self.db, self.artist_keys.get(key)) {
             // An artist's picture.
             (Some(_), Some(name)) => {
@@ -2882,6 +2911,7 @@ impl LibraryPanel {
         self.covers_ready += 1;
         self.color_album_page();
         self.show_artist_picture();
+        self.show_playlist_picture();
     }
 
     /// What is kept of the artist `name`'s picture: theirs, and their albums' covers.

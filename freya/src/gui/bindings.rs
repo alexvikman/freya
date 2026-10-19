@@ -434,6 +434,22 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     // The file is picked before the app is borrowed: the dialog runs the event loop.
     {
         let app = weak.clone();
+        let _ = ui.set_global_callback("Playlists", "pick-picture", move |args| {
+            let Some(Value::String(kind)) = args.first() else {
+                return Value::Void;
+            };
+            if let Some(file) = pick_picture()
+                && let Some(app) = app.upgrade()
+                && let Ok(mut app) = app.try_borrow_mut()
+            {
+                app.library.pick_playlist_picture(kind, &file);
+                app.refresh();
+            }
+            Value::Void
+        });
+    }
+    {
+        let app = weak.clone();
         let _ = ui.set_global_callback("Library", "pick-picture-file", move |args| {
             let Some(Value::String(kind)) = args.first() else {
                 return Value::Void;
@@ -575,6 +591,39 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     );
     bind(
         "Playlists",
+        "shuffle",
+        Box::new(|app, _| app.shuffle_playlist()),
+    );
+    bind(
+        "Playlists",
+        "set-sort",
+        Box::new(|app, args| {
+            app.library.set_playlist_sort(&text_arg(args, 0));
+            app.resync_playlist();
+        }),
+    );
+    bind(
+        "Playlists",
+        "edit",
+        Box::new(|app, _| app.library.edit_playlist()),
+    );
+    bind(
+        "Playlists",
+        "clear-picture",
+        Box::new(|app, args| app.library.clear_playlist_picture(&text_arg(args, 0))),
+    );
+    bind(
+        "Playlists",
+        "save-edit",
+        Box::new(|app, args| app.save_playlist_edit(&text_arg(args, 0), &text_arg(args, 1))),
+    );
+    bind(
+        "Playlists",
+        "cancel-edit",
+        Box::new(|app, _| app.library.cancel_playlist_edit()),
+    );
+    bind(
+        "Playlists",
         "enqueue",
         Box::new(|app, _| {
             let entries = app.shown_playlist_entries();
@@ -586,7 +635,8 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
         "remove",
         Box::new(|app, args| {
             if let Some(shown) = app.shown_playlist {
-                app.playlists.remove_track(shown, index(args, 0));
+                let entry = app.library.playlist_entry(index(args, 0));
+                app.playlists.remove_track(shown, entry);
             }
         }),
     );
@@ -595,7 +645,7 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
         "add-queue-selection",
         Box::new(|app, args| {
             let entries = app.queue_selection();
-            app.playlists.add(index(args, 0), entries);
+            app.add_to_playlist(index(args, 0), entries);
         }),
     );
     bind(
@@ -608,7 +658,7 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
                 .iter()
                 .map(library::entry)
                 .collect();
-            app.playlists.add(index(args, 0), entries);
+            app.add_to_playlist(index(args, 0), entries);
         }),
     );
 

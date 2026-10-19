@@ -785,12 +785,90 @@ impl App {
 
     // ----- Playlists ---------------------------------------------------------------------------
 
-    /// The entries of the playlist shown.
+    /// The entries of the playlist shown, in the order its page shows them.
     pub fn shown_playlist_entries(&self) -> Vec<Entry> {
-        self.shown_playlist
+        let Some(entries) = self
+            .shown_playlist
             .and_then(|i| self.playlists.get(i))
-            .map(|p| p.entries.clone())
-            .unwrap_or_default()
+            .map(|p| &p.entries)
+        else {
+            return Vec::new();
+        };
+        match self.library.playlist_order() {
+            Some(order) if order.len() == entries.len() => {
+                order.iter().map(|&i| entries[i].clone()).collect()
+            }
+            _ => entries.clone(),
+        }
+    }
+
+    /// Up Next becomes the playlist shown, shuffled.
+    pub fn shuffle_playlist(&mut self) {
+        let entries = self.shown_playlist_entries();
+        if entries.is_empty() {
+            return;
+        }
+        if !self.settings.shuffle {
+            self.toggle_shuffle();
+        }
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0, |d| d.subsec_nanos() as usize);
+        let start = nanos % entries.len();
+        self.play_entries(entries, start);
+    }
+
+    /// Adds `entries` to the `index`th playlist, noting when.
+    pub fn add_to_playlist(&mut self, index: usize, entries: Vec<Entry>) {
+        self.playlists.add(index, entries);
+        self.note_playlist_added(index);
+    }
+
+    /// Notes when the tracks of the `index`th playlist not noted before were added: now.
+    fn note_playlist_added(&mut self, index: usize) {
+        if let Some(playlist) = self.playlists.get(index) {
+            self.library
+                .note_playlist_added(&playlist.name, &playlist.entries);
+        }
+    }
+
+    /// Shows the playlist's page again: its order or what it has changed.
+    pub fn resync_playlist(&mut self) {
+        self.view.playlists_synced = None;
+    }
+
+    /// Keeps the name, description and pictures of the playlist being changed.
+    pub fn save_playlist_edit(&mut self, name: &str, description: &str) {
+        let Some(index) = self.shown_playlist else {
+            self.library.cancel_playlist_edit();
+            return;
+        };
+        let before = self.playlists.get(index).map(|p| p.name.clone());
+        let name = name.trim();
+        let renamed = before.as_deref().is_some_and(|b| b != name) && !name.is_empty();
+        if renamed {
+            match self.playlists.rename(index, name) {
+                Ok(index) => {
+                    self.shown_playlist = Some(index);
+                    self.playlists_error.clear();
+                    if let Some(before) = &before {
+                        self.library.rename_playlist(before, name);
+                    }
+                }
+                Err(e) => {
+                    self.library.set_playlist_draft_error(e);
+                    return;
+                }
+            }
+        }
+        let shown = self
+            .shown_playlist
+            .and_then(|i| self.playlists.get(i))
+            .map(|p| p.name.clone());
+        if let Some(shown) = shown {
+            self.library.save_playlist_edit(&shown, description);
+        }
+        self.resync_playlist();
     }
 
     /// Up Next's selected entries, or all of them when none is selected.
@@ -814,6 +892,7 @@ impl App {
             Ok(index) => {
                 self.shown_playlist = Some(index);
                 self.playlists_error.clear();
+                self.note_playlist_added(index);
             }
             Err(e) => self.playlists_error = e,
         }
@@ -823,10 +902,15 @@ impl App {
         let Some(index) = self.shown_playlist else {
             return;
         };
+        let before = self.playlists.get(index).map(|p| p.name.clone());
         match self.playlists.rename(index, name) {
             Ok(index) => {
                 self.shown_playlist = Some(index);
                 self.playlists_error.clear();
+                if let (Some(before), Some(after)) = (before, self.playlists.get(index)) {
+                    let after = after.name.clone();
+                    self.library.rename_playlist(&before, &after);
+                }
             }
             Err(e) => self.playlists_error = e,
         }
@@ -834,6 +918,10 @@ impl App {
 
     pub fn delete_playlist(&mut self) {
         if let Some(index) = self.shown_playlist.take() {
+            if let Some(playlist) = self.playlists.get(index) {
+                let name = playlist.name.clone();
+                self.library.forget_playlist(&name);
+            }
             self.playlists.delete(index);
         }
     }
@@ -1432,6 +1520,11 @@ impl App {
             let shown = self.shown_playlist;
             let synced = Some((self.playlists.version(), shown));
             if view.playlists_synced != synced {
+                let playlist = shown.and_then(|i| self.playlists.get(i));
+                self.library.show_playlist(
+                    playlist.map(|p| p.name.as_str()),
+                    playlist.map_or(&[][..], |p| &p.entries),
+                );
                 view.playlist_list_rows.sync(self.playlists.rows());
                 let tracks = shown
                     .and_then(|i| self.playlists.get(i))
@@ -1453,6 +1546,8 @@ impl App {
                     ("shown", Value::Number(shown.map_or(-1.0, |i| i as f64))),
                     ("summary", skin_state::string(summary)),
                     ("error", skin_state::string(&self.playlists_error)),
+                    ("page", self.library.playlist_page_value()),
+                    ("draft", self.library.playlist_draft_value()),
                 ],
             );
         }

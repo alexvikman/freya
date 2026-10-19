@@ -504,6 +504,52 @@ export global Library {
 }
 
 /// One of the playlists the user keeps, as the navigation lists them.
+/// The playlist shown, as its page shows it: see `Playlists.page`.
+export struct PlaylistPage {
+    name: string,
+    /// What the user wrote about it; may be empty.
+    description: string,
+    /// What to pass to `Library.cover` for its picture: the user's, else its tracks' covers.
+    picture: string,
+    /// Its wide picture across the top of its page, once decoded; `has-banner` while it is.
+    banner: image,
+    has-banner: bool,
+    /// A color from its pictures, dark enough for white text.
+    color: color,
+    /// "84 tracks · 6 h 9 min".
+    summary: string,
+    /// How its tracks are ordered: "custom" (as the playlist has them), "title", "artist",
+    /// "album", "added" or "duration".
+    sort: string,
+}
+
+/// A track of the playlist shown, in the order of `PlaylistPage.sort`.
+export struct PlaylistEntryRow {
+    /// Its row, from 1.
+    number: int,
+    title: string,
+    artist: string,
+    album: string,
+    /// What to pass to `Library.cover` for its album's cover; empty when the library has it not.
+    cover: string,
+    /// When it was added: "23 Dec 2025".
+    added: string,
+    /// "3:05", or empty when unknown.
+    duration: string,
+}
+
+/// The playlist being changed: see `Playlists.edit`.
+export struct PlaylistDraft {
+    shown: bool,
+    name: string,
+    description: string,
+    /// Its picture and wide picture as chosen so far; empty for none.
+    picture: image,
+    backdrop: image,
+    /// Why a picture could not be used.
+    error: string,
+}
+
 export struct PlaylistRow {
     name: string,
     /// How many tracks it has, as text.
@@ -542,6 +588,23 @@ export global Playlists {
     callback add-queue-selection(int);
     /// Add everything a library row stands for to a playlist: `add-library-row(playlist, row)`.
     callback add-library-row(int, int);
+    /// The playlist shown, as its own page shows it, and its tracks in the order it says.
+    /// `play`, `remove` and the rest take rows of `entries`.
+    in property <PlaylistPage> page;
+    in property <[PlaylistEntryRow]> entries;
+    /// Up Next becomes the playlist shown, shuffled.
+    callback shuffle();
+    /// Order the tracks shown: see `PlaylistPage.sort`.
+    callback set-sort(string);
+    /// Change the playlist shown: `edit` starts, filling `draft`; `pick-picture` asks for a
+    /// file and `clear-picture` takes one away, "picture" or "backdrop"; `save-edit` keeps the
+    /// name and description given with the pictures chosen, `cancel-edit` none of it.
+    in property <PlaylistDraft> draft;
+    callback edit();
+    callback pick-picture(string);
+    callback clear-picture(string);
+    callback save-edit(string, string);
+    callback cancel-edit();
 }
 
 /// One saved radio station.

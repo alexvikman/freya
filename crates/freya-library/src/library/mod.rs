@@ -10,6 +10,7 @@ mod edits;
 mod fetch;
 mod matches;
 mod online;
+mod playlists;
 mod scan;
 
 use std::collections::HashMap;
@@ -26,6 +27,7 @@ pub use edits::{ArtistEdit, Header};
 pub use fetch::{LastFm, Online};
 pub use matches::{AlbumMatch, plain_name, split_artist};
 pub use online::{ASK_AGAIN_AFTER, ArtistText, Asked, CHOSEN, FOLDER, PictureKind, PictureRow};
+pub use playlists::{PlaylistInfo, PlaylistTrack};
 pub use rusqlite::Error;
 pub use scan::{ScanEvent, ScanOptions, ScanSummary, Scanner, scan, scan_with};
 
@@ -320,6 +322,7 @@ impl Library {
         edits::migrate(&db)?;
         db.execute_batch(matches::SCHEMA)?;
         db.execute_batch(covers::SCHEMA)?;
+        db.execute_batch(playlists::SCHEMA)?;
         Ok(Self { db })
     }
 
