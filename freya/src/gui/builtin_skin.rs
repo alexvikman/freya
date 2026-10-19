@@ -405,6 +405,27 @@ impl Convert for PlaylistDraft {
     }
 }
 
+impl Convert for SearchSection {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            kind: field(&s, "kind"),
+            title: field(&s, "title"),
+            first: field(&s, "first"),
+            count: field(&s, "count"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("kind", self.kind.to_value()),
+            ("title", self.title.to_value()),
+            ("first", self.first.to_value()),
+            ("count", self.count.to_value()),
+        ])
+    }
+}
+
 impl Convert for LetterJump {
     fn from_value(value: Value) -> Option<Self> {
         let Value::Struct(s) = value else { return None };
@@ -909,6 +930,12 @@ skin_api! {
         Library."album-view" => set_album_view, get_album_view;
         Library."scanning" => set_scanning, get_scanning;
         Library."letters" => set_letters, get_letters;
+        Library."search-filter" => set_search_filter, get_search_filter;
+        Library."search-shown" => set_search_shown, get_search_shown;
+        Library."search-songs" => set_search_songs, get_search_songs;
+        Library."search-sections" => set_search_sections, get_search_sections;
+        Library."search-top" => set_search_top, get_search_top;
+        Library."suggestions" => set_suggestions, get_suggestions;
         Library."watch-folders" => set_watch_folders, get_watch_folders;
         Library."scan-every-hours" => set_scan_every_hours, get_scan_every_hours;
         Library."scan-at-start" => set_scan_at_start, get_scan_at_start;
@@ -1050,6 +1077,9 @@ skin_api! {
         Library."set-artist-view" => on_set_artist_view, invoke_set_artist_view(view: SharedString);
         Library."set-artist-pictures-online" => on_set_artist_pictures_online, invoke_set_artist_pictures_online(online: bool);
         Library."set-watch-folders" => on_set_watch_folders, invoke_set_watch_folders(watch: bool);
+        Library."set-search-filter" => on_set_search_filter, invoke_set_search_filter(filter: SharedString);
+        Library."suggest" => on_suggest, invoke_suggest(text: SharedString);
+        Library."open-suggestion" => on_open_suggestion, invoke_open_suggestion(index: i32);
         Library."set-scan-every-hours" => on_set_scan_every_hours, invoke_set_scan_every_hours(hours: i32);
         Library."set-scan-at-start" => on_set_scan_at_start, invoke_set_scan_at_start(scan: bool);
         Library."open-album-artist" => on_open_album_artist, invoke_open_album_artist();

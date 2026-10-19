@@ -4,7 +4,7 @@
 // contrast against the background it is drawn on (WCAG AA), light and dark mode follow the
 // system.
 
-import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, LastFm, PlaybackState, Shortcuts, TrackRow, LibraryRow, AlbumPage, ArtistPage, ArtistDraft, PictureChoice, MatchChoice, AlbumMatchDraft, AlbumMatchChoice, ArtistMatchDraft, PlaylistRow, PlaylistPage, PlaylistEntryRow, StationRow, NativeSpectrum, NativeOscilloscope, NativeHologram } from "@freya/v1.slint";
+import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, LastFm, PlaybackState, Shortcuts, TrackRow, LibraryRow, AlbumPage, ArtistPage, ArtistDraft, PictureChoice, MatchChoice, AlbumMatchDraft, AlbumMatchChoice, ArtistMatchDraft, PlaylistRow, PlaylistPage, PlaylistEntryRow, SearchSection, StationRow, NativeSpectrum, NativeOscilloscope, NativeHologram } from "@freya/v1.slint";
 import { AboutSlint, ListView, Palette, ScrollView } from "std-widgets.slint";
 
 // Every skin re-exports the API globals so the app can reach them.
@@ -1380,6 +1380,8 @@ component SearchField inherits Rectangle {
     callback edited;
     callback accepted;
     forward-focus: input;
+    /// Whether the keyboard is in it.
+    out property <bool> typing: input.has-focus;
 
     height: 34px;
     border-radius: 8px;
@@ -1421,10 +1423,17 @@ component SearchField inherits Rectangle {
                 accessible-role: text-input;
                 accessible-label: "Search the library";
                 edited => {
-                    Library.search(self.text);
+                    if (Library.search-shown) {
+                        Library.search(self.text);
+                    } else {
+                        Library.suggest(self.text);
+                    }
                     root.edited();
                 }
-                accepted => { root.accepted(); }
+                accepted => {
+                    Library.search(self.text);
+                    root.accepted();
+                }
             }
         }
         if Library.query != "": IconButton {
@@ -2635,6 +2644,355 @@ component DialogFocus inherits FocusScope {
     @children
 }
 
+/// What a match of a search is, as its rows say: "Artist", "Album · Pink Floyd" and so on.
+global Matches {
+    public pure function kind(entry: LibraryRow) -> string {
+        return entry.kind == "artist" ? "Artist"
+            : entry.kind == "album" ? "Album" + (entry.artist == "" ? "" : " · " + entry.artist)
+            : entry.kind == "genre" ? "Genre"
+            : entry.kind == "playlist" ? entry.detail
+            : "Song" + (entry.artist == "" ? "" : " · " + entry.artist);
+    }
+}
+
+/// One of the kinds of match a search shows, as a chip above them.
+component FilterChip inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    callback clicked;
+
+    height: 32px;
+    width: label.preferred-width + 28px;
+    border-radius: 16px;
+    background: root.selected ? Theme.text : touch.has-hover ? Theme.pressed : Theme.hover;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-checked: root.selected;
+    accessible-action-default => { root.clicked(); }
+
+    label := Text {
+        text: root.text;
+        font-size: 13px;
+        font-weight: 600;
+        color: root.selected ? Theme.background : Theme.text;
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// A match under the search field: its picture, name and what it is.
+component SuggestionRow inherits Rectangle {
+    in property <LibraryRow> entry;
+    callback clicked();
+
+    property <image> cover-image: entry.cover == "" ? @image-url("") : Library.cover(entry.cover, Library.covers-ready);
+
+    height: 52px;
+    border-radius: 6px;
+    background: touch.has-hover ? Theme.hover : transparent;
+    accessible-role: button;
+    accessible-label: root.entry.title + ", " + Matches.kind(root.entry);
+    accessible-action-default => { root.clicked(); }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 12px;
+
+        Rectangle {
+            y: (parent.height - self.height) / 2;
+            width: 40px;
+            height: 40px;
+            border-radius: root.entry.kind == "artist" ? 20px : 4px;
+            background: Theme.track;
+            clip: true;
+
+            if root.cover-image.width > 0: Image {
+                width: parent.width;
+                height: parent.height;
+                source: root.cover-image;
+                image-fit: cover;
+            }
+            if root.cover-image.width == 0: Icon {
+                width: 18px;
+                height: 18px;
+                data: root.entry.kind == "artist" ? Icons.artist
+                    : root.entry.kind == "playlist" ? Icons.playlist
+                    : root.entry.kind == "genre" ? Icons.genre
+                    : Icons.note;
+                stroked: true;
+                color: Theme.text-secondary;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            min-width: 0;
+            spacing: 2px;
+
+            Text {
+                text: root.entry.title;
+                font-size: 14px;
+                color: Theme.text;
+                overflow: elide;
+            }
+            Text {
+                text: Matches.kind(root.entry);
+                font-size: 12px;
+                color: Theme.text-secondary;
+                overflow: elide;
+            }
+        }
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// The best matches of what is typed, under the search field; and all of them.
+component SuggestionList inherits MenuSurface {
+    callback opened(int);
+    callback all();
+
+    VerticalLayout {
+        padding: 6px;
+
+        for row[i] in Library.suggestions: SuggestionRow {
+            entry: row;
+            clicked => { root.opened(i); }
+        }
+        MenuDivider { }
+        MenuItem {
+            text: "Show all results";
+            activated => { root.all(); }
+        }
+    }
+}
+
+/// A song of a search's page: its cover, title, artist and length.
+component SearchSongRow inherits Rectangle {
+    in property <LibraryRow> entry;
+    in property <bool> cursor;
+    callback activated();
+    callback context-menu(length, length);
+
+    property <image> cover-image: entry.cover == "" ? @image-url("") : Library.cover(entry.cover, Library.covers-ready);
+
+    height: 56px;
+    border-radius: 6px;
+    background: root.cursor ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
+    accessible-role: list-item;
+    accessible-label: root.entry.title + ", " + root.entry.artist;
+    accessible-action-default => { root.activated(); }
+
+    touch := TouchArea {
+        double-clicked => { root.activated(); }
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                root.context-menu(root.absolute-position.x + self.mouse-x, root.absolute-position.y + self.mouse-y);
+            }
+        }
+    }
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 12px;
+        spacing: 12px;
+
+        Rectangle {
+            y: (parent.height - self.height) / 2;
+            width: 40px;
+            height: 40px;
+            background: Theme.track;
+
+            if root.cover-image.width > 0: Image {
+                width: parent.width;
+                height: parent.height;
+                source: root.cover-image;
+                image-fit: cover;
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            min-width: 0;
+            spacing: 2px;
+
+            Text {
+                text: root.entry.title;
+                font-size: 14px;
+                color: Theme.text;
+                overflow: elide;
+            }
+            Text {
+                text: root.entry.artist;
+                font-size: 13px;
+                color: Theme.text-secondary;
+                overflow: elide;
+            }
+        }
+        Text {
+            text: root.entry.duration;
+            font-size: 13px;
+            color: Theme.text-secondary;
+            vertical-alignment: center;
+        }
+    }
+}
+
+/// The best match of all on a search's page, large.
+component TopResult inherits Rectangle {
+    in property <LibraryRow> entry;
+    callback activated();
+
+    property <image> cover-image: entry.cover == "" ? @image-url("") : Library.cover(entry.cover, Library.covers-ready);
+
+    border-radius: 10px;
+    background: touch.has-hover ? Theme.pressed : Theme.hover;
+    accessible-role: button;
+    accessible-label: root.entry.title + ", " + Matches.kind(root.entry);
+    accessible-action-default => { root.activated(); }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.activated(); }
+    }
+    VerticalLayout {
+        padding: 20px;
+        spacing: 14px;
+        alignment: start;
+
+        Rectangle {
+            width: 100px;
+            height: 100px;
+            border-radius: root.entry.kind == "artist" ? 50px : 6px;
+            background: Theme.track;
+            clip: true;
+
+            if root.cover-image.width > 0: Image {
+                width: parent.width;
+                height: parent.height;
+                source: root.cover-image;
+                image-fit: cover;
+            }
+        }
+        Text {
+            text: root.entry.title;
+            font-size: 30px;
+            font-weight: 800;
+            color: Theme.text;
+            overflow: elide;
+        }
+        HorizontalLayout {
+            alignment: start;
+
+            Rectangle {
+                height: 26px;
+                width: kind.preferred-width + 20px;
+                border-radius: 13px;
+                background: Theme.background;
+
+                kind := Text {
+                    text: Matches.kind(root.entry);
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: Theme.text;
+                }
+            }
+        }
+    }
+}
+
+/// A search's page of every kind of match: the best of all and the songs, then a row of each
+/// other kind.
+component SearchPage inherits ScrollView {
+    callback activate(int);
+    callback open-menu(int, length, length);
+    in property <int> cursor;
+
+    property <length> tile: 160px;
+    property <length> gap: 20px;
+    property <int> fit: max(1, floor((self.visible-width - 48px + self.gap) / (self.tile + self.gap)));
+
+    VerticalLayout {
+        width: root.visible-width;
+        alignment: start;
+        padding: 24px;
+        spacing: 32px;
+
+        if Library.search-top >= 0 || Library.search-songs.count > 0: HorizontalLayout {
+            spacing: 24px;
+            height: 48px + 4 * 56px;
+
+            if Library.search-top >= 0: VerticalLayout {
+                width: min(420px, (root.visible-width - 48px - 24px) * 0.45);
+                spacing: 12px;
+
+                Text {
+                    height: 36px;
+                    text: "Top result";
+                    font-size: 22px;
+                    font-weight: 700;
+                    color: Theme.text;
+                }
+                TopResult {
+                    vertical-stretch: 1;
+                    entry: Library.rows[Library.search-top];
+                    activated => { root.activate(Library.search-top); }
+                }
+            }
+            if Library.search-songs.count > 0: VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 0;
+                alignment: start;
+
+                Text {
+                    height: 48px;
+                    text: "Songs";
+                    font-size: 22px;
+                    font-weight: 700;
+                    color: Theme.text;
+                    vertical-alignment: top;
+                }
+                for i in Library.search-songs.count: SearchSongRow {
+                    entry: Library.rows[Library.search-songs.first + i];
+                    cursor: root.cursor == Library.search-songs.first + i;
+                    activated => { root.activate(Library.search-songs.first + i); }
+                    context-menu(x, y) => { root.open-menu(Library.search-songs.first + i, x, y); }
+                }
+            }
+        }
+        for section in Library.search-sections: VerticalLayout {
+            spacing: 12px;
+
+            Text {
+                text: section.title;
+                font-size: 22px;
+                font-weight: 700;
+                color: Theme.text;
+            }
+            HorizontalLayout {
+                spacing: root.gap;
+                alignment: start;
+
+                for i in min(section.count, root.fit): AlbumTile {
+                    size: root.tile;
+                    entry: Library.rows[section.first + i];
+                    cursor: root.cursor == section.first + i;
+                    activated => { root.activate(section.first + i); }
+                    context-menu(x, y) => { root.open-menu(section.first + i, x, y); }
+                }
+            }
+        }
+        if Library.rows.length == 0: Text {
+            text: "Nothing in the library matches";
+            font-size: 15px;
+            color: Theme.text-secondary;
+        }
+    }
+}
+
 /// Letters down the side of a list, to jump to the first row each starts: clicked, or swept
 /// over with the mouse held down.
 component LetterBar inherits Rectangle {
@@ -2756,10 +3114,11 @@ component LibraryPanel inherits FocusScope {
     property <int> cursor: -1;
     property <bool> grid-shown: Library.layout == "grid";
     property <bool> table-shown: Library.layout == "table";
+    property <bool> search-page-shown: Library.layout == "search";
     property <bool> discography-shown: Library.layout == "discography";
     /// An album's tracks, under the album's own page.
     property <bool> album-shown: Library.album-page.shown && !grid-shown && !table-shown && !discography-shown;
-    property <bool> list-shown: !grid-shown && !table-shown && !discography-shown && !album-shown;
+    property <bool> list-shown: !grid-shown && !table-shown && !discography-shown && !album-shown && !search-page-shown;
     property <length> album-page-head-height: 300px + 96px + 37px;
     property <length> album-row-height: 56px;
     /// An artist's page over their albums; its height, by what it holds.
@@ -2771,7 +3130,7 @@ component LibraryPanel inherits FocusScope {
         + 56px;
     /// Over the artists, and an artist's albums: how they are ordered and shown. The artist's
     /// page has these in its albums' heading.
-    property <bool> options-shown: (Library.album-options || Library.artist-options) && !artist-page-shown;
+    property <bool> options-shown: ((Library.album-options || Library.artist-options) && !artist-page-shown) || Library.search-shown;
     property <length> options-height: options-shown ? 44px : 0;
     property <length> album-head-height: 188px;
     /// Recently Played and Most Played show when or how often each track was played.
@@ -2947,8 +3306,19 @@ component LibraryPanel inherits FocusScope {
         }
     }
 
+    // A search's page of every kind of match.
+    if root.search-page-shown: SearchPage {
+        y: root.options-height;
+        height: root.height - root.options-height;
+        cursor: root.cursor;
+        activate(row) => { root.activate(row); }
+        open-menu(row, x, y) => { root.open-menu(row, x, y); }
+    }
+
     VerticalLayout {
         visible: root.table-shown;
+        y: root.options-height;
+        height: root.height - root.options-height;
 
         if root.table-shown && Library.rows.length > 0: TrackTableHeader {
             played-label: !root.played-column ? "" : Library.section == "most-played" ? "Plays" : "Last played";
@@ -3115,7 +3485,32 @@ component LibraryPanel inherits FocusScope {
         }
     }
 
-    if root.options-shown: HorizontalLayout {
+    // Over a search's matches: which kind of them.
+    if Library.search-shown: HorizontalLayout {
+        y: 0;
+        height: root.options-height;
+        padding-left: 24px;
+        spacing: 8px;
+        alignment: start;
+
+        for chip in [
+            { name: "all", text: "All" },
+            { name: "songs", text: "Songs" },
+            { name: "artists", text: "Artists" },
+            { name: "albums", text: "Albums" },
+            { name: "playlists", text: "Playlists" },
+            { name: "genres", text: "Genres" },
+        ]: FilterChip {
+            y: (parent.height - self.height) / 2;
+            text: chip.text;
+            selected: Library.search-filter == chip.name;
+            clicked => {
+                root.start-over();
+                Library.set-search-filter(chip.name);
+            }
+        }
+    }
+    if root.options-shown && !Library.search-shown: HorizontalLayout {
         y: 0;
         height: root.options-height;
         padding-right: 20px;
@@ -7211,6 +7606,12 @@ component Toolbar inherits HorizontalLayout {
     in property <bool> can-go-back;
     callback toggle-sidebar();
     callback back();
+    /// Where the search field is in the window, and whether the keyboard is in it, for the
+    /// matches under it.
+    out property <length> search-x: search.absolute-position.x;
+    out property <length> search-bottom: search.absolute-position.y + search.height;
+    out property <length> search-width: search.width;
+    out property <bool> search-typing: search.typing;
     callback search-edited();
     callback search-accepted();
     /// After a playlist was made from Up Next ("playlist") or deleted ("queue").
@@ -7754,14 +8155,21 @@ export component FreyaSkin inherits Window {
                                 can-go-back: root.view == "library" && Library.can-go-back;
                                 toggle-sidebar => { root.sidebar-shown = !root.sidebar-shown; }
                                 back => { library.back(); }
+                                // On a search's page, it follows what is typed; elsewhere the
+                                // best matches show under the field.
                                 search-edited => {
-                                    root.open("library");
-                                    library.start-over();
+                                    if (Library.search-shown) {
+                                        root.open("library");
+                                    } else {
+                                        root.suggesting = true;
+                                    }
                                 }
                                 // The keyboard goes to the results, so Space plays again
                                 // instead of typing into the search.
                                 search-accepted => {
-                                    library.activate-current();
+                                    root.suggesting = false;
+                                    root.open("library");
+                                    library.start-over();
                                     library.focus();
                                 }
                                 show-view(view) => { root.show(view); }
@@ -7865,6 +8273,26 @@ export component FreyaSkin inherits Window {
     }
 
     // Over the whole window, dimmed, as a dialog: it closes with Cancel, Save or Esc only.
+    /// Whether the matches of what is typed show under the search field.
+    property <bool> suggesting;
+
+    if root.suggesting && toolbar.search-typing && Library.query != "" && Library.suggestions.length > 0: SuggestionList {
+        width: 380px;
+        x: max(8px, toolbar.search-x + toolbar.search-width - self.width);
+        y: toolbar.search-bottom + 6px;
+        opened(i) => {
+            root.suggesting = false;
+            Library.open-suggestion(i);
+        }
+        all => {
+            root.suggesting = false;
+            Library.search(Library.query);
+            root.open("library");
+            library.start-over();
+            library.focus();
+        }
+    }
+
     folders-popup := PopupWindow {
         x: 0;
         y: 0;

@@ -275,6 +275,15 @@ export struct AlbumPage {
     color: color,
 }
 
+/// A section of the search page: rows `first` to `first + count` of `Library.rows`, of the
+/// kind "songs", "artists", "albums", "playlists" or "genres", titled "Songs" and so on.
+export struct SearchSection {
+    kind: string,
+    title: string,
+    first: int,
+    count: int,
+}
+
 /// A letter to jump to in the artists or albums shown: see `Library.letters`.
 export struct LetterJump {
     /// "#", "A" to "Z", or another letter names start with, such as "Å".
@@ -370,6 +379,24 @@ export global Library {
     callback set-watch-folders(bool);
     callback set-scan-every-hours(int);
     callback set-scan-at-start(bool);
+    /// While searching, which kind of match the rows are: "all", "songs", "artists", "albums",
+    /// "playlists" or "genres"; set with `set-search-filter`. With "all", `layout` is "search":
+    /// `search-sections` say which rows are what, and `search-top` is the row of the best match
+    /// of all, or -1.
+    in property <string> search-filter: "all";
+    /// Whether the rows are a search's; with "all", the songs beside the best match, and the
+    /// other kinds' sections under them.
+    in property <bool> search-shown;
+    in property <SearchSection> search-songs;
+    in property <[SearchSection]> search-sections;
+    in property <int> search-top: -1;
+    callback set-search-filter(string);
+    /// A few of the best matches of what is typed, for under the search field, without leaving
+    /// what is shown: `suggest` asks; `open-suggestion` opens one: an artist, album or genre in
+    /// the library; a song plays; a playlist shows.
+    in property <[LibraryRow]> suggestions;
+    callback suggest(string);
+    callback open-suggestion(int);
     /// The letters to jump to beside the artists or albums shown, when they are in the order
     /// of their names; empty otherwise.
     in property <[LetterJump]> letters;

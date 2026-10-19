@@ -109,7 +109,7 @@ struct Known {
 
 impl LibraryPanel {
     /// The key of the picture of the playlist `name`, for `Library.cover`.
-    fn playlist_key(name: &str) -> String {
+    pub(super) fn playlist_key(name: &str) -> String {
         Thumbnails::key(Some("\u{1}playlist"), Some(name))
     }
 
@@ -197,21 +197,7 @@ impl LibraryPanel {
             summary = format!("{summary} · {}", long_time(total));
         }
         // Its own picture, else the covers of its first albums.
-        let mut covers: Vec<String> = Vec::new();
-        for entry in entries {
-            let Some(cover) = known
-                .get(&entry.path)
-                .and_then(|k| self.made_covers.get(&k.cover)?.cover.clone())
-            else {
-                continue;
-            };
-            if !covers.contains(&cover) {
-                covers.push(cover);
-            }
-            if covers.len() == 4 {
-                break;
-            }
-        }
+        let covers = self.covers_of(entries, &known);
         let key = Self::playlist_key(name);
         let source = ArtistSource {
             picture: info.picture.clone(),
@@ -244,6 +230,33 @@ impl LibraryPanel {
             order,
         });
         self.show_playlist_picture();
+    }
+
+    /// The covers of the first albums of `entries`, at most four, among Freya's pictures.
+    fn covers_of(&self, entries: &[Entry], known: &HashMap<PathBuf, Known>) -> Vec<String> {
+        let mut covers: Vec<String> = Vec::new();
+        for entry in entries {
+            let Some(cover) = known
+                .get(&entry.path)
+                .and_then(|k| self.made_covers.get(&k.cover)?.cover.clone())
+            else {
+                continue;
+            };
+            if !covers.contains(&cover) {
+                covers.push(cover);
+            }
+            if covers.len() == 4 {
+                break;
+            }
+        }
+        covers
+    }
+
+    /// The covers of the first albums of `entries`, looked up in the library.
+    pub(super) fn first_covers(&self, entries: &[Entry]) -> Vec<String> {
+        // Enough tracks for four albums, mostly.
+        let first = &entries[..entries.len().min(40)];
+        self.covers_of(first, &self.known_tracks(first))
     }
 
     /// The cover's key and album of each track the library has, by its file.

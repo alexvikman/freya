@@ -70,6 +70,12 @@ impl Playlists {
         self.list.get(index)
     }
 
+    /// Where the playlist named `name` is, ignoring case.
+    pub fn index_of(&self, name: &str) -> Option<usize> {
+        let name = name.to_lowercase();
+        self.list.iter().position(|p| p.name.to_lowercase() == name)
+    }
+
     /// Makes a playlist of `entries`. Returns its index.
     pub fn create(&mut self, name: &str, entries: Vec<Entry>) -> Result<usize, String> {
         let name = self.check_name(name, None)?;

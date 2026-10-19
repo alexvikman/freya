@@ -802,6 +802,15 @@ impl App {
         }
     }
 
+    /// Shows the playlist named `name`, as a search found it.
+    pub fn show_playlist_named(&mut self, name: &str) {
+        if let Some(index) = self.playlists.index_of(name) {
+            self.shown_playlist = Some(index);
+            self.playlists_error.clear();
+            self.show_view("playlist");
+        }
+    }
+
     /// Up Next becomes the playlist shown, shuffled.
     pub fn shuffle_playlist(&mut self) {
         let entries = self.shown_playlist_entries();
@@ -1520,6 +1529,11 @@ impl App {
             let shown = self.shown_playlist;
             let synced = Some((self.playlists.version(), shown));
             if view.playlists_synced != synced {
+                let all: Vec<(String, &[Entry])> = (0..self.playlists.len())
+                    .filter_map(|i| self.playlists.get(i))
+                    .map(|p| (p.name.clone(), p.entries.as_slice()))
+                    .collect();
+                self.library.set_playlists(&all);
                 let playlist = shown.and_then(|i| self.playlists.get(i));
                 self.library.show_playlist(
                     playlist.map(|p| p.name.as_str()),

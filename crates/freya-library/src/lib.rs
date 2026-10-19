@@ -10,6 +10,7 @@ pub mod library;
 pub mod pictures;
 pub mod playlist;
 pub mod playlist_file;
+pub mod search;
 pub mod tags;
 pub mod thumbnails;
 pub mod wikipedia;

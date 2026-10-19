@@ -23,11 +23,15 @@ use playlist_page::{PlaylistDraft, PlaylistPage};
 
 #[path = "playlist_page.rs"]
 mod playlist_page;
+#[path = "search_page.rs"]
+mod search_page;
 use super::folder_watch::FolderWatch;
 use super::match_finder::{AlbumFinder, MatchFinder};
 use super::picture_finder::{Found, Pick, PictureFinder, Request};
 use super::skin_state::{ModelRows, format_time, string};
 use super::skin_window::SkinWindow;
+use search_page::FoundPlaylist;
+pub use search_page::{Opened, SearchFilter};
 
 /// Search results are cut off here; nobody scrolls through more, and building rows for the
 /// whole library on every keystroke would be wasted work.
@@ -162,6 +166,7 @@ impl AlbumSort {
 }
 
 /// What one row stands for.
+#[derive(Clone)]
 enum Item {
     Artist(Artist),
     Album(Album),
@@ -169,6 +174,8 @@ enum Item {
     Track(Track),
     /// A track in Recently Played or Most Played.
     Played(Played),
+    /// A playlist a search found.
+    Playlist(FoundPlaylist),
 }
 
 impl Item {
@@ -329,6 +336,17 @@ pub struct LibraryPanel {
     playlist_sort: PlaylistSort,
     playlist_draft: Option<PlaylistDraft>,
     playlist_sources: HashMap<String, ArtistSource>,
+    /// What a search shows: one kind or all, the sections of the page of all and its best
+    /// match; a few matches under the search field as the user types; the playlists it can
+    /// find; and a playlist a match opened, for the app to show.
+    search_filter: SearchFilter,
+    search_top: Option<usize>,
+    search_songs: Option<(usize, usize)>,
+    search_section_rows: ModelRows,
+    suggestions: Vec<Item>,
+    suggestion_rows: ModelRows,
+    found_playlists: Vec<FoundPlaylist>,
+    open_playlist: Option<String>,
     /// While an album's tracks are shown: how often each was played, and its page.
     play_counts: HashMap<(PathBuf, Option<Duration>), u32>,
     album_page: Option<AlbumPage>,
@@ -665,6 +683,14 @@ impl LibraryPanel {
             playlist_sort: PlaylistSort::Custom,
             playlist_draft: None,
             playlist_sources: HashMap::new(),
+            search_filter: SearchFilter::All,
+            search_top: None,
+            search_songs: None,
+            search_section_rows: ModelRows::new(),
+            suggestions: Vec::new(),
+            suggestion_rows: ModelRows::new(),
+            found_playlists: Vec::new(),
+            open_playlist: None,
         }
     }
 
@@ -678,6 +704,13 @@ impl LibraryPanel {
         let _ = ui.set_global_property("Library", "popular", self.popular_rows.model_value());
         let _ = ui.set_global_property("Library", "letters", self.letter_rows.model_value());
         let _ = ui.set_global_property("Playlists", "entries", self.playlist_rows.model_value());
+        let _ = ui.set_global_property(
+            "Library",
+            "search-sections",
+            self.search_section_rows.model_value(),
+        );
+        let _ =
+            ui.set_global_property("Library", "suggestions", self.suggestion_rows.model_value());
         let _ = ui.set_global_property(
             "Library",
             "portrait-choices",
@@ -1237,6 +1270,11 @@ impl LibraryPanel {
             Item::Genre(genre) => Level::GenreAlbums {
                 genre: genre.name.clone(),
             },
+            // The app shows it.
+            Item::Playlist(playlist) => {
+                self.open_playlist = Some(playlist.name.clone());
+                return None;
+            }
             // The tracks shown, or in a discography the album's, playing from this one.
             Item::Track(_) | Item::Played(_) => {
                 let section = self.section_of(row);
@@ -2497,7 +2535,8 @@ impl LibraryPanel {
             Some(item @ (Item::Track(_) | Item::Played(_))) => {
                 Ok(item.track().cloned().into_iter().collect())
             }
-            None => Ok(Vec::new()),
+            // The app has its tracks.
+            Some(Item::Playlist(_)) | None => Ok(Vec::new()),
         };
         result.unwrap_or_else(|e| {
             log::warn!("library: {e}");
@@ -2532,7 +2571,20 @@ impl LibraryPanel {
             log::warn!("could not read what was changed about artists: {e}");
             HashMap::new()
         });
-        let result = self.load(db);
+        let result = if self.searching() {
+            Ok(self.search_items())
+        } else {
+            self.search_section_rows.sync(Vec::new());
+            self.search_top = None;
+            self.search_songs = None;
+            let Some(db) = &self.db else {
+                return;
+            };
+            self.load(db)
+        };
+        let Some(db) = &self.db else {
+            return;
+        };
         match result {
             Ok(items) => self.items = items,
             Err(e) => {
@@ -2556,6 +2608,9 @@ impl LibraryPanel {
                     self.cover_order.push(key);
                 }
                 Item::Album(album) => self.cover_order.push(cover_key(album)),
+                Item::Playlist(playlist) => {
+                    self.cover_order.push(Self::playlist_key(&playlist.name))
+                }
                 _ => {}
             }
         }
@@ -2687,10 +2742,13 @@ impl LibraryPanel {
     fn heading(&self) -> (String, String) {
         let n = self.items.len();
         if self.searching() {
-            let subtitle = if n >= SEARCH_LIMIT {
-                format!("The first {} matching tracks", thousands(n))
-            } else {
-                count(n, "matching track")
+            let subtitle = match self.search_filter {
+                SearchFilter::All => String::new(),
+                SearchFilter::Songs if n >= SEARCH_LIMIT => {
+                    format!("The first {} matching tracks", thousands(n))
+                }
+                SearchFilter::Songs => count(n, "matching track"),
+                _ => count(n, "match"),
             };
             return ("Search".to_owned(), subtitle);
         }
@@ -3041,7 +3099,11 @@ impl LibraryPanel {
             .scan_phase()
             .unwrap_or_else(|| self.stats.clone().unwrap_or_default());
         let layout = if self.searching() {
-            "table"
+            match self.search_filter {
+                SearchFilter::All => "search",
+                SearchFilter::Songs => "table",
+                _ => "grid",
+            }
         } else if self.discography() {
             "discography"
         } else if *self.level() == Level::Artists && !self.artist_list {
@@ -3052,6 +3114,27 @@ impl LibraryPanel {
         vec![
             ("section", string(self.opened[0].section_name())),
             ("layout", string(layout)),
+            ("search-shown", Value::Bool(self.searching())),
+            ("search-filter", string(self.search_filter.name())),
+            (
+                "search-songs",
+                Value::Struct(Struct::from_iter([
+                    ("kind".to_owned(), string("songs")),
+                    ("title".to_owned(), string("Songs")),
+                    (
+                        "first".to_owned(),
+                        Value::Number(self.search_songs.map_or(0.0, |(f, _)| f as f64)),
+                    ),
+                    (
+                        "count".to_owned(),
+                        Value::Number(self.search_songs.map_or(0.0, |(_, c)| c as f64)),
+                    ),
+                ])),
+            ),
+            (
+                "search-top",
+                Value::Number(self.search_top.map_or(-1.0, |row| row as f64)),
+            ),
             ("title", string(&self.title)),
             ("subtitle", string(&self.subtitle)),
             (
@@ -3315,6 +3398,14 @@ fn row_value(
                 count(a.albums as usize, "album"),
                 count(a.tracks as usize, "track")
             ),
+        ),
+        Item::Playlist(p) => (
+            "playlist",
+            {
+                cover = LibraryPanel::playlist_key(&p.name);
+                p.name.clone()
+            },
+            format!("Playlist · {}", count(p.tracks, "track")),
         ),
         Item::Genre(g) => (
             "genre",

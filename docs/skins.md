@@ -165,7 +165,7 @@ The user's music, read from the folders they chose, browsed in four sections (ar
 |---|---|---|
 | `rows` | `[LibraryRow]` | `kind` ("artist", "album", "genre" or "track"), `title`, `detail` ("3 albums · 41 tracks", "1997 · 12 tracks", or a track's artist and album), `artist` (of an album or track), `album` (of a track), `cover` (for albums: what to pass to `cover()`), `number` (track number inside an album, else empty), `duration`, `played` (in Recently Played when, "3 days ago"; in Most Played how often, "12 plays"; else empty) |
 | `section` | string | "artists", "albums", "songs", "genres", "recently-added", "recently-played" or "most-played": where browsing started |
-| `layout` | string | How the rows are best shown: "list" (artists, genres, an album's tracks), "grid" (albums) or "table" (tracks from many albums, with artist and album columns, and `played` in Recently Played and Most Played; also search results) |
+| `layout` | string | How the rows are best shown: "list" (artists, genres, an album's tracks), "grid" (albums) or "table" (tracks from many albums, with artist and album columns, and `played` in Recently Played and Most Played; also a search's songs), or "search" (a search's page of every kind of match) |
 | `title`, `subtitle` | string | Heading for the rows, like "Artists" or an album with "Björk · 1995 · 11 tracks · 46:12" |
 | `can-go-back` | bool | True below a section's own list, and while searching |
 | `covers-ready` | int | Goes up when new covers are ready; pass it to `cover()` |
@@ -176,7 +176,9 @@ The user's music, read from the folders they chose, browsed in four sections (ar
 
 | Callback | |
 |---|---|
-| `search(text)` | Tracks with words starting with every word of `text`, in artists, albums, titles, genres and file names; accents are ignored. Empty text goes back to browsing |
+| `search(text)` | Shows what matches `text`: with `search-filter` "all", the best match of all (`search-top`, a row), the songs (`search-songs`) and the artists, albums, playlists and genres (`search-sections`, each a range of rows); else all of one kind. Names match as wholes first, then at their start, then word by word; songs by the words of their artists, albums, titles, genres and file names. Accents and case are ignored. Empty text goes back to browsing |
+| `set-search-filter(kind)` | "all", "songs", "artists", "albums", "playlists" or "genres" |
+| `suggest(text)`, `open-suggestion(index)` | A few of the best matches of `text` in `suggestions`, for under a search field, without leaving what is shown; opening one shows an artist, album or genre, plays a song or shows a playlist |
 | `show(section)` | Start browsing a section: "artists", "albums", "songs", "genres", or one of the Recents, "recently-added", "recently-played" or "most-played" (200 albums or tracks each) |
 | `cover(key, covers-ready) -> image` | Pure: a small album cover (about 300 pixels) for a row's `cover`; empty while it is being made and for albums without one |
 | `activate(row)` | Open an artist, album or genre; on a track, the playlist becomes the tracks shown, playing from this one |

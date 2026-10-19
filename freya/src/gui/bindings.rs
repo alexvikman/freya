@@ -204,7 +204,32 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
             if let Some((tracks, start)) = app.library.activate(index(args, 0)) {
                 app.play_tracks(&tracks, start);
             }
+            if let Some(name) = app.library.take_open_playlist() {
+                app.show_playlist_named(&name);
+            }
         }),
+    );
+    bind(
+        "Library",
+        "set-search-filter",
+        Box::new(|app, args| app.library.set_search_filter(&text_arg(args, 0))),
+    );
+    bind(
+        "Library",
+        "suggest",
+        Box::new(|app, args| app.library.suggest(&text_arg(args, 0))),
+    );
+    bind(
+        "Library",
+        "open-suggestion",
+        Box::new(
+            |app, args| match app.library.open_suggestion(index(args, 0)) {
+                Some(library::Opened::Play(tracks, start)) => app.play_tracks(&tracks, start),
+                Some(library::Opened::Library) => app.show_view("library"),
+                Some(library::Opened::Playlist(name)) => app.show_playlist_named(&name),
+                None => {}
+            },
+        ),
     );
     bind(
         "Library",
