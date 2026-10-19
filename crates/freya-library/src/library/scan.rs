@@ -10,7 +10,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
 
-use super::fetch::{Online, fetch_artists, fetch_genres};
+use super::fetch::{Online, fetch_album_covers, fetch_artists, fetch_genres};
 use super::{AlbumCover, FileStamp, Library, NewTrack, Result, added, epoch_millis, put, remove};
 use crate::cover::ARTWORK_FOLDERS;
 use crate::cue::{self, Found};
@@ -258,6 +258,9 @@ pub fn scan_with(
         if !cancel.load(Ordering::Relaxed) {
             fetch_genres(library, &options.online, cancel, &mut progress)?;
         }
+        if !cancel.load(Ordering::Relaxed) && options.online.any() {
+            fetch_album_covers(library, pictures, cancel)?;
+        }
     }
     if !partial && !cancel.load(Ordering::Relaxed) {
         library.note_full_scan(SystemTime::now())?;
@@ -372,9 +375,10 @@ fn take_artists_pictures(
     Ok(())
 }
 
-/// Makes the covers of the albums that need one: new ones, those with tracks in
-/// `changed_sources`, and those whose folder's `images` changed; all when `rescan`. A few at
-/// a time, as reading a cover is mostly waiting for the disk. Only albums `within` the folders
+/// Makes the covers of the albums that have none yet: new ones, and those without a cover
+/// whose tracks are in `changed_sources` or whose folder's `images` changed. A cover found once
+/// stays the album's; all are made again only when `rescan`, as the user asks. A few at a time,
+/// as reading a cover is mostly waiting for the disk. Only albums `within` the folders
 /// looked through, whose pictures are in `images`.
 #[allow(clippy::too_many_arguments)]
 fn make_covers(
@@ -409,10 +413,12 @@ fn make_covers(
         let track = album.track.to_string_lossy().into_owned();
         let images = album.track.parent().map_or(0, |folder| stamps.of(folder));
         let made = kept.get(&key);
-        let needed = within(&album.track)
-            && (rescan
-                || changed.contains(&key)
-                || made.is_none_or(|made| made.track != track || made.images != images));
+        // A cover found once, in its music or on the internet, stays the album's: only one
+        // still missing is looked for again, when its music or pictures changed.
+        let missing = made.is_none_or(|made| made.cover.is_none());
+        let looked = made.is_some_and(|made| made.track == track && made.images == images);
+        let needed =
+            within(&album.track) && (rescan || (missing && (changed.contains(&key) || !looked)));
         if needed {
             work.push((key.clone(), album.track, images));
         }
@@ -717,7 +723,8 @@ impl Scanner {
                         &mut |e| {
                             let _ = events.send(e);
                         },
-                    )
+                    )?;
+                    fetch_album_covers(&library, &pictures, &stop)
                 });
                 let event = match result {
                     Ok(()) => ScanEvent::Finished(ScanSummary::default()),

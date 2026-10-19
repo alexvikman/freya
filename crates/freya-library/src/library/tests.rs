@@ -883,6 +883,13 @@ fn a_scan_makes_each_albums_cover_once_and_again_when_its_pictures_change() {
             .contains(&checksum)
     );
     assert_eq!(scan(&mut library), 0);
+
+    // Found once, it stays: another picture in the folder does not replace it.
+    image::RgbImage::from_pixel(1200, 1200, image::Rgb([30, 30, 200]))
+        .save(album.join("cover.jpg"))
+        .unwrap();
+    assert_eq!(scan(&mut library), 0);
+    assert_eq!(library.album_covers().unwrap()[key].cover, Some(checksum));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

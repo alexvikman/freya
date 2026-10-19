@@ -1985,6 +1985,8 @@ impl LibraryPanel {
         }
         self.cancel_album_match();
         self.show_album(Some(key.unwrap_or(tagged)), Some(album));
+        // Its cover from the Cover Art Archive, when its music has none.
+        self.fetch(None);
     }
 
     /// Files the album being matched as its tags say again.

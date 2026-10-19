@@ -164,6 +164,23 @@ pub fn deezer_picture_urls(name: &str) -> Result<Vec<String>, String> {
     Ok(picture_urls(&answer, name))
 }
 
+/// The front cover of the release group `group` from the Cover Art Archive, as large as it
+/// keeps it up to 1200 pixels; none when it has none.
+pub fn cover_art(group: &str) -> Result<Option<Vec<u8>>, String> {
+    let url = format!("https://coverartarchive.org/release-group/{group}/front-1200");
+    match agent().get(&url).call() {
+        Ok(mut answer) => answer
+            .body_mut()
+            .with_config()
+            .limit(MAX_PICTURE_BYTES)
+            .read_to_vec()
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        Err(ureq::Error::StatusCode(404)) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Downloads a picture at `url`.
 pub fn download(url: &str) -> Result<Vec<u8>, String> {
     agent()

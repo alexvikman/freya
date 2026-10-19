@@ -111,6 +111,25 @@ impl Library {
     }
 }
 
+impl Library {
+    /// Every album's match.
+    pub fn album_matches(&self) -> Result<Vec<AlbumMatch>> {
+        let mut statement = self.db.prepare_cached(
+            "SELECT album_artist, album, release_group, artist_mbid, artist_key FROM album_matches",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(AlbumMatch {
+                album_artist: row.get(0)?,
+                album: row.get(1)?,
+                release_group: row.get(2)?,
+                artist_mbid: row.get(3)?,
+                artist_key: row.get(4)?,
+            })
+        })?;
+        rows.collect()
+    }
+}
+
 /// The artist a matched album is filed under instead of `album_artist`, its tags' name; none
 /// for an album not matched to another.
 pub(super) fn filed_under(

@@ -288,6 +288,55 @@ pub(super) fn fetch_artists(
     })
 }
 
+/// Asks the Cover Art Archive for the covers of the albums matched to one in MusicBrainz whose
+/// music has none: the front of the release group matched. One it had none of is asked again
+/// after a while, or when the album is matched to another.
+pub(super) fn fetch_album_covers(
+    library: &Library,
+    pictures: &Pictures,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let covers = library.album_covers()?;
+    for matched in library.album_matches()? {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        let Some(group) = matched.release_group.as_deref() else {
+            continue;
+        };
+        let artist = matched
+            .artist_key
+            .as_deref()
+            .unwrap_or(&matched.album_artist);
+        let key = crate::thumbnails::Thumbnails::key(Some(artist), Some(&matched.album));
+        if covers.get(&key).is_some_and(|c| c.cover.is_some()) {
+            continue;
+        }
+        let asked = library.album_online_cover(&key)?;
+        let lacking = asked.is_none_or(|(asked_group, asked)| {
+            asked_group != group || (!asked.answer && !asked.recent())
+        });
+        if !lacking {
+            continue;
+        }
+        match artist_image::cover_art(group) {
+            Ok(found) => {
+                let kept = found
+                    .and_then(|bytes| crate::cover::album_art_from(&bytes))
+                    .and_then(|(jpeg, color)| Some((pictures.put(&jpeg).ok()?, color)));
+                library.set_album_online_cover(
+                    &key,
+                    group,
+                    kept.as_ref().map(|(c, color)| (c.as_str(), *color)),
+                    SystemTime::now(),
+                )?;
+            }
+            Err(e) => log::debug!("could not ask the Cover Art Archive for {group}: {e}"),
+        }
+    }
+    Ok(())
+}
+
 /// Asks the internet what each genre lacks: what Wikipedia says of it, else Last.fm. A genre
 /// it found nothing of is asked again after a while. Stops early when `cancel` is set.
 pub(super) fn fetch_genres(

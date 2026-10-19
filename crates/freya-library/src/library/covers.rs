@@ -25,6 +25,17 @@ pub(super) const SCHEMA: &str = "
         images INTEGER NOT NULL,
         made INTEGER NOT NULL
     );
+    -- Covers from the internet for albums whose music has none, as the album was matched
+    -- to one in MusicBrainz: kept apart, so a scan of the music never takes them away.
+    CREATE TABLE IF NOT EXISTS album_online_covers (
+        key TEXT NOT NULL PRIMARY KEY,
+        -- NULL when the source had none.
+        cover TEXT,
+        color TEXT,
+        -- The release group it is of, and when it was asked for.
+        release_group TEXT NOT NULL,
+        asked INTEGER NOT NULL
+    );
 ";
 
 /// An album's cover as the last scan made it.
@@ -38,10 +49,17 @@ pub struct AlbumCover {
 
 impl Library {
     /// Every album's cover, by the album's key.
+    /// Every album's cover, by the album's key: its music's, else one from the internet.
     pub fn album_covers(&self) -> Result<HashMap<String, AlbumCover>> {
-        let mut statement = self
-            .db
-            .prepare_cached("SELECT key, cover, color, track, images FROM album_covers")?;
+        let mut statement = self.db.prepare_cached(
+            "SELECT c.key, coalesce(c.cover, o.cover), coalesce(c.color, o.color), c.track,
+                    c.images
+             FROM album_covers c LEFT JOIN album_online_covers o ON o.key = c.key
+             UNION ALL
+             SELECT o.key, o.cover, o.color, '', 0
+             FROM album_online_covers o
+             WHERE o.cover IS NOT NULL AND o.key NOT IN (SELECT key FROM album_covers)",
+        )?;
         let rows = statement.query_map([], |row| {
             let color: Option<String> = row.get(2)?;
             Ok((
@@ -55,6 +73,50 @@ impl Library {
             ))
         })?;
         rows.collect()
+    }
+
+    /// Keeps the cover from the internet of the album `key`, of the release group `group`, or
+    /// that there is none; asked at `asked`.
+    pub fn set_album_online_cover(
+        &self,
+        key: &str,
+        group: &str,
+        cover: Option<(&str, [u8; 3])>,
+        asked: std::time::SystemTime,
+    ) -> Result<()> {
+        self.db
+            .prepare_cached(
+                "INSERT OR REPLACE INTO album_online_covers (key, cover, color, release_group, asked)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?
+            .execute(params![
+                key,
+                cover.map(|(c, _)| c),
+                cover.map(|(_, [r, g, b])| format!("{r:02x}{g:02x}{b:02x}")),
+                group,
+                super::epoch_millis(asked)
+            ])?;
+        Ok(())
+    }
+
+    /// The release group the album `key`'s cover from the internet was asked of, and when,
+    /// and whether there was one.
+    pub fn album_online_cover(&self, key: &str) -> Result<Option<(String, super::Asked<bool>)>> {
+        self.db
+            .prepare_cached(
+                "SELECT release_group, cover IS NOT NULL, asked FROM album_online_covers
+                 WHERE key = ?1",
+            )?
+            .query_row([key], |row| {
+                Ok((
+                    row.get(0)?,
+                    super::Asked {
+                        answer: row.get(1)?,
+                        asked: super::from_epoch_millis(row.get(2)?),
+                    },
+                ))
+            })
+            .optional()
     }
 
     /// Whether the albums' colors are made as Freya makes them now.
@@ -153,6 +215,48 @@ fn color_of(text: &str) -> Option<[u8; 3]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cover_from_the_internet_stands_in_for_the_musics_and_stays() {
+        let library = Library::open_in_memory().unwrap();
+        let at = std::time::SystemTime::now();
+        // Matched before a scan made its row.
+        library
+            .set_album_online_cover("k", "group", Some(("cafe", [10, 20, 30])), at)
+            .unwrap();
+        assert_eq!(
+            library.album_covers().unwrap()["k"].cover.as_deref(),
+            Some("cafe")
+        );
+        // A scan finds no cover in its music: the internet's stays.
+        let none = AlbumCover {
+            cover: None,
+            color: None,
+            track: "/m/1.mp3".into(),
+            images: 0,
+        };
+        library.set_album_cover("k", &none).unwrap();
+        let kept = &library.album_covers().unwrap()["k"];
+        assert_eq!(
+            (kept.cover.as_deref(), kept.color),
+            (Some("cafe"), Some([10, 20, 30]))
+        );
+        assert_eq!(kept.track, "/m/1.mp3");
+        // Its music's comes first.
+        let own = AlbumCover {
+            cover: Some("beef".into()),
+            color: Some([1, 2, 3]),
+            ..none
+        };
+        library.set_album_cover("k", &own).unwrap();
+        assert_eq!(
+            library.album_covers().unwrap()["k"].cover.as_deref(),
+            Some("beef")
+        );
+        let (group, asked) = library.album_online_cover("k").unwrap().unwrap();
+        assert_eq!((group.as_str(), asked.answer), ("group", true));
+        assert!(library.artist_picture_checksums().unwrap().contains("cafe"));
+    }
 
     #[test]
     fn keeps_each_albums_cover_and_forgets_those_gone() {

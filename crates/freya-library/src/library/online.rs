@@ -201,6 +201,7 @@ impl Library {
              UNION SELECT cover FROM album_covers WHERE cover IS NOT NULL
              UNION SELECT picture FROM playlist_info WHERE picture IS NOT NULL
              UNION SELECT backdrop FROM playlist_info WHERE backdrop IS NOT NULL
+             UNION SELECT cover FROM album_online_covers WHERE cover IS NOT NULL
              UNION SELECT picture FROM genre_info WHERE picture IS NOT NULL
              UNION SELECT backdrop FROM genre_info WHERE backdrop IS NOT NULL",
         )?;

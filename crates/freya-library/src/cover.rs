@@ -53,7 +53,25 @@ pub const ALBUM_ART: u32 = 600;
 /// the album has no cover.
 pub fn album_art(track: &Path) -> Option<(Vec<u8>, [u8; 3])> {
     let bytes = embedded_cover(track).or_else(|| folder_cover(track))?;
+    album_art_from(&bytes)
+}
+
+/// An album's cover from `track`, one of its tracks, as large as it is up to `largest` wide
+/// or high, to show whole: read from the music's file or folder.
+pub fn album_art_large(track: &Path, largest: u32) -> Option<image::DynamicImage> {
+    let bytes = embedded_cover(track).or_else(|| folder_cover(track))?;
     let image = image::load_from_memory(&bytes).ok()?;
+    Some(if image.width() > largest || image.height() > largest {
+        image.resize(largest, largest, image::imageops::FilterType::Lanczos3)
+    } else {
+        image
+    })
+}
+
+/// An album's cover from the picture `bytes`, as Freya keeps it: at most [`ALBUM_ART`] wide
+/// or high, as a JPEG, and a color from it for the album's page.
+pub fn album_art_from(bytes: &[u8]) -> Option<(Vec<u8>, [u8; 3])> {
+    let image = image::load_from_memory(bytes).ok()?;
     let image = if image.width() > ALBUM_ART || image.height() > ALBUM_ART {
         image.resize(ALBUM_ART, ALBUM_ART, image::imageops::FilterType::Lanczos3)
     } else {
@@ -71,18 +89,6 @@ pub fn album_art(track: &Path) -> Option<(Vec<u8>, [u8; 3])> {
         .encode_image(&rgb)
         .ok()?;
     Some((jpeg, color))
-}
-
-/// An album's cover from `track`, one of its tracks, as large as it is up to `largest` wide
-/// or high, to show whole: read from the music's file or folder.
-pub fn album_art_large(track: &Path, largest: u32) -> Option<image::DynamicImage> {
-    let bytes = embedded_cover(track).or_else(|| folder_cover(track))?;
-    let image = image::load_from_memory(&bytes).ok()?;
-    Some(if image.width() > largest || image.height() > largest {
-        image.resize(largest, largest, image::imageops::FilterType::Lanczos3)
-    } else {
-        image
-    })
 }
 
 /// The front cover from the file's tags, or else any picture in them.
