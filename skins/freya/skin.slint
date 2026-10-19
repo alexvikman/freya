@@ -3395,12 +3395,11 @@ component LibraryPanel inherits FocusScope {
         root.reveal(root.cursor);
     }
 
-    /// Scrolls `row` to the top, and puts the keyboard on it.
+    /// Scrolls `row` to the top, leaving the keyboard where it is.
     function jump-to(row: int) {
         if (row < 0 || row >= Library.rows.length) {
             return;
         }
-        root.cursor = row;
         if (root.grid-shown) {
             grid.content-y = -min(max(0, grid.content-height - grid.visible-height), root.head-lines * root.artist-head-height + floor(row / root.columns) * root.grid-line-height);
         } else if (root.list-shown) {
