@@ -1939,24 +1939,27 @@ component ArtistPageHead inherits Rectangle {
     accessible-role: groupbox;
     accessible-label: page.name;
 
-    /// Where the header ends.
-    property <length> fade-top: 340px;
-
-    // The header's color fading out under the buttons, the tracks' heading and the first
-    // tracks, behind them.
-    Rectangle {
-        y: root.fade-top;
-        height: 320px;
-        background: @linear-gradient(180deg, root.page.color.darker(35%) 0%, root.page.color.darker(35%).with-alpha(0.55) 45%, root.page.color.darker(35%).with-alpha(0) 100%);
-    }
 
     VerticalLayout {
         // Their picture across the page, darker towards its foot; without a large one, their
         // picture or covers beside their name, as an album's page has.
         Rectangle {
             height: 340px;
-            background: @linear-gradient(180deg, root.page.color.brighter(30%) 0%, root.page.color 55%, root.page.color.darker(15%) 100%);
+            background: root.page.color;
             clip: true;
+
+            // In two parts: a gradient's stop between its ends draws a line in Slint's
+            // software renderer.
+            Rectangle {
+                y: 0;
+                height: parent.height * 0.55;
+                background: @linear-gradient(180deg, root.page.color.brighter(30%) 0%, root.page.color 100%);
+            }
+            Rectangle {
+                y: parent.height * 0.55;
+                height: parent.height * 0.45;
+                background: @linear-gradient(180deg, root.page.color 0%, root.page.color.darker(15%) 100%);
+            }
 
             // Filling the width, cut a third of the way down rather than through the middle,
             // where faces in such pictures mostly are.
@@ -2292,22 +2295,25 @@ component AlbumPageHead inherits Rectangle {
     accessible-role: groupbox;
     accessible-label: "Album " + page.title + " by " + page.artist + ", " + page.detail;
 
-    /// Where the header ends.
-    property <length> fade-top: 300px;
-
-    // The header's color fading out under the buttons, the tracks' heading and the first
-    // tracks, behind them.
-    Rectangle {
-        y: root.fade-top;
-        height: 320px;
-        background: @linear-gradient(180deg, root.page.color.darker(35%) 0%, root.page.color.darker(35%).with-alpha(0.55) 45%, root.page.color.darker(35%).with-alpha(0) 100%);
-    }
 
     VerticalLayout {
         // The cover's color behind the header, darker towards its foot.
         Rectangle {
             height: 300px;
-            background: @linear-gradient(180deg, root.page.color.brighter(30%) 0%, root.page.color 55%, root.page.color.darker(15%) 100%);
+            background: root.page.color;
+
+            // In two parts: a gradient's stop between its ends draws a line in Slint's
+            // software renderer.
+            Rectangle {
+                y: 0;
+                height: parent.height * 0.55;
+                background: @linear-gradient(180deg, root.page.color.brighter(30%) 0%, root.page.color 100%);
+            }
+            Rectangle {
+                y: parent.height * 0.55;
+                height: parent.height * 0.45;
+                background: @linear-gradient(180deg, root.page.color 0%, root.page.color.darker(15%) 100%);
+            }
 
             HorizontalLayout {
                 padding: root.pad;
@@ -3570,6 +3576,28 @@ component LibraryPanel inherits FocusScope {
         }
     }
 
+    // The page's color fading out from under its heading, behind its buttons and first
+    // rows, scrolling with them.
+    if root.grid-shown && root.artist-page-shown: Rectangle {
+        x: grid.x;
+        y: grid.y;
+        width: grid.width;
+        height: grid.height;
+        clip: true;
+
+        // In two parts, as a gradient's stop between its ends draws a line.
+        Rectangle {
+            y: grid.content-y + 340px;
+            height: 144px;
+            background: @linear-gradient(180deg, Library.artist-page.color.darker(35%) 0%, Library.artist-page.color.darker(35%).with-alpha(0.55) 100%);
+        }
+        Rectangle {
+            y: grid.content-y + 340px + 144px;
+            height: 176px;
+            background: @linear-gradient(180deg, Library.artist-page.color.darker(35%).with-alpha(0.55) 0%, Library.artist-page.color.darker(35%).with-alpha(0) 100%);
+        }
+    }
+
     grid := ListView {
         visible: root.grid-shown;
         x: 0;
@@ -3639,6 +3667,28 @@ component LibraryPanel inherits FocusScope {
         jump(row) => { root.jump-to(row); }
     }
 
+    // The page's color fading out from under its heading, behind its buttons and first
+    // rows, scrolling with them.
+    if root.album-shown: Rectangle {
+        x: album.x;
+        y: album.y;
+        width: album.width;
+        height: album.height;
+        clip: true;
+
+        // In two parts, as a gradient's stop between its ends draws a line.
+        Rectangle {
+            y: album.content-y + 300px;
+            height: 144px;
+            background: @linear-gradient(180deg, Library.album-page.color.darker(35%) 0%, Library.album-page.color.darker(35%).with-alpha(0.55) 100%);
+        }
+        Rectangle {
+            y: album.content-y + 300px + 144px;
+            height: 176px;
+            background: @linear-gradient(180deg, Library.album-page.color.darker(35%).with-alpha(0.55) 0%, Library.album-page.color.darker(35%).with-alpha(0) 100%);
+        }
+    }
+
     // An album's tracks under its page, which scrolls with them.
     album := ListView {
         visible: root.album-shown;
@@ -3672,6 +3722,28 @@ component LibraryPanel inherits FocusScope {
                 activated => { root.activate(index - 1); }
                 context-menu(x, y) => { root.open-menu(index - 1, x, y); }
             }
+        }
+    }
+
+    // The page's color fading out from under its heading, behind its buttons and first
+    // rows, scrolling with them.
+    if root.discography-shown && root.artist-page-shown: Rectangle {
+        x: discography.x;
+        y: discography.y;
+        width: discography.width;
+        height: discography.height;
+        clip: true;
+
+        // In two parts, as a gradient's stop between its ends draws a line.
+        Rectangle {
+            y: discography.content-y + 340px;
+            height: 144px;
+            background: @linear-gradient(180deg, Library.artist-page.color.darker(35%) 0%, Library.artist-page.color.darker(35%).with-alpha(0.55) 100%);
+        }
+        Rectangle {
+            y: discography.content-y + 340px + 144px;
+            height: 176px;
+            background: @linear-gradient(180deg, Library.artist-page.color.darker(35%).with-alpha(0.55) 0%, Library.artist-page.color.darker(35%).with-alpha(0) 100%);
         }
     }
 
@@ -4365,22 +4437,25 @@ component PlaylistPageHead inherits Rectangle {
     accessible-role: groupbox;
     accessible-label: root.page.name;
 
-    /// Where the header ends.
-    property <length> fade-top: 340px;
-
-    // The header's color fading out under the buttons, the tracks' heading and the first
-    // tracks, behind them.
-    Rectangle {
-        y: root.fade-top;
-        height: 320px;
-        background: @linear-gradient(180deg, root.page.color.darker(35%) 0%, root.page.color.darker(35%).with-alpha(0.55) 45%, root.page.color.darker(35%).with-alpha(0) 100%);
-    }
 
     VerticalLayout {
         Rectangle {
             height: 340px;
-            background: @linear-gradient(180deg, root.page.color.brighter(30%) 0%, root.page.color 55%, root.page.color.darker(15%) 100%);
+            background: root.page.color;
             clip: true;
+
+            // In two parts: a gradient's stop between its ends draws a line in Slint's
+            // software renderer.
+            Rectangle {
+                y: 0;
+                height: parent.height * 0.55;
+                background: @linear-gradient(180deg, root.page.color.brighter(30%) 0%, root.page.color 100%);
+            }
+            Rectangle {
+                y: parent.height * 0.55;
+                height: parent.height * 0.45;
+                background: @linear-gradient(180deg, root.page.color 0%, root.page.color.darker(15%) 100%);
+            }
 
             if root.page.banner.width > 0: Image {
                 property <float> aspect: root.page.banner.width / max(1, root.page.banner.height);
@@ -4759,6 +4834,28 @@ component PlaylistView inherits Rectangle {
             tracks.content-y = -App.restore-scroll;
         }
         App.scroll = -tracks.content-y;
+    }
+
+    // The page's color fading out from under its heading, behind its buttons and first
+    // rows, scrolling with them.
+    Rectangle {
+        x: tracks.x;
+        y: tracks.y;
+        width: tracks.width;
+        height: tracks.height;
+        clip: true;
+
+        // In two parts, as a gradient's stop between its ends draws a line.
+        Rectangle {
+            y: tracks.content-y + 340px;
+            height: 144px;
+            background: @linear-gradient(180deg, Playlists.page.color.darker(35%) 0%, Playlists.page.color.darker(35%).with-alpha(0.55) 100%);
+        }
+        Rectangle {
+            y: tracks.content-y + 340px + 144px;
+            height: 176px;
+            background: @linear-gradient(180deg, Playlists.page.color.darker(35%).with-alpha(0.55) 0%, Playlists.page.color.darker(35%).with-alpha(0) 100%);
+        }
     }
 
     tracks := ListView {
