@@ -1653,7 +1653,7 @@ dependencies = [
 
 [[package]]
 name = "freya"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -1703,7 +1703,7 @@ dependencies = [
 
 [[package]]
 name = "freya-audio"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "cpal",
  "crossbeam-channel",
@@ -1719,7 +1719,7 @@ dependencies = [
 
 [[package]]
 name = "freya-library"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "image",
  "lofty",
@@ -1732,7 +1732,7 @@ dependencies = [
 
 [[package]]
 name = "freya-skin"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "directories",
  "image",
