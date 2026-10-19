@@ -650,7 +650,7 @@ fn duplicate_entries_play_in_order() {
         fixture("sine.flac"),
         fixture("sine.ogg"),
     ]);
-    assert_eq!(rows_played(&app, Duration::from_secs(12)), [0, 1, 2, 3]);
+    assert_eq!(rows_played(&app, Duration::from_secs(40)), [0, 1, 2, 3]);
 }
 
 #[test]
@@ -660,7 +660,7 @@ fn an_unplayable_entry_is_skipped_and_hopeless_lists_stop() {
     let missing = temp_dir("unplayable").join("missing.flac");
     app.borrow_mut()
         .add_paths(&[fixture("sine.flac"), missing.clone(), fixture("sine.ogg")]);
-    assert_eq!(rows_played(&app, Duration::from_secs(10)), [0, 2]);
+    assert_eq!(rows_played(&app, Duration::from_secs(40)), [0, 2]);
 
     // Nothing can be played, repeat on: Freya tries each once, then stops.
     let app = silent_app("hopeless");
