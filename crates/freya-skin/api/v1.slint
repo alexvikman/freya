@@ -136,6 +136,8 @@ export struct LibraryRow {
     played: string,
     /// For tracks shown in their album: how often each was played, "1,204"; empty for none.
     plays: string,
+    /// For albums: whether it is one of the user's favourites.
+    favorite: bool,
 }
 
 /// What the user may change about an artist, for a form: see `Library.edit-artist`. Each
@@ -289,6 +291,8 @@ export struct AlbumPage {
     cover: string,
     /// A color from the cover for the page behind it, dark enough for white text.
     color: color,
+    /// Whether it is one of the user's favourites: see `Library.toggle-album-favorite`.
+    favorite: bool,
 }
 
 /// A section of the search page: rows `first` to `first + count` of `Library.rows`, of the
@@ -399,6 +403,16 @@ export global Library {
     /// "playlists" or "genres"; set with `set-search-filter`. With "all", `layout` is "search":
     /// `search-sections` say which rows are what, and `search-top` is the row of the best match
     /// of all, or -1.
+    /// While the albums are shown: how they are ordered, "added" (by when they came into the
+    /// library or were made favourites, the latest first), "played" (the latest played
+    /// first), "name" or "artist"; set with `set-albums-sort`, and kept between runs.
+    in property <bool> albums-options;
+    in property <string> albums-sort: "added";
+    callback set-albums-sort(string);
+    /// Make an album a favourite, or not one any longer: the `row`th row's, or the one whose
+    /// page is shown. A favourite is as recently added as when it was made one.
+    callback toggle-favorite(int);
+    callback toggle-album-favorite();
     in property <string> search-filter: "all";
     /// Whether the rows are a search's; with "all", the songs beside the best match, and the
     /// other kinds' sections under them.

@@ -288,6 +288,7 @@ impl Convert for LibraryRow {
             duration: field(&s, "duration"),
             played: field(&s, "played"),
             plays: field(&s, "plays"),
+            favorite: field(&s, "favorite"),
         })
     }
 
@@ -303,6 +304,7 @@ impl Convert for LibraryRow {
             ("duration", self.duration.to_value()),
             ("played", self.played.to_value()),
             ("plays", self.plays.to_value()),
+            ("favorite", self.favorite.to_value()),
         ])
     }
 }
@@ -688,6 +690,7 @@ impl Convert for AlbumPage {
             detail: field(&s, "detail"),
             cover: field(&s, "cover"),
             color: field(&s, "color"),
+            favorite: field(&s, "favorite"),
         })
     }
 
@@ -699,6 +702,7 @@ impl Convert for AlbumPage {
             ("detail", self.detail.to_value()),
             ("cover", self.cover.to_value()),
             ("color", self.color.to_value()),
+            ("favorite", self.favorite.to_value()),
         ])
     }
 }
@@ -958,6 +962,8 @@ skin_api! {
         Library."album-view" => set_album_view, get_album_view;
         Library."scanning" => set_scanning, get_scanning;
         Library."letters" => set_letters, get_letters;
+        Library."albums-options" => set_albums_options, get_albums_options;
+        Library."albums-sort" => set_albums_sort, get_albums_sort;
         Library."search-filter" => set_search_filter, get_search_filter;
         Library."search-shown" => set_search_shown, get_search_shown;
         Library."search-songs" => set_search_songs, get_search_songs;
@@ -1110,6 +1116,9 @@ skin_api! {
         Library."set-artist-view" => on_set_artist_view, invoke_set_artist_view(view: SharedString);
         Library."set-artist-pictures-online" => on_set_artist_pictures_online, invoke_set_artist_pictures_online(online: bool);
         Library."set-watch-folders" => on_set_watch_folders, invoke_set_watch_folders(watch: bool);
+        Library."set-albums-sort" => on_set_albums_sort, invoke_set_albums_sort(sort: SharedString);
+        Library."toggle-favorite" => on_toggle_favorite, invoke_toggle_favorite(row: i32);
+        Library."toggle-album-favorite" => on_toggle_album_favorite, invoke_toggle_album_favorite();
         Library."set-search-filter" => on_set_search_filter, invoke_set_search_filter(filter: SharedString);
         Library."suggest" => on_suggest, invoke_suggest(text: SharedString);
         Library."open-suggestion" => on_open_suggestion, invoke_open_suggestion(index: i32);

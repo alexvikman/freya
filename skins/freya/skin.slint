@@ -78,6 +78,7 @@ global Icons {
     out property <string> added: "M12 3 V15 M7 10 L12 15 L17 10 M4 15 V19 C4 20.1 4.9 21 6 21 H18 C19.1 21 20 20.1 20 19 V15";
     out property <string> clock: "M12 3 A9 9 0 1 0 12 21 A9 9 0 1 0 12 3 Z M12 7 V12 L15.5 14";
     out property <string> star: "M12 3 L14.8 8.8 L21 9.6 L16.5 14 L17.6 20.3 L12 17.3 L6.4 20.3 L7.5 14 L3 9.6 L9.2 8.8 Z";
+    out property <string> heart: "M12 20.5 C12 20.5 3.5 15 3.5 9 C3.5 6.2 5.7 4 8.5 4 C10 4 11.3 4.8 12 6 C12.7 4.8 14 4 15.5 4 C18.3 4 20.5 6.2 20.5 9 C20.5 15 12 20.5 12 20.5 Z";
     out property <string> genre: "M3 4 V11 L13 21 L21 13 L11 3 H4 C3.4 3 3 3.4 3 4 Z M7.5 7.5 H7.6";
     out property <string> expand: "M4 9 V4 H9 M15 4 H20 V9 M20 15 V20 H15 M9 20 H4 V15";
     out property <string> picture: "M3.5 5 H20.5 V19 H3.5 Z M3.5 16 L8.5 11 L12.5 15 L15 12.5 L20.5 18 M15.5 7.5 A1.5 1.5 0 1 0 15.5 10.5 A1.5 1.5 0 1 0 15.5 7.5 Z";
@@ -1759,6 +1760,22 @@ component AlbumTile inherits Rectangle {
                 stroked: true;
                 color: Theme.text-secondary;
             }
+            // A favourite's heart, in the corner.
+            if root.entry.favorite: Rectangle {
+                x: parent.width - self.width - 8px;
+                y: 8px;
+                width: 26px;
+                height: 26px;
+                border-radius: 13px;
+                background: #000000a6;
+
+                Icon {
+                    width: 15px;
+                    height: 15px;
+                    data: Icons.heart;
+                    color: Theme.accent;
+                }
+            }
             // Over the cover, so it shows on dark covers too.
             if root.cursor: Rectangle {
                 border-radius: 8px;
@@ -1922,12 +1939,23 @@ component ArtistPageHead inherits Rectangle {
     accessible-role: groupbox;
     accessible-label: page.name;
 
+    /// Where the header ends.
+    property <length> fade-top: 340px;
+
+    // The header's color fading out under the buttons, the tracks' heading and the first
+    // tracks, behind them.
+    Rectangle {
+        y: root.fade-top;
+        height: 280px;
+        background: @linear-gradient(180deg, root.page.color.darker(25%).with-alpha(0.8) 0%, root.page.color.darker(25%).with-alpha(0.35) 45%, root.page.color.darker(25%).with-alpha(0) 100%);
+    }
+
     VerticalLayout {
         // Their picture across the page, darker towards its foot; without a large one, their
         // picture or covers beside their name, as an album's page has.
         Rectangle {
             height: 340px;
-            background: root.page.color;
+            background: @linear-gradient(180deg, root.page.color.brighter(30%) 0%, root.page.color 55%, root.page.color.darker(15%) 100%);
             clip: true;
 
             // Filling the width, cut a third of the way down rather than through the middle,
@@ -2044,7 +2072,7 @@ component ArtistPageHead inherits Rectangle {
         // Play, shuffle and add, over the color fading out.
         Rectangle {
             height: 88px;
-            background: @linear-gradient(180deg, root.page.color.with-alpha(0.55) 0%, root.page.color.with-alpha(0) 100%);
+            background: transparent;
 
             HorizontalLayout {
                 padding-left: root.pad;
@@ -2252,11 +2280,22 @@ component AlbumPageHead inherits Rectangle {
     accessible-role: groupbox;
     accessible-label: "Album " + page.title + " by " + page.artist + ", " + page.detail;
 
+    /// Where the header ends.
+    property <length> fade-top: 300px;
+
+    // The header's color fading out under the buttons, the tracks' heading and the first
+    // tracks, behind them.
+    Rectangle {
+        y: root.fade-top;
+        height: 280px;
+        background: @linear-gradient(180deg, root.page.color.darker(25%).with-alpha(0.8) 0%, root.page.color.darker(25%).with-alpha(0.35) 45%, root.page.color.darker(25%).with-alpha(0) 100%);
+    }
+
     VerticalLayout {
         // The cover's color behind the header, darker towards its foot.
         Rectangle {
             height: 300px;
-            background: @linear-gradient(180deg, root.page.color.brighter(15%) 0%, root.page.color 100%);
+            background: @linear-gradient(180deg, root.page.color.brighter(30%) 0%, root.page.color 55%, root.page.color.darker(15%) 100%);
 
             HorizontalLayout {
                 padding: root.pad;
@@ -2339,7 +2378,7 @@ component AlbumPageHead inherits Rectangle {
         // The color fades out under the buttons.
         Rectangle {
             height: 96px;
-            background: @linear-gradient(180deg, root.page.color.with-alpha(0.55) 0%, root.page.color.with-alpha(0) 100%);
+            background: transparent;
 
             HorizontalLayout {
                 padding-left: root.pad;
@@ -2372,6 +2411,16 @@ component AlbumPageHead inherits Rectangle {
                     label: "Add " + root.page.title + " to Up Next";
                     tooltip: "Add to Up Next";
                     clicked => { Library.enqueue-all(); }
+                }
+                IconButton {
+                    y: (parent.height - self.height) / 2;
+                    icon: Icons.heart;
+                    stroked: !root.page.favorite;
+                    checked: root.page.favorite;
+                    size: 44px;
+                    label: root.page.favorite ? "Remove " + root.page.title + " from Favorites" : "Add " + root.page.title + " to Favorites";
+                    tooltip: root.page.favorite ? "Remove from Favorites" : "Add to Favorites";
+                    clicked => { Library.toggle-album-favorite(); }
                 }
                 album-more := IconButton {
                     y: (parent.height - self.height) / 2;
@@ -3166,7 +3215,7 @@ component LibraryPanel inherits FocusScope {
         + 56px;
     /// Over the artists, and an artist's albums: how they are ordered and shown. The artist's
     /// page has these in its albums' heading.
-    property <bool> options-shown: ((Library.album-options || Library.artist-options) && !artist-page-shown) || Library.search-shown;
+    property <bool> options-shown: ((Library.album-options || Library.artist-options || Library.albums-options) && !artist-page-shown) || Library.search-shown;
     property <length> options-height: options-shown ? 44px : 0;
     property <length> album-head-height: 188px;
     /// Recently Played and Most Played show when or how often each track was played.
@@ -3610,6 +3659,11 @@ component LibraryPanel inherits FocusScope {
                         ? (Library.artist-sort == "most-played" ? "Most played"
                             : Library.artist-sort == "recently-added" ? "Recently added"
                             : "Name")
+                        : Library.albums-options
+                        ? (Library.albums-sort == "played" ? "Recently played"
+                            : Library.albums-sort == "name" ? "Alphabetical"
+                            : Library.albums-sort == "artist" ? "Artist"
+                            : "Recently added")
                         : (Library.album-sort == "name" ? "Name" : "Release date");
                     // A whole number of pixels, so the icon after it falls on a pixel.
                     width: ceil(self.preferred-width / 1px) * 1px;
@@ -3621,7 +3675,7 @@ component LibraryPanel inherits FocusScope {
                     width: 16px;
                     height: 16px;
                     y: (parent.height - self.height) / 2;
-                    data: (Library.artist-options ? Library.artist-view : Library.album-view) == "list" ? Icons.list : Icons.grid;
+                    data: Library.albums-options || (Library.artist-options ? Library.artist-view : Library.album-view) == "list" ? Icons.list : Icons.grid;
                     color: Theme.text-secondary;
                 }
             }
@@ -3641,12 +3695,24 @@ component LibraryPanel inherits FocusScope {
                 padding: 6px;
 
                 MenuHeading { text: "Sort by"; }
-                if !Library.artist-options: MenuItem {
+                if Library.albums-options: VerticalLayout {
+                    for choice in [
+                        { name: "added", text: "Recently added" },
+                        { name: "played", text: "Recently played" },
+                        { name: "name", text: "Alphabetical" },
+                        { name: "artist", text: "Artist" },
+                    ]: MenuItem {
+                        text: choice.text;
+                        checked: Library.albums-sort == choice.name;
+                        activated => { Library.set-albums-sort(choice.name); }
+                    }
+                }
+                if !Library.artist-options && !Library.albums-options: MenuItem {
                     text: "Release date";
                     checked: Library.album-sort == "release-date";
                     activated => { Library.set-album-sort("release-date"); }
                 }
-                if !Library.artist-options: MenuItem {
+                if !Library.artist-options && !Library.albums-options: MenuItem {
                     text: "Name";
                     checked: Library.album-sort == "name";
                     activated => { Library.set-album-sort("name"); }
@@ -3666,9 +3732,9 @@ component LibraryPanel inherits FocusScope {
                     checked: Library.artist-sort == "recently-added";
                     activated => { Library.set-artist-sort("recently-added"); }
                 }
-                MenuDivider { }
-                MenuHeading { text: "View as"; }
-                MenuItem {
+                if !Library.albums-options: MenuDivider { }
+                if !Library.albums-options: MenuHeading { text: "View as"; }
+                if !Library.albums-options: MenuItem {
                     text: "List";
                     checked: (Library.artist-options ? Library.artist-view : Library.album-view) == "list";
                     activated => {
@@ -3679,7 +3745,7 @@ component LibraryPanel inherits FocusScope {
                         }
                     }
                 }
-                MenuItem {
+                if !Library.albums-options: MenuItem {
                     text: "Grid";
                     checked: (Library.artist-options ? Library.artist-view : Library.album-view) == "grid";
                     activated => {
@@ -3811,6 +3877,10 @@ component LibraryPanel inherits FocusScope {
                     }
                 }
                 if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "album": MenuDivider { }
+                if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "album": MenuItem {
+                    text: Library.rows[root.menu-row].favorite ? "Remove from Favorites" : "Add to Favorites";
+                    activated => { Library.toggle-favorite(root.menu-row); }
+                }
                 if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "album": MenuItem {
                     text: "Fix Match…";
                     activated => {
@@ -4222,10 +4292,21 @@ component PlaylistPageHead inherits Rectangle {
     accessible-role: groupbox;
     accessible-label: root.page.name;
 
+    /// Where the header ends.
+    property <length> fade-top: 340px;
+
+    // The header's color fading out under the buttons, the tracks' heading and the first
+    // tracks, behind them.
+    Rectangle {
+        y: root.fade-top;
+        height: 280px;
+        background: @linear-gradient(180deg, root.page.color.darker(25%).with-alpha(0.8) 0%, root.page.color.darker(25%).with-alpha(0.35) 45%, root.page.color.darker(25%).with-alpha(0) 100%);
+    }
+
     VerticalLayout {
         Rectangle {
             height: 340px;
-            background: root.page.color;
+            background: @linear-gradient(180deg, root.page.color.brighter(30%) 0%, root.page.color 55%, root.page.color.darker(15%) 100%);
             clip: true;
 
             if root.page.banner.width > 0: Image {
@@ -4313,7 +4394,7 @@ component PlaylistPageHead inherits Rectangle {
         // Play, shuffle, add and change it; and how its tracks are ordered.
         Rectangle {
             height: 88px;
-            background: @linear-gradient(180deg, root.page.color.with-alpha(0.55) 0%, root.page.color.with-alpha(0) 100%);
+            background: transparent;
 
             HorizontalLayout {
                 padding-left: root.pad;

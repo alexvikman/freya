@@ -7,6 +7,7 @@
 
 mod covers;
 mod edits;
+mod favorites;
 mod fetch;
 mod genres;
 mod matches;
@@ -25,6 +26,7 @@ use crate::tags::TagInfo;
 
 pub use covers::AlbumCover;
 pub use edits::{ArtistEdit, Header};
+pub use favorites::{AlbumKey, AlbumOrder};
 pub use fetch::{LastFm, Online};
 pub use genres::{GenreArticle, GenreInfo};
 pub use matches::{AlbumMatch, plain_name, split_artist};
@@ -354,6 +356,7 @@ impl Library {
         db.execute_batch(covers::SCHEMA)?;
         db.execute_batch(playlists::SCHEMA)?;
         db.execute_batch(genres::SCHEMA)?;
+        db.execute_batch(favorites::SCHEMA)?;
         Ok(Self { db })
     }
 

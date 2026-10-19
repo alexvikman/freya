@@ -211,6 +211,27 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     );
     bind(
         "Library",
+        "set-albums-sort",
+        Box::new(|app, args| {
+            let sort = text_arg(args, 0);
+            if library::albums_order(&sort).is_some() {
+                app.library.set_albums_order(&sort);
+                app.settings.albums_sort = sort;
+            }
+        }),
+    );
+    bind(
+        "Library",
+        "toggle-favorite",
+        Box::new(|app, args| app.library.toggle_favorite(index(args, 0))),
+    );
+    bind(
+        "Library",
+        "toggle-album-favorite",
+        Box::new(|app, _| app.library.toggle_page_favorite()),
+    );
+    bind(
+        "Library",
         "edit-genre",
         Box::new(|app, _| app.library.edit_genre()),
     );

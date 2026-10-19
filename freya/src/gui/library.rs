@@ -8,8 +8,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 use freya_library::cue::Part;
 use freya_library::library::{
-    Album, AlbumMatch, Artist, ArtistEdit, ArtistOrder, CHOSEN, Genre, Header, Online, PictureKind,
-    PictureRow, Played, ScanEvent, ScanOptions, Scanner, Track, plain_name, split_artist,
+    Album, AlbumKey, AlbumMatch, AlbumOrder, Artist, ArtistEdit, ArtistOrder, CHOSEN, Genre,
+    Header, Online, PictureKind, PictureRow, Played, ScanEvent, ScanOptions, Scanner, Track,
+    plain_name, split_artist,
 };
 use freya_library::pictures::Pictures;
 use freya_library::thumbnails::{ArtistSource, Thumbnail, Thumbnails};
@@ -344,6 +345,10 @@ pub struct LibraryPanel {
     /// What a search shows: one kind or all, the sections of the page of all and its best
     /// match; a few matches under the search field as the user types; the playlists it can
     /// find; and a playlist a match opened, for the app to show.
+    /// How the albums are ordered; and the user's favourite albums, and when each was made
+    /// one.
+    albums_order: AlbumOrder,
+    favorites: HashMap<AlbumKey, SystemTime>,
     /// What the user gave genres, by their names in lower case; the genres shown, by their
     /// pictures' keys; and the one being changed.
     genre_infos: HashMap<String, freya_library::library::GenreInfo>,
@@ -696,6 +701,8 @@ impl LibraryPanel {
             playlist_sort: PlaylistSort::Custom,
             playlist_draft: None,
             playlist_sources: HashMap::new(),
+            albums_order: AlbumOrder::Added,
+            favorites: HashMap::new(),
             genre_infos: HashMap::new(),
             genre_keys: HashMap::new(),
             genre_draft: None,
@@ -2605,6 +2612,10 @@ impl LibraryPanel {
             log::warn!("could not read what was changed about artists: {e}");
             HashMap::new()
         });
+        self.favorites = db.album_favorites().unwrap_or_else(|e| {
+            log::warn!("could not read the favourite albums: {e}");
+            HashMap::new()
+        });
         let result = if self.searching() {
             Ok(self.search_items())
         } else {
@@ -2686,6 +2697,13 @@ impl LibraryPanel {
                 plays,
             ));
         }
+        for (row, item) in rows.iter_mut().zip(&self.items) {
+            if let (Value::Struct(row), Item::Album(album)) = (row, item)
+                && self.is_favorite(album.artist.as_deref(), album.name.as_deref())
+            {
+                row.set_field("favorite".into(), Value::Bool(true));
+            }
+        }
         self.rows.sync(rows);
         self.letter_rows.sync(self.letters());
         self.find_playing_row();
@@ -2744,7 +2762,7 @@ impl LibraryPanel {
                 .into_iter()
                 .map(Item::Artist)
                 .collect(),
-            Level::Albums => albums(db.all_albums()?),
+            Level::Albums => albums(db.albums_by(self.albums_order)?),
             Level::Songs => tracks(db.all_tracks()?),
             Level::Genres => db.genres()?.into_iter().map(Item::Genre).collect(),
             Level::RecentlyAdded => albums(db.recently_added(RECENT)?),
@@ -3219,6 +3237,11 @@ impl LibraryPanel {
                     !self.searching() && matches!(self.level(), Level::ArtistAlbums { .. }),
                 ),
             ),
+            (
+                "albums-options",
+                Value::Bool(!self.searching() && *self.level() == Level::Albums),
+            ),
+            ("albums-sort", string(albums_order_name(self.albums_order))),
             ("playing-row", Value::Number(f64::from(self.playing_row))),
             ("playing-known", Value::Bool(self.playing_album.is_some())),
             ("reveal-row", Value::Number(f64::from(self.reveal_row))),
@@ -3397,7 +3420,87 @@ impl LibraryPanel {
                 "color".to_owned(),
                 Value::Brush(slint::Brush::SolidColor(slint::Color::from_rgb_u8(r, g, b))),
             ),
+            ("favorite".to_owned(), Value::Bool(self.page_favorite())),
         ]))
+    }
+
+    /// Whether the album `artist` / `album` is a favourite.
+    fn is_favorite(&self, artist: Option<&str>, album: Option<&str>) -> bool {
+        self.favorites
+            .contains_key(&(artist.map(str::to_owned), album.map(str::to_owned)))
+    }
+
+    /// Whether the album whose page is shown is a favourite.
+    fn page_favorite(&self) -> bool {
+        match self.level() {
+            Level::AlbumTracks { artist, album } => {
+                self.is_favorite(artist.as_deref(), album.as_deref())
+            }
+            _ => false,
+        }
+    }
+
+    /// Makes the album `artist` / `album` a favourite, or not one any longer.
+    fn set_favorite(&mut self, artist: Option<String>, album: Option<String>) {
+        let Some(db) = &self.db else {
+            return;
+        };
+        let favorite = !self.is_favorite(artist.as_deref(), album.as_deref());
+        let kept = db.set_album_favorite(
+            artist.as_deref(),
+            album.as_deref(),
+            favorite,
+            SystemTime::now(),
+        );
+        if let Err(e) = kept {
+            log::warn!("could not keep the favourite: {e}");
+        }
+        self.reload();
+    }
+
+    /// Makes the album in the `row`th row a favourite, or not one any longer.
+    pub fn toggle_favorite(&mut self, row: usize) {
+        if let Some(Item::Album(album)) = self.items.get(row) {
+            let (artist, name) = (album.artist.clone(), album.name.clone());
+            self.set_favorite(artist, name);
+        }
+    }
+
+    /// Makes the album whose page is shown a favourite, or not one any longer.
+    pub fn toggle_page_favorite(&mut self) {
+        if let Level::AlbumTracks { artist, album } = self.level().clone() {
+            self.set_favorite(artist, album);
+        }
+    }
+
+    /// Orders the albums: "added", "played", "name" or "artist".
+    pub fn set_albums_order(&mut self, name: &str) {
+        if let Some(order) = albums_order(name)
+            && order != self.albums_order
+        {
+            self.albums_order = order;
+            self.reload();
+        }
+    }
+}
+
+/// An albums order by its name in the skin API and settings.
+pub fn albums_order(name: &str) -> Option<AlbumOrder> {
+    Some(match name {
+        "added" => AlbumOrder::Added,
+        "played" => AlbumOrder::Played,
+        "name" => AlbumOrder::Name,
+        "artist" => AlbumOrder::Artist,
+        _ => return None,
+    })
+}
+
+fn albums_order_name(order: AlbumOrder) -> &'static str {
+    match order {
+        AlbumOrder::Added => "added",
+        AlbumOrder::Played => "played",
+        AlbumOrder::Name => "name",
+        AlbumOrder::Artist => "artist",
     }
 }
 
@@ -3531,6 +3634,7 @@ fn row_value(
         ("artist".to_owned(), string(artist)),
         ("album".to_owned(), string(album)),
         ("cover".to_owned(), string(cover)),
+        ("favorite".to_owned(), Value::Bool(false)),
         ("number".to_owned(), string(number)),
         ("duration".to_owned(), string(duration)),
         ("played".to_owned(), string(played_text)),
@@ -4194,6 +4298,44 @@ mod tests {
             );
         }
         assert_eq!(shown_backdrop(&backdrops, &edits, "Air"), None);
+    }
+
+    #[test]
+    fn an_album_is_made_a_favourite_and_ordered_as_the_user_picks() {
+        let dir = std::env::temp_dir().join(format!("freya-favourite-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fixtures =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-audio/tests/fixtures");
+        std::fs::copy(fixtures.join("sine.mp3"), dir.join("sine.mp3")).unwrap();
+        let mut db = Library::open_in_memory().unwrap();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        freya_library::library::scan(&mut db, std::slice::from_ref(&dir), &cancel, |_| {}).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut panel = LibraryPanel::new(None, None, None);
+        panel.db = Some(db);
+        panel.opened = vec![Level::Albums];
+        panel.reload();
+        let favorite = |panel: &LibraryPanel| {
+            let Value::Model(rows) = panel.rows.model_value() else {
+                panic!("a model");
+            };
+            match slint::Model::row_data(&rows, 0) {
+                Some(Value::Struct(row)) => row.get_field("favorite") == Some(&Value::Bool(true)),
+                _ => false,
+            }
+        };
+        assert!(!favorite(&panel));
+        panel.toggle_favorite(0);
+        assert!(favorite(&panel), "shown at once");
+        assert_eq!(panel.favorites.len(), 1);
+        panel.toggle_favorite(0);
+        assert!(!favorite(&panel));
+
+        panel.set_albums_order("played");
+        assert_eq!(panel.albums_order, AlbumOrder::Played);
+        panel.set_albums_order("nonsense");
+        assert_eq!(panel.albums_order, AlbumOrder::Played);
     }
 
     #[test]
