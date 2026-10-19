@@ -1151,6 +1151,34 @@ fn a_scan_of_one_folder_makes_no_other_albums_covers() {
 }
 
 #[test]
+fn a_favourite_artist_is_as_recent_as_when_they_were_made_one() {
+    let mut library = Library::open_in_memory().unwrap();
+    add_at(&mut library, "/m/1.mp3", &tags("Old", "A", "One", 1), 1000);
+    add_at(&mut library, "/m/2.mp3", &tags("New", "B", "Two", 1), 2000);
+    let order = |library: &Library| -> Vec<String> {
+        library
+            .artists_by(ArtistOrder::RecentlyAdded)
+            .unwrap()
+            .into_iter()
+            .filter_map(|a| a.name)
+            .collect()
+    };
+    assert_eq!(order(&library), ["New", "Old"]);
+    let at = SystemTime::UNIX_EPOCH + Duration::from_secs(10);
+    library.set_artist_favorite("Old", true, at).unwrap();
+    assert_eq!(order(&library), ["Old", "New"]);
+    assert!(library.artist_favorites().unwrap().contains_key("Old"));
+    library.set_artist_favorite("Old", false, at).unwrap();
+    assert_eq!(order(&library), ["New", "Old"]);
+
+    library.set_playlist_favorite("Mix", true, at).unwrap();
+    library.rename_playlist("Mix", "Night").unwrap();
+    assert!(library.playlist_favorites().unwrap().contains_key("Night"));
+    library.forget_playlist("Night").unwrap();
+    assert!(library.playlist_favorites().unwrap().is_empty());
+}
+
+#[test]
 fn a_track_of_many_genres_is_in_each() {
     assert_eq!(
         split_genres("Alternative Metal, industrial metal;Power Pop / alternative metal"),

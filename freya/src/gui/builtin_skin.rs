@@ -338,6 +338,7 @@ impl Convert for PlaylistPage {
             color: field(&s, "color"),
             summary: field(&s, "summary"),
             sort: field(&s, "sort"),
+            favorite: field(&s, "favorite"),
         })
     }
 
@@ -351,6 +352,7 @@ impl Convert for PlaylistPage {
             ("color", self.color.to_value()),
             ("summary", self.summary.to_value()),
             ("sort", self.sort.to_value()),
+            ("favorite", self.favorite.to_value()),
         ])
     }
 }
@@ -635,6 +637,7 @@ impl Convert for ArtistPage {
         Some(Self {
             shown: field(&s, "shown"),
             kind: field(&s, "kind"),
+            favorite: field(&s, "favorite"),
             name: field(&s, "name"),
             detail: field(&s, "detail"),
             genres: field(&s, "genres"),
@@ -659,6 +662,7 @@ impl Convert for ArtistPage {
         structure(vec![
             ("shown", self.shown.to_value()),
             ("kind", self.kind.to_value()),
+            ("favorite", self.favorite.to_value()),
             ("name", self.name.to_value()),
             ("detail", self.detail.to_value()),
             ("genres", self.genres.to_value()),
@@ -691,6 +695,7 @@ impl Convert for AlbumPage {
             cover: field(&s, "cover"),
             color: field(&s, "color"),
             favorite: field(&s, "favorite"),
+            picture_full: field(&s, "picture-full"),
         })
     }
 
@@ -703,6 +708,7 @@ impl Convert for AlbumPage {
             ("cover", self.cover.to_value()),
             ("color", self.color.to_value()),
             ("favorite", self.favorite.to_value()),
+            ("picture-full", self.picture_full.to_value()),
         ])
     }
 }
@@ -964,6 +970,8 @@ skin_api! {
         Library."letters" => set_letters, get_letters;
         Library."albums-options" => set_albums_options, get_albums_options;
         Library."albums-sort" => set_albums_sort, get_albums_sort;
+        Library."playlists-options" => set_playlists_options, get_playlists_options;
+        Library."playlists-sort" => set_playlists_sort, get_playlists_sort;
         Library."search-filter" => set_search_filter, get_search_filter;
         Library."search-shown" => set_search_shown, get_search_shown;
         Library."search-songs" => set_search_songs, get_search_songs;
@@ -1081,6 +1089,7 @@ skin_api! {
         Playlists."clear-picture" => on_clear_picture, invoke_clear_picture(kind: SharedString);
         Playlists."save-edit" => on_save_edit, invoke_save_edit(name: SharedString, description: SharedString);
         Playlists."cancel-edit" => on_cancel_edit, invoke_cancel_edit();
+        Playlists."toggle-favorite" => on_toggle_favorite, invoke_toggle_favorite();
 
         Radio."play" => on_play, invoke_play(row: i32);
         Radio."add" => on_add, invoke_add(name: SharedString, url: SharedString);
@@ -1117,8 +1126,10 @@ skin_api! {
         Library."set-artist-pictures-online" => on_set_artist_pictures_online, invoke_set_artist_pictures_online(online: bool);
         Library."set-watch-folders" => on_set_watch_folders, invoke_set_watch_folders(watch: bool);
         Library."set-albums-sort" => on_set_albums_sort, invoke_set_albums_sort(sort: SharedString);
+        Library."set-playlists-sort" => on_set_playlists_sort, invoke_set_playlists_sort(sort: SharedString);
         Library."toggle-favorite" => on_toggle_favorite, invoke_toggle_favorite(row: i32);
         Library."toggle-album-favorite" => on_toggle_album_favorite, invoke_toggle_album_favorite();
+        Library."show-album-cover" => on_show_album_cover, invoke_show_album_cover();
         Library."set-search-filter" => on_set_search_filter, invoke_set_search_filter(filter: SharedString);
         Library."suggest" => on_suggest, invoke_suggest(text: SharedString);
         Library."open-suggestion" => on_open_suggestion, invoke_open_suggestion(index: i32);

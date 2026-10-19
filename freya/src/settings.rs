@@ -50,6 +50,8 @@ pub struct Settings {
     pub artist_sort: String,
     /// How the albums are ordered: "added", "played", "name" or "artist".
     pub albums_sort: String,
+    /// How the playlists are ordered: "added" or "name".
+    pub playlists_sort: String,
     /// How the artists are shown: "grid" (pictures) or "list".
     pub artist_view: String,
     /// Whether pictures of artists without one of their own come from Deezer, which is told
@@ -94,6 +96,7 @@ impl Default for Settings {
             album_view: "grid".to_owned(),
             artist_sort: "name".to_owned(),
             albums_sort: "added".to_owned(),
+            playlists_sort: "added".to_owned(),
             artist_view: "grid".to_owned(),
             artist_pictures_online: true,
             artist_bios_online: true,

@@ -240,6 +240,8 @@ export struct ArtistPage {
     /// and Fix Match is not for it.
     kind: string,
     name: string,
+    /// Whether the artist is one of the user's favourites: see `Library.toggle-favorite`.
+    favorite: bool,
     /// "4 albums · 52 tracks · 3 h 41 min".
     detail: string,
     /// Their most frequent genres in the library's tags: "Pop/Rock, Folk".
@@ -293,6 +295,8 @@ export struct AlbumPage {
     color: color,
     /// Whether it is one of the user's favourites: see `Library.toggle-album-favorite`.
     favorite: bool,
+    /// Its cover whole and large, once read after `Library.show-album-cover`; empty before.
+    picture-full: image,
 }
 
 /// A section of the search page: rows `first` to `first + count` of `Library.rows`, of the
@@ -409,10 +413,20 @@ export global Library {
     in property <bool> albums-options;
     in property <string> albums-sort: "added";
     callback set-albums-sort(string);
-    /// Make an album a favourite, or not one any longer: the `row`th row's, or the one whose
-    /// page is shown. A favourite is as recently added as when it was made one.
+    /// While the playlists are shown, as the section "playlists": how they are ordered,
+    /// "added" (by when they were made or made favourites, the latest first) or "name"; set
+    /// with `set-playlists-sort`, and kept between runs.
+    in property <bool> playlists-options;
+    in property <string> playlists-sort: "added";
+    callback set-playlists-sort(string);
+    /// Make an album, artist or playlist a favourite, or not one any longer: the `row`th row's,
+    /// or the album or artist whose page is shown. A favourite is as recently added as when it
+    /// was made one.
     callback toggle-favorite(int);
     callback toggle-album-favorite();
+    /// Read the cover of the album whose page is shown whole, from its music, into its
+    /// page's `picture-full`.
+    callback show-album-cover();
     in property <string> search-filter: "all";
     /// Whether the rows are a search's; with "all", the songs beside the best match, and the
     /// other kinds' sections under them.
@@ -585,6 +599,8 @@ export struct PlaylistPage {
     color: color,
     /// "84 tracks · 6 h 9 min".
     summary: string,
+    /// Whether it is one of the user's favourites: see `Playlists.toggle-favorite`.
+    favorite: bool,
     /// How its tracks are ordered: "custom" (as the playlist has them), "title", "artist",
     /// "album", "added" or "duration".
     sort: string,
@@ -672,6 +688,9 @@ export global Playlists {
     callback clear-picture(string);
     callback save-edit(string, string);
     callback cancel-edit();
+    /// Make the playlist shown a favourite, or not one any longer. A favourite is as recently
+    /// added as when it was made one.
+    callback toggle-favorite();
 }
 
 /// One saved radio station.

@@ -389,7 +389,8 @@ impl Library {
         let order = match order {
             ArtistOrder::Name => "",
             ArtistOrder::MostPlayed => "sum(coalesce(plays.n, 0)) DESC,",
-            ArtistOrder::RecentlyAdded => "max(tracks.added) DESC,",
+            // A favourite is as recent as when it was made one.
+            ArtistOrder::RecentlyAdded => "coalesce(favorite.at, max(tracks.added)) DESC,",
         };
         // By the name the user sorts them by, else the name shown.
         let mut query = self.db.prepare_cached(&format!(
@@ -398,6 +399,7 @@ impl Library {
              LEFT JOIN (SELECT path, start_ms, count(*) AS n FROM plays GROUP BY path, start_ms)
                  AS plays ON plays.path = tracks.path AND plays.start_ms IS tracks.start_ms
              LEFT JOIN artist_edits AS edits ON edits.artist = tracks.album_artist
+             LEFT JOIN artist_favorites AS favorite ON favorite.artist = tracks.album_artist
              GROUP BY album_artist
              ORDER BY album_artist IS NULL, {order}
                       coalesce(edits.sort_name, edits.name, album_artist) COLLATE NOCASE"

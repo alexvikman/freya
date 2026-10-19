@@ -61,6 +61,8 @@ impl SearchFilter {
 pub struct FoundPlaylist {
     pub name: String,
     pub tracks: usize,
+    /// When it was made, when known.
+    pub created: Option<std::time::SystemTime>,
 }
 
 /// What a search found of each kind, the best first.
@@ -342,16 +344,25 @@ impl LibraryPanel {
         }
     }
 
-    /// The user's playlists, with their tracks, for searches to find and show.
-    pub fn set_playlists(&mut self, playlists: &[(String, &[Entry])]) {
+    /// The user's playlists, with their tracks and when each was made, for searches and the
+    /// playlists' section to find and show.
+    pub fn set_playlists(
+        &mut self,
+        playlists: &[(String, &[Entry], Option<std::time::SystemTime>)],
+    ) {
+        let before = self.found_playlists.clone();
         self.found_playlists = playlists
             .iter()
-            .map(|(name, entries)| FoundPlaylist {
+            .map(|(name, entries, created)| FoundPlaylist {
                 name: name.clone(),
                 tracks: entries.len(),
+                created: *created,
             })
             .collect();
-        for (name, entries) in playlists {
+        if before != self.found_playlists && *self.level() == Level::Playlists {
+            self.stale = true;
+        }
+        for (name, entries, _) in playlists {
             let key = Self::playlist_key(name);
             if self.playlist_sources.contains_key(&key) {
                 continue;
@@ -408,7 +419,10 @@ mod tests {
 
     /// A panel over a library of the test fixture: the artist Freya.
     fn panel() -> LibraryPanel {
-        let dir = std::env::temp_dir().join(format!("freya-search-{}", std::process::id()));
+        // One for each test, as they run at once.
+        static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let made = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("freya-search-{}-{made}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let fixtures =
@@ -420,7 +434,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let mut panel = LibraryPanel::new(None, None, None);
         panel.db = Some(db);
-        panel.set_playlists(&[("Freya's favourites".to_owned(), &[][..])]);
+        panel.set_playlists(&[("Freya's favourites".to_owned(), &[][..], None)]);
         panel
     }
 
@@ -453,6 +467,37 @@ mod tests {
                 .any(|item| matches!(item, Item::Artist(_))),
             "not the start of a word"
         );
+    }
+
+    #[test]
+    fn the_playlists_section_lists_favourites_by_when_they_were_made_ones() {
+        let mut panel = panel();
+        let at =
+            |s: u64| Some(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(s));
+        panel.set_playlists(&[
+            ("Old".to_owned(), &[][..], at(100)),
+            ("New".to_owned(), &[][..], at(200)),
+        ]);
+        panel.show("playlists");
+        let names = |panel: &LibraryPanel| -> Vec<String> {
+            panel
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    Item::Playlist(p) => Some(p.name.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(names(&panel), ["New", "Old"]);
+        panel.toggle_favorite(1);
+        assert_eq!(names(&panel), ["Old", "New"], "made a favourite now");
+        assert!(panel.is_playlist_favorite("Old"));
+        panel.set_playlists_order("name");
+        assert_eq!(names(&panel), ["New", "Old"]);
+        // A playlist opens as its own page.
+        assert!(panel.activate(0).is_none());
+        assert_eq!(panel.take_open_playlist().as_deref(), Some("New"));
     }
 
     #[test]

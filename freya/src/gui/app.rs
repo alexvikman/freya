@@ -426,6 +426,7 @@ impl App {
         }
         library.set_artist_list(settings.artist_view == "list");
         library.set_albums_order(&settings.albums_sort);
+        library.set_playlists_order(&settings.playlists_sort);
         library.set_online_pictures(settings.artist_pictures_online);
         library.set_online_bios(settings.artist_bios_online);
         library.set_online_wikipedia(settings.artist_wikipedia_online);
@@ -1530,9 +1531,9 @@ impl App {
             let shown = self.shown_playlist;
             let synced = Some((self.playlists.version(), shown));
             if view.playlists_synced != synced {
-                let all: Vec<(String, &[Entry])> = (0..self.playlists.len())
-                    .filter_map(|i| self.playlists.get(i))
-                    .map(|p| (p.name.clone(), p.entries.as_slice()))
+                let all: Vec<(String, &[Entry], Option<SystemTime>)> = (0..self.playlists.len())
+                    .filter_map(|i| Some((self.playlists.get(i)?, self.playlists.created(i))))
+                    .map(|(p, created)| (p.name.clone(), p.entries.as_slice(), created))
                     .collect();
                 self.library.set_playlists(&all);
                 let playlist = shown.and_then(|i| self.playlists.get(i));

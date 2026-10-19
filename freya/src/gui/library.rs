@@ -62,6 +62,7 @@ enum Level {
     Albums,
     Songs,
     Genres,
+    Playlists,
     RecentlyAdded,
     RecentlyPlayed,
     MostPlayed,
@@ -85,6 +86,7 @@ impl Level {
             "albums" => Self::Albums,
             "songs" => Self::Songs,
             "genres" => Self::Genres,
+            "playlists" => Self::Playlists,
             "recently-added" => Self::RecentlyAdded,
             "recently-played" => Self::RecentlyPlayed,
             "most-played" => Self::MostPlayed,
@@ -97,6 +99,7 @@ impl Level {
             Self::Albums => "albums",
             Self::Songs => "songs",
             Self::Genres => "genres",
+            Self::Playlists => "playlists",
             Self::RecentlyAdded => "recently-added",
             Self::RecentlyPlayed => "recently-played",
             Self::MostPlayed => "most-played",
@@ -112,7 +115,7 @@ impl Level {
             | Self::ArtistAlbums { .. }
             | Self::GenreAlbums { .. } => "grid",
             Self::Songs | Self::RecentlyPlayed | Self::MostPlayed => "table",
-            Self::Genres => "grid",
+            Self::Genres | Self::Playlists => "grid",
             Self::Artists | Self::AlbumTracks { .. } => "list",
         }
     }
@@ -292,6 +295,8 @@ pub struct LibraryPanel {
     /// While an artist's albums are shown, the page over them; and whether a scan may ask
     /// Last.fm and Wikipedia what they say of artists.
     artist_page: Option<ArtistPage>,
+    /// Albums' covers whole, read on a thread.
+    full_covers: (Sender<FullCover>, Receiver<FullCover>),
     /// The artist page's pictures a thread made, by the page's picture's key.
     page_pictures: (Sender<MadePage>, Receiver<MadePage>),
     online_bios: bool,
@@ -349,6 +354,11 @@ pub struct LibraryPanel {
     /// one.
     albums_order: AlbumOrder,
     favorites: HashMap<AlbumKey, SystemTime>,
+    /// The favourite artists and playlists, by their names; and how the playlists are
+    /// ordered: by when they were made or made favourites, or by name.
+    artist_favorites: HashMap<String, SystemTime>,
+    playlist_favorites: HashMap<String, SystemTime>,
+    playlists_by_name: bool,
     /// What the user gave genres, by their names in lower case; the genres shown, by their
     /// pictures' keys; and the one being changed.
     genre_infos: HashMap<String, freya_library::library::GenreInfo>,
@@ -565,7 +575,17 @@ struct AlbumPage {
     cover: String,
     /// From the cover, once its thumbnail is made.
     color: Option<[u8; 3]>,
+    /// The cover whole and large, once read after the user asked to see it.
+    cover_full: Option<Image>,
+    /// A track of the album, which its cover is read from.
+    track: PathBuf,
 }
+
+/// An album's cover whole, read on a thread: the album's cover key, and the picture.
+type FullCover = (String, slint::SharedPixelBuffer<slint::Rgb8Pixel>);
+
+/// The longest side of an album's cover shown whole.
+const COVER_FULL: u32 = 1400;
 
 /// The covers shown last, so scrolling back does not decode them again.
 #[derive(Default)]
@@ -667,6 +687,7 @@ impl LibraryPanel {
             artist_keys: HashMap::new(),
             artist_page: None,
             page_pictures: std::sync::mpsc::channel(),
+            full_covers: std::sync::mpsc::channel(),
             online_wikipedia: true,
             edits: HashMap::new(),
             draft: None,
@@ -703,6 +724,9 @@ impl LibraryPanel {
             playlist_sources: HashMap::new(),
             albums_order: AlbumOrder::Added,
             favorites: HashMap::new(),
+            artist_favorites: HashMap::new(),
+            playlist_favorites: HashMap::new(),
+            playlists_by_name: false,
             genre_infos: HashMap::new(),
             genre_keys: HashMap::new(),
             genre_draft: None,
@@ -1022,6 +1046,7 @@ impl LibraryPanel {
             self.covers_ready += 1;
         }
         self.take_page_pictures();
+        self.take_full_covers();
         if let Some(thumbnails) = &mut self.thumbnails
             && thumbnails.poll()
         {
@@ -1402,7 +1427,7 @@ impl LibraryPanel {
     /// none.
     fn load_album_page(&mut self) {
         self.play_counts.clear();
-        self.album_page = None;
+        let before = self.album_page.take();
         let (Some(db), Level::AlbumTracks { artist, album }) = (&self.db, self.level().clone())
         else {
             return;
@@ -1438,12 +1463,18 @@ impl LibraryPanel {
             size = format!("{size}, {}", long_time(total));
         }
         detail.push(size);
+        // Read already, while the same album shows.
+        let cover_full = before
+            .filter(|page| page.cover == cover)
+            .and_then(|page| page.cover_full);
         self.album_page = Some(AlbumPage {
             title: album_name(album.as_deref()),
             artist: self.shown_artist(artist.as_deref()),
             detail: detail.join(" · "),
+            track: first.path.clone(),
             cover,
             color: None,
+            cover_full,
         });
         self.color_album_page();
     }
@@ -2626,6 +2657,8 @@ impl LibraryPanel {
             log::warn!("could not read the favourite albums: {e}");
             HashMap::new()
         });
+        self.artist_favorites = db.artist_favorites().unwrap_or_default();
+        self.playlist_favorites = db.playlist_favorites().unwrap_or_default();
         let result = if self.searching() {
             Ok(self.search_items())
         } else {
@@ -2708,8 +2741,19 @@ impl LibraryPanel {
             ));
         }
         for (row, item) in rows.iter_mut().zip(&self.items) {
-            if let (Value::Struct(row), Item::Album(album)) = (row, item)
-                && self.is_favorite(album.artist.as_deref(), album.name.as_deref())
+            let favorite = match item {
+                Item::Album(album) => {
+                    self.is_favorite(album.artist.as_deref(), album.name.as_deref())
+                }
+                Item::Artist(artist) => artist
+                    .name
+                    .as_ref()
+                    .is_some_and(|n| self.artist_favorites.contains_key(n)),
+                Item::Playlist(playlist) => self.playlist_favorites.contains_key(&playlist.name),
+                _ => false,
+            };
+            if let Value::Struct(row) = row
+                && favorite
             {
                 row.set_field("favorite".into(), Value::Bool(true));
             }
@@ -2775,6 +2819,7 @@ impl LibraryPanel {
             Level::Albums => albums(db.albums_by(self.albums_order)?),
             Level::Songs => tracks(db.all_tracks()?),
             Level::Genres => db.genres()?.into_iter().map(Item::Genre).collect(),
+            Level::Playlists => self.playlist_items(),
             Level::RecentlyAdded => albums(db.recently_added(RECENT)?),
             Level::RecentlyPlayed => db
                 .recently_played(RECENT)?
@@ -2844,6 +2889,7 @@ impl LibraryPanel {
             Level::Albums => ("Albums".to_owned(), count(n, "album")),
             Level::Songs => ("Songs".to_owned(), count(n, "track")),
             Level::Genres => ("Genres".to_owned(), count(n, "genre")),
+            Level::Playlists => ("Playlists".to_owned(), count(n, "playlist")),
             Level::RecentlyAdded => ("Recently Added".to_owned(), count(n, "album")),
             Level::RecentlyPlayed => ("Recently Played".to_owned(), count(n, "track")),
             Level::MostPlayed => ("Most Played".to_owned(), count(n, "track")),
@@ -3252,6 +3298,18 @@ impl LibraryPanel {
                 Value::Bool(!self.searching() && *self.level() == Level::Albums),
             ),
             ("albums-sort", string(albums_order_name(self.albums_order))),
+            (
+                "playlists-options",
+                Value::Bool(!self.searching() && *self.level() == Level::Playlists),
+            ),
+            (
+                "playlists-sort",
+                string(if self.playlists_by_name {
+                    "name"
+                } else {
+                    "added"
+                }),
+            ),
             ("playing-row", Value::Number(f64::from(self.playing_row))),
             ("playing-known", Value::Bool(self.playing_album.is_some())),
             ("reveal-row", Value::Number(f64::from(self.reveal_row))),
@@ -3352,6 +3410,15 @@ impl LibraryPanel {
             ),
             ("name".to_owned(), text(|p| p.shown_name.clone())),
             (
+                "favorite".to_owned(),
+                Value::Bool(page.is_some_and(|p| {
+                    !p.genre
+                        && p.name
+                            .as_ref()
+                            .is_some_and(|n| self.artist_favorites.contains_key(n))
+                })),
+            ),
+            (
                 "own-biography".to_owned(),
                 Value::Bool(page.is_some_and(|p| p.own_biography)),
             ),
@@ -3419,6 +3486,8 @@ impl LibraryPanel {
             detail: String::new(),
             cover: String::new(),
             color: None,
+            cover_full: None,
+            track: PathBuf::new(),
         });
         Value::Struct(Struct::from_iter([
             ("shown".to_owned(), Value::Bool(!page.title.is_empty())),
@@ -3431,7 +3500,46 @@ impl LibraryPanel {
                 Value::Brush(slint::Brush::SolidColor(slint::Color::from_rgb_u8(r, g, b))),
             ),
             ("favorite".to_owned(), Value::Bool(self.page_favorite())),
+            (
+                "picture-full".to_owned(),
+                Value::Image(page.cover_full.unwrap_or_default()),
+            ),
         ]))
+    }
+
+    /// Reads the cover of the album whose page is shown whole, from its music, on a thread:
+    /// the user asked to see it.
+    pub fn show_album_cover(&mut self) {
+        let Some(page) = self.album_page.as_ref().filter(|p| p.cover_full.is_none()) else {
+            return;
+        };
+        let (key, track) = (page.cover.clone(), page.track.clone());
+        let read = self.full_covers.0.clone();
+        let started = std::thread::Builder::new()
+            .name("freya-album-cover".into())
+            .spawn(move || {
+                if let Some(picture) = freya_library::cover::album_art_large(&track, COVER_FULL) {
+                    let rgb = picture.to_rgb8();
+                    let buffer = slint::SharedPixelBuffer::clone_from_slice(
+                        rgb.as_raw(),
+                        rgb.width(),
+                        rgb.height(),
+                    );
+                    let _ = read.send((key, buffer));
+                }
+            });
+        if let Err(e) = started {
+            log::warn!("could not read the album's cover: {e}");
+        }
+    }
+
+    /// Shows an album's cover whole, once read, if its page shows still.
+    fn take_full_covers(&mut self) {
+        while let Ok((key, buffer)) = self.full_covers.1.try_recv() {
+            if let Some(page) = self.album_page.as_mut().filter(|p| p.cover == key) {
+                page.cover_full = Some(Image::from_rgb8(buffer));
+            }
+        }
     }
 
     /// Whether the album `artist` / `album` is a favourite.
@@ -3468,18 +3576,77 @@ impl LibraryPanel {
         self.reload();
     }
 
-    /// Makes the album in the `row`th row a favourite, or not one any longer.
+    /// Makes the album, artist or playlist in the `row`th row a favourite, or not one any
+    /// longer.
     pub fn toggle_favorite(&mut self, row: usize) {
-        if let Some(Item::Album(album)) = self.items.get(row) {
-            let (artist, name) = (album.artist.clone(), album.name.clone());
-            self.set_favorite(artist, name);
+        match self.items.get(row).cloned() {
+            Some(Item::Album(album)) => self.set_favorite(album.artist, album.name),
+            Some(Item::Artist(Artist {
+                name: Some(name), ..
+            })) => self.set_artist_favorite(&name),
+            Some(Item::Playlist(playlist)) => self.set_playlist_favorite(&playlist.name),
+            _ => {}
         }
     }
 
-    /// Makes the album whose page is shown a favourite, or not one any longer.
+    /// Makes the album or artist whose page is shown a favourite, or not one any longer.
     pub fn toggle_page_favorite(&mut self) {
-        if let Level::AlbumTracks { artist, album } = self.level().clone() {
-            self.set_favorite(artist, album);
+        match self.level().clone() {
+            Level::AlbumTracks { artist, album } => self.set_favorite(artist, album),
+            Level::ArtistAlbums {
+                artist: Some(artist),
+            } => self.set_artist_favorite(&artist),
+            _ => {}
+        }
+    }
+
+    /// Makes the artist `name` a favourite, or not one any longer.
+    fn set_artist_favorite(&mut self, name: &str) {
+        let favorite = !self.artist_favorites.contains_key(name);
+        if let Some(db) = &self.db
+            && let Err(e) = db.set_artist_favorite(name, favorite, SystemTime::now())
+        {
+            log::warn!("could not keep the favourite: {e}");
+        }
+        self.reload();
+    }
+
+    /// Makes the playlist `name` a favourite, or not one any longer.
+    pub fn set_playlist_favorite(&mut self, name: &str) {
+        let favorite = !self.playlist_favorites.contains_key(name);
+        if let Some(db) = &self.db
+            && let Err(e) = db.set_playlist_favorite(name, favorite, SystemTime::now())
+        {
+            log::warn!("could not keep the favourite: {e}");
+        }
+        self.reload();
+    }
+
+    /// Whether the playlist `name` is a favourite.
+    pub fn is_playlist_favorite(&self, name: &str) -> bool {
+        self.playlist_favorites.contains_key(name)
+    }
+
+    /// The playlists' section: every playlist, by when it was made or made a favourite, the
+    /// latest first; or by name.
+    fn playlist_items(&self) -> Vec<Item> {
+        let mut playlists = self.found_playlists.clone();
+        if self.playlists_by_name {
+            playlists.sort_by_key(|p| p.name.to_lowercase());
+        } else {
+            playlists.sort_by_key(|p| {
+                std::cmp::Reverse(self.playlist_favorites.get(&p.name).copied().or(p.created))
+            });
+        }
+        playlists.into_iter().map(Item::Playlist).collect()
+    }
+
+    /// Orders the playlists: "added" or "name".
+    pub fn set_playlists_order(&mut self, name: &str) {
+        let by_name = name == "name";
+        if by_name != self.playlists_by_name {
+            self.playlists_by_name = by_name;
+            self.reload();
         }
     }
 

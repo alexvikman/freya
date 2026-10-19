@@ -1,6 +1,6 @@
-//! The albums the user made favourites, and when: a favourite is as recently added as when it
-//! was made one, so it comes first among the albums by when they came, and stays in that
-//! order. Not a pin: it does not keep it first.
+//! The albums, artists and playlists the user made favourites, and when: a favourite is as
+//! recently added as when it was made one, so it comes first among them by when they came, and
+//! stays in that order. Not a pin: it does not keep it first.
 
 use std::collections::HashMap;
 use std::time::SystemTime;
@@ -17,6 +17,15 @@ pub(super) const SCHEMA: &str = "
         -- When it was made a favourite, in milliseconds since 1970.
         at INTEGER NOT NULL,
         PRIMARY KEY (album_artist, album)
+    );
+    -- Artists as their tags name them; playlists by their names.
+    CREATE TABLE IF NOT EXISTS artist_favorites (
+        artist TEXT NOT NULL PRIMARY KEY,
+        at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS playlist_favorites (
+        playlist TEXT NOT NULL PRIMARY KEY,
+        at INTEGER NOT NULL
     );
 ";
 
@@ -76,6 +85,62 @@ impl Library {
                 from_epoch_millis(row.get(2)?),
             ))
         })?;
+        rows.collect()
+    }
+
+    /// Makes the artist `artist` a favourite at `at`, or not one.
+    pub fn set_artist_favorite(&self, artist: &str, favorite: bool, at: SystemTime) -> Result<()> {
+        self.set_named_favorite("artist_favorites", "artist", artist, favorite, at)
+    }
+
+    /// Every favourite artist, and when they were made one.
+    pub fn artist_favorites(&self) -> Result<HashMap<String, SystemTime>> {
+        self.named_favorites("artist_favorites", "artist")
+    }
+
+    /// Makes the playlist `playlist` a favourite at `at`, or not one.
+    pub fn set_playlist_favorite(
+        &self,
+        playlist: &str,
+        favorite: bool,
+        at: SystemTime,
+    ) -> Result<()> {
+        self.set_named_favorite("playlist_favorites", "playlist", playlist, favorite, at)
+    }
+
+    /// Every favourite playlist, and when it was made one.
+    pub fn playlist_favorites(&self) -> Result<HashMap<String, SystemTime>> {
+        self.named_favorites("playlist_favorites", "playlist")
+    }
+
+    fn set_named_favorite(
+        &self,
+        table: &str,
+        column: &str,
+        name: &str,
+        favorite: bool,
+        at: SystemTime,
+    ) -> Result<()> {
+        if favorite {
+            self.db
+                .prepare_cached(&format!(
+                    "INSERT OR REPLACE INTO {table} ({column}, at) VALUES (?1, ?2)"
+                ))?
+                .execute(params![name, epoch_millis(at)])?;
+        } else {
+            self.db
+                .prepare_cached(&format!("DELETE FROM {table} WHERE {column} = ?1"))?
+                .execute([name])?;
+        }
+        Ok(())
+    }
+
+    fn named_favorites(&self, table: &str, column: &str) -> Result<HashMap<String, SystemTime>> {
+        let mut statement = self
+            .db
+            .prepare_cached(&format!("SELECT {column}, at FROM {table}"))?;
+        let rows =
+            statement.query_map([], |row| Ok((row.get(0)?, from_epoch_millis(row.get(1)?))))?;
         rows.collect()
     }
 

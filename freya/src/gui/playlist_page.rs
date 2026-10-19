@@ -434,6 +434,10 @@ impl LibraryPanel {
             ),
             ("summary".to_owned(), text(|p| p.summary.clone())),
             ("sort".to_owned(), string(self.playlist_sort.name())),
+            (
+                "favorite".to_owned(),
+                Value::Bool(page.is_some_and(|p| self.is_playlist_favorite(&p.name))),
+            ),
         ]))
     }
 

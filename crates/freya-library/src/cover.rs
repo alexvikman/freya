@@ -73,6 +73,18 @@ pub fn album_art(track: &Path) -> Option<(Vec<u8>, [u8; 3])> {
     Some((jpeg, color))
 }
 
+/// An album's cover from `track`, one of its tracks, as large as it is up to `largest` wide
+/// or high, to show whole: read from the music's file or folder.
+pub fn album_art_large(track: &Path, largest: u32) -> Option<image::DynamicImage> {
+    let bytes = embedded_cover(track).or_else(|| folder_cover(track))?;
+    let image = image::load_from_memory(&bytes).ok()?;
+    Some(if image.width() > largest || image.height() > largest {
+        image.resize(largest, largest, image::imageops::FilterType::Lanczos3)
+    } else {
+        image
+    })
+}
+
 /// The front cover from the file's tags, or else any picture in them.
 fn embedded_cover(track: &Path) -> Option<Vec<u8>> {
     let file = lofty::read_from_path(track).ok()?;

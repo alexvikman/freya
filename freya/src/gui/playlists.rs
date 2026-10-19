@@ -70,6 +70,13 @@ impl Playlists {
         self.list.get(index)
     }
 
+    /// When the `index`th playlist was made, as its file says.
+    pub fn created(&self, index: usize) -> Option<std::time::SystemTime> {
+        let file = self.file(&self.list.get(index)?.name)?;
+        let metadata = std::fs::metadata(file).ok()?;
+        metadata.created().or_else(|_| metadata.modified()).ok()
+    }
+
     /// Where the playlist named `name` is, ignoring case.
     pub fn index_of(&self, name: &str) -> Option<usize> {
         let name = name.to_lowercase();

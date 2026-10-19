@@ -2106,6 +2106,16 @@ component ArtistPageHead inherits Rectangle {
                     tooltip: "Add to Up Next";
                     clicked => { Library.enqueue-all(); }
                 }
+                if root.page.kind != "genre": IconButton {
+                    y: (parent.height - self.height) / 2;
+                    icon: Icons.heart;
+                    stroked: !root.page.favorite;
+                    checked: root.page.favorite;
+                    size: 44px;
+                    label: root.page.favorite ? "Remove " + root.page.name + " from Favorites" : "Add " + root.page.name + " to Favorites";
+                    tooltip: root.page.favorite ? "Remove from Favorites" : "Add to Favorites";
+                    clicked => { Library.toggle-album-favorite(); }
+                }
                 IconButton {
                     y: (parent.height - self.height) / 2;
                     icon: Icons.pencil;
@@ -2273,6 +2283,8 @@ component AlbumPageHead inherits Rectangle {
     in property <AlbumPage> page;
     /// Match the album to the one in MusicBrainz it is.
     callback fix-match();
+    /// Show its cover whole and large.
+    callback show-picture();
 
     property <image> cover-image: page.cover == "" ? @image-url("") : Library.cover(page.cover, Library.covers-ready);
     property <length> pad: 24px;
@@ -2318,6 +2330,11 @@ component AlbumPageHead inherits Rectangle {
                         height: parent.height;
                         source: root.cover-image;
                         image-fit: cover;
+                    }
+                    // Its cover whole and large.
+                    if root.cover-image.width > 0: TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.show-picture(); }
                     }
                     if root.cover-image.width == 0: Icon {
                         width: 64px;
@@ -2725,6 +2742,125 @@ component DialogFocus inherits FocusScope {
     }
 
     @children
+}
+
+/// A text field with a label above it, as in forms.
+component FormField inherits VerticalLayout {
+    in property <string> label;
+    in property <string> placeholder;
+    /// Under the field, in small print.
+    in property <string> hint;
+    in-out property <string> text;
+    callback accepted();
+
+    public function focus-field() {
+        input.focus();
+    }
+
+    spacing: 4px;
+
+    Text {
+        text: root.label;
+        font-size: 13px;
+        color: Theme.text-secondary;
+    }
+    Rectangle {
+        height: 34px;
+        border-radius: 8px;
+        border-width: 1px;
+        border-color: input.has-focus ? Theme.accent : Theme.divider;
+        background: Theme.background;
+
+        if root.text == "": Text {
+            x: 10px;
+            width: parent.width - 20px;
+            text: root.placeholder;
+            color: Theme.text-secondary;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        input := TextInput {
+            x: 10px;
+            width: parent.width - 20px;
+            text <=> root.text;
+            single-line: true;
+            color: Theme.text;
+            selection-background-color: Theme.selection;
+            selection-foreground-color: Theme.text;
+            vertical-alignment: center;
+            accessible-role: text-input;
+            accessible-label: root.label;
+            accepted => { root.accepted(); }
+        }
+    }
+    if root.hint != "": Text {
+        text: root.hint;
+        font-size: 12px;
+        color: Theme.text-secondary;
+        wrap: word-wrap;
+    }
+}
+
+/// Asks for a playlist's name: for a new playlist, for keeping Up Next, or for a new name.
+component PlaylistNameForm inherits MenuSurface {
+    in property <string> title;
+    /// The button that saves, like "Create".
+    in property <string> action;
+    /// The name the field starts with.
+    in property <string> initial;
+    /// Calls the `Playlists` callback that uses the name.
+    callback submit(string);
+    /// The name was taken.
+    callback saved();
+    callback cancelled();
+
+    function save() {
+        root.submit(name.text);
+        // Freya answers at once: an error stays in Playlists.error and the form stays open.
+        if (Playlists.error == "") {
+            root.saved();
+        }
+    }
+
+    init => {
+        name.text = root.initial;
+        name.focus-field();
+    }
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 10px;
+
+        Text {
+            text: root.title;
+            font-size: 15px;
+            font-weight: 600;
+            color: Theme.text;
+        }
+        name := FormField {
+            label: "Name";
+            accepted => { root.save(); }
+        }
+        if Playlists.error != "": Text {
+            text: Playlists.error;
+            font-size: 13px;
+            color: Theme.danger;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+
+            TextButton {
+                text: "Cancel";
+                clicked => { root.cancelled(); }
+            }
+            TextButton {
+                text: root.action;
+                clicked => { root.save(); }
+            }
+        }
+    }
 }
 
 /// What a match of a search is, as its rows say: "Artist", "Album · Pink Floyd" and so on.
@@ -3137,6 +3273,8 @@ component LibraryPanel inherits FocusScope {
     callback match-album();
     /// The dialog for changing the genre whose page is shown.
     callback edit-genre();
+    /// Show another view: the playlist just made.
+    callback show-view(string);
 
     /// Back and forward: how far down the list shown is scrolled, and scrolling it back there.
     property <bool> shown: App.view == "library";
@@ -3215,7 +3353,7 @@ component LibraryPanel inherits FocusScope {
         + 56px;
     /// Over the artists, and an artist's albums: how they are ordered and shown. The artist's
     /// page has these in its albums' heading.
-    property <bool> options-shown: ((Library.album-options || Library.artist-options || Library.albums-options) && !artist-page-shown) || Library.search-shown;
+    property <bool> options-shown: ((Library.album-options || Library.artist-options || Library.albums-options || Library.playlists-options) && !artist-page-shown) || Library.search-shown;
     property <length> options-height: options-shown ? 44px : 0;
     property <length> album-head-height: 188px;
     /// Recently Played and Most Played show when or how often each track was played.
@@ -3462,7 +3600,10 @@ component LibraryPanel inherits FocusScope {
                 }
                 fix-match => { root.match-artist(); }
                 read-more => { bio-popup.show(); }
-                show-picture => { picture-popup.show(); }
+                show-picture => {
+                    root.picture-of-album = false;
+                    picture-popup.show();
+                }
             }
             if line >= root.head-lines: HorizontalLayout {
                 padding-left: root.grid-pad;
@@ -3513,6 +3654,11 @@ component LibraryPanel inherits FocusScope {
             if index == 0: AlbumPageHead {
                 page: Library.album-page;
                 fix-match => { root.match-album(); }
+                show-picture => {
+                    root.picture-of-album = true;
+                    Library.show-album-cover();
+                    picture-popup.show();
+                }
             }
             if index > 0: AlbumTrackRow {
                 entry: Library.rows[index - 1];
@@ -3560,7 +3706,10 @@ component LibraryPanel inherits FocusScope {
                 }
                 fix-match => { root.match-artist(); }
                 read-more => { bio-popup.show(); }
-                show-picture => { picture-popup.show(); }
+                show-picture => {
+                    root.picture-of-album = false;
+                    picture-popup.show();
+                }
             }
             if cell.album: DiscographyAlbum {
                 entry: Library.rows[cell.i];
@@ -3614,6 +3763,11 @@ component LibraryPanel inherits FocusScope {
         spacing: 4px;
         alignment: end;
 
+        if Library.playlists-options: TextButton {
+            y: (parent.height - self.height) / 2;
+            text: "New Playlist…";
+            clicked => { new-playlist.show(); }
+        }
         // Every artist's music.
         if Library.artist-options: IconButton {
             y: (parent.height - self.height) / 2;
@@ -3655,7 +3809,9 @@ component LibraryPanel inherits FocusScope {
                 spacing: 8px;
 
                 Text {
-                    text: Library.artist-options
+                    text: Library.playlists-options
+                        ? (Library.playlists-sort == "name" ? "Alphabetical" : "Recently added")
+                        : Library.artist-options
                         ? (Library.artist-sort == "most-played" ? "Most played"
                             : Library.artist-sort == "recently-added" ? "Recently added"
                             : "Name")
@@ -3675,13 +3831,31 @@ component LibraryPanel inherits FocusScope {
                     width: 16px;
                     height: 16px;
                     y: (parent.height - self.height) / 2;
-                    data: Library.albums-options || (Library.artist-options ? Library.artist-view : Library.album-view) == "list" ? Icons.list : Icons.grid;
+                    data: Library.albums-options || Library.playlists-options || (Library.artist-options ? Library.artist-view : Library.album-view) == "list" ? Icons.list : Icons.grid;
                     color: Theme.text-secondary;
                 }
             }
             options-touch := TouchArea {
                 clicked => { options-menu.show(); }
             }
+        }
+    }
+
+    new-playlist := PopupWindow {
+        x: root.width - self.width - 20px;
+        y: root.options-height;
+        width: 300px;
+        close-policy: close-on-click-outside;
+
+        PlaylistNameForm {
+            title: "New playlist";
+            action: "Create";
+            submit(name) => { Playlists.create(name); }
+            saved => {
+                new-playlist.close();
+                root.show-view("playlist");
+            }
+            cancelled => { new-playlist.close(); }
         }
     }
 
@@ -3695,6 +3869,16 @@ component LibraryPanel inherits FocusScope {
                 padding: 6px;
 
                 MenuHeading { text: "Sort by"; }
+                if Library.playlists-options: VerticalLayout {
+                    for choice in [
+                        { name: "added", text: "Recently added" },
+                        { name: "name", text: "Alphabetical" },
+                    ]: MenuItem {
+                        text: choice.text;
+                        checked: Library.playlists-sort == choice.name;
+                        activated => { Library.set-playlists-sort(choice.name); }
+                    }
+                }
                 if Library.albums-options: VerticalLayout {
                     for choice in [
                         { name: "added", text: "Recently added" },
@@ -3707,12 +3891,12 @@ component LibraryPanel inherits FocusScope {
                         activated => { Library.set-albums-sort(choice.name); }
                     }
                 }
-                if !Library.artist-options && !Library.albums-options: MenuItem {
+                if !Library.artist-options && !Library.albums-options && !Library.playlists-options: MenuItem {
                     text: "Release date";
                     checked: Library.album-sort == "release-date";
                     activated => { Library.set-album-sort("release-date"); }
                 }
-                if !Library.artist-options && !Library.albums-options: MenuItem {
+                if !Library.artist-options && !Library.albums-options && !Library.playlists-options: MenuItem {
                     text: "Name";
                     checked: Library.album-sort == "name";
                     activated => { Library.set-album-sort("name"); }
@@ -3732,9 +3916,9 @@ component LibraryPanel inherits FocusScope {
                     checked: Library.artist-sort == "recently-added";
                     activated => { Library.set-artist-sort("recently-added"); }
                 }
-                if !Library.albums-options: MenuDivider { }
-                if !Library.albums-options: MenuHeading { text: "View as"; }
-                if !Library.albums-options: MenuItem {
+                if !Library.albums-options && !Library.playlists-options: MenuDivider { }
+                if !Library.albums-options && !Library.playlists-options: MenuHeading { text: "View as"; }
+                if !Library.albums-options && !Library.playlists-options: MenuItem {
                     text: "List";
                     checked: (Library.artist-options ? Library.artist-view : Library.album-view) == "list";
                     activated => {
@@ -3745,7 +3929,7 @@ component LibraryPanel inherits FocusScope {
                         }
                     }
                 }
-                if !Library.albums-options: MenuItem {
+                if !Library.albums-options && !Library.playlists-options: MenuItem {
                     text: "Grid";
                     checked: (Library.artist-options ? Library.artist-view : Library.album-view) == "grid";
                     activated => {
@@ -3762,6 +3946,10 @@ component LibraryPanel inherits FocusScope {
 
     // All of what Last.fm says of the artist, over the library, closed with Close or Esc.
     // An artist's picture whole, large over the dimmed library; any click closes it.
+    /// Whether the large picture is the album's cover, rather than the artist's picture.
+    property <bool> picture-of-album;
+    property <image> picture-large: root.picture-of-album ? Library.album-page.picture-full : Library.artist-page.picture-full;
+
     picture-popup := PopupWindow {
         x: 0;
         y: 0;
@@ -3772,17 +3960,17 @@ component LibraryPanel inherits FocusScope {
             background: #000000b3;
 
             Image {
-                property <float> aspect: Library.artist-page.picture-full.width / max(1, Library.artist-page.picture-full.height);
+                property <float> aspect: root.picture-large.width / max(1, root.picture-large.height);
 
                 // As large as the library allows, up to the picture's own size.
-                width: min(parent.width - 96px, (parent.height - 96px) * self.aspect, Library.artist-page.picture-full.width * 1px);
+                width: min(parent.width - 96px, (parent.height - 96px) * self.aspect, root.picture-large.width * 1px);
                 height: self.width / self.aspect;
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                source: Library.artist-page.picture-full;
+                source: root.picture-large;
                 image-rendering: smooth;
                 accessible-role: image;
-                accessible-label: Library.artist-page.name;
+                accessible-label: root.picture-of-album ? Library.album-page.title : Library.artist-page.name;
             }
         }
     }
@@ -3878,6 +4066,10 @@ component LibraryPanel inherits FocusScope {
                 }
                 if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "album": MenuDivider { }
                 if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "album": MenuItem {
+                    text: Library.rows[root.menu-row].favorite ? "Remove from Favorites" : "Add to Favorites";
+                    activated => { Library.toggle-favorite(root.menu-row); }
+                }
+                if root.menu-row >= 0 && root.menu-row < Library.rows.length && (Library.rows[root.menu-row].kind == "artist" || Library.rows[root.menu-row].kind == "playlist"): MenuItem {
                     text: Library.rows[root.menu-row].favorite ? "Remove from Favorites" : "Add to Favorites";
                     activated => { Library.toggle-favorite(root.menu-row); }
                 }
@@ -4060,63 +4252,6 @@ component RadioView inherits Rectangle {
     }
 }
 
-/// A text field with a label above it, as in forms.
-component FormField inherits VerticalLayout {
-    in property <string> label;
-    in property <string> placeholder;
-    /// Under the field, in small print.
-    in property <string> hint;
-    in-out property <string> text;
-    callback accepted();
-
-    public function focus-field() {
-        input.focus();
-    }
-
-    spacing: 4px;
-
-    Text {
-        text: root.label;
-        font-size: 13px;
-        color: Theme.text-secondary;
-    }
-    Rectangle {
-        height: 34px;
-        border-radius: 8px;
-        border-width: 1px;
-        border-color: input.has-focus ? Theme.accent : Theme.divider;
-        background: Theme.background;
-
-        if root.text == "": Text {
-            x: 10px;
-            width: parent.width - 20px;
-            text: root.placeholder;
-            color: Theme.text-secondary;
-            vertical-alignment: center;
-            overflow: elide;
-        }
-        input := TextInput {
-            x: 10px;
-            width: parent.width - 20px;
-            text <=> root.text;
-            single-line: true;
-            color: Theme.text;
-            selection-background-color: Theme.selection;
-            selection-foreground-color: Theme.text;
-            vertical-alignment: center;
-            accessible-role: text-input;
-            accessible-label: root.label;
-            accepted => { root.accepted(); }
-        }
-    }
-    if root.hint != "": Text {
-        text: root.hint;
-        font-size: 12px;
-        color: Theme.text-secondary;
-        wrap: word-wrap;
-    }
-}
-
 /// Asks for a new station's name and address.
 component AddStationForm inherits MenuSurface {
     callback done();
@@ -4169,68 +4304,6 @@ component AddStationForm inherits MenuSurface {
             }
             TextButton {
                 text: "Add";
-                clicked => { root.save(); }
-            }
-        }
-    }
-}
-
-/// Asks for a playlist's name: for a new playlist, for keeping Up Next, or for a new name.
-component PlaylistNameForm inherits MenuSurface {
-    in property <string> title;
-    /// The button that saves, like "Create".
-    in property <string> action;
-    /// The name the field starts with.
-    in property <string> initial;
-    /// Calls the `Playlists` callback that uses the name.
-    callback submit(string);
-    /// The name was taken.
-    callback saved();
-    callback cancelled();
-
-    function save() {
-        root.submit(name.text);
-        // Freya answers at once: an error stays in Playlists.error and the form stays open.
-        if (Playlists.error == "") {
-            root.saved();
-        }
-    }
-
-    init => {
-        name.text = root.initial;
-        name.focus-field();
-    }
-
-    VerticalLayout {
-        padding: 14px;
-        spacing: 10px;
-
-        Text {
-            text: root.title;
-            font-size: 15px;
-            font-weight: 600;
-            color: Theme.text;
-        }
-        name := FormField {
-            label: "Name";
-            accepted => { root.save(); }
-        }
-        if Playlists.error != "": Text {
-            text: Playlists.error;
-            font-size: 13px;
-            color: Theme.danger;
-            wrap: word-wrap;
-        }
-        HorizontalLayout {
-            alignment: end;
-            spacing: 8px;
-
-            TextButton {
-                text: "Cancel";
-                clicked => { root.cancelled(); }
-            }
-            TextButton {
-                text: root.action;
                 clicked => { root.save(); }
             }
         }
@@ -4427,6 +4500,16 @@ component PlaylistPageHead inherits Rectangle {
                     label: "Add " + root.page.name + " to Up Next";
                     tooltip: "Add to Up Next";
                     clicked => { Playlists.enqueue(); }
+                }
+                IconButton {
+                    y: (parent.height - self.height) / 2;
+                    icon: Icons.heart;
+                    stroked: !root.page.favorite;
+                    checked: root.page.favorite;
+                    size: 44px;
+                    label: root.page.favorite ? "Remove " + root.page.name + " from Favorites" : "Add " + root.page.name + " to Favorites";
+                    tooltip: root.page.favorite ? "Remove from Favorites" : "Add to Favorites";
+                    clicked => { Playlists.toggle-favorite(); }
                 }
                 IconButton {
                     y: (parent.height - self.height) / 2;
@@ -6562,6 +6645,12 @@ component Sidebar inherits Rectangle {
                     selected: root.view == "library" && Library.section == "genres";
                     clicked => { root.show-section("genres"); }
                 }
+                SidebarItem {
+                    icon: Icons.playlist;
+                    text: "Playlists";
+                    selected: (root.view == "library" && Library.section == "playlists") || root.view == "playlist";
+                    clicked => { root.show-section("playlists"); }
+                }
                 SidebarHeading { text: "Recents"; }
                 SidebarItem {
                     icon: Icons.added;
@@ -6609,21 +6698,6 @@ component Sidebar inherits Rectangle {
                     selected: root.view == "equalizer";
                     clicked => { root.selected("equalizer"); }
                 }
-                playlists-heading := SidebarHeading {
-                    text: "Playlists";
-                    add-label: "New playlist";
-                    add => { new-playlist.show(); }
-                }
-                for playlist[i] in Playlists.playlists: SidebarItem {
-                    icon: Icons.playlist;
-                    text: playlist.name;
-                    badge: playlist.count;
-                    selected: root.view == "playlist" && Playlists.shown == i;
-                    clicked => {
-                        Playlists.show(i);
-                        root.selected("playlist");
-                    }
-                }
             }
         }
         if Updates.state == "available" || Updates.state == "downloading": VerticalLayout {
@@ -6655,25 +6729,6 @@ component Sidebar inherits Rectangle {
                     clicked => { root.show-update(); }
                 }
             }
-        }
-    }
-
-    new-playlist := PopupWindow {
-        x: 10px;
-        // The heading moves as the navigation scrolls.
-        y: playlists-heading.absolute-position.y - root.absolute-position.y + playlists-heading.height;
-        width: 300px;
-        close-policy: close-on-click-outside;
-
-        PlaylistNameForm {
-            title: "New playlist";
-            action: "Create";
-            submit(name) => { Playlists.create(name); }
-            saved => {
-                new-playlist.close();
-                root.selected("playlist");
-            }
-            cancelled => { new-playlist.close(); }
         }
     }
 }
@@ -8506,6 +8561,7 @@ export component FreyaSkin inherits Window {
                                     Library.edit-genre();
                                     genre-popup.show();
                                 }
+                                show-view(view) => { root.show(view); }
                             }
                             if root.view == "playlist": PlaylistView {
                                 width: 100%;

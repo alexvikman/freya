@@ -222,6 +222,35 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     );
     bind(
         "Library",
+        "set-playlists-sort",
+        Box::new(|app, args| {
+            let sort = text_arg(args, 0);
+            if sort == "added" || sort == "name" {
+                app.library.set_playlists_order(&sort);
+                app.settings.playlists_sort = sort;
+            }
+        }),
+    );
+    bind(
+        "Playlists",
+        "toggle-favorite",
+        Box::new(|app, _| {
+            let name = app
+                .shown_playlist
+                .and_then(|i| app.playlists.get(i))
+                .map(|p| p.name.clone());
+            if let Some(name) = name {
+                app.library.set_playlist_favorite(&name);
+            }
+        }),
+    );
+    bind(
+        "Library",
+        "show-album-cover",
+        Box::new(|app, _| app.library.show_album_cover()),
+    );
+    bind(
+        "Library",
         "toggle-favorite",
         Box::new(|app, args| app.library.toggle_favorite(index(args, 0))),
     );

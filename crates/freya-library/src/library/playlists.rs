@@ -91,6 +91,10 @@ impl Library {
             "UPDATE playlist_added SET playlist = ?2 WHERE playlist = ?1",
             params![from, to],
         )?;
+        tx.execute(
+            "UPDATE playlist_favorites SET playlist = ?2 WHERE playlist = ?1",
+            params![from, to],
+        )?;
         tx.commit()
     }
 
@@ -99,6 +103,10 @@ impl Library {
         let tx = self.db.transaction()?;
         tx.execute("DELETE FROM playlist_info WHERE playlist = ?1", [playlist])?;
         tx.execute("DELETE FROM playlist_added WHERE playlist = ?1", [playlist])?;
+        tx.execute(
+            "DELETE FROM playlist_favorites WHERE playlist = ?1",
+            [playlist],
+        )?;
         tx.commit()
     }
 
