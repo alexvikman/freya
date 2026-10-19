@@ -2618,6 +2618,23 @@ component DiscographyAlbum inherits Rectangle {
     }
 }
 
+/// A dialog's keyboard, so Esc closes it at once: taken when the dialog is shown, and again
+/// just after, from what was clicked to open it.
+component DialogFocus inherits FocusScope {
+    init => { self.focus(); }
+
+    Timer {
+        interval: 50ms;
+        running: true;
+        triggered => {
+            self.running = false;
+            root.focus();
+        }
+    }
+
+    @children
+}
+
 /// Letters down the side of a list, to jump to the first row each starts: clicked, or swept
 /// over with the mouse held down.
 component LetterBar inherits Rectangle {
@@ -2893,8 +2910,6 @@ component LibraryPanel inherits FocusScope {
             root.move(root.page);
         } else if (event.text == Key.Return) {
             root.activate(root.cursor);
-        } else if (event.text == Key.Escape) {
-            root.back();
         } else if ((event.modifiers.control || event.modifiers.meta) && (event.text == "f" || event.text == "F")) {
             root.find();
         } else {
@@ -7322,8 +7337,7 @@ export component FreyaSkin inherits Window {
         height: root.height;
         close-policy: no-auto-close;
 
-        FocusScope {
-            init => { self.focus(); }
+        DialogFocus {
             key-pressed(event) => {
                 if (event.text == Key.Escape) {
                     folders-popup.close();
@@ -7355,8 +7369,7 @@ export component FreyaSkin inherits Window {
         height: root.height;
         close-policy: no-auto-close;
 
-        FocusScope {
-            init => { self.focus(); }
+        DialogFocus {
             key-pressed(event) => {
                 if (event.text == Key.Escape) {
                     artist-match-form.cancel();
@@ -7387,8 +7400,7 @@ export component FreyaSkin inherits Window {
         height: root.height;
         close-policy: no-auto-close;
 
-        FocusScope {
-            init => { self.focus(); }
+        DialogFocus {
             key-pressed(event) => {
                 if (event.text == Key.Escape) {
                     album-match-form.cancel();
@@ -7422,9 +7434,7 @@ export component FreyaSkin inherits Window {
         height: root.height;
         close-policy: no-auto-close;
 
-        FocusScope {
-            // So Esc closes it at once.
-            init => { self.focus(); }
+        DialogFocus {
             key-pressed(event) => {
                 if (event.text == Key.Escape) {
                     artist-form.cancel();
@@ -7456,7 +7466,7 @@ export component FreyaSkin inherits Window {
         height: root.height;
         close-policy: no-auto-close;
 
-        FocusScope {
+        DialogFocus {
             key-pressed(event) => {
                 if (event.text == Key.Escape) {
                     fanart-popup.close();
