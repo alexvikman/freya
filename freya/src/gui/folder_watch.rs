@@ -20,6 +20,8 @@ pub struct FolderWatch {
     /// Kept to keep watching; dropped, it stops.
     _watcher: notify::RecommendedWatcher,
     changes: Receiver<PathBuf>,
+    /// How many of the folders asked for are watched: those there when it began.
+    watching: usize,
     /// The folders where something changed, not scanned yet; when the first and the last
     /// change came.
     changed: Vec<PathBuf>,
@@ -66,10 +68,16 @@ impl FolderWatch {
         (watching > 0).then(|| Self {
             _watcher: watcher,
             changes,
+            watching,
             changed: Vec::new(),
             first: None,
             last: None,
         })
+    }
+
+    /// How many of the folders asked for are watched.
+    pub fn watching(&self) -> usize {
+        self.watching
     }
 
     /// The folders where something changed, once they have been still for a moment; each

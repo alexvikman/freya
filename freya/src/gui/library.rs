@@ -232,9 +232,11 @@ pub struct LibraryPanel {
     /// when the settings were damaged, and the list may be missing some.
     folders: Vec<PathBuf>,
     scans_allowed: bool,
-    /// The folders' watch, while they are watched; and the folders where something changed,
-    /// to scan once the scan running ends.
+    /// The folders' watch, while they are watched, and when it was last tried: a drive not
+    /// mounted yet is tried again; and the folders where something changed, to scan once the
+    /// scan running ends.
     watch: Option<FolderWatch>,
+    watch_tried: Option<Instant>,
     watch_folders: bool,
     scan_later: Vec<PathBuf>,
     /// How often the whole library is scanned, if at all, and when that was last looked into;
@@ -590,6 +592,7 @@ impl LibraryPanel {
             folders: Vec::new(),
             scans_allowed: false,
             watch: None,
+            watch_tried: None,
             watch_folders: true,
             scan_later: Vec::new(),
             scan_every: Some(Duration::from_secs(24 * 3600)),
@@ -740,7 +743,35 @@ impl LibraryPanel {
             && self.db.is_some()
             && !self.folders.is_empty()
         {
+            self.watch_tried = Some(Instant::now());
             self.watch = FolderWatch::new(&self.folders);
+        }
+    }
+
+    /// Watches the folders once they are there, when they were not: a drive mounted later.
+    fn watch_when_there(&mut self) {
+        let all = self
+            .watch
+            .as_ref()
+            .is_some_and(|watch| watch.watching() == self.folders.len());
+        let tried_lately = self
+            .watch_tried
+            .is_some_and(|at| at.elapsed() < SCAN_CHECK_INTERVAL);
+        if all || tried_lately {
+            return;
+        }
+        // Looked at once a minute, not at each poll.
+        self.watch_tried = Some(Instant::now());
+        if !self.folders.iter().any(|f| f.is_dir()) {
+            return;
+        }
+        // Some of them were not there: tried again from scratch.
+        let missing = self.watch.as_ref().map_or(self.folders.len(), |watch| {
+            self.folders.len() - watch.watching()
+        });
+        if missing > 0 {
+            self.watch = None;
+            self.start_watching();
         }
     }
 
@@ -898,6 +929,7 @@ impl LibraryPanel {
         if !self.scanning {
             self.prepare_some();
         }
+        self.watch_when_there();
         if let Some(changed) = self.watch.as_mut().and_then(FolderWatch::poll) {
             self.scan_changed(changed);
         }
