@@ -779,6 +779,16 @@ impl LibraryPanel {
             .is_none_or(|db| db.last_full_scan().ok().flatten().is_none());
         if empty || self.scan_at_start {
             self.rescan(folders);
+        } else if self
+            .db
+            .as_ref()
+            .is_some_and(|db| !db.cover_colors_current().unwrap_or(true))
+            && let (Some(path), Some(thumbnails)) = (&self.path, &self.thumbnails)
+        {
+            // Albums' colors as they are made now, from their covers: quick.
+            self.scanner
+                .make_colors(path.clone(), thumbnails.pictures().clone());
+            self.scanning = true;
         }
     }
 

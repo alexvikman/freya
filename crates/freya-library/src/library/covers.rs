@@ -5,7 +5,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
+
+/// How albums' colors are made: counted up when that changes, so they are made again.
+const COLORS: i64 = 2;
 
 use super::{Library, Result};
 
@@ -52,6 +55,57 @@ impl Library {
             ))
         })?;
         rows.collect()
+    }
+
+    /// Whether the albums' colors are made as Freya makes them now.
+    pub fn cover_colors_current(&self) -> Result<bool> {
+        let made: Option<i64> = self
+            .db
+            .prepare_cached("SELECT at FROM library_state WHERE key = 'cover-colors'")?
+            .query_row([], |row| row.get(0))
+            .optional()?;
+        Ok(made == Some(COLORS))
+    }
+
+    /// Makes every album's color again from its cover among `pictures`, as Freya makes them
+    /// now, without reading the music's files. Stops early when `cancel` is set. Returns how
+    /// many were made.
+    pub fn make_cover_colors(
+        &self,
+        pictures: &crate::pictures::Pictures,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<usize> {
+        let covers: Vec<(String, String)> = self
+            .album_covers()?
+            .into_iter()
+            .filter_map(|(key, made)| Some((key, made.cover?)))
+            .collect();
+        let mut made = 0;
+        for (key, cover) in covers {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                return Ok(made);
+            }
+            let Some(picture) = pictures
+                .read(&cover)
+                .and_then(|bytes| image::load_from_memory(&bytes).ok())
+            else {
+                continue;
+            };
+            let color = crate::cover::page_color(picture.thumbnail(64, 64).to_rgb8().as_raw());
+            self.db
+                .prepare_cached("UPDATE album_covers SET color = ?2 WHERE key = ?1")?
+                .execute(params![
+                    key,
+                    format!("{:02x}{:02x}{:02x}", color[0], color[1], color[2])
+                ])?;
+            made += 1;
+        }
+        self.db
+            .prepare_cached(
+                "INSERT OR REPLACE INTO library_state (key, at) VALUES ('cover-colors', ?1)",
+            )?
+            .execute([COLORS])?;
+        Ok(made)
     }
 
     pub fn set_album_cover(&self, key: &str, cover: &AlbumCover) -> Result<()> {

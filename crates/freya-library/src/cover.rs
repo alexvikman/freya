@@ -132,30 +132,61 @@ fn image_in(dir: &Path) -> Option<Vec<u8>> {
     std::fs::read(chosen).ok()
 }
 
-/// A color for an album's page, from its cover's pixels (RGB, 3 bytes each): the cover's
-/// colors averaged, the vivid ones counting most so a red cover on grey gives red, then made
-/// dark enough for white text and not garish. A grey cover gives grey.
+/// A color for an album's page, from its cover's pixels (RGB, 3 bytes each): its most
+/// prominent vivid hue, where bright, saturated pixels count most, as a window of light in a
+/// dark picture rather than the dark around it; not an average, which turns blue and yellow
+/// to mud. Then made dark enough for white text. A grey cover, or one with only a touch of
+/// color, gives grey.
 pub fn page_color(rgb: &[u8]) -> [u8; 3] {
-    let mut sum = [0.0f64; 3];
-    let mut weight = 0.0;
+    const HUES: usize = 24;
+    let mut weights = [0.0f64; HUES];
+    let mut sums = [[0.0f64; 3]; HUES];
+    let mut all = 0.0;
     for pixel in rgb.as_chunks::<3>().0 {
         let [r, g, b] = pixel.map(|c| f64::from(c) / 255.0);
         let (max, min) = (r.max(g).max(b), r.min(g).min(b));
-        // Vivid pixels count up to nine times as much as grey ones; near-black and near-white
-        // ones, as in a border or a background, hardly at all.
-        let vivid = 1.0 + 8.0 * (max - min);
-        let w = vivid * (max * (1.0 - min)).max(0.02);
-        sum[0] += r * w;
-        sum[1] += g * w;
-        sum[2] += b * w;
-        weight += w;
+        // Bright pixels count most; white ones hardly.
+        let presence = max.powi(3) * (1.0 - min).max(0.05);
+        all += presence;
+        let saturation = if max > 0.0 { (max - min) / max } else { 0.0 };
+        if saturation < 0.2 || max < 0.12 {
+            continue;
+        }
+        let (hue, ..) = hsl(r, g, b);
+        let at = ((hue * HUES as f64) as usize).min(HUES - 1);
+        let weight = saturation * presence;
+        weights[at] += weight;
+        for (sum, c) in sums[at].iter_mut().zip([r, g, b]) {
+            *sum += c * weight;
+        }
     }
-    if weight == 0.0 {
+    // A hue with its neighbours, half as much.
+    let around = |at: usize| [(at + HUES - 1) % HUES, at, (at + 1) % HUES];
+    let score = |at: usize| {
+        let [before, at, after] = around(at);
+        weights[before] / 2.0 + weights[at] + weights[after] / 2.0
+    };
+    let best = (0..HUES).max_by(|a, b| score(*a).total_cmp(&score(*b)));
+    let picked = best.map(|best| {
+        let mut sum = [0.0; 3];
+        let mut weight = 0.0;
+        for at in around(best) {
+            weight += weights[at];
+            for (s, c) in sum.iter_mut().zip(sums[at]) {
+                *s += c;
+            }
+        }
+        (sum, weight)
+    });
+    let Some((sum, weight)) = picked.filter(|(_, weight)| *weight > 0.0) else {
         return [83, 83, 83];
-    }
+    };
     let [r, g, b] = sum.map(|c| c / weight);
     let (hue, saturation, _) = hsl(r, g, b);
-    let mut rgb = from_hsl(hue, saturation.min(0.55), 0.32);
+    // How much of the cover is vivid: a touch of color in a grey cover leaves it grey.
+    let vivid = ((weights.iter().sum::<f64>() / all - 0.05) / (0.12 - 0.05)).clamp(0.0, 1.0);
+    let vivid = vivid * vivid * (3.0 - 2.0 * vivid);
+    let mut rgb = from_hsl(hue, saturation.min(0.6) * vivid, 0.42);
     // Yellows and greens look lighter than blues at the same lightness: darker still, until
     // white text reads on them as on the others.
     let [r, g, b] = rgb;
@@ -167,7 +198,7 @@ pub fn page_color(rgb: &[u8]) -> [u8; 3] {
 }
 
 /// The most a page color's luminance may be, from 0 to 1.
-const MAX_LUMINANCE: f64 = 0.38;
+const MAX_LUMINANCE: f64 = 0.34;
 
 /// Hue (0 to 1), saturation and lightness of an RGB color with channels from 0 to 1.
 fn hsl(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
@@ -223,9 +254,18 @@ mod tests {
             assert!(luminance < 110.0, "{color:?} gave {r} {g} {b}");
         }
         // Grey stays grey; no pixels at all give a neutral grey.
-        let [r, g, b] = page_color(&image(&[[100, 100, 100]; 4]));
-        assert!(r == g && g == b);
+        assert_eq!(page_color(&image(&[[100, 100, 100]; 4])), [83, 83, 83]);
         assert_eq!(page_color(&[]), [83, 83, 83]);
+        // A bright window in a dark blue picture: the window's yellow, not a mix.
+        let mut night = vec![[20, 30, 70]; 85];
+        night.extend([[220, 220, 110]; 15]);
+        let [r, g, b] = page_color(&image(&night));
+        assert!(r > b + 30 && g > b + 30, "{r} {g} {b}");
+        // A touch of color in a grey cover leaves it grey.
+        let mut grey = vec![[150, 150, 150]; 99];
+        grey.push([200, 40, 40]);
+        let [r, g, b] = page_color(&image(&grey));
+        assert!(r.abs_diff(g) < 12 && g.abs_diff(b) < 12, "{r} {g} {b}");
     }
 
     #[test]

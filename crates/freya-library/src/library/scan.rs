@@ -229,6 +229,9 @@ pub fn scan_with(
     if let Some(pictures) = &options.pictures
         && !cancel.load(Ordering::Relaxed)
     {
+        if !library.cover_colors_current()? {
+            library.make_cover_colors(pictures, cancel)?;
+        }
         make_covers(
             library,
             &images,
@@ -723,6 +726,31 @@ impl Scanner {
                 let _ = events.send(event);
             })
             .expect("spawn fetch thread");
+        self.running = Some((thread, cancel));
+    }
+
+    /// Makes every album's color again from its cover, as Freya makes them now, without
+    /// scanning: when they were made otherwise before. Stops a scan that is still running.
+    pub fn make_colors(&mut self, database: PathBuf, pictures: Pictures) {
+        self.stop();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let events = self.events_out.clone();
+        let stop = Arc::clone(&cancel);
+        let thread = std::thread::Builder::new()
+            .name("freya-colors".into())
+            .spawn(move || {
+                let result = Library::open(&database)
+                    .and_then(|library| library.make_cover_colors(&pictures, &stop));
+                let event = match result {
+                    Ok(made) => {
+                        log::info!("made the colors of {made} albums again");
+                        ScanEvent::Finished(ScanSummary::default())
+                    }
+                    Err(e) => ScanEvent::Failed(e.to_string()),
+                };
+                let _ = events.send(event);
+            })
+            .expect("spawn colors thread");
         self.running = Some((thread, cancel));
     }
 
