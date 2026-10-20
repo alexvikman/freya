@@ -9,12 +9,13 @@ use std::time::{Duration, Instant, SystemTime};
 use freya_library::cue::Part;
 use freya_library::library::{
     Album, AlbumKey, AlbumMatch, AlbumOrder, Artist, ArtistEdit, ArtistOrder, CHOSEN, Genre,
-    Header, Online, PictureKind, PictureRow, Played, ScanEvent, ScanOptions, Scanner, Track,
-    plain_name, split_artist,
+    Header, Online, PictureKind, PictureRow, Played, ScanEvent, Track, plain_name, split_artist,
 };
 use freya_library::pictures::Pictures;
 use freya_library::thumbnails::{ArtistSource, Thumbnail, Thumbnails};
 use freya_library::{Entry, Library};
+use freya_protocol::ServiceEvent;
+use freya_server::{Service, ServiceConfig};
 use slint::{Image, ModelRc, VecModel};
 use slint_interpreter::{Struct, Value};
 
@@ -28,7 +29,6 @@ mod genre_page;
 mod playlist_page;
 #[path = "search_page.rs"]
 mod search_page;
-use super::folder_watch::FolderWatch;
 use super::match_finder::{AlbumFinder, MatchFinder};
 use super::picture_finder::{Found, Pick, PictureFinder, Request};
 use super::skin_state::{ModelRows, format_time, string};
@@ -40,8 +40,6 @@ pub use search_page::{Opened, SearchFilter};
 /// Search results are cut off here; nobody scrolls through more, and building rows for the
 /// whole library on every keystroke would be wasted work.
 const SEARCH_LIMIT: usize = 1_000;
-/// How often Freya looks whether the whole library is due to be scanned.
-const SCAN_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 /// While a scan runs, the rows are reloaded at most this often.
 const RELOAD_INTERVAL: Duration = Duration::from_secs(1);
 /// Decoded covers kept: about 270 KB each, 70 MB in all. Those on screen, at most about 90 full
@@ -200,7 +198,11 @@ pub struct LibraryPanel {
     path: Option<PathBuf>,
     /// Opened when a skin first shows the library.
     db: Option<Library>,
-    scanner: Scanner,
+    /// The library's scans, started with it; what it tells of them, and where it keeps
+    /// pictures.
+    service: Option<Service>,
+    service_events: Option<Receiver<ServiceEvent>>,
+    pictures_dir: Option<PathBuf>,
     /// The lists opened, the section's own list first; `back` returns to the one before.
     opened: Vec<Level>,
     /// Search text; when not empty, search results are shown instead of `level`.
@@ -240,29 +242,17 @@ pub struct LibraryPanel {
     prepare: VecDeque<Prepare>,
     /// `Library.covers-ready`: goes up as covers are made.
     covers_ready: i32,
-    /// Plays not yet written: a scan may be writing to the database.
-    plays: Vec<(PathBuf, Option<Part>, SystemTime)>,
     /// How an artist's albums are ordered, and whether they are shown as a list of albums
     /// with their tracks rather than a grid of covers.
     album_sort: AlbumSort,
     album_list: bool,
     /// A scan was started and its end not yet taken in.
     scanning: bool,
-    /// The library's folders, and whether scans may bring the library in line with them: not
-    /// when the settings were damaged, and the list may be missing some.
+    /// The library's folders, whether they are watched, how often the whole library is
+    /// scanned, if at all, and whether also each time Freya starts: for the service.
     folders: Vec<PathBuf>,
-    scans_allowed: bool,
-    /// The folders' watch, while they are watched, and when it was last tried: a drive not
-    /// mounted yet is tried again; and the folders where something changed, to scan once the
-    /// scan running ends.
-    watch: Option<FolderWatch>,
-    watch_tried: Option<Instant>,
     watch_folders: bool,
-    scan_later: Vec<PathBuf>,
-    /// How often the whole library is scanned, if at all, and when that was last looked into;
-    /// and whether it is each time Freya starts.
     scan_every: Option<Duration>,
-    scan_checked: Option<Instant>,
     scan_at_start: bool,
     /// The folder a scan looks through or reads now, and how far it is with albums' covers
     /// and with asking the internet about artists.
@@ -272,10 +262,6 @@ pub struct LibraryPanel {
     genres_progress: Option<(usize, usize)>,
     /// Whether the covers and pictures in the library changed since they were last read.
     pictures_stale: bool,
-    /// Artists to ask the internet about once the scan running ends; all of them when
-    /// `fetch_all_later`.
-    fetch_later: Vec<String>,
-    fetch_all_later: bool,
     /// The track playing, by its file and where in it it starts, and its row, or -1.
     playing: Option<(PathBuf, Duration)>,
     playing_row: i32,
@@ -626,7 +612,9 @@ impl LibraryPanel {
         Self {
             path,
             db: None,
-            scanner: Scanner::new(),
+            service: None,
+            service_events: None,
+            pictures_dir: pictures.clone(),
             opened: vec![Level::Artists],
             query: String::new(),
             items: Vec::new(),
@@ -654,24 +642,16 @@ impl LibraryPanel {
             backdrops: HashMap::new(),
             recent_covers: RecentCovers::default(),
             covers_ready: 0,
-            plays: Vec::new(),
             scanning: false,
             folders: Vec::new(),
-            scans_allowed: false,
-            watch: None,
-            watch_tried: None,
             watch_folders: true,
-            scan_later: Vec::new(),
             scan_every: Some(Duration::from_secs(24 * 3600)),
-            scan_checked: None,
             scan_at_start: false,
             scan_folder: None,
             covers_progress: None,
             artists_progress: None,
             genres_progress: None,
             pictures_stale: true,
-            fetch_later: Vec::new(),
-            fetch_all_later: false,
             album_sort: AlbumSort::ReleaseDate,
             album_list: false,
             playing: None,
@@ -775,10 +755,10 @@ impl LibraryPanel {
         if self.db.is_some() {
             return;
         }
-        let Some(path) = &self.path else {
+        let Some(path) = self.path.clone() else {
             return;
         };
-        match Library::open(path) {
+        match Library::open(&path) {
             Ok(db) => self.db = Some(db),
             Err(e) => {
                 log::warn!("could not open the library at {}: {e}", path.display());
@@ -789,147 +769,53 @@ impl LibraryPanel {
         self.clear_older_cache();
         self.prepare_all();
         self.reload();
-        self.scans_allowed = scan;
-        self.set_folders(folders);
-        if !scan {
-            log::warn!("the library is not checked against its folders: the settings were damaged");
-            return;
-        }
-        // The first time, everything is read; after, what changed while Freya was not
-        // running is found by a periodic scan, or by one at each start if the user wants it.
-        let empty = self
-            .db
-            .as_ref()
-            .is_none_or(|db| db.last_full_scan().ok().flatten().is_none());
-        if empty || self.scan_at_start {
-            self.rescan(folders);
-        } else if self
-            .db
-            .as_ref()
-            .is_some_and(|db| !db.cover_colors_current().unwrap_or(true))
-            && let (Some(path), Some(thumbnails)) = (&self.path, &self.thumbnails)
-        {
-            // Albums' colors as they are made now, from their covers: quick.
-            self.scanner
-                .make_colors(path.clone(), thumbnails.pictures().clone());
-            self.scanning = true;
+        self.folders = folders.to_vec();
+        let config = ServiceConfig {
+            folders: self.folders.clone(),
+            scans_allowed: scan,
+            watch_folders: self.watch_folders,
+            scan_every: self.scan_every,
+            scan_at_start: self.scan_at_start,
+            online: self.online(),
+        };
+        match Service::start(path, self.pictures_dir.clone(), config) {
+            Ok(service) => {
+                self.scanning = service.is_scanning();
+                self.service_events = Some(service.subscribe());
+                self.service = Some(service);
+            }
+            Err(e) => log::warn!("{e}"),
         }
     }
 
     /// The library's folders now: those watched, and scanned later.
     pub fn set_folders(&mut self, folders: &[PathBuf]) {
-        if self.folders != folders {
-            self.folders = folders.to_vec();
-            self.watch = None;
+        self.folders = folders.to_vec();
+        if let Some(service) = &self.service {
+            service.set_folders(folders);
         }
-        self.start_watching();
     }
 
     /// Whether the folders are watched, and what changes in them scanned at once.
     pub fn set_watch_folders(&mut self, watch: bool) {
         self.watch_folders = watch;
-        if !watch {
-            self.watch = None;
+        if let Some(service) = &self.service {
+            service.set_watch_folders(watch);
         }
-        self.start_watching();
     }
 
     /// How often the whole library is scanned, in hours; 0 for never.
     pub fn set_scan_every_hours(&mut self, hours: u32) {
         self.scan_every = (hours > 0).then(|| Duration::from_secs(u64::from(hours) * 3600));
-        self.scan_checked = None;
+        if let Some(service) = &self.service {
+            service.set_scan_every(self.scan_every);
+        }
     }
 
     pub fn set_scan_at_start(&mut self, scan: bool) {
         self.scan_at_start = scan;
-    }
-
-    fn start_watching(&mut self) {
-        if self.watch.is_none()
-            && self.watch_folders
-            && self.scans_allowed
-            && self.db.is_some()
-            && !self.folders.is_empty()
-        {
-            self.watch_tried = Some(Instant::now());
-            self.watch = FolderWatch::new(&self.folders);
-        }
-    }
-
-    /// Watches the folders once they are there, when they were not: a drive mounted later.
-    fn watch_when_there(&mut self) {
-        let all = self
-            .watch
-            .as_ref()
-            .is_some_and(|watch| watch.watching() == self.folders.len());
-        let tried_lately = self
-            .watch_tried
-            .is_some_and(|at| at.elapsed() < SCAN_CHECK_INTERVAL);
-        if all || tried_lately {
-            return;
-        }
-        // Looked at once a minute, not at each poll.
-        self.watch_tried = Some(Instant::now());
-        if !self.folders.iter().any(|f| f.is_dir()) {
-            return;
-        }
-        // Some of them were not there: tried again from scratch.
-        let missing = self.watch.as_ref().map_or(self.folders.len(), |watch| {
-            self.folders.len() - watch.watching()
-        });
-        if missing > 0 {
-            self.watch = None;
-            self.start_watching();
-        }
-    }
-
-    /// Scans `changed`, folders within the library's, once no scan runs.
-    fn scan_changed(&mut self, changed: Vec<PathBuf>) {
-        let changed: Vec<PathBuf> = changed
-            .into_iter()
-            .filter(|c| self.folders.iter().any(|f| c.starts_with(f)))
-            .collect();
-        if changed.is_empty() {
-            return;
-        }
-        if self.scanning {
-            self.scan_later.extend(changed);
-            return;
-        }
-        log::info!("scanning what changed in {} folders", changed.len());
-        let folders = self.folders.clone();
-        self.scan(&folders, changed, false);
-    }
-
-    /// Scans the whole library when the last scan of it is older than the user wants.
-    fn scan_when_due(&mut self) {
-        let Some(every) = self.scan_every else {
-            return;
-        };
-        if self.scanning
-            || !self.scans_allowed
-            || self
-                .scan_checked
-                .is_some_and(|at| at.elapsed() < SCAN_CHECK_INTERVAL)
-        {
-            return;
-        }
-        self.scan_checked = Some(Instant::now());
-        let Some(db) = &self.db else {
-            return;
-        };
-        let due = match db.last_full_scan() {
-            Ok(Some(last)) => last.elapsed().is_ok_and(|age| age >= every),
-            Ok(None) => true,
-            Err(e) => {
-                log::warn!("could not read when the library was last scanned: {e}");
-                false
-            }
-        };
-        if due {
-            log::info!("scanning the whole library, as it is time to");
-            let folders = self.folders.clone();
-            self.rescan(&folders);
+        if let Some(service) = &self.service {
+            service.set_scan_at_start(scan);
         }
     }
 
@@ -981,45 +867,38 @@ impl LibraryPanel {
     /// for what artists lack.
     pub fn rescan(&mut self, folders: &[PathBuf]) {
         self.set_folders(folders);
-        self.scan(folders, Vec::new(), false);
+        if let Some(service) = &self.service {
+            service.rescan();
+        }
     }
 
     /// Reads every file in `folders` again and makes every cover again, changed or not.
     pub fn rescan_files(&mut self, folders: &[PathBuf]) {
-        self.scan(folders, Vec::new(), true);
+        self.set_folders(folders);
+        if let Some(service) = &self.service {
+            service.rescan_files();
+        }
     }
 
     /// Looks through the `index`th of `folders` only.
     pub fn scan_folder(&mut self, folders: &[PathBuf], index: usize) {
         if let Some(folder) = folders.get(index) {
-            self.scan(folders, vec![folder.clone()], false);
+            self.scan_added(folders, vec![folder.clone()]);
         }
     }
 
     /// Looks through `added`, folders new in `folders`, only.
     pub fn scan_added(&mut self, folders: &[PathBuf], added: Vec<PathBuf>) {
         self.set_folders(folders);
-        self.scan(folders, added, false);
+        if let Some(service) = &self.service {
+            service.scan_only(added);
+        }
     }
 
     /// Stops the scan running; what it did so far is kept.
     pub fn stop_scan(&mut self) {
-        self.fetch_later.clear();
-        self.fetch_all_later = false;
-        self.scan_later.clear();
-        self.scanner.stop();
-    }
-
-    fn scan(&mut self, folders: &[PathBuf], only: Vec<PathBuf>, rescan: bool) {
-        if let (Some(path), Some(_)) = (&self.path, &self.db) {
-            let options = ScanOptions {
-                pictures: self.thumbnails.as_ref().map(|t| t.pictures().clone()),
-                rescan,
-                only,
-                online: self.online(),
-            };
-            self.scanner.start(path.clone(), folders.to_vec(), options);
-            self.scanning = true;
+        if let Some(service) = &self.service {
+            service.stop_scan();
         }
     }
 
@@ -1037,11 +916,6 @@ impl LibraryPanel {
         if !self.scanning {
             self.prepare_some();
         }
-        self.watch_when_there();
-        if let Some(changed) = self.watch.as_mut().and_then(FolderWatch::poll) {
-            self.scan_changed(changed);
-        }
-        self.scan_when_due();
         if self.decode_covers() {
             self.covers_ready += 1;
         }
@@ -1102,45 +976,49 @@ impl LibraryPanel {
                 self.show_choices();
             }
         }
-        // Asked before the events are read: a scan that had ended by then has sent them all.
-        let ended = !self.scanner.is_running();
         let mut finished = false;
-        for event in self.scanner.poll() {
+        let events: Vec<ServiceEvent> = self
+            .service_events
+            .as_ref()
+            .map(|events| events.try_iter().collect())
+            .unwrap_or_default();
+        for event in events {
             match event {
-                ScanEvent::Progress { done, total } => {
+                ServiceEvent::ScanStarted => self.scanning = true,
+                ServiceEvent::Scan(ScanEvent::Progress { done, total }) => {
                     self.progress = Some((done, total));
                     self.stale = true;
                 }
-                ScanEvent::Looking(folder) => self.scan_folder = Some(folder),
-                ScanEvent::Covers { done, total } => {
+                ServiceEvent::Scan(ScanEvent::Looking(folder)) => self.scan_folder = Some(folder),
+                ServiceEvent::Scan(ScanEvent::Covers { done, total }) => {
                     self.covers_progress = Some((done, total));
                     self.scan_folder = None;
                     // Shown as they come.
                     self.pictures_stale = true;
                 }
-                ScanEvent::Artists { done, total } => {
+                ServiceEvent::Scan(ScanEvent::Artists { done, total }) => {
                     self.artists_progress = Some((done, total));
                     self.scan_folder = None;
                     self.pictures_stale = true;
                 }
-                ScanEvent::Genres { done, total } => {
+                ServiceEvent::Scan(ScanEvent::Genres { done, total }) => {
                     self.genres_progress = Some((done, total));
                     self.scan_folder = None;
                     self.pictures_stale = true;
                 }
-                ScanEvent::Finished(summary) => {
+                ServiceEvent::Scan(ScanEvent::Finished(summary)) => {
                     self.progress = None;
-                    self.scanning = false;
                     // A scan that found nothing new leaves the rows as they are.
                     self.stale |= summary.added + summary.updated + summary.removed > 0;
-                    finished = true;
                 }
-                ScanEvent::Failed(e) => {
-                    log::warn!("library scan failed: {e}");
+                ServiceEvent::Scan(ScanEvent::Failed(_)) => self.progress = None,
+                ServiceEvent::ScanEnded => {
                     self.progress = None;
                     self.scanning = false;
                     finished = true;
                 }
+                // Plays noted while the scan wrote.
+                ServiceEvent::PlaysWritten => self.stale |= self.shows_plays(),
             }
         }
         // Covers and pictures found so far show as they come; and what was said of the artist
@@ -1149,37 +1027,14 @@ impl LibraryPanel {
             self.load_pictures();
             self.show_artist_info();
         }
-        // A scan whose thread ended without saying so is over all the same.
-        if ended && self.scanning {
-            self.scanning = false;
-            finished = true;
-        }
         if !self.scanning {
             self.scan_folder = None;
             self.covers_progress = None;
             self.artists_progress = None;
             self.genres_progress = None;
         }
-        // Plays noted while the scan wrote.
-        if finished && self.write_plays() && self.shows_plays() {
-            self.stale = true;
-        }
         if finished {
-            self.keep_named_pictures();
             self.prepare_all();
-            // A scan asks the internet for what every artist lacks too.
-            if !self.scan_later.is_empty() {
-                self.fetch_later.clear();
-                self.fetch_all_later = false;
-                let changed = std::mem::take(&mut self.scan_later);
-                self.scan_changed(changed);
-            } else if std::mem::take(&mut self.fetch_all_later) {
-                self.fetch_later.clear();
-                self.fetch(None);
-            } else if !self.fetch_later.is_empty() {
-                let artists = std::mem::take(&mut self.fetch_later);
-                self.fetch(Some(artists));
-            }
         }
         if self.stale && (finished || self.reloaded.elapsed() >= RELOAD_INTERVAL) {
             self.reload();
@@ -1192,12 +1047,12 @@ impl LibraryPanel {
 
     /// Notes that a track was played just now.
     pub fn record_play(&mut self, path: PathBuf, part: Option<Part>) {
-        if self.path.is_none() {
-            return;
-        }
-        self.plays.push((path, part, SystemTime::now()));
         // While a scan writes, the play waits rather than the window.
-        if !self.scanning && self.write_plays() && self.shows_plays() {
+        let written = self
+            .service
+            .as_ref()
+            .is_some_and(|service| service.record_play(&path, part, SystemTime::now()));
+        if written && self.shows_plays() {
             self.reload();
         }
     }
@@ -1209,7 +1064,9 @@ impl LibraryPanel {
 
     /// Writes the plays noted, waiting for a scan if one is running. For when Freya quits.
     pub fn save(&mut self) {
-        self.write_plays();
+        if let Some(service) = &self.service {
+            service.save();
+        }
     }
 
     /// What a scan may ask of the internet about artists, as the user allows.
@@ -1225,44 +1082,15 @@ impl LibraryPanel {
     /// Asks the internet what `artists` lack, every artist when none, once no scan runs:
     /// after the user matched them to another artist or allowed another service.
     fn fetch(&mut self, artists: Option<Vec<String>>) {
-        if self.scanning {
-            match artists {
-                Some(artists) => self.fetch_later.extend(artists),
-                None => self.fetch_all_later = true,
-            }
-            return;
+        if let Some(service) = &self.service {
+            service.fetch(artists);
         }
-        let (Some(path), Some(_), Some(thumbnails)) = (&self.path, &self.db, &self.thumbnails)
-        else {
-            return;
-        };
-        let online = self.online();
-        if !online.any() {
-            return;
-        }
-        let pictures = thumbnails.pictures().clone();
-        self.scanner.fetch(path.clone(), artists, online, pictures);
-        self.scanning = true;
     }
 
-    /// Takes away the downloaded pictures no artist has any longer.
-    fn keep_named_pictures(&self) {
-        let (Some(db), Some(thumbnails)) = (&self.db, &self.thumbnails) else {
-            return;
-        };
-        let kept = db
-            .artist_picture_checksums()
-            .map_err(|e| e.to_string())
-            .and_then(|named| {
-                thumbnails
-                    .pictures()
-                    .keep_only(&named)
-                    .map_err(|e| e.to_string())
-            });
-        match kept {
-            Ok(0) => {}
-            Ok(n) => log::info!("took away {n} downloaded pictures no artist has"),
-            Err(e) => log::warn!("could not tidy the downloaded pictures: {e}"),
+    /// Tells the service what scans may ask the internet now.
+    fn tell_online(&self) {
+        if let Some(service) = &self.service {
+            service.set_online(self.online());
         }
     }
 
@@ -1281,23 +1109,6 @@ impl LibraryPanel {
             .ok()
             .flatten()
             .or_else(|| db.searched_artist_id(name?).ok()??.answer)
-    }
-
-    /// Writes the plays noted. Returns true when any were written.
-    fn write_plays(&mut self) -> bool {
-        let Some(db) = &self.db else {
-            return false;
-        };
-        let mut written = false;
-        while let Some((path, part, at)) = self.plays.first() {
-            if let Err(e) = db.record_play(path, *part, *at) {
-                log::warn!("could not note a play of {}: {e}", path.display());
-                break;
-            }
-            self.plays.remove(0);
-            written = true;
-        }
-        written
     }
 
     // ----- Navigation --------------------------------------------------------------------------
@@ -1731,6 +1542,7 @@ impl LibraryPanel {
     pub fn set_fanart_key(&mut self, key: Option<String>) {
         if self.fanart_key != key {
             self.fanart_key = key;
+            self.tell_online();
             if self.fanart_key.is_some() {
                 self.fetch(None);
             }
@@ -1740,20 +1552,22 @@ impl LibraryPanel {
     /// Whether a scan may ask Wikipedia for articles on artists: allowed, it is asked now for
     /// those who lack one.
     pub fn set_online_wikipedia(&mut self, online: bool) {
-        if online && !self.online_wikipedia {
-            self.online_wikipedia = true;
+        let allowed = online && !self.online_wikipedia;
+        self.online_wikipedia = online;
+        self.tell_online();
+        if allowed {
             self.fetch(None);
         }
-        self.online_wikipedia = online;
     }
 
     /// Whether a scan may ask Last.fm what it says of artists; as for Wikipedia.
     pub fn set_online_bios(&mut self, online: bool) {
-        if online && !self.online_bios {
-            self.online_bios = true;
+        let allowed = online && !self.online_bios;
+        self.online_bios = online;
+        self.tell_online();
+        if allowed {
             self.fetch(None);
         }
-        self.online_bios = online;
     }
 
     /// Takes the album page's color from its cover, once the cover's thumbnail is made.
@@ -2533,6 +2347,7 @@ impl LibraryPanel {
     /// Whether pictures of artists may come from Deezer, when they have none of their own.
     pub fn set_online_pictures(&mut self, online: bool) {
         self.online_pictures = online;
+        self.tell_online();
     }
 
     fn reload_artists(&mut self) {
@@ -4216,9 +4031,9 @@ mod tests {
             .unwrap();
         let mut db = Library::open_in_memory().unwrap();
         let cancel = std::sync::atomic::AtomicBool::new(false);
-        let options = ScanOptions {
+        let options = freya_library::library::ScanOptions {
             pictures: Some(Pictures::new(dir.join("pictures"))),
-            ..ScanOptions::default()
+            ..freya_library::library::ScanOptions::default()
         };
         freya_library::library::scan_with(&mut db, &[dir.join("music")], &options, &cancel, |_| {})
             .unwrap();

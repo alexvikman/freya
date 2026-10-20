@@ -40,3 +40,16 @@ pub struct ScanSummary {
     pub removed: usize,
     pub unchanged: usize,
 }
+
+/// What a server tells its clients as it happens.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub enum ServiceEvent {
+    /// A scan began, or asking the internet without one.
+    ScanStarted,
+    /// How it goes.
+    Scan(ScanEvent),
+    /// It ended, done or not; what it wrote is in the library.
+    ScanEnded,
+    /// Plays noted while a scan wrote are in the library now.
+    PlaysWritten,
+}

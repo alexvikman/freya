@@ -1,7 +1,7 @@
 //! The music folders, watched for changes as the system tells of them: what changed in them
 //! is scanned once they have been still for a moment, rather than every folder at each start.
 //! Network drives may not tell of changes made from other computers; a periodic scan catches
-//! those (see `LibraryPanel::poll`).
+//! those (see [`crate::Service`]).
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, channel};

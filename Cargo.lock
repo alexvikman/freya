@@ -1665,13 +1665,14 @@ dependencies = [
  "env_logger",
  "freya-audio",
  "freya-library",
+ "freya-protocol",
+ "freya-server",
  "freya-skin",
  "image",
  "jiff",
  "libc",
  "log",
  "memmap2",
- "notify",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-core-foundation",
@@ -1736,6 +1737,16 @@ name = "freya-protocol"
 version = "0.2.1"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "freya-server"
+version = "0.2.1"
+dependencies = [
+ "freya-library",
+ "freya-protocol",
+ "log",
+ "notify",
 ]
 
 [[package]]
