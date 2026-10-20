@@ -33,7 +33,7 @@ use crate::stream::Interrupt;
 
 pub use crate::engine::Event;
 pub use crate::eq::{BAND_FREQUENCIES, EqSettings, MAX_GAIN_DB};
-pub use crate::source::{Media, MediaTags, TrackInfo};
+pub use crate::source::{Media, MediaTags, RemoteSource, TrackInfo};
 pub use crate::state::{PlaybackState, Status};
 pub use crate::stream::{is_url, split_title};
 

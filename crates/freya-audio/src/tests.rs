@@ -709,7 +709,10 @@ fn a_file_read_from_a_server_plays_as_the_file_itself() {
     for name in ["sine.flac", "sine.mp3", "sine.ogg"] {
         let local = Media::from(fixture(name));
         let remote = Media {
-            remote: Some(file_server(fixture(name), None)),
+            remote: Some(crate::RemoteSource {
+                url: file_server(fixture(name), None),
+                token: None,
+            }),
             ..local.clone()
         };
         assert_eq!(
@@ -730,7 +733,10 @@ fn a_file_read_from_a_server_plays_as_the_file_itself() {
 fn a_dropped_request_is_made_again() {
     let local = Media::from(fixture("sine.flac"));
     let remote = Media {
-        remote: Some(file_server(fixture("sine.flac"), Some(3))),
+        remote: Some(crate::RemoteSource {
+            url: file_server(fixture("sine.flac"), Some(3)),
+            token: None,
+        }),
         ..local.clone()
     };
     assert_eq!(
@@ -750,7 +756,7 @@ fn a_server_that_never_answers_is_given_up_on() {
         }
     });
     let media = Media {
-        remote: Some(url),
+        remote: Some(crate::RemoteSource { url, token: None }),
         ..Media::from(fixture("sine.flac"))
     };
     let started = std::time::Instant::now();

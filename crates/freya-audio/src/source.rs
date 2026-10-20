@@ -53,9 +53,25 @@ pub struct Media {
     /// [`crate::Event::Unplayable`], so it can tell which of its entries plays or failed even
     /// when two play the same file. 0 when it has none.
     pub id: u64,
-    /// Where the file is read from instead of `path`, which still names it: an address of a
-    /// server that answers Range requests for it, as Freya's does.
-    pub remote: Option<String>,
+    /// Where the file is read from instead of `path`, which still names it: a server that
+    /// answers Range requests for it, as Freya's does.
+    pub remote: Option<RemoteSource>,
+}
+
+/// A file on a server: its address, and the token the server asks for.
+#[derive(Clone, PartialEq, Eq)]
+pub struct RemoteSource {
+    pub url: String,
+    pub token: Option<String>,
+}
+
+/// Without the token, which is not for logs.
+impl std::fmt::Debug for RemoteSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RemoteSource")
+            .field("url", &self.url)
+            .finish()
+    }
 }
 
 /// Tags that replace a file's. One left out keeps the file's.
@@ -99,7 +115,7 @@ pub struct TrackInfo {
     /// being played, as far as the station says.
     pub station: Option<String>,
     /// Where the file is read from, as in [`Media::remote`].
-    pub remote: Option<String>,
+    pub remote: Option<RemoteSource>,
 }
 
 impl TrackInfo {
@@ -182,8 +198,8 @@ impl Source {
         let mut file_len = None;
 
         let input: Box<dyn MediaSource> = match path.to_str().filter(|p| stream::is_url(p)) {
-            _ if let Some(url) = &media.remote => {
-                let file = RemoteFile::open(url, interrupt.clone()).map_err(|e| {
+            _ if let Some(remote) = &media.remote => {
+                let file = RemoteFile::open(remote, interrupt.clone()).map_err(|e| {
                     if interrupt.is_raised() {
                         Error::Interrupted
                     } else {

@@ -4,8 +4,8 @@ use std::sync::atomic::AtomicBool;
 use freya_library::Library;
 use freya_library::pictures::Pictures;
 use freya_protocol::{
-    AlbumOrder, ArtistEdit, LibraryApi, LibraryData, ServerControl, ServerEvents, ServerSettings,
-    ServiceEvent,
+    AlbumOrder, ArtistEdit, LibraryApi, LibraryData, LibraryPictures, ServerControl, ServerEvents,
+    ServerSettings, ServiceEvent,
 };
 use freya_server::http::Server;
 use freya_server::{LocalLibrary, Served, Service, ServiceConfig};
@@ -37,9 +37,10 @@ fn served(name: &str) -> (Server, Arc<dyn LibraryApi>, Arc<dyn LibraryApi>, Path
         library: Arc::new(LocalLibrary::new(Library::open(&path).unwrap(), pictures())),
         server: None,
         quit: None,
+        accounts: None,
     };
     let server = Server::start("127.0.0.1:0", freya_server::handler(served)).unwrap();
-    let remote = connect(&format!("http://{}", server.address()), None);
+    let remote = connect(&format!("http://{}", server.address()), None, None);
     (server, remote, local, dir)
 }
 
@@ -105,7 +106,7 @@ fn a_failed_call_says_why() {
     let bad = http.call("search", serde_json::json!(["only one"]));
     assert!(bad.unwrap_err().0.contains("could not read what was sent"));
     drop(remote);
-    let gone = connect("http://127.0.0.1:1", None).stats();
+    let gone = connect("http://127.0.0.1:1", None, None).stats();
     assert!(gone.unwrap_err().0.contains("could not reach the server"));
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -147,9 +148,10 @@ fn the_server_is_told_what_to_do_and_tells_what_happens() {
         library: service.api(),
         server: Some(Arc::clone(&service) as _),
         quit: None,
+        accounts: None,
     };
     let server = Server::start("127.0.0.1:0", freya_server::handler(served)).unwrap();
-    let remote = connect(&format!("http://{}", server.address()), None);
+    let remote = connect(&format!("http://{}", server.address()), None, None);
 
     assert_eq!(remote.settings().unwrap(), settings);
     let changed = ServerSettings {
@@ -296,7 +298,10 @@ fn a_track_plays_from_the_server() {
         .unwrap();
     let player = freya_audio::Player::silent(48_000);
     player.play(freya_audio::Media {
-        remote: Some(audio_url(&address, &track.path)),
+        remote: Some(freya_audio::RemoteSource {
+            url: audio_url(&address, &track.path),
+            token: None,
+        }),
         ..freya_audio::Media::from(&track.path)
     });
     let next = || {
@@ -320,5 +325,96 @@ fn a_track_plays_from_the_server() {
             _ => {}
         }
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn only_a_device_with_a_token_is_answered() {
+    let dir = std::env::temp_dir().join(format!("freya-client-tokens-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("music")).unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../freya-audio/tests/fixtures");
+    std::fs::copy(fixtures.join("sine.flac"), dir.join("music/sine.flac")).unwrap();
+    let path = dir.join("library.db");
+    let mut db = Library::open(&path).unwrap();
+    freya_library::library::scan(
+        &mut db,
+        &[dir.join("music")],
+        &AtomicBool::new(false),
+        |_| {},
+    )
+    .unwrap();
+    let config = ServiceConfig {
+        settings: ServerSettings {
+            watch_folders: false,
+            ..ServerSettings::default()
+        },
+        ..ServiceConfig::default()
+    };
+    let service = Arc::new(Service::start(path, None, config).unwrap());
+    let pairing_key = dir.join("pairing.key");
+    let accounts = Arc::new(freya_server::accounts::Accounts::open(
+        Some(dir.join("accounts.json")),
+        Some(pairing_key.clone()),
+    ));
+    let served = Served {
+        library: service.api(),
+        server: Some(Arc::clone(&service) as _),
+        quit: None,
+        accounts: Some(accounts),
+    };
+    let server = Server::start("127.0.0.1:0", freya_server::handler(served)).unwrap();
+    let address = format!("http://{}", server.address());
+
+    // Without a token, only the version.
+    let stranger = connect(&address, None, None);
+    assert!(stranger.0.version().is_ok());
+    assert!(stranger.stats().is_err());
+    assert!(stranger.events().is_err());
+    assert!(stranger.picture(&"0".repeat(64)).is_err());
+    assert_eq!(stranger.0.account().unwrap(), None);
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build()
+        .into();
+    let track = dir.join("music/sine.flac");
+    let audio = agent.get(&audio_url(&address, &track)).call().unwrap();
+    assert_eq!(audio.status().as_u16(), 401);
+
+    // Paired with the key in the file, once.
+    let key = std::fs::read_to_string(&pairing_key).unwrap();
+    let token = Http::new(&address).pair(&key, "Mac").unwrap();
+    assert!(Http::new(&address).pair(&key, "Mac again").is_err());
+    let mac = connect(&address, Some(token.clone()), None);
+    assert_eq!(mac.stats().unwrap().tracks, 1);
+    assert!(mac.events().is_ok());
+    let audio = agent
+        .get(&audio_url(&address, &track))
+        .header("Authorization", format!("Bearer {token}"))
+        .call()
+        .unwrap();
+    assert_eq!(audio.status().as_u16(), 200);
+
+    // Another device logs in once the user has a password.
+    let user = mac.0.account().unwrap().unwrap().user;
+    assert!(
+        Http::new(&address)
+            .login(&user, "correct horse", "PC")
+            .is_err()
+    );
+    mac.0.set_password("correct horse").unwrap();
+    let pc = Http::new(&address)
+        .login(&user, "correct horse", "PC")
+        .unwrap();
+    let pc = connect(&address, Some(pc), None);
+    let devices = pc.0.account().unwrap().unwrap().devices;
+    assert_eq!(devices.len(), 2);
+    // The Mac takes the PC's token back.
+    let pc_device = devices.iter().find(|d| d.this).unwrap().id.clone();
+    mac.0.revoke(&pc_device).unwrap();
+    assert!(pc.stats().is_err());
+    assert!(mac.stats().is_ok());
+    drop(server);
+    drop(service);
     let _ = std::fs::remove_dir_all(&dir);
 }

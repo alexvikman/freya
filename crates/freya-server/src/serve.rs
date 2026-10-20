@@ -13,6 +13,14 @@
 //!   a line, and an empty line now and then while nothing does.
 //! - `GET /version`: `{"version": ...}`.
 //! - `POST /quit`: the server stops; only from this computer.
+//! - `POST /pair`: `{"key", "device"}`, the pairing key a client on this computer read: a token
+//!   for the device. Only from this computer.
+//! - `POST /login`: `{"user", "password", "device"}`: a token for the device.
+//! - `GET /account`: the caller's account and devices; `POST /account/password`:
+//!   `{"password"}`; `POST /account/revoke`: `{"device"}`.
+//!
+//! Every request but `/version`, `/pair` and `/login` carries a device's token, as
+//! `Authorization: Bearer ...`, or is refused.
 //!
 //! Only Freya's clients are answered, never a web page: until clients log in, a page in the
 //! user's browser could otherwise call the server on this computer. A request a browser sends
@@ -25,6 +33,7 @@ use std::time::Duration;
 
 use freya_protocol::{API_PATH, LibraryApi, Server, ServiceEvent, dispatch_control, dispatch_data};
 
+use crate::accounts::{Accounts, Caller};
 use crate::http::{Handler, Request, Response};
 
 /// How long the event stream says nothing before it sends an empty line, to find a client
@@ -38,6 +47,8 @@ pub struct Served {
     pub server: Option<Arc<dyn Server>>,
     /// Stops the server, when it may be stopped from this computer.
     pub quit: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Who may call; without, anyone may, as in tests.
+    pub accounts: Option<Arc<Accounts>>,
 }
 
 /// Answers requests to the API as `served` says.
@@ -76,6 +87,29 @@ fn answer(served: &Served, request: Request) -> Response {
     let Some(path) = request.path.strip_prefix(API_PATH) else {
         return Response::error(404, "no such page");
     };
+    let local = request.peer.is_some_and(|peer| peer.ip().is_loopback());
+    let caller = match &served.accounts {
+        None => None,
+        Some(accounts) => match (request.method.as_str(), path) {
+            ("GET", "/version") => None,
+            ("POST", "/pair") => return pair(accounts, &request, local),
+            ("POST", "/login") => return login(accounts, &request),
+            _ => {
+                let token = request
+                    .header("authorization")
+                    .and_then(|value| value.strip_prefix("Bearer "));
+                match token.and_then(|token| accounts.caller(token.trim())) {
+                    Some(caller) => Some(caller),
+                    None => return Response::error(401, "log in first"),
+                }
+            }
+        },
+    };
+    if let (Some(accounts), Some(caller)) = (&served.accounts, &caller)
+        && let Some(answer) = account(accounts, caller, &request, path)
+    {
+        return answer;
+    }
     let library = served.library.as_ref();
     match (request.method.as_str(), path) {
         ("POST", path) if path.starts_with("/call/") => {
@@ -161,16 +195,13 @@ fn answer(served: &Served, request: Request) -> Response {
             200,
             &serde_json::json!({ "version": env!("CARGO_PKG_VERSION") }),
         ),
-        ("POST", "/quit") => {
-            let local = request.peer.is_some_and(|peer| peer.ip().is_loopback());
-            match &served.quit {
-                Some(quit) if local => {
-                    quit();
-                    Response::json(200, &serde_json::Value::Null)
-                }
-                _ => Response::error(403, "the server is not stopped from here"),
+        ("POST", "/quit") => match &served.quit {
+            Some(quit) if local => {
+                quit();
+                Response::json(200, &serde_json::Value::Null)
             }
-        }
+            _ => Response::error(403, "the server is not stopped from here"),
+        },
         _ => Response::error(404, "no such page"),
     }
 }
@@ -281,6 +312,82 @@ fn audio_type(path: &std::path::Path) -> &'static str {
         "wav" => "audio/wav",
         _ => "application/octet-stream",
     }
+}
+
+/// `{"key", "device"}`: a token for the device, given the pairing key; only from this computer.
+fn pair(accounts: &Accounts, request: &Request, local: bool) -> Response {
+    #[derive(serde::Deserialize)]
+    struct Pairing {
+        key: String,
+        device: String,
+    }
+    if !local {
+        return Response::error(403, "pairing is only from the server's computer");
+    }
+    let Ok(pairing) = serde_json::from_slice::<Pairing>(&request.body) else {
+        return Response::error(400, "a key and a device");
+    };
+    match accounts.pair(pairing.key.trim(), &pairing.device) {
+        Some(token) => Response::json(200, &serde_json::json!({ "token": token })),
+        None => Response::error(403, "not the pairing key"),
+    }
+}
+
+/// `{"user", "password", "device"}`: a token for the device, given the user's password.
+fn login(accounts: &Accounts, request: &Request) -> Response {
+    #[derive(serde::Deserialize)]
+    struct Login {
+        user: String,
+        password: String,
+        device: String,
+    }
+    let Ok(login) = serde_json::from_slice::<Login>(&request.body) else {
+        return Response::error(400, "a user, a password and a device");
+    };
+    match accounts.login(&login.user, &login.password, &login.device) {
+        Some(token) => Response::json(200, &serde_json::json!({ "token": token })),
+        None => Response::error(401, "wrong user or password"),
+    }
+}
+
+/// The caller's account: what it is, its password, and taking its devices' tokens back.
+fn account(
+    accounts: &Accounts,
+    caller: &Caller,
+    request: &Request,
+    path: &str,
+) -> Option<Response> {
+    #[derive(serde::Deserialize)]
+    struct NewPassword {
+        password: String,
+    }
+    #[derive(serde::Deserialize)]
+    struct Revoked {
+        device: String,
+    }
+    Some(match (request.method.as_str(), path) {
+        ("GET", "/account") => match serde_json::to_value(accounts.info(caller)) {
+            Ok(info) => Response::json(200, &info),
+            Err(e) => Response::error(500, e),
+        },
+        ("POST", "/account/password") => {
+            match serde_json::from_slice::<NewPassword>(&request.body) {
+                Ok(new) => match accounts.set_password(caller.user, &new.password) {
+                    Ok(()) => Response::json(200, &serde_json::Value::Null),
+                    Err(e) => Response::error(400, e),
+                },
+                Err(e) => Response::error(400, e),
+            }
+        }
+        ("POST", "/account/revoke") => match serde_json::from_slice::<Revoked>(&request.body) {
+            Ok(revoked) if accounts.revoke(caller, &revoked.device) => {
+                Response::json(200, &serde_json::Value::Null)
+            }
+            Ok(_) => Response::error(404, "no such device"),
+            Err(e) => Response::error(400, e),
+        },
+        _ => return None,
+    })
 }
 
 fn event_line(event: &ServiceEvent) -> String {

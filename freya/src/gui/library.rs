@@ -229,6 +229,8 @@ pub struct LibraryPanel {
     server: Option<Arc<dyn Server>>,
     server_events: Option<Receiver<ServiceEvent>>,
     connected: bool,
+    /// The token the server gave this computer, for reading tracks from it.
+    token: Option<String>,
     /// The server told that the playlists changed, and how scrobbling goes, since the app
     /// last asked.
     playlists_changed: bool,
@@ -638,6 +640,7 @@ impl LibraryPanel {
             server: None,
             server_events: None,
             connected: false,
+            token: None,
             playlists_changed: false,
             lastfm_status: None,
             covers_dir: covers,
@@ -774,12 +777,30 @@ impl LibraryPanel {
         };
         let (api, server): (Arc<dyn LibraryApi>, Arc<dyn Server>) = match source {
             LibrarySource::Local { address, program } => {
-                if let Err(e) = freya_client::start_local_server(&address, &program) {
-                    log::warn!("no library: {e}");
+                let (Some(pairing_key), Some(tokens)) = (
+                    crate::settings::pairing_key_path(),
+                    crate::settings::tokens_path(),
+                ) else {
+                    log::warn!("no library: no folder for Freya's files");
                     return;
-                }
+                };
                 let cache = crate::settings::cache_dir().map(|dir| dir.join("pictures"));
-                let remote = freya_client::connect(&address, cache);
+                let connected = freya_client::connect_locally(
+                    &address,
+                    &program,
+                    &pairing_key,
+                    &tokens,
+                    &crate::settings::device_name(),
+                    cache,
+                );
+                let remote = match connected {
+                    Ok(remote) => remote,
+                    Err(e) => {
+                        log::warn!("no library: {e}");
+                        return;
+                    }
+                };
+                self.token = remote.0.token().map(str::to_owned);
                 (Arc::clone(&remote) as _, remote)
             }
             #[cfg(test)]
@@ -819,7 +840,7 @@ impl LibraryPanel {
     /// Where the server serves the file of the library's track at `path`, when it is to be
     /// played from there: when the server is on another computer and the file is not here
     /// too, or always with `FREYA_STREAM` set, to try it on one computer.
-    pub fn stream_url(&self, path: &Path) -> Option<String> {
+    pub fn stream_url(&self, path: &Path) -> Option<freya_audio::RemoteSource> {
         let address = self.source.as_ref()?.address()?;
         self.server.as_ref()?;
         if freya_audio::is_url(&path.to_string_lossy()) {
@@ -827,7 +848,10 @@ impl LibraryPanel {
         }
         let forced = std::env::var_os("FREYA_STREAM").is_some();
         let here = freya_client::is_this_computer(address) || path.exists();
-        (forced || !here).then(|| freya_client::audio_url(address, path))
+        (forced || !here).then(|| freya_audio::RemoteSource {
+            url: freya_client::audio_url(address, path),
+            token: self.token.clone(),
+        })
     }
 
     /// The library, once open.

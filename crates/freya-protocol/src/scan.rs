@@ -99,3 +99,22 @@ impl Default for ServerSettings {
         }
     }
 }
+
+/// What a user sees of their account.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AccountInfo {
+    pub user: String,
+    /// Whether they can log in on other devices.
+    pub has_password: bool,
+    pub devices: Vec<DeviceInfo>,
+}
+
+/// A device a user connected, with a token of its own.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct DeviceInfo {
+    pub id: String,
+    pub name: String,
+    pub created: std::time::SystemTime,
+    /// The device asking.
+    pub this: bool,
+}

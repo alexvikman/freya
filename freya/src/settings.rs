@@ -128,6 +128,28 @@ pub fn cache_dir() -> Option<PathBuf> {
     dirs().map(|d| d.cache_dir().to_owned())
 }
 
+/// The key a client on this computer pairs with Freya's server through, where a server started
+/// from here writes it.
+pub fn pairing_key_path() -> Option<PathBuf> {
+    dirs().map(|d| d.data_dir().join("server").join(freya_server::PAIRING_KEY))
+}
+
+/// The tokens servers gave this computer, by their address.
+pub fn tokens_path() -> Option<PathBuf> {
+    dirs().map(|d| d.config_dir().join("servers.json"))
+}
+
+/// What this computer is called, for the server's list of devices.
+pub fn device_name() -> String {
+    let named = std::env::var("COMPUTERNAME").ok().or_else(|| {
+        let out = std::process::Command::new("hostname").output().ok()?;
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_owned())
+    });
+    named
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "This computer".into())
+}
+
 /// Freya's log, of this run and earlier ones.
 pub fn log_path() -> Option<PathBuf> {
     dirs().map(|d| d.data_dir().join("freya.log"))

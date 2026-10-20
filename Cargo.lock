@@ -1729,6 +1729,7 @@ dependencies = [
  "freya-server",
  "image",
  "log",
+ "serde",
  "serde_json",
  "ureq",
 ]
@@ -1778,6 +1779,7 @@ dependencies = [
  "image",
  "log",
  "notify",
+ "ring",
  "serde",
  "serde_json",
  "toml",

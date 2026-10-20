@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use symphonia::core::io::MediaSource;
 
+use crate::source::RemoteSource;
 use crate::stream::Interrupt;
 
 /// How much each request asks for; little in tests, so their small files take many.
@@ -28,6 +29,8 @@ type Fetched = io::Result<(Vec<u8>, u64)>;
 struct Fetcher {
     agent: ureq::Agent,
     url: String,
+    /// "Bearer ...", when the server asks for a token.
+    authorization: Option<String>,
     interrupt: Interrupt,
 }
 
@@ -56,12 +59,11 @@ impl Fetcher {
 
     fn request(&self, start: u64) -> Fetched {
         let range = format!("bytes={start}-{}", start + CHUNK - 1);
-        let mut answer = self
-            .agent
-            .get(&self.url)
-            .header("Range", &range)
-            .call()
-            .map_err(io::Error::other)?;
+        let mut request = self.agent.get(&self.url).header("Range", &range);
+        if let Some(authorization) = &self.authorization {
+            request = request.header("Authorization", authorization);
+        }
+        let mut answer = request.call().map_err(io::Error::other)?;
         if answer.status().as_u16() != 206 {
             return Err(io::Error::other(format!(
                 "the server answered {} to a range",
@@ -106,8 +108,8 @@ pub(crate) struct RemoteFile {
 }
 
 impl RemoteFile {
-    /// The file at `url`, of a server that answers Range requests; its first chunk read.
-    pub fn open(url: &str, interrupt: Interrupt) -> io::Result<Self> {
+    /// The file `remote`, of a server that answers Range requests; its first chunk read.
+    pub fn open(remote: &RemoteSource, interrupt: Interrupt) -> io::Result<Self> {
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .timeout_global(Some(REQUEST_TIMEOUT))
             .user_agent(concat!("Freya/", env!("CARGO_PKG_VERSION")))
@@ -116,7 +118,8 @@ impl RemoteFile {
             .into();
         let fetcher = Fetcher {
             agent,
-            url: url.to_owned(),
+            url: remote.url.clone(),
+            authorization: remote.token.as_ref().map(|token| format!("Bearer {token}")),
             interrupt,
         };
         let (first, len) = fetcher.fetch(0)?;

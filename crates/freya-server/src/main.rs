@@ -9,9 +9,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::channel;
 
+use freya_server::accounts::Accounts;
 use freya_server::http::Server;
 use freya_server::take_in::{Folders, take_in};
-use freya_server::{LOCAL_ADDRESS, Served, Service, ServiceConfig, handler, settings};
+use freya_server::{LOCAL_ADDRESS, PAIRING_KEY, Served, Service, ServiceConfig, handler, settings};
 
 fn main() {
     let mut address = LOCAL_ADDRESS.to_owned();
@@ -90,6 +91,10 @@ fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> 
         library: service.api(),
         server: Some(Arc::clone(&service) as _),
         quit: Some(quit),
+        accounts: Some(Arc::new(Accounts::open(
+            Some(data.join("accounts.json")),
+            Some(data.join(PAIRING_KEY)),
+        ))),
     };
     let server = Server::start(address, handler(served))
         .map_err(|e| format!("could not listen on {address}: {e}"))?;
