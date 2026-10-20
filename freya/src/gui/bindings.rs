@@ -884,6 +884,67 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     bind("App", "go-forward", Box::new(|app, _| app.go_forward()));
     // The skin changed its view; noted after every callback.
     bind("App", "navigated", Box::new(|_, _| {}));
+    bind("Server", "find", Box::new(|app, _| app.server.find()));
+    bind(
+        "Server",
+        "choose-found",
+        Box::new(|app, args| app.server.choose_found(index(args, 0))),
+    );
+    bind(
+        "Server",
+        "choose-address",
+        Box::new(|app, args| app.server.choose_address(&text_arg(args, 0))),
+    );
+    bind(
+        "Server",
+        "log-in",
+        Box::new(|app, args| app.server.log_in(&text_arg(args, 0), &text_arg(args, 1))),
+    );
+    bind(
+        "Server",
+        "cancel-login",
+        Box::new(|app, _| app.server.cancel_login()),
+    );
+    bind(
+        "Server",
+        "use-this-computer",
+        Box::new(|app, _| app.use_this_computer()),
+    );
+    bind(
+        "Server",
+        "set-password",
+        Box::new(|app, args| {
+            let remote = app.library.remote();
+            app.server
+                .set_password(remote.as_deref(), &text_arg(args, 0));
+        }),
+    );
+    bind(
+        "Server",
+        "revoke",
+        Box::new(|app, args| {
+            let remote = app.library.remote();
+            app.server.revoke(remote.as_deref(), &text_arg(args, 0));
+        }),
+    );
+    bind(
+        "Server",
+        "set-network",
+        Box::new(|app, args| {
+            if let Some(Value::Bool(on)) = args.first() {
+                app.library.set_network(*on);
+            }
+        }),
+    );
+    bind(
+        "Server",
+        "set-server-name",
+        Box::new(|app, args| {
+            app.library.set_server_name(&text_arg(args, 0));
+            let remote = app.library.remote();
+            app.server.refresh(remote.as_deref());
+        }),
+    );
     bind("LastFm", "connect", Box::new(|app, _| app.lastfm.connect()));
     bind("LastFm", "cancel", Box::new(|app, _| app.lastfm.cancel()));
     bind(

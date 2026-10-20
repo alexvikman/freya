@@ -1073,6 +1073,83 @@ export global LastFm {
     callback set-scrobbling(bool);
 }
 
+/// A device connected to the user's account on the server.
+export struct ServerDevice {
+    /// What `Server.revoke` takes.
+    id: string,
+    name: string,
+    /// When it was connected: "2026-10-20".
+    connected: string,
+    /// This device.
+    this: bool,
+}
+
+/// A server found on the network.
+export struct FoundServer {
+    name: string,
+    /// "192.168.1.20:47475".
+    address: string,
+    /// Its certificate's fingerprint, for the user to compare with what the server's own
+    /// computer shows.
+    fingerprint: string,
+}
+
+/// The server that keeps the library: Freya's own on this computer, or one on another computer
+/// on the network, which the user finds or types in and logs in to. Optional: without it, a
+/// skin always shows this computer's library.
+export global Server {
+    /// Whether the library is on another computer, what that server is called and where it is.
+    in property <bool> remote;
+    in property <string> name;
+    in property <string> address;
+    /// "connecting", "connected", "unreachable" (Freya tries again by itself) or "log-in" (the
+    /// server no longer takes this device's token: log in again).
+    in property <string> state: "connecting";
+    in property <string> error;
+    /// The server's certificate's fingerprint, to compare with what another computer shows
+    /// when it first connects; and, for the server on this computer, its name where others find
+    /// it and whether they may connect.
+    in property <string> fingerprint;
+    in property <string> server-name;
+    in property <bool> network: true;
+
+    /// The account this device is connected to: its user, whether they set a password (only then
+    /// can they log in on other devices), and the devices connected to it.
+    in property <string> user;
+    in property <bool> has-password;
+    in property <[ServerDevice]> devices;
+    /// What went wrong with the password last.
+    in property <string> password-error;
+
+    /// While looking for servers on the network, and those found.
+    in property <bool> finding;
+    in property <[FoundServer]> found;
+
+    /// While logging in to a server on another computer: shown, its address and certificate's
+    /// fingerprint, whether Freya is asking it now, and what went wrong.
+    in property <bool> logging-in;
+    in property <string> login-address;
+    in property <string> login-fingerprint;
+    in property <bool> login-busy;
+    in property <string> login-error;
+
+    /// Look for servers on the network.
+    callback find();
+    /// Log in to the `index`th server found, or to one at the address typed in
+    /// ("mini.local", "192.168.1.20:47475").
+    callback choose-found(int);
+    callback choose-address(string);
+    callback log-in(string /* user */, string /* password */);
+    callback cancel-login();
+    /// Use the server on this computer again.
+    callback use-this-computer();
+    callback set-password(string);
+    /// Take a device's token back: it has to log in again.
+    callback revoke(string /* id */);
+    callback set-network(bool);
+    callback set-server-name(string);
+}
+
 /// Updates to Freya. Optional: without it, Freya never looks for updates. Freya looks at
 /// launch and once a day when `check-automatically` is on, and installs only when the user asks.
 export global Updates {

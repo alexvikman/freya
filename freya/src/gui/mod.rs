@@ -16,6 +16,7 @@ mod native_spectrum;
 mod picture_finder;
 mod playlists;
 mod radio;
+mod server_panel;
 mod skin_state;
 mod skin_window;
 mod skins;
@@ -125,6 +126,17 @@ pub fn run(options: Options) -> anyhow::Result<()> {
         ui.window().set_size(slint::LogicalSize::new(w, h));
     }
 
+    // The server on another computer the user chose, else this computer's.
+    let source = settings
+        .server
+        .as_ref()
+        .and_then(|server| {
+            Some(library::LibrarySource::Remote {
+                pin: server.pin()?,
+                name: server.name.clone(),
+            })
+        })
+        .or_else(local_source);
     let app = Rc::new(RefCell::new(App::new(
         ui.clone(),
         skin,
@@ -133,10 +145,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
         window_events.clone(),
         app::Collections {
             library: library::LibraryPanel::new(
-                server_program().map(|program| library::LibrarySource::Local {
-                    address: format!("http://{}", freya_server::LOCAL_ADDRESS),
-                    program,
-                }),
+                source,
                 crate::settings::cache_dir().map(|dir| dir.join("covers")),
             ),
             stations: radio::Stations::load(crate::settings::stations_path()),
@@ -278,4 +287,12 @@ fn select_backend(requested: Option<String>, events: &WindowEvents) -> anyhow::R
 fn server_program() -> Option<std::path::PathBuf> {
     let exe = std::env::current_exe().ok()?;
     Some(exe.with_file_name(format!("freya-server{}", std::env::consts::EXE_SUFFIX)))
+}
+
+/// The library of Freya's server on this computer, started from beside this program.
+pub fn local_source() -> Option<library::LibrarySource> {
+    server_program().map(|program| library::LibrarySource::Local {
+        address: format!("http://{}", freya_server::LOCAL_ADDRESS),
+        program,
+    })
 }

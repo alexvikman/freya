@@ -23,6 +23,7 @@ use super::library::{self, AlbumSort, LibraryPanel};
 use super::listening::Listening;
 use super::playlists::Playlists;
 use super::radio::{self, Stations};
+use super::server_panel::{self, ServerPanel};
 use super::skin_state::{self, GlobalWriter, ModelRows, Rows};
 use super::skin_window::SkinWindow;
 use super::system_media::{MediaRequest, SystemMedia};
@@ -79,6 +80,7 @@ pub struct View {
     playlists_out: GlobalWriter,
     updates_out: GlobalWriter,
     lastfm_out: GlobalWriter,
+    server_out: GlobalWriter,
     playlist_list_rows: ModelRows,
     playlist_track_rows: ModelRows,
     activity_rows: ModelRows,
@@ -112,6 +114,7 @@ impl View {
             playlists_out: GlobalWriter::new(&ui, "Playlists"),
             updates_out: GlobalWriter::new(&ui, "Updates"),
             lastfm_out: GlobalWriter::new(&ui, "LastFm"),
+            server_out: GlobalWriter::new(&ui, "Server"),
             playlist_list_rows: ModelRows::new(),
             playlist_track_rows: ModelRows::new(),
             activity_rows: ModelRows::new(),
@@ -380,6 +383,8 @@ pub struct App {
     pub updater: Updater,
     started: Instant,
     pub lastfm: LastFm,
+    /// The server the library is on, as the user chooses it, and the account.
+    pub server: ServerPanel,
     /// The entry asked to play, by its id, until it starts or fails: an error about any other
     /// (one from before Stop, say) does not move playback on.
     requested: Option<u64>,
@@ -427,25 +432,9 @@ impl App {
             stations,
             playlists,
         } = collections;
-        if let Some(sort) = AlbumSort::from_name(&settings.album_sort) {
-            library.set_album_sort(sort);
-        }
-        library.set_album_list(settings.album_view == "list");
-        if let Some(order) = library::artist_order(&settings.artist_sort) {
-            library.set_artist_order(order);
-        }
-        library.set_artist_list(settings.artist_view == "list");
-        library.set_albums_order(&settings.albums_sort);
-        library.set_playlists_order(&settings.playlists_sort);
-        library.set_online_pictures(settings.artist_pictures_online);
-        library.set_online_bios(settings.artist_bios_online);
-        library.set_online_wikipedia(settings.artist_wikipedia_online);
-        library.set_fanart_key(settings.fanart_key.clone());
-        library.set_folders(&settings.library_folders);
-        library.set_watch_folders(settings.watch_folders);
-        library.set_scan_every_hours(settings.scan_every_hours);
-        library.set_scan_at_start(settings.scan_at_start);
+        configure_library(&mut library, &settings);
         let lastfm = LastFm::new();
+        let server = ServerPanel::new();
         let mut app = Self {
             player,
             playlist: Playlist::new(),
@@ -488,6 +477,7 @@ impl App {
             updater: Updater::new(),
             started: Instant::now(),
             lastfm,
+            server,
             requested: None,
             armed: None,
             skip_after: None,
@@ -752,8 +742,15 @@ impl App {
 
     /// Shows the library, if the skin has one.
     fn attach_library(&mut self) {
+        if self.view.server_out.available {
+            let ui = &self.view.ui;
+            let _ =
+                ui.set_global_property("Server", "devices", self.server.device_rows.model_value());
+            let _ = ui.set_global_property("Server", "found", self.server.found_rows.model_value());
+        }
         if self.view.library_out.available {
             self.library.attach(&self.view.ui);
+            self.server.refresh(self.library.remote().as_deref());
             if let Some(server) = self.library.server() {
                 self.playlists.connect(Arc::clone(&server));
                 self.lastfm.use_server(server);
@@ -771,6 +768,42 @@ impl App {
                 settings.fanart_key = server.fanart_key;
             }
         }
+    }
+
+    // ----- The server ----------------------------------------------------------------------------
+
+    /// Shows the library of the server `chosen`, which the user just logged in to; this
+    /// computer keeps its token and certificate.
+    fn use_remote_server(&mut self, chosen: server_panel::Chosen) {
+        if let Some(file) = settings::tokens_path() {
+            let mut tokens = freya_client::Tokens::load(&file);
+            tokens.set(&freya_client::token_key(&chosen.pin), &chosen.token);
+            tokens.save(&file);
+        }
+        self.settings.server = Some(settings::SavedServer::new(&chosen.name, &chosen.pin));
+        self.settings.save();
+        self.show_library_of(library::LibrarySource::Remote {
+            pin: chosen.pin,
+            name: chosen.name,
+        });
+    }
+
+    /// Shows the library of the server on this computer again.
+    pub fn use_this_computer(&mut self) {
+        self.settings.server = None;
+        self.settings.save();
+        if let Some(source) = super::local_source() {
+            self.show_library_of(source);
+        }
+    }
+
+    /// Shows the library from `source` in place of the one shown.
+    fn show_library_of(&mut self, source: library::LibrarySource) {
+        let covers = settings::cache_dir().map(|dir| dir.join("covers"));
+        let mut library = LibraryPanel::new(Some(source), covers);
+        configure_library(&mut library, &self.settings);
+        self.library = library;
+        self.attach_library();
     }
 
     /// Replaces the playlist with library tracks and plays from `start`.
@@ -1321,6 +1354,12 @@ impl App {
         self.lastfm_was_playing = playing;
 
         self.library.poll();
+        if let Some(chosen) = self.server.poll() {
+            self.use_remote_server(chosen);
+        }
+        if self.library.wants_reconnect() {
+            self.attach_library();
+        }
         // Changed by another client, or by this one.
         if self.library.take_playlists_changed() {
             self.playlists.reload();
@@ -1610,6 +1649,21 @@ impl App {
             // Unreadable keeps the user: the session may be readable next time.
             _ => {}
         }
+        let (remote, name, address) = self.library.source_shown();
+        let (state, error) = self.library.server_state();
+        let mut server = vec![
+            ("remote", Value::Bool(remote)),
+            ("name", skin_state::string(name)),
+            ("address", skin_state::string(address)),
+            ("state", skin_state::string(state)),
+            ("error", skin_state::string(error)),
+            (
+                "network",
+                Value::Bool(self.library.server_settings().is_none_or(|s| s.network)),
+            ),
+        ];
+        server.extend(self.server.values());
+        view.server_out.write(ui, server);
         view.lastfm_out.write(
             ui,
             vec![
@@ -1776,6 +1830,28 @@ fn show_cover(ui: &SkinWindow, image: Option<slint::Image>) {
     let has_cover = image.is_some();
     let _ = ui.set_global_property("Player", "cover", Value::Image(image.unwrap_or_default()));
     let _ = ui.set_global_property("Player", "has-cover", Value::Bool(has_cover));
+}
+
+/// Gives `library` how the user set the library up, before it is connected.
+fn configure_library(library: &mut LibraryPanel, settings: &Settings) {
+    if let Some(sort) = AlbumSort::from_name(&settings.album_sort) {
+        library.set_album_sort(sort);
+    }
+    library.set_album_list(settings.album_view == "list");
+    if let Some(order) = library::artist_order(&settings.artist_sort) {
+        library.set_artist_order(order);
+    }
+    library.set_artist_list(settings.artist_view == "list");
+    library.set_albums_order(&settings.albums_sort);
+    library.set_playlists_order(&settings.playlists_sort);
+    library.set_online_pictures(settings.artist_pictures_online);
+    library.set_online_bios(settings.artist_bios_online);
+    library.set_online_wikipedia(settings.artist_wikipedia_online);
+    library.set_fanart_key(settings.fanart_key.clone());
+    library.set_folders(&settings.library_folders);
+    library.set_watch_folders(settings.watch_folders);
+    library.set_scan_every_hours(settings.scan_every_hours);
+    library.set_scan_at_start(settings.scan_at_start);
 }
 
 /// What the player plays for a playlist entry: its file, or for a track of a CUE sheet, the

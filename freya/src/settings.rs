@@ -71,6 +71,40 @@ pub struct Settings {
     /// Whether the whole library is scanned each time Freya starts; it is the first time
     /// anyway.
     pub scan_at_start: bool,
+    /// The server on another computer the library is on; none for this computer's.
+    pub server: Option<SavedServer>,
+}
+
+/// A server on another computer, as this client pinned it when it logged in.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedServer {
+    pub name: String,
+    /// "192.168.1.20:47475".
+    pub address: String,
+    /// Its certificate, in DER, as hex.
+    pub certificate: String,
+}
+
+impl SavedServer {
+    pub fn new(name: &str, pin: &freya_client::Pin) -> Self {
+        Self {
+            name: name.to_owned(),
+            address: pin.address.to_string(),
+            certificate: pin.certificate.iter().map(|b| format!("{b:02x}")).collect(),
+        }
+    }
+
+    /// Where it is and its certificate; none when what was kept cannot be read.
+    pub fn pin(&self) -> Option<freya_client::Pin> {
+        let certificate = (0..self.certificate.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(self.certificate.get(i..i + 2)?, 16).ok())
+            .collect::<Option<Vec<u8>>>()?;
+        Some(freya_client::Pin {
+            address: self.address.parse().ok()?,
+            certificate,
+        })
+    }
 }
 
 impl Default for Settings {
@@ -105,6 +139,7 @@ impl Default for Settings {
             watch_folders: true,
             scan_every_hours: 24,
             scan_at_start: false,
+            server: None,
             damaged: false,
         }
     }

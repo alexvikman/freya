@@ -4,11 +4,11 @@
 // contrast against the background it is drawn on (WCAG AA), light and dark mode follow the
 // system.
 
-import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, LastFm, PlaybackState, Shortcuts, TrackRow, LibraryRow, AlbumPage, ArtistPage, ArtistDraft, PictureChoice, MatchChoice, AlbumMatchDraft, AlbumMatchChoice, ArtistMatchDraft, PlaylistRow, PlaylistPage, PlaylistEntryRow, SearchSection, StationRow, NativeSpectrum, NativeOscilloscope, NativeHologram } from "@freya/v1.slint";
+import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, LastFm, Server, ServerDevice, FoundServer, PlaybackState, Shortcuts, TrackRow, LibraryRow, AlbumPage, ArtistPage, ArtistDraft, PictureChoice, MatchChoice, AlbumMatchDraft, AlbumMatchChoice, ArtistMatchDraft, PlaylistRow, PlaylistPage, PlaylistEntryRow, SearchSection, StationRow, NativeSpectrum, NativeOscilloscope, NativeHologram } from "@freya/v1.slint";
 import { AboutSlint, ListView, Palette, ScrollView } from "std-widgets.slint";
 
 // Every skin re-exports the API globals so the app can reach them.
-export { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, LastFm } from "@freya/v1.slint";
+export { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, LastFm, Server } from "@freya/v1.slint";
 
 /// Whether the visualizer fills the screen: everything else is hidden, and the skin turns dark,
 /// as fits a TV.
@@ -2754,6 +2754,8 @@ component DialogFocus inherits FocusScope {
 component FormField inherits VerticalLayout {
     in property <string> label;
     in property <string> placeholder;
+    /// Shown as dots.
+    in property <bool> password;
     /// Under the field, in small print.
     in property <string> hint;
     in-out property <string> text;
@@ -2765,7 +2767,7 @@ component FormField inherits VerticalLayout {
 
     spacing: 4px;
 
-    Text {
+    if root.label != "": Text {
         text: root.label;
         font-size: 13px;
         color: Theme.text-secondary;
@@ -2789,6 +2791,7 @@ component FormField inherits VerticalLayout {
             x: 10px;
             width: parent.width - 20px;
             text <=> root.text;
+            input-type: root.password ? InputType.password : InputType.text;
             single-line: true;
             color: Theme.text;
             selection-background-color: Theme.selection;
@@ -7347,6 +7350,258 @@ component LinkRow inherits Rectangle {
 }
 
 /// A page of settings with a large title, using the view's width, and scrolling.
+/// A server found on the network, to log in to.
+component FoundServerView inherits Rectangle {
+    in property <FoundServer> entry;
+    callback clicked();
+
+    border-radius: 8px;
+    background: touch.has-hover ? Theme.hover : transparent;
+    accessible-role: button;
+    accessible-label: root.entry.name;
+    accessible-action-default => { root.clicked(); }
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 2px;
+
+        Text {
+            text: root.entry.name + "  ·  " + root.entry.address;
+            font-size: 14px;
+            font-weight: 600;
+            color: Theme.text;
+            overflow: elide;
+        }
+        Text {
+            text: root.entry.fingerprint;
+            font-size: 12px;
+            color: Theme.text-secondary;
+            wrap: word-wrap;
+        }
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// Finds servers on the network, or takes one's name or address, and logs in to the one
+/// chosen, after showing its certificate's fingerprint.
+component ServerForm inherits MenuSurface {
+    callback closed();
+
+    property <string> typed;
+    property <string> user;
+    property <string> password;
+    /// Closed once the library is the server logged in to.
+    property <string> address: Server.address;
+    changed address => { root.closed(); }
+
+    init => { Server.find(); }
+
+    VerticalLayout {
+        padding: 20px;
+        spacing: 14px;
+
+        if !Server.logging-in: VerticalLayout {
+            spacing: 14px;
+
+            VerticalLayout {
+                spacing: 4px;
+
+                Text {
+                    text: "Servers on your network";
+                    font-size: 17px;
+                    font-weight: 600;
+                    color: Theme.text;
+                }
+                Text {
+                    text: "Freya on another computer takes this one once you log in with the password set there.";
+                    font-size: 13px;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+            }
+            if Server.finding: Text {
+                text: "Looking…";
+                font-size: 13px;
+                color: Theme.text-secondary;
+            }
+            if !Server.finding && Server.found.length == 0: Text {
+                text: "None answered. Type its name or address below.";
+                font-size: 13px;
+                color: Theme.text-secondary;
+            }
+            for server[i] in Server.found: FoundServerView {
+                entry: server;
+                clicked => { Server.choose-found(i); }
+            }
+            FormField {
+                label: "Name or address";
+                placeholder: "mini.local or 192.168.1.20";
+                text <=> root.typed;
+                accepted => { Server.choose-address(root.typed); }
+            }
+            if Server.login-error != "": Text {
+                text: Server.login-error;
+                font-size: 13px;
+                color: Theme.danger;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                spacing: 8px;
+
+                TextButton {
+                    text: "Look Again";
+                    clicked => { Server.find(); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                TextButton {
+                    text: "Cancel";
+                    clicked => { root.closed(); }
+                }
+                TextButton {
+                    text: Server.login-busy ? "Connecting…" : "Connect";
+                    primary: true;
+                    clicked => { Server.choose-address(root.typed); }
+                }
+            }
+        }
+        if Server.logging-in: VerticalLayout {
+            spacing: 14px;
+
+            VerticalLayout {
+                spacing: 4px;
+
+                Text {
+                    text: "Log in to " + Server.login-address;
+                    font-size: 17px;
+                    font-weight: 600;
+                    color: Theme.text;
+                }
+                Text {
+                    text: "Its certificate's fingerprint, which Settings on that computer shows too. If they differ, another computer answered in its place: cancel.";
+                    font-size: 13px;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: Server.login-fingerprint;
+                    font-size: 13px;
+                    font-weight: 600;
+                    color: Theme.text;
+                    wrap: word-wrap;
+                }
+            }
+            FormField {
+                label: "User";
+                text <=> root.user;
+            }
+            FormField {
+                label: "Password";
+                password: true;
+                text <=> root.password;
+                accepted => { Server.log-in(root.user, root.password); }
+            }
+            if Server.login-error != "": Text {
+                text: Server.login-error;
+                font-size: 13px;
+                color: Theme.danger;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                spacing: 8px;
+
+                TextButton {
+                    text: "Back";
+                    clicked => { Server.cancel-login(); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                TextButton {
+                    text: Server.login-busy ? "Logging In…" : "Log In";
+                    primary: true;
+                    clicked => { Server.log-in(root.user, root.password); }
+                }
+            }
+        }
+    }
+}
+
+/// Sets the password the user logs in with on other computers.
+component PasswordForm inherits MenuSurface {
+    callback closed();
+
+    property <string> password;
+    property <string> again;
+    property <string> error;
+
+    function save() {
+        if (root.password != root.again) {
+            root.error = "The passwords are not the same.";
+            return;
+        }
+        Server.set-password(root.password);
+        if (Server.password-error == "") {
+            root.closed();
+        } else {
+            root.error = Server.password-error;
+        }
+    }
+
+    VerticalLayout {
+        padding: 20px;
+        spacing: 14px;
+
+        VerticalLayout {
+            spacing: 4px;
+
+            Text {
+                text: Server.has-password ? "Change the password" : "Set a password";
+                font-size: 17px;
+                font-weight: 600;
+                color: Theme.text;
+            }
+            Text {
+                text: "Other computers log in to this library as " + Server.user + " with it. At least 8 characters.";
+                font-size: 13px;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+        }
+        FormField {
+            label: "Password";
+            password: true;
+            text <=> root.password;
+        }
+        FormField {
+            label: "Again";
+            password: true;
+            text <=> root.again;
+            accepted => { root.save(); }
+        }
+        if root.error != "": Text {
+            text: root.error;
+            font-size: 13px;
+            color: Theme.danger;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+
+            Rectangle { horizontal-stretch: 1; }
+            TextButton {
+                text: "Cancel";
+                clicked => { root.closed(); }
+            }
+            TextButton {
+                text: "Save";
+                primary: true;
+                clicked => { root.save(); }
+            }
+        }
+    }
+}
+
 component SettingsPage inherits ScrollView {
     in property <string> title;
 
@@ -7374,6 +7629,11 @@ component SettingsView inherits Rectangle {
     /// Open the dialog for the library's folders, or for the fanart.tv key.
     callback manage-folders();
     callback edit-fanart-key();
+    /// Open the dialog for finding a server, or for the account's password.
+    callback find-servers();
+    callback set-password();
+
+    property <string> server-name;
 
     SettingsPage {
         width: 100%;
@@ -7609,6 +7869,121 @@ component SettingsView inherits Rectangle {
                     TextButton {
                         text: Library.fanart-key == "" ? "Add Key…" : "Change Key…";
                         clicked => { root.edit-fanart-key(); }
+                    }
+                }
+            }
+        }
+
+        SettingsSection {
+            title: "Server";
+
+            if !Server.remote: SettingsRow {
+                label: "The library is on this computer";
+                detail: "Freya's server here keeps it, with its pictures, playlists and plays.";
+
+                VerticalLayout {
+                    alignment: center;
+
+                    TextButton {
+                        text: "Use Another Computer's…";
+                        clicked => { root.find-servers(); }
+                    }
+                }
+            }
+            if !Server.remote: SettingsRow {
+                label: "Let other computers use this library";
+                detail: Server.network
+                    ? "They find it on your network as " + Server.server-name + ", and log in with your password. Its certificate's fingerprint, which they show the first time: " + Server.fingerprint
+                    : "Only this computer uses it.";
+
+                VerticalLayout {
+                    alignment: center;
+
+                    Toggle {
+                        label: "Let other computers use this library";
+                        checked: Server.network;
+                        toggled => { Server.set-network(!Server.network); }
+                    }
+                }
+            }
+            if !Server.remote && Server.network: SettingsRow {
+                label: "Name on the network";
+
+                VerticalLayout {
+                    alignment: center;
+
+                    FormField {
+                        width: 220px;
+                        placeholder: Server.server-name;
+                        text <=> root.server-name;
+                        accepted => {
+                            Server.set-server-name(root.server-name);
+                            root.server-name = "";
+                        }
+                    }
+                }
+            }
+            if Server.remote: SettingsRow {
+                label: "The library is on " + Server.name + " (" + Server.address + ")";
+                detail: Server.state == "unreachable" ? "Freya cannot reach it, and tries again by itself. " + Server.error
+                    : Server.state == "log-in" ? Server.error
+                    : Server.state == "connecting" ? "Connecting…"
+                    : "Its certificate's fingerprint: " + Server.fingerprint;
+
+                VerticalLayout {
+                    alignment: center;
+
+                    HorizontalLayout {
+                        spacing: 8px;
+
+                        if Server.state == "log-in": TextButton {
+                            text: "Log In…";
+                            primary: true;
+                            clicked => {
+                                Server.choose-address(Server.address);
+                                root.find-servers();
+                            }
+                        }
+                        TextButton {
+                            text: "Another Server…";
+                            clicked => { root.find-servers(); }
+                        }
+                        TextButton {
+                            text: "Use This Computer";
+                            clicked => { Server.use-this-computer(); }
+                        }
+                    }
+                }
+            }
+        }
+
+        if Server.user != "": SettingsSection {
+            title: "Account";
+
+            SettingsRow {
+                label: "Connected as " + Server.user;
+                detail: Server.has-password ? "Other computers log in with your password."
+                    : "Set a password to use this library from other computers.";
+
+                VerticalLayout {
+                    alignment: center;
+
+                    TextButton {
+                        text: Server.has-password ? "Change Password…" : "Set a Password…";
+                        clicked => { root.set-password(); }
+                    }
+                }
+            }
+            for device in Server.devices: SettingsRow {
+                label: device.name + (device.this ? " (this computer)" : "");
+                detail: "Connected " + device.connected;
+
+                if !device.this: VerticalLayout {
+                    alignment: center;
+
+                    TextButton {
+                        text: "Disconnect";
+                        clicked => { Server.revoke(device.id); }
                     }
                 }
             }
@@ -8688,6 +9063,8 @@ export component FreyaSkin inherits Window {
                                 height: 100%;
                                 manage-folders => { root.manage-folders(); }
                                 edit-fanart-key => { fanart-popup.show(); }
+                                find-servers => { server-popup.show(); }
+                                set-password => { password-popup.show(); }
                             }
                             if root.view == "activity": ActivityView {
                                 width: 100%;
@@ -8953,6 +9330,70 @@ export component FreyaSkin inherits Window {
                     x: (parent.width - self.width) / 2;
                     y: max(24px, (parent.height - self.preferred-height) / 3);
                     closed => { fanart-popup.close(); }
+                }
+            }
+        }
+    }
+
+    server-popup := PopupWindow {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        close-policy: no-auto-close;
+
+        DialogFocus {
+            key-pressed(event) => {
+                if (event.text == Key.Escape) {
+                    Server.cancel-login();
+                    server-popup.close();
+                    return accept;
+                }
+                reject
+            }
+
+            Rectangle {
+                background: #00000059;
+
+                ServerForm {
+                    width: min(520px, parent.width - 48px);
+                    height: self.preferred-height;
+                    x: (parent.width - self.width) / 2;
+                    y: max(24px, (parent.height - self.preferred-height) / 4);
+                    closed => {
+                        Server.cancel-login();
+                        server-popup.close();
+                    }
+                }
+            }
+        }
+    }
+
+    password-popup := PopupWindow {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        close-policy: no-auto-close;
+
+        DialogFocus {
+            key-pressed(event) => {
+                if (event.text == Key.Escape) {
+                    password-popup.close();
+                    return accept;
+                }
+                reject
+            }
+
+            Rectangle {
+                background: #00000059;
+
+                PasswordForm {
+                    width: min(440px, parent.width - 48px);
+                    height: self.preferred-height;
+                    x: (parent.width - self.width) / 2;
+                    y: max(24px, (parent.height - self.preferred-height) / 3);
+                    closed => { password-popup.close(); }
                 }
             }
         }

@@ -406,6 +406,33 @@ Scrobbling to the user's Last.fm profile. Optional, and off until the user conne
 | `disconnect()` | Forgets the account, and the plays waiting to be sent |
 | `set-scrobbling(on)` | |
 
+### `Server`
+
+The server that keeps the library: Freya's own on this computer, or one on another computer on the network, which the user finds or types in and logs in to. The first time, Freya takes the other server's certificate and shows its fingerprint, to compare with what Settings shows on that computer; after, it trusts that certificate only. Optional: without it, a skin always shows this computer's library.
+
+| Property | Type | |
+|---|---|---|
+| `remote`, `name`, `address` | bool, string, string | Whether the library is on another computer, what that server is called and where it is |
+| `state` | string | "connecting", "connected", "unreachable" (Freya tries again by itself) or "log-in" (the server no longer takes this computer: log in again) |
+| `error` | string | Why it is unreachable, or must be logged in to |
+| `fingerprint` | string | The server's certificate's fingerprint |
+| `server-name`, `network` | string, bool | For the server on this computer: what others find it as, and whether they may connect |
+| `user`, `has-password` | string, bool | The account this computer is connected to, and whether it has a password; only then can other computers log in |
+| `devices` | [`ServerDevice`] | The devices connected to the account: `id`, `name`, `connected` (a date), `this` |
+| `password-error` | string | Why the password was not set |
+| `finding`, `found` | bool, [`FoundServer`] | While looking for servers on the network, and those that answered: `name`, `address`, `fingerprint` |
+| `logging-in`, `login-address`, `login-fingerprint`, `login-busy`, `login-error` | | While logging in to a server chosen: where it is, its certificate's fingerprint, whether Freya is asking it now, and what went wrong |
+
+| Callback | |
+|---|---|
+| `find()` | Looks for servers on the network |
+| `choose-found(index)`, `choose-address(text)` | Starts logging in to a server found, or to one typed in ("mini.local", "192.168.1.20:47475"): Freya takes its certificate, and `logging-in` turns on |
+| `log-in(user, password)`, `cancel-login()` | Once logged in, the library is that server's |
+| `use-this-computer()` | The library is this computer's server's again |
+| `set-password(password)` | At least 8 characters |
+| `revoke(id)` | Takes a device's token back: it has to log in again |
+| `set-network(on)`, `set-server-name(name)` | For the server on this computer |
+
 ### `Updates`
 
 Updates to Freya. Freya looks at launch and once a day while `check-automatically` is on, and installs only when the user asks: it downloads the new version, checks it against the release's signed checksums, puts it in place of the running Freya and restarts. On macOS (the app bundle) and Linux (the AppImage) Freya installs updates itself; elsewhere `install` opens the release's page.

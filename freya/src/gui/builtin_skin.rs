@@ -255,6 +255,46 @@ impl Convert for PlaylistRow {
     }
 }
 
+impl Convert for ServerDevice {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            id: field(&s, "id"),
+            name: field(&s, "name"),
+            connected: field(&s, "connected"),
+            this: field(&s, "this"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("id", self.id.to_value()),
+            ("name", self.name.to_value()),
+            ("connected", self.connected.to_value()),
+            ("this", self.this.to_value()),
+        ])
+    }
+}
+
+impl Convert for FoundServer {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            name: field(&s, "name"),
+            address: field(&s, "address"),
+            fingerprint: field(&s, "fingerprint"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("name", self.name.to_value()),
+            ("address", self.address.to_value()),
+            ("fingerprint", self.fingerprint.to_value()),
+        ])
+    }
+}
+
 impl Convert for StationRow {
     fn from_value(value: Value) -> Option<Self> {
         let Value::Struct(s) = value else { return None };
@@ -875,7 +915,7 @@ macro_rules! skin_api {
     };
 }
 
-const GLOBALS: [&str; 10] = [
+const GLOBALS: [&str; 11] = [
     "Player",
     "Playlist",
     "Playlists",
@@ -886,6 +926,7 @@ const GLOBALS: [&str; 10] = [
     "App",
     "Updates",
     "LastFm",
+    "Server",
 ];
 
 skin_api! {
@@ -1034,6 +1075,25 @@ skin_api! {
         LastFm."waiting" => set_waiting, get_waiting;
         LastFm."error" => set_error, get_error;
         Updates."check-automatically" => set_check_automatically, get_check_automatically;
+        Server."remote" => set_remote, get_remote;
+        Server."name" => set_name, get_name;
+        Server."address" => set_address, get_address;
+        Server."state" => set_state, get_state;
+        Server."error" => set_error, get_error;
+        Server."fingerprint" => set_fingerprint, get_fingerprint;
+        Server."server-name" => set_server_name, get_server_name;
+        Server."network" => set_network, get_network;
+        Server."user" => set_user, get_user;
+        Server."has-password" => set_has_password, get_has_password;
+        Server."devices" => set_devices, get_devices;
+        Server."password-error" => set_password_error, get_password_error;
+        Server."finding" => set_finding, get_finding;
+        Server."found" => set_found, get_found;
+        Server."logging-in" => set_logging_in, get_logging_in;
+        Server."login-address" => set_login_address, get_login_address;
+        Server."login-fingerprint" => set_login_fingerprint, get_login_fingerprint;
+        Server."login-busy" => set_login_busy, get_login_busy;
+        Server."login-error" => set_login_error, get_login_error;
     }
     callbacks {
         Player."play" => on_play, invoke_play();
@@ -1185,6 +1245,16 @@ skin_api! {
         LastFm."cancel" => on_cancel, invoke_cancel();
         LastFm."disconnect" => on_disconnect, invoke_disconnect();
         LastFm."set-scrobbling" => on_set_scrobbling, invoke_set_scrobbling(on: bool);
+        Server."find" => on_find, invoke_find();
+        Server."choose-found" => on_choose_found, invoke_choose_found(index: i32);
+        Server."choose-address" => on_choose_address, invoke_choose_address(address: SharedString);
+        Server."log-in" => on_log_in, invoke_log_in(user: SharedString, password: SharedString);
+        Server."cancel-login" => on_cancel_login, invoke_cancel_login();
+        Server."use-this-computer" => on_use_this_computer, invoke_use_this_computer();
+        Server."set-password" => on_set_password, invoke_set_password(password: SharedString);
+        Server."revoke" => on_revoke, invoke_revoke(id: SharedString);
+        Server."set-network" => on_set_network, invoke_set_network(on: bool);
+        Server."set-server-name" => on_set_server_name, invoke_set_server_name(name: SharedString);
     }
 }
 

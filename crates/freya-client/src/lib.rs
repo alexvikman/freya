@@ -117,6 +117,47 @@ fn make_agent(
     )
 }
 
+/// What a pinned server's token is kept by among [`Tokens`].
+pub fn token_key(pin: &Pin) -> String {
+    format!("https://{}", pin.address)
+}
+
+/// The server `pin` names, on another computer, called as the device `token` was given to;
+/// its pictures kept in `cache`.
+pub fn connect_pinned(
+    pin: Pin,
+    token: Option<String>,
+    cache: Option<PathBuf>,
+) -> Arc<Remote<Http>> {
+    let mut http = Http::pinned(pin).with_token(token);
+    http.cache = cache.map(PictureCache::new);
+    Arc::new(Remote(http))
+}
+
+/// Where a server typed in is: "mini.local", "192.168.1.20" or either with ":port", which is
+/// [`freya_protocol::NETWORK_PORT`] when left out.
+pub fn resolve(typed: &str) -> Result<std::net::SocketAddr, String> {
+    use std::net::ToSocketAddrs;
+    let typed = typed.trim();
+    if typed.is_empty() {
+        return Err("Type the server's name or address".into());
+    }
+    let with_port = match typed.rsplit_once(':') {
+        Some((_, port)) if port.parse::<u16>().is_ok() && !typed.ends_with(']') => typed.to_owned(),
+        _ => format!("{typed}:{}", freya_protocol::NETWORK_PORT),
+    };
+    let found: Vec<std::net::SocketAddr> = with_port
+        .to_socket_addrs()
+        .map_err(|e| format!("Could not find {typed}: {e}"))?
+        .collect();
+    found
+        .iter()
+        .find(|a| a.is_ipv4())
+        .or(found.first())
+        .copied()
+        .ok_or_else(|| format!("Could not find {typed}"))
+}
+
 /// The certificate of the server at `address`, asked for without checking it: for the user to
 /// compare its fingerprint, and to pin it.
 pub fn certificate_of(address: std::net::SocketAddr) -> ApiResult<Vec<u8>> {
@@ -701,25 +742,25 @@ fn start(address: &str, program: &Path) -> Result<(), String> {
 /// The tokens this client was given, by the server's address; kept in a file only the user
 /// can read.
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-struct Tokens(std::collections::BTreeMap<String, String>);
+pub struct Tokens(std::collections::BTreeMap<String, String>);
 
 impl Tokens {
-    fn load(file: &Path) -> Self {
+    pub fn load(file: &Path) -> Self {
         std::fs::read_to_string(file)
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
             .unwrap_or_default()
     }
 
-    fn get(&self, address: &str) -> Option<String> {
+    pub fn get(&self, address: &str) -> Option<String> {
         self.0.get(address).cloned()
     }
 
-    fn set(&mut self, address: &str, token: &str) {
+    pub fn set(&mut self, address: &str, token: &str) {
         self.0.insert(address.to_owned(), token.to_owned());
     }
 
-    fn save(&self, file: &Path) {
+    pub fn save(&self, file: &Path) {
         let written = serde_json::to_vec_pretty(self)
             .map_err(std::io::Error::other)
             .and_then(|json| write_private(file, &json));

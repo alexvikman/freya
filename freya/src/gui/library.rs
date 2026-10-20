@@ -199,6 +199,11 @@ pub enum LibrarySource {
     /// Freya's server on this computer, at `address`, started from `program` when none answers
     /// there.
     Local { address: String, program: PathBuf },
+    /// A server on another computer, its certificate pinned, called `name`.
+    Remote {
+        pin: freya_client::Pin,
+        name: String,
+    },
     /// A library in this process, kept at `database` with its pictures in `pictures`, its
     /// scans run here: as tests have it.
     #[cfg(test)]
@@ -209,15 +214,14 @@ pub enum LibrarySource {
 }
 
 impl LibrarySource {
-    /// The server's address, when the library is a server's.
-    fn address(&self) -> Option<&str> {
-        match self {
-            Self::Local { address, .. } => Some(address),
-            #[cfg(test)]
-            Self::InProcess { .. } => None,
-        }
+    /// Whether the library is on this computer.
+    fn here(&self) -> bool {
+        !matches!(self, Self::Remote { .. })
     }
 }
+
+/// How often a server that could not be reached is tried again.
+const RECONNECT_EVERY: Duration = Duration::from_secs(10);
 
 pub struct LibraryPanel {
     /// Where the library comes from; none for none.
@@ -229,8 +233,15 @@ pub struct LibraryPanel {
     server: Option<Arc<dyn Server>>,
     server_events: Option<Receiver<ServiceEvent>>,
     connected: bool,
-    /// The token the server gave this computer, for reading tracks from it.
-    token: Option<String>,
+    /// The server as this client calls it: for its account, and reading tracks from it.
+    remote: Option<Arc<freya_protocol::Remote<freya_client::Http>>>,
+    /// Where its tracks are read from, and how; made once connected.
+    audio: Option<(String, Arc<ureq::Agent>)>,
+    /// "connecting", "connected", "unreachable" or "log-in", as `Server.state`; why, and when
+    /// it was last tried.
+    server_state: &'static str,
+    server_error: String,
+    tried: Option<Instant>,
     /// The server told that the playlists changed, and how scrobbling goes, since the app
     /// last asked.
     playlists_changed: bool,
@@ -640,7 +651,11 @@ impl LibraryPanel {
             server: None,
             server_events: None,
             connected: false,
-            token: None,
+            remote: None,
+            audio: None,
+            server_state: "connecting",
+            server_error: String::new(),
+            tried: None,
             playlists_changed: false,
             lastfm_status: None,
             covers_dir: covers,
@@ -800,7 +815,32 @@ impl LibraryPanel {
                         return;
                     }
                 };
-                self.token = remote.0.token().map(str::to_owned);
+                self.remote = Some(Arc::clone(&remote));
+                (Arc::clone(&remote) as _, remote)
+            }
+            LibrarySource::Remote { pin, .. } => {
+                let tokens = crate::settings::tokens_path();
+                let token = tokens.as_deref().and_then(|file| {
+                    freya_client::Tokens::load(file).get(&freya_client::token_key(&pin))
+                });
+                let cache = crate::settings::cache_dir().map(|dir| dir.join("pictures"));
+                let remote = freya_client::connect_pinned(pin, token, cache);
+                match remote.0.account() {
+                    Ok(Some(_)) => {}
+                    Ok(None) => {
+                        self.server_state = "log-in";
+                        self.server_error =
+                            "The server no longer takes this computer: log in again.".into();
+                        return;
+                    }
+                    Err(e) => {
+                        log::warn!("could not reach the server: {e}");
+                        self.server_state = "unreachable";
+                        self.server_error = e.to_string();
+                        return;
+                    }
+                }
+                self.remote = Some(Arc::clone(&remote));
                 (Arc::clone(&remote) as _, remote)
             }
             #[cfg(test)]
@@ -834,6 +874,12 @@ impl LibraryPanel {
             Err(e) => log::warn!("could not follow the server: {e}"),
         }
         self.server = Some(server);
+        if let Some(remote) = &self.remote {
+            let (audio, agent) = remote.0.audio(freya_audio::REMOTE_TIMEOUT);
+            self.audio = Some((audio, Arc::new(agent)));
+        }
+        self.server_state = "connected";
+        self.server_error.clear();
         self.open(api);
     }
 
@@ -841,18 +887,60 @@ impl LibraryPanel {
     /// played from there: when the server is on another computer and the file is not here
     /// too, or always with `FREYA_STREAM` set, to try it on one computer.
     pub fn stream_url(&self, path: &Path) -> Option<freya_audio::RemoteSource> {
-        let address = self.source.as_ref()?.address()?;
-        self.server.as_ref()?;
+        let source = self.source.as_ref()?;
+        let remote = self.remote.as_ref()?;
+        let (audio, agent) = self.audio.as_ref()?;
         if freya_audio::is_url(&path.to_string_lossy()) {
             return None;
         }
         let forced = std::env::var_os("FREYA_STREAM").is_some();
-        let here = freya_client::is_this_computer(address) || path.exists();
+        let here = source.here() || path.exists();
         (forced || !here).then(|| freya_audio::RemoteSource {
-            url: freya_client::audio_url(address, path),
-            token: self.token.clone(),
-            agent: None,
+            url: freya_client::audio_url_at(audio, path),
+            token: remote.0.token().map(str::to_owned),
+            agent: Some(Arc::clone(agent)),
         })
+    }
+
+    /// The server as this client calls it, once connected.
+    pub fn remote(&self) -> Option<Arc<freya_protocol::Remote<freya_client::Http>>> {
+        self.remote.clone()
+    }
+
+    /// Where the library is, for `Server.remote`, `name` and `address`.
+    pub fn source_shown(&self) -> (bool, String, String) {
+        match &self.source {
+            Some(LibrarySource::Remote { pin, name }) => {
+                (true, name.clone(), pin.address.to_string())
+            }
+            _ => (false, String::new(), String::new()),
+        }
+    }
+
+    /// How the connection to the server goes, and why not, for `Server.state` and `error`.
+    pub fn server_state(&self) -> (&'static str, &str) {
+        (self.server_state, &self.server_error)
+    }
+
+    /// Whether to connect again now: the server could not be reached, a while ago.
+    pub fn wants_reconnect(&mut self) -> bool {
+        let due = self.server_state == "unreachable"
+            && self.tried.is_none_or(|at| at.elapsed() >= RECONNECT_EVERY);
+        if due {
+            self.tried = Some(Instant::now());
+        }
+        due
+    }
+
+    /// Whether clients on other computers may connect to the server, and what they find it as.
+    pub fn set_network(&mut self, on: bool) {
+        self.settings.network = on;
+        self.tell_settings();
+    }
+
+    pub fn set_server_name(&mut self, name: &str) {
+        self.settings.name = name.trim().to_owned();
+        self.tell_settings();
     }
 
     /// The library, once open.
