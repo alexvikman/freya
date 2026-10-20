@@ -432,6 +432,7 @@ The server that keeps the library: Freya's own on this computer, or one on anoth
 | `set-password(password)` | At least 8 characters |
 | `revoke(id)` | Takes a device's token back: it has to log in again |
 | `set-network(on)`, `set-server-name(name)` | For the server on this computer |
+| `browse-start()`, `browse-into(index)`, `browse-up()`, `browse-add()`, `browse-cancel()` | Choosing a music folder among a server's on another computer: `browsing`, `browse-folder` ("" where to start: the home folder and the drives) and `browse-folders` say what is shown; `browse-add` adds the folder shown to `Library.folders-draft` |
 
 ### `Updates`
 

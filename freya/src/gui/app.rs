@@ -747,6 +747,11 @@ impl App {
             let _ =
                 ui.set_global_property("Server", "devices", self.server.device_rows.model_value());
             let _ = ui.set_global_property("Server", "found", self.server.found_rows.model_value());
+            let _ = ui.set_global_property(
+                "Server",
+                "browse-folders",
+                self.server.browse_rows.model_value(),
+            );
         }
         if self.view.library_out.available {
             self.library.attach(&self.view.ui);

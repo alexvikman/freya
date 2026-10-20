@@ -8,7 +8,9 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 
 use freya_client::{Found, Http, Pin};
-use freya_protocol::{AccountInfo, Remote, ServerFound};
+use std::path::{Path, PathBuf};
+
+use freya_protocol::{AccountInfo, FolderListing, Remote, ServerControl, ServerFound};
 use slint_interpreter::{Struct, Value};
 
 use super::skin_state::{ModelRows, string};
@@ -49,9 +51,12 @@ pub struct ServerPanel {
     account: Option<AccountInfo>,
     info: Option<ServerFound>,
     password_error: String,
+    /// While choosing a music folder among the server's: the folder shown and those in it.
+    browse: Option<FolderListing>,
     done: (Sender<Done>, Receiver<Done>),
     pub device_rows: ModelRows,
     pub found_rows: ModelRows,
+    pub browse_rows: ModelRows,
 }
 
 impl ServerPanel {
@@ -66,9 +71,11 @@ impl ServerPanel {
             account: None,
             info: None,
             password_error: String::new(),
+            browse: None,
             done: channel(),
             device_rows: ModelRows::new(),
             found_rows: ModelRows::new(),
+            browse_rows: ModelRows::new(),
         }
     }
 
@@ -209,6 +216,35 @@ impl ServerPanel {
         self.refresh(Some(remote));
     }
 
+    /// Shows the folders in `folder` on the server, or where to start when none.
+    pub fn browse(&mut self, remote: Option<&Remote<Http>>, folder: Option<&Path>) {
+        let Some(remote) = remote else {
+            return;
+        };
+        match remote.server_folders(folder) {
+            Ok(listing) => self.browse = Some(listing),
+            Err(e) => log::warn!("could not list the server's folders: {e}"),
+        }
+    }
+
+    /// The folder shown, the `index`th in it, or the one it is in.
+    pub fn browsed(&self) -> Option<PathBuf> {
+        self.browse.as_ref()?.folder.clone()
+    }
+
+    pub fn browsed_into(&self, index: usize) -> Option<PathBuf> {
+        self.browse.as_ref()?.folders.get(index).cloned()
+    }
+
+    /// The folder the one shown is in; none at the start, where it goes back to.
+    pub fn browsed_up(&self) -> Option<PathBuf> {
+        self.browse.as_ref()?.parent.clone()
+    }
+
+    pub fn stop_browsing(&mut self) {
+        self.browse = None;
+    }
+
     /// `Server`'s properties but where the library is and how it goes.
     pub fn values(&mut self) -> Vec<(&'static str, Value)> {
         let account = self.account.as_ref();
@@ -219,8 +255,36 @@ impl ServerPanel {
         );
         self.found_rows
             .sync(self.found.iter().map(found_row).collect());
+        let browse = self.browse.as_ref();
+        self.browse_rows.sync(
+            browse
+                .map(|b| {
+                    b.folders
+                        .iter()
+                        .map(|f| {
+                            // Where to start, whole paths; inside a folder, names.
+                            let shown = match &b.folder {
+                                Some(_) => f.file_name().map(|n| n.to_string_lossy().into_owned()),
+                                None => None,
+                            };
+                            string(shown.unwrap_or_else(|| f.to_string_lossy().into_owned()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        );
         let info = self.info.as_ref();
         vec![
+            ("browsing", Value::Bool(browse.is_some())),
+            (
+                "browse-folder",
+                string(
+                    browse
+                        .and_then(|b| b.folder.as_ref())
+                        .map(|f| f.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                ),
+            ),
             (
                 "fingerprint",
                 string(info.map(|i| i.fingerprint.clone()).unwrap_or_default()),

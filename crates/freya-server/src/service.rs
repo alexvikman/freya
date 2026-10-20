@@ -13,9 +13,9 @@ use freya_library::Library;
 use freya_library::library::{LastFm, Online, ScanOptions, Scanner};
 use freya_library::pictures::Pictures;
 use freya_protocol::{
-    ApiError, ApiResult, LastFmStatus, LastFmTrack, LibraryApi, LibraryData, LibraryPictures, Part,
-    PlaylistEntry, SavedPlaylist, ScanEvent, Scrobble, ServerControl, ServerEvents, ServerSettings,
-    ServiceEvent,
+    ApiError, ApiResult, FolderListing, LastFmStatus, LastFmTrack, LibraryApi, LibraryData,
+    LibraryPictures, Part, PlaylistEntry, SavedPlaylist, ScanEvent, Scrobble, ServerControl,
+    ServerEvents, ServerSettings, ServiceEvent,
 };
 
 use crate::folder_watch::FolderWatch;
@@ -264,6 +264,10 @@ impl ServerControl for Service {
     fn delete_playlist(&self, name: &str) -> ApiResult<()> {
         self.playlists_changed(|playlists| playlists.delete(name))?;
         self.shared.api.with_db(|db| db.forget_playlist(name))
+    }
+
+    fn server_folders(&self, folder: Option<&Path>) -> ApiResult<FolderListing> {
+        Ok(crate::folders::listing(folder))
     }
 
     fn lastfm_status(&self) -> ApiResult<LastFmStatus> {
@@ -822,10 +826,7 @@ mod tests {
         assert!(
             matches!(
                 events.recv().unwrap(),
-                ServiceEvent::Connected {
-                    scanning: true,
-                    ..
-                }
+                ServiceEvent::Connected { scanning: true, .. }
             ),
             "an empty library is read at once"
         );

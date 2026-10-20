@@ -1094,6 +1094,9 @@ skin_api! {
         Server."login-fingerprint" => set_login_fingerprint, get_login_fingerprint;
         Server."login-busy" => set_login_busy, get_login_busy;
         Server."login-error" => set_login_error, get_login_error;
+        Server."browsing" => set_browsing, get_browsing;
+        Server."browse-folder" => set_browse_folder, get_browse_folder;
+        Server."browse-folders" => set_browse_folders, get_browse_folders;
     }
     callbacks {
         Player."play" => on_play, invoke_play();
@@ -1255,6 +1258,11 @@ skin_api! {
         Server."revoke" => on_revoke, invoke_revoke(id: SharedString);
         Server."set-network" => on_set_network, invoke_set_network(on: bool);
         Server."set-server-name" => on_set_server_name, invoke_set_server_name(name: SharedString);
+        Server."browse-start" => on_browse_start, invoke_browse_start();
+        Server."browse-into" => on_browse_into, invoke_browse_into(index: i32);
+        Server."browse-up" => on_browse_up, invoke_browse_up();
+        Server."browse-add" => on_browse_add, invoke_browse_add();
+        Server."browse-cancel" => on_browse_cancel, invoke_browse_cancel();
     }
 }
 

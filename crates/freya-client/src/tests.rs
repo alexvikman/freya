@@ -194,6 +194,11 @@ fn the_server_is_told_what_to_do_and_tells_what_happens() {
             .unwrap()
     );
 
+    // The server's folders, to choose the music's from another computer.
+    let listing = remote.server_folders(Some(&dir)).unwrap();
+    assert!(listing.folders.contains(&dir.join("music")));
+    assert!(remote.server_folders(None).unwrap().folder.is_none());
+
     // Playlists, kept by the server; every client is told of a change.
     let entry = freya_protocol::PlaylistEntry {
         path: dir.join("music/sine.flac"),

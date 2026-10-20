@@ -5400,12 +5400,98 @@ component FoldersForm inherits MenuSurface {
             }
         }
 
-        HorizontalLayout {
+        if !Server.browsing: HorizontalLayout {
             alignment: start;
 
             TextButton {
                 text: "Add Folder…";
-                clicked => { Library.add-draft-folder(); }
+                // A server on another computer: among its folders, not this computer's.
+                clicked => {
+                    if (Server.remote) {
+                        Server.browse-start();
+                    } else {
+                        Library.add-draft-folder();
+                    }
+                }
+            }
+        }
+        if Server.browsing: VerticalLayout {
+            spacing: 8px;
+
+            Text {
+                text: Server.browse-folder == "" ? "On " + Server.name : Server.browse-folder;
+                font-size: 13px;
+                font-weight: 600;
+                color: Theme.text;
+                overflow: elide;
+            }
+            Rectangle {
+                height: min(max(Server.browse-folders.length, 1), 7) * 36px;
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: Theme.divider;
+                clip: true;
+
+                if Server.browse-folders.length == 0: Text {
+                    text: "No folders in it.";
+                    font-size: 13px;
+                    color: Theme.text-secondary;
+                }
+                ScrollView {
+                    VerticalLayout {
+                        for name[i] in Server.browse-folders: Rectangle {
+                            height: 36px;
+                            background: folder-touch.has-hover ? Theme.hover : Theme.surface;
+                            accessible-role: button;
+                            accessible-label: name;
+                            accessible-action-default => { Server.browse-into(i); }
+
+                            HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                spacing: 10px;
+
+                                Icon {
+                                    width: 18px;
+                                    height: 18px;
+                                    y: (parent.height - self.height) / 2;
+                                    data: Icons.folder;
+                                    stroked: true;
+                                    color: Theme.text-secondary;
+                                }
+                                Text {
+                                    horizontal-stretch: 1;
+                                    text: name;
+                                    color: Theme.text;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                            }
+                            folder-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { Server.browse-into(i); }
+                            }
+                        }
+                    }
+                }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+
+                if Server.browse-folder != "": TextButton {
+                    text: "Up";
+                    clicked => { Server.browse-up(); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                TextButton {
+                    text: "Cancel";
+                    clicked => { Server.browse-cancel(); }
+                }
+                if Server.browse-folder != "": TextButton {
+                    text: "Add This Folder";
+                    primary: true;
+                    clicked => { Server.browse-add(); }
+                }
             }
         }
 

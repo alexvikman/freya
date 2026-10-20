@@ -4,6 +4,7 @@
 pub mod accounts;
 pub mod discovery;
 mod folder_watch;
+mod folders;
 pub mod http;
 mod lastfm;
 mod playlists;

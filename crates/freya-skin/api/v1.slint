@@ -1148,6 +1148,19 @@ export global Server {
     callback revoke(string /* id */);
     callback set-network(bool);
     callback set-server-name(string);
+
+    /// While choosing a music folder among the server's, from another computer: the folder
+    /// shown ("" where to start: the home folder and the drives) and the folders in it.
+    in property <bool> browsing;
+    in property <string> browse-folder;
+    in property <[string]> browse-folders;
+    callback browse-start();
+    /// Into the `index`th folder shown, or up to the one the folder shown is in.
+    callback browse-into(int);
+    callback browse-up();
+    /// Adds the folder shown to `Library.folders-draft`, and stops browsing.
+    callback browse-add();
+    callback browse-cancel();
 }
 
 /// Updates to Freya. Optional: without it, Freya never looks for updates. Freya looks at

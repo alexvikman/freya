@@ -139,6 +139,18 @@ pub struct AccountInfo {
     pub devices: Vec<DeviceInfo>,
 }
 
+/// The folders in a folder on the server, for choosing the music's folders from another
+/// computer.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct FolderListing {
+    /// The folder listed; none for where to start: the user's home, and the drives.
+    pub folder: Option<PathBuf>,
+    /// The folder it is in; none at the start.
+    pub parent: Option<PathBuf>,
+    /// By name; hidden ones left out.
+    pub folders: Vec<PathBuf>,
+}
+
 /// A device a user connected, with a token of its own.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct DeviceInfo {

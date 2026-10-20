@@ -143,6 +143,8 @@ macro_rules! with_server_control {
             fn rename_saved_playlist(from: &str, to: &str) -> ();
             /// Takes the playlist `name` away, with what the library keeps of it.
             fn delete_playlist(name: &str) -> ();
+            /// The folders in `folder` on the server, or where to start looking when none.
+            fn server_folders(folder: Option<&::std::path::Path>) -> $crate::FolderListing;
             /// How scrobbling to Last.fm goes.
             fn lastfm_status() -> $crate::LastFmStatus;
             /// Starts connecting the user's Last.fm account: the page, for the user's browser,
@@ -279,6 +281,13 @@ impl<'a> WireArg<'a> for &'a str {
 impl<'a> WireArg<'a> for Option<&'a str> {
     type Owned = Option<String>;
     fn lend(owned: &'a Option<String>) -> Self {
+        owned.as_deref()
+    }
+}
+
+impl<'a> WireArg<'a> for Option<&'a Path> {
+    type Owned = Option<std::path::PathBuf>;
+    fn lend(owned: &'a Option<std::path::PathBuf>) -> Self {
         owned.as_deref()
     }
 }

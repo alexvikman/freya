@@ -945,6 +945,48 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
             app.server.refresh(remote.as_deref());
         }),
     );
+    bind(
+        "Server",
+        "browse-start",
+        Box::new(|app, _| {
+            let remote = app.library.remote();
+            app.server.browse(remote.as_deref(), None);
+        }),
+    );
+    bind(
+        "Server",
+        "browse-into",
+        Box::new(|app, args| {
+            let remote = app.library.remote();
+            if let Some(folder) = app.server.browsed_into(index(args, 0)) {
+                app.server.browse(remote.as_deref(), Some(&folder));
+            }
+        }),
+    );
+    bind(
+        "Server",
+        "browse-up",
+        Box::new(|app, _| {
+            let remote = app.library.remote();
+            let up = app.server.browsed_up();
+            app.server.browse(remote.as_deref(), up.as_deref());
+        }),
+    );
+    bind(
+        "Server",
+        "browse-add",
+        Box::new(|app, _| {
+            if let Some(folder) = app.server.browsed() {
+                app.add_draft_folder(folder);
+            }
+            app.server.stop_browsing();
+        }),
+    );
+    bind(
+        "Server",
+        "browse-cancel",
+        Box::new(|app, _| app.server.stop_browsing()),
+    );
     bind("LastFm", "connect", Box::new(|app, _| app.lastfm.connect()));
     bind("LastFm", "cancel", Box::new(|app, _| app.lastfm.cancel()));
     bind(
