@@ -162,6 +162,7 @@ fn part(path: &Path, start_ms: u64, end_ms: Option<u64>) -> Media {
         end: end_ms.map(Duration::from_millis),
         tags: MediaTags::default(),
         id: 0,
+        remote: None,
     }
 }
 
@@ -646,4 +647,113 @@ fn a_stream_stays_ended_for_every_read() {
         "{:?}",
         started.elapsed()
     );
+}
+
+/// A server of `file` that answers Range requests, as Freya's does, one connection a request;
+/// with `fail_every`, every that many requests is dropped unanswered.
+fn file_server(file: PathBuf, fail_every: Option<usize>) -> String {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/audio", listener.local_addr().unwrap());
+    let bytes = std::fs::read(file).unwrap();
+    std::thread::spawn(move || {
+        for (n, connection) in listener.incoming().enumerate() {
+            let Ok(connection) = connection else {
+                continue;
+            };
+            let mut reader = BufReader::new(connection);
+            let mut range = None;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("range: bytes=") {
+                    let (from, to) = value.trim().split_once('-').unwrap();
+                    range = Some((from.parse::<usize>().unwrap(), to.parse::<usize>().unwrap()));
+                }
+            }
+            if fail_every.is_some_and(|every| n % every == every - 1) {
+                continue;
+            }
+            let (from, to) = range.expect("a range is asked for");
+            let to = to.min(bytes.len() - 1);
+            let mut connection = reader.into_inner();
+            let head = format!(
+                "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {from}-{to}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                bytes.len(),
+                to + 1 - from
+            );
+            let _ = connection.write_all(head.as_bytes());
+            let _ = connection.write_all(&bytes[from..=to]);
+        }
+    });
+    url
+}
+
+/// The frames `media` plays from `at` on, through the source.
+fn frames_from(media: &Media, at: Duration) -> u64 {
+    let mut source = crate::source::Source::open(media, &Default::default()).unwrap();
+    if !at.is_zero() {
+        source.seek(at).unwrap();
+    }
+    let mut frames = 0;
+    while let Some(chunk) = source.next_chunk().unwrap() {
+        frames += (chunk.samples.len() / chunk.channels) as u64;
+    }
+    frames
+}
+
+#[test]
+fn a_file_read_from_a_server_plays_as_the_file_itself() {
+    for name in ["sine.flac", "sine.mp3", "sine.ogg"] {
+        let local = Media::from(fixture(name));
+        let remote = Media {
+            remote: Some(file_server(fixture(name), None)),
+            ..local.clone()
+        };
+        assert_eq!(
+            frames_from(&remote, Duration::ZERO),
+            frames_from(&local, Duration::ZERO),
+            "{name}"
+        );
+        let middle = Duration::from_millis(600);
+        assert_eq!(
+            frames_from(&remote, middle),
+            frames_from(&local, middle),
+            "{name} sought"
+        );
+    }
+}
+
+#[test]
+fn a_dropped_request_is_made_again() {
+    let local = Media::from(fixture("sine.flac"));
+    let remote = Media {
+        remote: Some(file_server(fixture("sine.flac"), Some(3))),
+        ..local.clone()
+    };
+    assert_eq!(
+        frames_from(&remote, Duration::ZERO),
+        frames_from(&local, Duration::ZERO)
+    );
+}
+
+#[test]
+fn a_server_that_never_answers_is_given_up_on() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/audio", listener.local_addr().unwrap());
+    // Every connection taken and closed at once.
+    std::thread::spawn(move || {
+        for connection in listener.incoming() {
+            drop(connection)
+        }
+    });
+    let media = Media {
+        remote: Some(url),
+        ..Media::from(fixture("sine.flac"))
+    };
+    let started = std::time::Instant::now();
+    assert!(crate::source::Source::open(&media, &Default::default()).is_err());
+    assert!(started.elapsed() < Duration::from_secs(10));
 }

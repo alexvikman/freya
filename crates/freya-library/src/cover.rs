@@ -31,7 +31,12 @@ impl Cover {
 /// Finds and decodes the cover for `track`, scaled down to fit in `max_size` × `max_size`.
 pub fn read_cover(track: &Path, max_size: u32) -> Option<Cover> {
     let bytes = embedded_cover(track).or_else(|| folder_cover(track))?;
-    let image = image::load_from_memory(&bytes).ok()?;
+    cover_from(&bytes, max_size)
+}
+
+/// The cover in the picture `bytes`, at most `max_size` wide or high.
+pub fn cover_from(bytes: &[u8], max_size: u32) -> Option<Cover> {
+    let image = image::load_from_memory(bytes).ok()?;
     let image = if image.width() > max_size || image.height() > max_size {
         image.thumbnail(max_size, max_size)
     } else {

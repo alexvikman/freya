@@ -11,6 +11,7 @@ mod engine;
 mod eq;
 mod null_output;
 mod output;
+mod remote;
 mod source;
 mod state;
 mod stream;

@@ -7,6 +7,8 @@
 //! - `POST /pictures`, with `?largest=` to make it smaller: keeps the picture in the body,
 //!   answering its checksum.
 //! - `POST /album-art`: the cover of the album whose track `{"track", "largest"}` is.
+//! - `GET /audio?path=`: a track's file, the path percent-encoded, whole or the part a Range
+//!   header asks for; only the library's own music.
 //! - `GET /events`: what happens at the server, as it happens: one [`ServiceEvent`] in JSON
 //!   a line, and an empty line now and then while nothing does.
 //! - `GET /version`: `{"version": ...}`.
@@ -131,6 +133,7 @@ fn answer(served: &Served, request: Request) -> Response {
                 Err(e) => Response::error(500, e),
             }
         }
+        ("GET", "/audio") => audio(library, &request),
         ("GET", "/events") => {
             let Some(server) = &served.server else {
                 return Response::error(404, "no events here");
@@ -172,6 +175,114 @@ fn answer(served: &Served, request: Request) -> Response {
     }
 }
 
+/// The file of the library's track `?path=`, whole or the part `Range` asks for.
+fn audio(library: &dyn LibraryApi, request: &Request) -> Response {
+    let Some(path) = request
+        .query_value("path")
+        .and_then(percent_decode)
+        .map(std::path::PathBuf::from)
+    else {
+        return Response::error(400, "which file?");
+    };
+    match library.knows_file(&path) {
+        Ok(true) => {}
+        Ok(false) => return Response::error(404, "no such track"),
+        Err(e) => return Response::error(500, e),
+    }
+    let mut file = match std::fs::File::open(&path) {
+        Ok(file) => file,
+        Err(e) => return Response::error(404, e),
+    };
+    let length = match file.metadata() {
+        Ok(metadata) => metadata.len(),
+        Err(e) => return Response::error(500, e),
+    };
+    let kind = audio_type(&path);
+    let Some(range) = request.header("range") else {
+        let mut whole = Response::read(200, kind, length, Box::new(file));
+        whole.headers.push(("Accept-Ranges", "bytes".into()));
+        return whole;
+    };
+    let Some((from, to)) = byte_range(range, length) else {
+        let mut refused = Response::error(416, "no such part");
+        refused
+            .headers
+            .push(("Content-Range", format!("bytes */{length}")));
+        return refused;
+    };
+    use std::io::{Seek, SeekFrom};
+    if let Err(e) = file.seek(SeekFrom::Start(from)) {
+        return Response::error(500, e);
+    }
+    let mut part = Response::read(206, kind, to + 1 - from, Box::new(file));
+    part.headers.push(("Accept-Ranges", "bytes".into()));
+    part.headers
+        .push(("Content-Range", format!("bytes {from}-{to}/{length}")));
+    part
+}
+
+/// The first and last byte a `Range` header asks for of a file of `length` bytes: "bytes=0-99",
+/// "bytes=100-" or "bytes=-100". None for one that cannot be had, or of several parts.
+fn byte_range(range: &str, length: u64) -> Option<(u64, u64)> {
+    let spec = range.trim().strip_prefix("bytes=")?;
+    if spec.contains(',') || length == 0 {
+        return None;
+    }
+    let (from, to) = spec.split_once('-')?;
+    let (from, to) = (from.trim(), to.trim());
+    let last = length - 1;
+    let (from, to) = if from.is_empty() {
+        // The last `to` bytes.
+        let count: u64 = to.parse().ok()?;
+        (length.saturating_sub(count), last)
+    } else {
+        let from: u64 = from.parse().ok()?;
+        let to = if to.is_empty() {
+            last
+        } else {
+            to.parse::<u64>().ok()?.min(last)
+        };
+        (from, to)
+    };
+    (from <= to && from < length).then_some((from, to))
+}
+
+/// The text `value` stands for, with its `%XX` escapes undone; none when they are not valid,
+/// or not UTF-8.
+fn percent_decode(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = std::str::from_utf8(bytes.get(i + 1..i + 3)?).ok()?;
+            decoded.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            decoded.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
+/// The media type of an audio file, by its extension.
+fn audio_type(path: &std::path::Path) -> &'static str {
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "mp3" => "audio/mpeg",
+        "flac" => "audio/flac",
+        "ogg" | "oga" | "opus" => "audio/ogg",
+        "m4a" | "mp4" | "aac" => "audio/mp4",
+        "wav" => "audio/wav",
+        _ => "application/octet-stream",
+    }
+}
+
 fn event_line(event: &ServiceEvent) -> String {
     let mut line = serde_json::to_string(event).unwrap_or_default();
     line.push('\n');
@@ -194,6 +305,24 @@ mod tests {
                 .collect(),
             body: body.to_vec(),
         }
+    }
+
+    #[test]
+    fn reads_ranges_and_escapes() {
+        assert_eq!(byte_range("bytes=0-99", 1000), Some((0, 99)));
+        assert_eq!(byte_range("bytes=900-", 1000), Some((900, 999)));
+        assert_eq!(byte_range("bytes=990-2000", 1000), Some((990, 999)));
+        assert_eq!(byte_range("bytes=-100", 1000), Some((900, 999)));
+        assert_eq!(byte_range("bytes=1000-", 1000), None);
+        assert_eq!(byte_range("bytes=5-1", 1000), None);
+        assert_eq!(byte_range("bytes=0-1,5-6", 1000), None);
+        assert_eq!(byte_range("lines=0-1", 1000), None);
+        assert_eq!(
+            percent_decode("%2Fm%C3%BAsica%20x%2B1").as_deref(),
+            Some("/música x+1")
+        );
+        assert_eq!(percent_decode("%2"), None);
+        assert_eq!(percent_decode("%FF"), None);
     }
 
     #[test]

@@ -208,6 +208,17 @@ pub enum LibrarySource {
     },
 }
 
+impl LibrarySource {
+    /// The server's address, when the library is a server's.
+    fn address(&self) -> Option<&str> {
+        match self {
+            Self::Local { address, .. } => Some(address),
+            #[cfg(test)]
+            Self::InProcess { .. } => None,
+        }
+    }
+}
+
 pub struct LibraryPanel {
     /// Where the library comes from; none for none.
     source: Option<LibrarySource>,
@@ -803,6 +814,25 @@ impl LibraryPanel {
         }
         self.server = Some(server);
         self.open(api);
+    }
+
+    /// Where the server serves the file of the library's track at `path`, when it is to be
+    /// played from there: when the server is on another computer and the file is not here
+    /// too, or always with `FREYA_STREAM` set, to try it on one computer.
+    pub fn stream_url(&self, path: &Path) -> Option<String> {
+        let address = self.source.as_ref()?.address()?;
+        self.server.as_ref()?;
+        if freya_audio::is_url(&path.to_string_lossy()) {
+            return None;
+        }
+        let forced = std::env::var_os("FREYA_STREAM").is_some();
+        let here = freya_client::is_this_computer(address) || path.exists();
+        (forced || !here).then(|| freya_client::audio_url(address, path))
+    }
+
+    /// The library, once open.
+    pub fn api(&self) -> Option<Arc<dyn LibraryApi>> {
+        self.db.clone()
     }
 
     /// The server that keeps the library, once connected.

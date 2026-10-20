@@ -56,6 +56,8 @@ pub type Stream = Box<dyn FnOnce(&mut dyn Write) -> io::Result<()> + Send>;
 
 pub enum Body {
     Bytes(Vec<u8>),
+    /// `length` bytes read from a reader as they are sent, such as part of a file.
+    Read(u64, Box<dyn Read + Send>),
     Stream(Stream),
 }
 
@@ -83,6 +85,21 @@ impl Response {
     /// `message` as JSON: `{"error": message}`.
     pub fn error(status: u16, message: impl std::fmt::Display) -> Self {
         Self::json(status, &serde_json::json!({ "error": message.to_string() }))
+    }
+
+    /// `length` bytes from `reader`, read as they are sent.
+    pub fn read(
+        status: u16,
+        content_type: &'static str,
+        length: u64,
+        reader: Box<dyn Read + Send>,
+    ) -> Self {
+        Self {
+            status,
+            content_type,
+            headers: Vec::new(),
+            body: Body::Read(length, reader),
+        }
     }
 
     pub fn stream(content_type: &'static str, stream: Stream) -> Self {
@@ -193,7 +210,7 @@ impl Connection {
                 .is_some_and(|c| c.eq_ignore_ascii_case("close"));
             let response = handler(request);
             // A streamed answer ends with the connection.
-            let keep = !close && matches!(response.body, Body::Bytes(_));
+            let keep = !close && !matches!(response.body, Body::Stream(_));
             self.write(response, keep)?;
             if !keep {
                 return Ok(());
@@ -312,6 +329,16 @@ impl Connection {
                 head.push_str(&format!("Content-Length: {}\r\n\r\n", bytes.len()));
                 self.stream.write_all(head.as_bytes())?;
                 self.stream.write_all(&bytes)?;
+                self.stream.flush()
+            }
+            Body::Read(length, reader) => {
+                head.push_str(&format!("Content-Length: {length}\r\n\r\n"));
+                self.stream.write_all(head.as_bytes())?;
+                let sent = io::copy(&mut reader.take(length), &mut self.stream)?;
+                if sent < length {
+                    // Shorter than said: the connection cannot be used again.
+                    return Err(io::ErrorKind::UnexpectedEof.into());
+                }
                 self.stream.flush()
             }
             Body::Stream(stream) => {

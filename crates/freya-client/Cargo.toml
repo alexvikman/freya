@@ -15,6 +15,7 @@ serde_json = "1.0.152"
 ureq = "3"
 
 [dev-dependencies]
+freya-audio = { path = "../freya-audio" }
 freya-library = { path = "../freya-library" }
 freya-server = { path = "../freya-server" }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }

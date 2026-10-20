@@ -243,3 +243,82 @@ fn a_server_elsewhere_has_its_pictures_kept_here() {
     assert!(cache.get(&checksum).is_some());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_tracks_file_is_served_whole_or_in_parts() {
+    let (server, _remote, local, dir) = served("audio");
+    let address = format!("http://{}", server.address());
+    let track = local.all_tracks().unwrap()[0].path.clone();
+    let bytes = std::fs::read(&track).unwrap();
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build()
+        .into();
+    let get = |url: &str, range: Option<&str>| {
+        let mut request = agent.get(url);
+        if let Some(range) = range {
+            request = request.header("Range", range);
+        }
+        let mut answer = request.call().unwrap();
+        let status = answer.status().as_u16();
+        let said = answer
+            .headers()
+            .get("content-range")
+            .map(|v| v.to_str().unwrap().to_owned());
+        let body = answer.body_mut().read_to_vec().unwrap();
+        (status, said, body)
+    };
+    let url = audio_url(&address, &track);
+    let (status, said, body) = get(&url, Some("bytes=10-109"));
+    assert_eq!(status, 206);
+    assert_eq!(said, Some(format!("bytes 10-109/{}", bytes.len())));
+    assert_eq!(body, bytes[10..110]);
+    let (status, _, body) = get(&url, None);
+    assert_eq!((status, body.len()), (200, bytes.len()));
+    let (status, said, _) = get(&url, Some(&format!("bytes={}-", bytes.len())));
+    assert_eq!(status, 416);
+    assert_eq!(said, Some(format!("bytes */{}", bytes.len())));
+    // Only the library's music.
+    let (status, _, _) = get(&audio_url(&address, &dir.join("library.db")), None);
+    assert_eq!(status, 404);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_track_plays_from_the_server() {
+    let (server, _remote, local, dir) = served("plays");
+    let address = format!("http://{}", server.address());
+    let track = local
+        .all_tracks()
+        .unwrap()
+        .into_iter()
+        .find(|t| t.path.extension().is_some_and(|e| e == "flac"))
+        .unwrap();
+    let player = freya_audio::Player::silent(48_000);
+    player.play(freya_audio::Media {
+        remote: Some(audio_url(&address, &track.path)),
+        ..freya_audio::Media::from(&track.path)
+    });
+    let next = || {
+        player
+            .events()
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .unwrap()
+    };
+    match next() {
+        freya_audio::Event::TrackStarted(info) => {
+            // Named by its path in the library, though read from the server.
+            assert_eq!(info.path, track.path);
+            assert!(info.duration.is_some());
+        }
+        other => panic!("expected the track to start, got {other:?}"),
+    }
+    loop {
+        match next() {
+            freya_audio::Event::Finished => break,
+            freya_audio::Event::Unplayable { .. } => panic!("it could not be played"),
+            _ => {}
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

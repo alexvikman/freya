@@ -7,11 +7,10 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant, SystemTime};
 
 use freya_audio::{Event, Media, MediaTags, PlaybackState, Player, TrackInfo};
-use freya_library::cover::{Cover, read_cover};
+use freya_library::cover::{Cover, cover_from, read_cover};
 use freya_library::cue::{self, Found};
 use freya_library::{Entry, Playlist, TagLoader, playlist_file};
-use freya_protocol::Part;
-use freya_protocol::Track;
+use freya_protocol::{LibraryApi, Part, Track};
 use freya_skin::SkinSource;
 use slint::winit_030::WinitWindowAccessor;
 use slint::{ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
@@ -201,7 +200,9 @@ impl Covers {
         }
     }
 
-    fn request(&mut self, path: &Path) {
+    /// Reads the cover of the track at `path`: from its file, or from the library `remote`
+    /// keeps it in when it is played from there.
+    fn request(&mut self, path: &Path, remote: Option<Arc<dyn LibraryApi>>) {
         if self.wanted.as_deref() == Some(path) {
             return;
         }
@@ -209,7 +210,15 @@ impl Covers {
         let tx = self.tx.clone();
         let path = path.to_owned();
         std::thread::spawn(move || {
-            let cover = read_cover(&path, COVER_SIZE).map(|cover| {
+            let read = match &remote {
+                Some(library) => library
+                    .album_art(&path, COVER_SIZE)
+                    .ok()
+                    .flatten()
+                    .and_then(|bytes| cover_from(&bytes, COVER_SIZE)),
+                None => read_cover(&path, COVER_SIZE),
+            };
+            let cover = read.map(|cover| {
                 let file = save_cover_file(&path, &cover);
                 (cover, file)
             });
@@ -516,11 +525,11 @@ impl App {
         let Some(entry) = self.playlist.get(index) else {
             return;
         };
-        let media = media(entry);
+        let media = media(entry, &self.library);
         self.requested = Some(media.id);
         self.skip_after = None;
         self.playlist.set_current(Some(index));
-        self.covers.request(&media.path);
+        self.request_cover(&media);
         self.player.play(media);
         self.playlist_dirty = true;
         // What follows this entry, not the one queued after the last.
@@ -595,7 +604,7 @@ impl App {
             .playlist
             .peek_next(self.settings.shuffle, self.settings.repeat)
             .and_then(|i| self.playlist.get(i))
-            .map(media);
+            .map(|entry| media(entry, &self.library));
         self.armed = next.as_ref().map(|m| m.id);
         self.player.set_next(next);
     }
@@ -723,9 +732,17 @@ impl App {
         self.play_index(0);
     }
 
+    /// Reads the cover of what `media` plays, from where it is played.
+    fn request_cover(&mut self, media: &Media) {
+        let remote = media.remote.as_ref().and(self.library.api());
+        self.covers.request(&media.path, remote);
+    }
+
     fn request_missing_tags(&self) {
         for entry in self.playlist.entries().iter().filter(|e| !e.tags_loaded) {
-            if !entry.path.to_string_lossy().contains("://") {
+            // A file played from a server elsewhere is not here to read.
+            let remote = self.library.stream_url(&entry.path).is_some();
+            if !entry.path.to_string_lossy().contains("://") && !remote {
                 self.tags.request(entry.path.clone());
             }
         }
@@ -1153,7 +1170,8 @@ impl App {
                     }
                     self.listening.start(self.countable(&track), track.duration);
                     self.lastfm_started(&track);
-                    self.covers.request(&track.path);
+                    let remote = self.library.stream_url(&track.path).and(self.library.api());
+                    self.covers.request(&track.path, remote);
                     self.track = Some(track);
                     self.playlist_dirty = true;
                     self.queue_next();
@@ -1761,11 +1779,14 @@ fn show_cover(ui: &SkinWindow, image: Option<slint::Image>) {
 }
 
 /// What the player plays for a playlist entry: its file, or for a track of a CUE sheet, the
-/// part of the file the track is, with the track's own tags.
-fn media(entry: &Entry) -> Media {
+/// part of the file the track is, with the track's own tags; read from the server when
+/// `library` says it is played from there.
+fn media(entry: &Entry, library: &LibraryPanel) -> Media {
+    let remote = library.stream_url(&entry.path);
     let Some(part) = entry.part else {
         return Media {
             id: entry.id,
+            remote,
             ..Media::from(&entry.path)
         };
     };
@@ -1779,6 +1800,7 @@ fn media(entry: &Entry) -> Media {
             album: entry.album.clone(),
         },
         id: entry.id,
+        remote,
     }
 }
 

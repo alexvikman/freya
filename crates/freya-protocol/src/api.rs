@@ -40,6 +40,8 @@ macro_rules! with_library_data {
             fn track_at(path: &::std::path::Path, start: ::std::time::Duration) -> Option<$crate::Track>;
             fn album_tracks(artist: Option<&str>, album: Option<&str>) -> Vec<$crate::Track>;
             fn artist_tracks(artist: Option<&str>) -> Vec<$crate::Track>;
+            /// Whether the file at `path` is one of the library's tracks.
+            fn knows_file(path: &::std::path::Path) -> bool;
             fn genres() -> Vec<$crate::Genre>;
             fn genre_albums(genre: Option<&str>) -> Vec<$crate::Album>;
             fn genre_tracks(genre: Option<&str>) -> Vec<$crate::Track>;

@@ -16,6 +16,7 @@ use symphonia::core::units::{Time, TimeBase};
 
 use crate::Error;
 use crate::ape;
+use crate::remote::RemoteFile;
 use crate::stream::{self, Interrupt, Stream, Titles};
 
 /// Symphonia's decoders, plus Opus from libopus and Monkey's Audio of our own, which Symphonia
@@ -52,6 +53,9 @@ pub struct Media {
     /// [`crate::Event::Unplayable`], so it can tell which of its entries plays or failed even
     /// when two play the same file. 0 when it has none.
     pub id: u64,
+    /// Where the file is read from instead of `path`, which still names it: an address of a
+    /// server that answers Range requests for it, as Freya's does.
+    pub remote: Option<String>,
 }
 
 /// Tags that replace a file's. One left out keeps the file's.
@@ -94,6 +98,8 @@ pub struct TrackInfo {
     /// For internet radio: the station's name. `title` and `artist` then follow the song
     /// being played, as far as the station says.
     pub station: Option<String>,
+    /// Where the file is read from, as in [`Media::remote`].
+    pub remote: Option<String>,
 }
 
 impl TrackInfo {
@@ -109,6 +115,7 @@ impl TrackInfo {
                 album: self.album.clone(),
             },
             id: self.id,
+            remote: self.remote.clone(),
         }
     }
 
@@ -175,6 +182,20 @@ impl Source {
         let mut file_len = None;
 
         let input: Box<dyn MediaSource> = match path.to_str().filter(|p| stream::is_url(p)) {
+            _ if let Some(url) = &media.remote => {
+                let file = RemoteFile::open(url, interrupt.clone()).map_err(|e| {
+                    if interrupt.is_raised() {
+                        Error::Interrupted
+                    } else {
+                        open_err(e.to_string())
+                    }
+                })?;
+                file_len = file.byte_len();
+                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                    hint.with_extension(ext);
+                }
+                Box::new(file)
+            }
             Some(url) => {
                 let (stream, info, stream_titles) = Stream::open(url, interrupt.clone())?;
                 if let Some(ext) = info.extension_hint() {
@@ -253,6 +274,7 @@ impl Source {
             codec: decoder.codec_info().short_name.to_owned(),
             bitrate_kbps,
             station: station.and_then(|s| s.name),
+            remote: media.remote.clone(),
             ..Default::default()
         };
         if let Some(rev) = format.metadata().skip_to_latest() {

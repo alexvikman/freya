@@ -29,8 +29,26 @@ pub fn connect(address: &str, cache: Option<PathBuf>) -> Arc<Remote<Http>> {
     Arc::new(Remote(http))
 }
 
+/// Where the server at `address` serves the file of the library's track at `path`, for
+/// playing it from there.
+pub fn audio_url(address: &str, path: &Path) -> String {
+    let path = path.to_string_lossy();
+    let mut encoded = String::with_capacity(path.len() * 3);
+    for byte in path.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    format!(
+        "{}{API_PATH}/audio?path={encoded}",
+        address.trim_end_matches('/')
+    )
+}
+
 /// Whether `address` is on this computer.
-fn is_this_computer(address: &str) -> bool {
+pub fn is_this_computer(address: &str) -> bool {
     let host = address
         .split("://")
         .last()
