@@ -46,7 +46,7 @@ macro_rules! with_library_data {
             fn album_plays(
                 artist: Option<&str>,
                 album: Option<&str>,
-            ) -> ::std::collections::HashMap<(::std::path::PathBuf, Option<::std::time::Duration>), u32>;
+            ) -> Vec<((::std::path::PathBuf, Option<::std::time::Duration>), u32)>;
             /// Each album's cover as the last scan made it, by the album's key.
             fn album_covers() -> ::std::collections::HashMap<String, $crate::AlbumCover>;
             fn artist_mbid(artist: Option<&str>) -> Option<String>;
@@ -62,7 +62,8 @@ macro_rules! with_library_data {
                 favorite: bool,
                 at: ::std::time::SystemTime,
             ) -> ();
-            fn album_favorites() -> ::std::collections::HashMap<$crate::AlbumKey, ::std::time::SystemTime>;
+            /// Each favourite album, and when it was made one.
+            fn album_favorites() -> Vec<($crate::AlbumKey, ::std::time::SystemTime)>;
             fn set_artist_favorite(artist: &str, favorite: bool, at: ::std::time::SystemTime) -> ();
             fn artist_favorites() -> ::std::collections::HashMap<String, ::std::time::SystemTime>;
             fn set_playlist_favorite(playlist: &str, favorite: bool, at: ::std::time::SystemTime) -> ();
@@ -92,7 +93,8 @@ macro_rules! with_library_data {
             fn set_playlist_info(playlist: &str, info: &$crate::PlaylistInfo) -> ();
             fn rename_playlist(from: &str, to: &str) -> ();
             fn forget_playlist(playlist: &str) -> ();
-            fn playlist_added(playlist: &str) -> ::std::collections::HashMap<$crate::PlaylistTrack, ::std::time::SystemTime>;
+            /// When each of a playlist's tracks was added to it.
+            fn playlist_added(playlist: &str) -> Vec<($crate::PlaylistTrack, ::std::time::SystemTime)>;
             fn note_playlist_added(playlist: &str, tracks: &[$crate::PlaylistTrack], at: ::std::time::SystemTime) -> ();
         }
     };
@@ -114,6 +116,163 @@ macro_rules! define_library_data {
 }
 
 with_library_data!(define_library_data);
+
+/// How an argument of a call goes over the network: as its owned form, which the call is lent.
+pub trait WireArg<'a> {
+    type Owned: serde::Serialize + serde::de::DeserializeOwned;
+    fn lend(owned: &'a Self::Owned) -> Self;
+}
+
+macro_rules! copied_args {
+    ($($t:ty),*) => {$(
+        impl<'a> WireArg<'a> for $t {
+            type Owned = $t;
+            fn lend(owned: &'a $t) -> Self {
+                *owned
+            }
+        }
+    )*};
+}
+
+copied_args!(
+    usize,
+    u32,
+    bool,
+    std::time::SystemTime,
+    std::time::Duration,
+    crate::PictureKind,
+    crate::ArtistOrder,
+    crate::AlbumOrder
+);
+
+macro_rules! lent_args {
+    ($($t:ty),*) => {$(
+        impl<'a> WireArg<'a> for &'a $t {
+            type Owned = $t;
+            fn lend(owned: &'a $t) -> Self {
+                owned
+            }
+        }
+    )*};
+}
+
+lent_args!(
+    crate::ArtistEdit,
+    crate::GenreInfo,
+    crate::AlbumMatch,
+    crate::PlaylistInfo
+);
+
+impl<'a> WireArg<'a> for &'a str {
+    type Owned = String;
+    fn lend(owned: &'a String) -> Self {
+        owned
+    }
+}
+
+impl<'a> WireArg<'a> for Option<&'a str> {
+    type Owned = Option<String>;
+    fn lend(owned: &'a Option<String>) -> Self {
+        owned.as_deref()
+    }
+}
+
+impl<'a> WireArg<'a> for &'a Path {
+    type Owned = std::path::PathBuf;
+    fn lend(owned: &'a std::path::PathBuf) -> Self {
+        owned
+    }
+}
+
+impl<'a> WireArg<'a> for &'a [crate::PlaylistTrack] {
+    type Owned = Vec<crate::PlaylistTrack>;
+    fn lend(owned: &'a Vec<crate::PlaylistTrack>) -> Self {
+        owned
+    }
+}
+
+fn wire_error(e: impl std::fmt::Display) -> ApiError {
+    ApiError(format!("could not read what was sent: {e}"))
+}
+
+macro_rules! wire_library_data {
+    ($(
+        $(#[doc = $doc:literal])*
+        fn $name:ident($($arg:ident: $ty:ty),* $(,)?) -> $ret:ty;
+    )*) => {
+        /// Answers the call of `method` with `args`, as [`Remote`] sent them, from `api`; none
+        /// for a method there is no such call of.
+        pub fn dispatch(
+            api: &dyn LibraryData,
+            method: &str,
+            args: serde_json::Value,
+        ) -> Option<ApiResult<serde_json::Value>> {
+            match method {
+                $(
+                    stringify!($name) => Some((|| {
+                        let ($($arg,)*): ($(<$ty as WireArg<'_>>::Owned,)*) =
+                            serde_json::from_value(args).map_err(wire_error)?;
+                        let answer = api.$name($(<$ty as WireArg<'_>>::lend(&$arg)),*)?;
+                        serde_json::to_value(answer).map_err(wire_error)
+                    })()),
+                )*
+                _ => None,
+            }
+        }
+
+        impl<T: Transport> LibraryData for Remote<T> {
+            $(
+                fn $name(&self, $($arg: $ty),*) -> ApiResult<$ret> {
+                    let args = serde_json::to_value(($($arg,)*)).map_err(wire_error)?;
+                    let answer = self.0.call(stringify!($name), args)?;
+                    serde_json::from_value(answer).map_err(wire_error)
+                }
+            )*
+        }
+    };
+}
+
+/// What carries a call to a library elsewhere and brings back its answer.
+pub trait Transport: Send + Sync {
+    fn call(&self, method: &str, args: serde_json::Value) -> ApiResult<serde_json::Value>;
+    /// The picture kept as `checksum`.
+    fn picture(&self, checksum: &str) -> ApiResult<Option<Vec<u8>>>;
+    /// Keeps the picture in `bytes`, at most `largest` wide or high when given: its checksum.
+    fn keep_picture(&self, bytes: &[u8], largest: Option<u32>) -> ApiResult<String>;
+    fn album_art(&self, track: &Path, largest: u32) -> ApiResult<Option<Vec<u8>>>;
+}
+
+impl<T: Transport> LibraryPictures for Remote<T> {
+    fn picture(&self, checksum: &str) -> ApiResult<Option<Vec<u8>>> {
+        self.0.picture(checksum)
+    }
+
+    fn put_picture(&self, bytes: &[u8]) -> ApiResult<String> {
+        self.0.keep_picture(bytes, None)
+    }
+
+    fn take_picture(&self, bytes: &[u8], largest: u32) -> ApiResult<String> {
+        self.0.keep_picture(bytes, Some(largest))
+    }
+
+    fn album_art(&self, track: &Path, largest: u32) -> ApiResult<Option<Vec<u8>>> {
+        self.0.album_art(track, largest)
+    }
+}
+
+/// Whether `checksum` names a picture as Freya names them: 64 hex digits, its SHA-256. Nothing
+/// else is looked up, so no name leads out of the pictures' folder.
+pub fn is_checksum(checksum: &str) -> bool {
+    checksum.len() == 64 && checksum.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Where the API is served, under the server's address.
+pub const API_PATH: &str = "/api/v1";
+
+/// A library elsewhere, called through `T`.
+pub struct Remote<T>(pub T);
+
+with_library_data!(wire_library_data);
 
 /// The library's pictures, and its music's covers.
 pub trait LibraryPictures: Send + Sync {

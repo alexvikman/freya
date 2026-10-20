@@ -277,6 +277,23 @@ impl LocalLibrary {
     }
 }
 
+/// An answer of the library as the API gives it: as it is, or a map as its pairs.
+trait IntoApi<T> {
+    fn into_api(self) -> T;
+}
+
+impl<T> IntoApi<T> for T {
+    fn into_api(self) -> T {
+        self
+    }
+}
+
+impl<K, V> IntoApi<Vec<(K, V)>> for std::collections::HashMap<K, V> {
+    fn into_api(self) -> Vec<(K, V)> {
+        self.into_iter().collect()
+    }
+}
+
 fn api_error(e: impl std::fmt::Display) -> ApiError {
     ApiError(e.to_string())
 }
@@ -289,7 +306,10 @@ macro_rules! serve_library_data {
         impl LibraryData for LocalLibrary {
             $(
                 fn $name(&self, $($arg: $ty),*) -> ApiResult<$ret> {
-                    lock(&self.db).$name($($arg),*).map_err(api_error)
+                    lock(&self.db)
+                        .$name($($arg),*)
+                        .map(IntoApi::into_api)
+                        .map_err(api_error)
                 }
             )*
         }
@@ -300,6 +320,9 @@ freya_protocol::with_library_data!(serve_library_data);
 
 impl LibraryPictures for LocalLibrary {
     fn picture(&self, checksum: &str) -> ApiResult<Option<Vec<u8>>> {
+        if !freya_protocol::is_checksum(checksum) {
+            return Ok(None);
+        }
         Ok(self.pictures()?.read(checksum))
     }
 
@@ -314,6 +337,10 @@ impl LibraryPictures for LocalLibrary {
     }
 
     fn album_art(&self, track: &Path, largest: u32) -> ApiResult<Option<Vec<u8>>> {
+        // Only the library's own music is read.
+        if !lock(&self.db).knows_file(track).map_err(api_error)? {
+            return Ok(None);
+        }
         let Some(picture) = freya_library::cover::album_art_large(track, largest) else {
             return Ok(None);
         };

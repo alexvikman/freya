@@ -1259,6 +1259,7 @@ impl LibraryPanel {
         }
         self.play_counts = db
             .album_plays(artist.as_deref(), album.as_deref())
+            .map(|plays| plays.into_iter().collect())
             .unwrap_or_else(|e| {
                 log::warn!("library: {e}");
                 HashMap::new()
@@ -2481,10 +2482,13 @@ impl LibraryPanel {
             log::warn!("could not read what was changed about artists: {e}");
             HashMap::new()
         });
-        self.favorites = db.album_favorites().unwrap_or_else(|e| {
-            log::warn!("could not read the favourite albums: {e}");
-            HashMap::new()
-        });
+        self.favorites = db
+            .album_favorites()
+            .map(|f| f.into_iter().collect())
+            .unwrap_or_else(|e| {
+                log::warn!("could not read the favourite albums: {e}");
+                HashMap::new()
+            });
         self.artist_favorites = db.artist_favorites().unwrap_or_default();
         self.playlist_favorites = db.playlist_favorites().unwrap_or_default();
         let result = if self.searching() {

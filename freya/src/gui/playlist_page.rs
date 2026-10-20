@@ -137,7 +137,9 @@ impl LibraryPanel {
                 }
                 (
                     db.playlist_info(name).unwrap_or_default(),
-                    db.playlist_added(name).unwrap_or_default(),
+                    db.playlist_added(name)
+                        .map(|added| added.into_iter().collect::<HashMap<_, _>>())
+                        .unwrap_or_default(),
                 )
             }
             None => Default::default(),

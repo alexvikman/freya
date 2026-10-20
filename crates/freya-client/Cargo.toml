@@ -1,0 +1,19 @@
+[package]
+name = "freya-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+freya-protocol = { path = "../freya-protocol" }
+serde_json = "1.0.152"
+ureq = "3"
+
+[dev-dependencies]
+freya-library = { path = "../freya-library" }
+freya-server = { path = "../freya-server" }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }

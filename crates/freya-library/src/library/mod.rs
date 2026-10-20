@@ -352,6 +352,14 @@ impl Library {
     }
 
     /// Every track filed under `artist`, album by album.
+    /// Whether the file at `path` is one of the library's tracks.
+    pub fn knows_file(&self, path: &Path) -> Result<bool> {
+        let mut query = self
+            .db
+            .prepare_cached("SELECT EXISTS (SELECT 1 FROM tracks WHERE path = ?1)")?;
+        query.query_row([path.to_string_lossy()], |row| row.get(0))
+    }
+
     pub fn artist_tracks(&self, artist: Option<&str>) -> Result<Vec<Track>> {
         let mut query = self.db.prepare_cached(&format!(
             "SELECT {TRACK_COLUMNS} FROM tracks

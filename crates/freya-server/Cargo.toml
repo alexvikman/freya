@@ -11,7 +11,10 @@ workspace = true
 [dependencies]
 freya-library = { path = "../freya-library" }
 freya-protocol = { path = "../freya-protocol" }
+httparse = "1.10.1"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 log = "0.4.34"
 # Watching the music folders for changes (see src/folder_watch.rs).
 notify = "8.2.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.152"
