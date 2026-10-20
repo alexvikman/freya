@@ -9,6 +9,11 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+# Stopped by Ctrl-C, SIGTERM and SIGHUP alike.
+ctrlc = { version = "3.5.2", features = ["termination"] }
+directories = "6.0.0"
+env_logger = "0.11.11"
+freya-lastfm = { path = "../freya-lastfm" }
 freya-library = { path = "../freya-library" }
 freya-protocol = { path = "../freya-protocol" }
 httparse = "1.10.1"
@@ -18,3 +23,4 @@ log = "0.4.34"
 notify = "8.2.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.152"
+toml = "1.1.8"

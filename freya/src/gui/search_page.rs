@@ -432,7 +432,7 @@ mod tests {
         let cancel = std::sync::atomic::AtomicBool::new(false);
         freya_library::library::scan(&mut db, std::slice::from_ref(&dir), &cancel, |_| {}).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
-        let mut panel = LibraryPanel::new(None, None, None);
+        let mut panel = LibraryPanel::new(None, None);
         panel.open(crate::gui::library::tests::local(db, None));
         panel.set_playlists(&[("Freya's favourites".to_owned(), &[][..], None)]);
         panel

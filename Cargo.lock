@@ -1664,6 +1664,8 @@ dependencies = [
  "directories",
  "env_logger",
  "freya-audio",
+ "freya-client",
+ "freya-lastfm",
  "freya-library",
  "freya-protocol",
  "freya-server",
@@ -1726,6 +1728,16 @@ dependencies = [
  "freya-protocol",
  "freya-server",
  "image",
+ "log",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
+name = "freya-lastfm"
+version = "0.2.1"
+dependencies = [
+ "serde",
  "serde_json",
  "ureq",
 ]
@@ -1756,6 +1768,10 @@ dependencies = [
 name = "freya-server"
 version = "0.2.1"
 dependencies = [
+ "ctrlc",
+ "directories",
+ "env_logger",
+ "freya-lastfm",
  "freya-library",
  "freya-protocol",
  "httparse",
@@ -1764,6 +1780,7 @@ dependencies = [
  "notify",
  "serde",
  "serde_json",
+ "toml",
 ]
 
 [[package]]

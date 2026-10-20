@@ -432,6 +432,7 @@ impl App {
         library.set_online_bios(settings.artist_bios_online);
         library.set_online_wikipedia(settings.artist_wikipedia_online);
         library.set_fanart_key(settings.fanart_key.clone());
+        library.set_folders(&settings.library_folders);
         library.set_watch_folders(settings.watch_folders);
         library.set_scan_every_hours(settings.scan_every_hours);
         library.set_scan_at_start(settings.scan_at_start);
@@ -735,11 +736,19 @@ impl App {
     /// Shows the library, if the skin has one.
     fn attach_library(&mut self) {
         if self.view.library_out.available {
-            self.library.attach(
-                &self.view.ui,
-                &self.settings.library_folders,
-                !self.settings.damaged,
-            );
+            self.library.attach(&self.view.ui);
+            // The server's settings, as the settings page shows them.
+            if let Some(server) = self.library.server_settings().cloned() {
+                let settings = &mut self.settings;
+                settings.library_folders = server.library_folders;
+                settings.watch_folders = server.watch_folders;
+                settings.scan_every_hours = server.scan_every_hours;
+                settings.scan_at_start = server.scan_at_start;
+                settings.artist_pictures_online = server.artist_pictures_online;
+                settings.artist_bios_online = server.artist_bios_online;
+                settings.artist_wikipedia_online = server.artist_wikipedia_online;
+                settings.fanart_key = server.fanart_key;
+            }
         }
     }
 

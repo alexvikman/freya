@@ -1,12 +1,12 @@
-//! Last.fm, as a scan asks it what it says of artists who lack it: see
-//! [`freya_library::library::Online`]. Pages only show what was kept.
+//! Last.fm, as a scan asks it what it says of artists and genres that lack it: see
+//! [`freya_library::library::Online`]. Clients only show what was kept.
 
 use std::sync::Arc;
 
 use freya_library::library::LastFm;
 use freya_protocol::{ArtistText, plain_name};
 
-use crate::lastfm::{Client, Credentials};
+use freya_lastfm::{Client, Credentials};
 
 struct Texts(Client);
 

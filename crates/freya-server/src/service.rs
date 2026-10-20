@@ -10,10 +10,11 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
 
 use freya_library::Library;
-use freya_library::library::{Online, ScanOptions, Scanner};
+use freya_library::library::{LastFm, Online, ScanOptions, Scanner};
 use freya_library::pictures::Pictures;
 use freya_protocol::{
-    ApiError, ApiResult, LibraryApi, LibraryData, LibraryPictures, Part, ScanEvent, ServiceEvent,
+    ApiError, ApiResult, LibraryApi, LibraryData, LibraryPictures, Part, ScanEvent, ServerControl,
+    ServerEvents, ServerSettings, ServiceEvent,
 };
 
 use crate::folder_watch::FolderWatch;
@@ -24,34 +25,36 @@ const TICK: Duration = Duration::from_millis(100);
 /// not there before are there now.
 const SCAN_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 
-/// How the library is kept up to date, as the user set it.
-#[derive(Clone, Debug)]
+/// How the service keeps the library up to date.
+#[derive(Clone, Default)]
 pub struct ServiceConfig {
-    /// The music's folders.
-    pub folders: Vec<PathBuf>,
-    /// Whether scans may bring the library in line with `folders`: not when the settings were
-    /// damaged, and the list may be missing some, which would take their tracks away.
+    /// As the user set it.
+    pub settings: ServerSettings,
+    /// Where `settings` are kept when the user changes them; nowhere when none.
+    pub settings_file: Option<PathBuf>,
+    /// Whether scans may bring the library in line with the folders: not when the settings
+    /// were damaged, and the list may be missing some, which would take their tracks away.
     pub scans_allowed: bool,
-    /// Whether the folders are watched, and what changes in them scanned at once.
-    pub watch_folders: bool,
-    /// How often the whole library is scanned, if at all; and whether also each time the
-    /// service starts.
-    pub scan_every: Option<Duration>,
-    pub scan_at_start: bool,
-    /// What scans may ask the internet about artists.
-    pub online: Online,
+    /// Last.fm, for what it says of artists, when this build may ask it.
+    pub lastfm: Option<Arc<dyn LastFm>>,
 }
 
-impl Default for ServiceConfig {
-    fn default() -> Self {
-        Self {
-            folders: Vec::new(),
-            scans_allowed: true,
-            watch_folders: true,
-            scan_every: Some(Duration::from_secs(24 * 3600)),
-            scan_at_start: false,
-            online: Online::default(),
+impl ServiceConfig {
+    /// What scans may ask the internet about artists.
+    fn online(&self) -> Online {
+        let settings = &self.settings;
+        Online {
+            deezer: settings.artist_pictures_online,
+            fanart_key: settings.fanart_key.clone(),
+            lastfm: self.lastfm.clone().filter(|_| settings.artist_bios_online),
+            wikipedia: settings.artist_wikipedia_online,
         }
+    }
+
+    /// How often the whole library is scanned, if at all.
+    fn scan_every(&self) -> Option<Duration> {
+        let hours = self.settings.scan_every_hours;
+        (hours > 0).then(|| Duration::from_secs(u64::from(hours) * 3600))
     }
 }
 
@@ -132,96 +135,6 @@ impl Service {
         Arc::clone(&self.shared.api) as _
     }
 
-    /// What happens from now on, as it happens.
-    pub fn subscribe(&self) -> Receiver<ServiceEvent> {
-        let (tell, events) = channel();
-        lock(&self.shared.listeners).push(tell);
-        events
-    }
-
-    /// Whether a scan, or asking the internet, runs.
-    pub fn is_scanning(&self) -> bool {
-        lock(&self.shared.state).scanning
-    }
-
-    /// The music's folders now: those watched, and scanned.
-    pub fn set_folders(&self, folders: &[PathBuf]) {
-        self.with(|state| state.set_folders(folders));
-    }
-
-    pub fn set_watch_folders(&self, watch: bool) {
-        self.with(|state| {
-            state.config.watch_folders = watch;
-            if !watch {
-                state.watch = None;
-            }
-            state.start_watching();
-        });
-    }
-
-    pub fn set_scan_every(&self, every: Option<Duration>) {
-        self.with(|state| {
-            state.config.scan_every = every;
-            state.scan_checked = None;
-        });
-    }
-
-    pub fn set_scan_at_start(&self, scan: bool) {
-        self.with(|state| state.config.scan_at_start = scan);
-    }
-
-    pub fn set_online(&self, online: Online) {
-        self.with(|state| state.config.online = online);
-    }
-
-    /// Brings the library in line with the folders: reads what changed, and asks the internet
-    /// for what artists lack.
-    pub fn rescan(&self) {
-        self.with(|state| state.scan(Vec::new(), false));
-    }
-
-    /// Reads every file again and makes every cover again, changed or not.
-    pub fn rescan_files(&self) {
-        self.with(|state| state.scan(Vec::new(), true));
-    }
-
-    /// Looks through `folders`, within the library's, only.
-    pub fn scan_only(&self, folders: Vec<PathBuf>) {
-        self.with(|state| state.scan(folders, false));
-    }
-
-    /// Stops the scan running, and what was to follow it; what it did so far is kept.
-    pub fn stop_scan(&self) {
-        self.with(|state| {
-            state.fetch_later.clear();
-            state.fetch_all_later = false;
-            state.scan_later.clear();
-            state.scanner.stop();
-        });
-    }
-
-    /// Asks the internet what `artists` lack, every artist when none, once no scan runs:
-    /// after the user matched them to another artist or allowed another service.
-    pub fn fetch(&self, artists: Option<Vec<String>>) {
-        self.with(|state| state.fetch(artists));
-    }
-
-    /// Notes that the track at `path` was played at `at`. Returns whether it is in the
-    /// library now: while a scan writes, the play waits for it.
-    pub fn record_play(&self, path: &Path, part: Option<Part>, at: SystemTime) -> bool {
-        self.with(|state| {
-            state.plays.push((path.to_owned(), part, at));
-            !state.scanning && state.write_plays()
-        })
-    }
-
-    /// Writes the plays noted, whether a scan runs or not: for when Freya quits.
-    pub fn save(&self) {
-        self.with(|state| {
-            state.write_plays();
-        });
-    }
-
     /// Runs `f` on the state, then tells the listeners what it said.
     fn with<R>(&self, f: impl FnOnce(&mut State) -> R) -> R {
         Self::run(&self.shared, f)
@@ -240,6 +153,80 @@ impl Service {
             }
         }
         result
+    }
+}
+
+impl ServerControl for Service {
+    fn settings(&self) -> ApiResult<ServerSettings> {
+        Ok(lock(&self.shared.state).config.settings.clone())
+    }
+
+    fn set_settings(&self, settings: &ServerSettings) -> ApiResult<()> {
+        self.with(|state| state.set_settings(settings.clone()))
+    }
+
+    fn rescan(&self) -> ApiResult<()> {
+        self.with(|state| state.scan(Vec::new(), false));
+        Ok(())
+    }
+
+    fn rescan_files(&self) -> ApiResult<()> {
+        self.with(|state| state.scan(Vec::new(), true));
+        Ok(())
+    }
+
+    fn scan_only(&self, folders: &[PathBuf]) -> ApiResult<()> {
+        self.with(|state| state.scan(folders.to_vec(), false));
+        Ok(())
+    }
+
+    /// Stops the scan running, and what was to follow it; what it did so far is kept.
+    fn stop_scan(&self) -> ApiResult<()> {
+        self.with(|state| {
+            state.fetch_later.clear();
+            state.fetch_all_later = false;
+            state.scan_later.clear();
+            state.scanner.stop();
+        });
+        Ok(())
+    }
+
+    fn fetch(&self, artists: Option<&[String]>) -> ApiResult<()> {
+        self.with(|state| state.fetch(artists.map(<[String]>::to_vec)));
+        Ok(())
+    }
+
+    /// While a scan writes, the play waits for it.
+    fn record_play(&self, path: &Path, part: Option<Part>, at: SystemTime) -> ApiResult<bool> {
+        Ok(self.with(|state| {
+            state.plays.push((path.to_owned(), part, at));
+            !state.scanning && state.write_plays()
+        }))
+    }
+
+    fn save(&self) -> ApiResult<()> {
+        self.with(|state| {
+            state.write_plays();
+        });
+        Ok(())
+    }
+
+    fn is_scanning(&self) -> ApiResult<bool> {
+        Ok(lock(&self.shared.state).scanning)
+    }
+}
+
+impl ServerEvents for Service {
+    fn events(&self) -> ApiResult<Receiver<ServiceEvent>> {
+        let (tell, events) = channel();
+        // Told under the state's lock, so nothing it does is missed in between.
+        let state = lock(&self.shared.state);
+        let _ = tell.send(ServiceEvent::Connected {
+            scanning: state.scanning,
+        });
+        lock(&self.shared.listeners).push(tell);
+        drop(state);
+        Ok(events)
     }
 }
 
@@ -316,7 +303,7 @@ macro_rules! serve_library_data {
     };
 }
 
-freya_protocol::with_library_data!(serve_library_data);
+freya_protocol::with_library_data!(serve_library_data {});
 
 impl LibraryPictures for LocalLibrary {
     fn picture(&self, checksum: &str) -> ApiResult<Option<Vec<u8>>> {
@@ -395,7 +382,7 @@ impl State {
             return;
         }
         let empty = self.db.last_full_scan().ok().flatten().is_none();
-        if empty || self.config.scan_at_start {
+        if empty || self.config.settings.scan_at_start {
             self.scan(Vec::new(), false);
         } else if !self.db.cover_colors_current().unwrap_or(true)
             && let Some(pictures) = &self.pictures
@@ -465,28 +452,57 @@ impl State {
         }
     }
 
-    fn set_folders(&mut self, folders: &[PathBuf]) {
-        if self.config.folders != folders {
-            self.config.folders = folders.to_vec();
+    /// Works by `settings` from now on, and keeps them.
+    fn set_settings(&mut self, settings: ServerSettings) -> ApiResult<()> {
+        let before = std::mem::replace(&mut self.config.settings, settings);
+        let now = &self.config.settings;
+        if before.library_folders != now.library_folders
+            || before.watch_folders != now.watch_folders
+        {
             self.watch = None;
         }
+        if before.scan_every_hours != now.scan_every_hours {
+            self.scan_checked = None;
+        }
+        // A service newly allowed is asked now what artists lack.
+        let allowed = (now.artist_pictures_online && !before.artist_pictures_online)
+            || (now.artist_bios_online && !before.artist_bios_online)
+            || (now.artist_wikipedia_online && !before.artist_wikipedia_online)
+            || (now.fanart_key.is_some() && now.fanart_key != before.fanart_key);
         self.start_watching();
+        if allowed {
+            self.fetch(None);
+        }
+        self.save_settings()
+    }
+
+    fn save_settings(&self) -> ApiResult<()> {
+        let Some(file) = &self.config.settings_file else {
+            return Ok(());
+        };
+        crate::settings::save(file, &self.config.settings).map_err(|e| {
+            ApiError(format!(
+                "could not keep the settings in {}: {e}",
+                file.display()
+            ))
+        })
     }
 
     fn start_watching(&mut self) {
+        let settings = &self.config.settings;
         if self.watch.is_none()
-            && self.config.watch_folders
+            && settings.watch_folders
             && self.config.scans_allowed
-            && !self.config.folders.is_empty()
+            && !settings.library_folders.is_empty()
         {
             self.watch_tried = Some(Instant::now());
-            self.watch = FolderWatch::new(&self.config.folders);
+            self.watch = FolderWatch::new(&settings.library_folders);
         }
     }
 
     /// Watches the folders once they are there, when they were not: a drive mounted later.
     fn watch_when_there(&mut self) {
-        let folders = &self.config.folders;
+        let folders = &self.config.settings.library_folders;
         let all = self
             .watch
             .as_ref()
@@ -494,7 +510,7 @@ impl State {
         let tried_lately = self
             .watch_tried
             .is_some_and(|at| at.elapsed() < SCAN_CHECK_INTERVAL);
-        if all || tried_lately || !self.config.watch_folders {
+        if all || tried_lately || !self.config.settings.watch_folders {
             return;
         }
         // Looked at once a minute, not at each tick.
@@ -517,7 +533,10 @@ impl State {
     fn scan_changed(&mut self, changed: Vec<PathBuf>) {
         let changed: Vec<PathBuf> = changed
             .into_iter()
-            .filter(|c| self.config.folders.iter().any(|f| c.starts_with(f)))
+            .filter(|c| {
+                let folders = &self.config.settings.library_folders;
+                folders.iter().any(|f| c.starts_with(f))
+            })
             .collect();
         if changed.is_empty() {
             return;
@@ -532,7 +551,7 @@ impl State {
 
     /// Scans the whole library when the last scan of it is older than the user wants.
     fn scan_when_due(&mut self) {
-        let Some(every) = self.config.scan_every else {
+        let Some(every) = self.config.scan_every() else {
             return;
         };
         if self.scanning
@@ -568,10 +587,10 @@ impl State {
             pictures: self.pictures.clone(),
             rescan,
             only,
-            online: self.config.online.clone(),
+            online: self.config.online(),
         };
-        self.scanner
-            .start(self.database.clone(), self.config.folders.clone(), options);
+        let folders = self.config.settings.library_folders.clone();
+        self.scanner.start(self.database.clone(), folders, options);
         self.started();
     }
 
@@ -586,15 +605,12 @@ impl State {
         let Some(pictures) = &self.pictures else {
             return;
         };
-        if !self.config.online.any() {
+        let online = self.config.online();
+        if !online.any() {
             return;
         }
-        self.scanner.fetch(
-            self.database.clone(),
-            artists,
-            self.config.online.clone(),
-            pictures.clone(),
-        );
+        self.scanner
+            .fetch(self.database.clone(), artists, online, pictures.clone());
         self.started();
     }
 
@@ -661,16 +677,26 @@ mod tests {
     fn a_first_start_reads_the_music_and_plays_wait_for_the_scan() {
         let dir = temp_dir("first");
         let config = ServiceConfig {
-            folders: vec![dir.join("music")],
-            watch_folders: false,
+            settings: ServerSettings {
+                library_folders: vec![dir.join("music")],
+                watch_folders: false,
+                ..ServerSettings::default()
+            },
+            scans_allowed: true,
             ..ServiceConfig::default()
         };
         let service = Service::start(dir.join("library.db"), None, config).unwrap();
-        let events = service.subscribe();
-        assert!(service.is_scanning(), "an empty library is read at once");
+        let events = service.events().unwrap();
+        assert_eq!(
+            events.recv().unwrap(),
+            ServiceEvent::Connected { scanning: true },
+            "an empty library is read at once"
+        );
         // Noted while the scan writes: it waits for it.
         let track = dir.join("music/sine.flac");
-        let written = service.record_play(&track, None, SystemTime::now());
+        let written = service
+            .record_play(&track, None, SystemTime::now())
+            .unwrap();
         let seen = until_ended(&events);
         assert!(
             seen.iter()
@@ -681,7 +707,7 @@ mod tests {
             seen.contains(&ServiceEvent::PlaysWritten),
             "and was written after"
         );
-        assert!(!service.is_scanning());
+        assert!(!service.is_scanning().unwrap());
         drop(service);
 
         let library = Library::open(&dir.join("library.db")).unwrap();
@@ -694,13 +720,15 @@ mod tests {
     fn damaged_settings_scan_nothing() {
         let dir = temp_dir("damaged");
         let config = ServiceConfig {
-            folders: vec![dir.join("music")],
-            scans_allowed: false,
+            settings: ServerSettings {
+                library_folders: vec![dir.join("music")],
+                ..ServerSettings::default()
+            },
             ..ServiceConfig::default()
         };
         let service = Service::start(dir.join("library.db"), None, config).unwrap();
-        service.rescan();
-        assert!(!service.is_scanning());
+        service.rescan().unwrap();
+        assert!(!service.is_scanning().unwrap());
         drop(service);
         let library = Library::open(&dir.join("library.db")).unwrap();
         assert!(library.all_tracks().unwrap().is_empty());

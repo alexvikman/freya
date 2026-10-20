@@ -8,13 +8,13 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant, SystemTime};
 
 use freya_library::Entry;
-use freya_library::library::Online;
 use freya_library::thumbnails::{ArtistSource, Thumbnail, Thumbnails};
 use freya_protocol::{
     Album, AlbumKey, AlbumMatch, AlbumOrder, Artist, ArtistEdit, ArtistOrder, CHOSEN, Genre,
-    Header, LibraryApi, Part, PictureKind, PictureRow, Played, ScanEvent, ServiceEvent, Track,
-    plain_name, split_artist,
+    Header, LibraryApi, Part, PictureKind, PictureRow, Played, ScanEvent, Server, ServerSettings,
+    ServiceEvent, Track, plain_name, split_artist,
 };
+#[cfg(test)]
 use freya_server::{Service, ServiceConfig};
 use slint::{Image, ModelRc, VecModel};
 use slint_interpreter::{Struct, Value};
@@ -193,16 +193,31 @@ impl Item {
     }
 }
 
+/// Where the library comes from.
+#[derive(Clone, Debug)]
+pub enum LibrarySource {
+    /// Freya's server on this computer, at `address`, started from `program` when none answers
+    /// there.
+    Local { address: String, program: PathBuf },
+    /// A library in this process, kept at `database` with its pictures in `pictures`, its
+    /// scans run here: as tests have it.
+    #[cfg(test)]
+    InProcess {
+        database: PathBuf,
+        pictures: Option<PathBuf>,
+    },
+}
+
 pub struct LibraryPanel {
-    /// Where the database is kept.
-    path: Option<PathBuf>,
+    /// Where the library comes from; none for none.
+    source: Option<LibrarySource>,
     /// The library, opened when a skin first shows it.
     db: Option<Arc<dyn LibraryApi>>,
-    /// The library's scans, started with it; what it tells of them, and where it keeps
-    /// pictures.
-    service: Option<Service>,
-    service_events: Option<Receiver<ServiceEvent>>,
-    pictures_dir: Option<PathBuf>,
+    /// The server that keeps it, what it tells of its scans, and whether it was connected
+    /// before: when connected again, what it did meanwhile is read anew.
+    server: Option<Arc<dyn Server>>,
+    server_events: Option<Receiver<ServiceEvent>>,
+    connected: bool,
     /// Where thumbnails of covers and pictures are made, once the library is open.
     covers_dir: Option<PathBuf>,
     /// The lists opened, the section's own list first; `back` returns to the one before.
@@ -250,12 +265,9 @@ pub struct LibraryPanel {
     album_list: bool,
     /// A scan was started and its end not yet taken in.
     scanning: bool,
-    /// The library's folders, whether they are watched, how often the whole library is
-    /// scanned, if at all, and whether also each time Freya starts: for the service.
-    folders: Vec<PathBuf>,
-    watch_folders: bool,
-    scan_every: Option<Duration>,
-    scan_at_start: bool,
+    /// How the server keeps the library, as the user set it: its folders, scans, and what may
+    /// be asked of the internet.
+    settings: ServerSettings,
     /// The folder a scan looks through or reads now, and how far it is with albums' covers
     /// and with asking the internet about artists.
     scan_folder: Option<PathBuf>,
@@ -273,22 +285,18 @@ pub struct LibraryPanel {
     /// up; -1 to show the list from the top.
     reveal_row: i32,
     reveals: i32,
-    /// How artists are ordered, whether they show as a list rather than a grid of pictures,
-    /// and whether a scan may ask Deezer for pictures of them.
+    /// How artists are ordered, and whether they show as a list rather than a grid of
+    /// pictures.
     artist_order: ArtistOrder,
     artist_list: bool,
-    online_pictures: bool,
     /// The artists shown, by their picture's key.
     artist_keys: HashMap<String, Option<String>>,
-    /// While an artist's albums are shown, the page over them; and whether a scan may ask
-    /// Last.fm and Wikipedia what they say of artists.
+    /// While an artist's albums are shown, the page over them.
     artist_page: Option<ArtistPage>,
     /// Albums' covers whole, read on a thread.
     full_covers: (Sender<FullCover>, Receiver<FullCover>),
     /// The artist page's pictures a thread made, by the page's picture's key.
     page_pictures: (Sender<MadePage>, Receiver<MadePage>),
-    online_bios: bool,
-    online_wikipedia: bool,
     /// What the user changed about artists, by the tags' name for them.
     edits: HashMap<String, ArtistEdit>,
     /// While the user changes an artist: who, by the tags' name, and what the internet says
@@ -323,8 +331,6 @@ pub struct LibraryPanel {
     album_covers: HashMap<String, Image>,
     album_match_error: String,
     album_rows: ModelRows,
-    /// The user's personal fanart.tv key, for wide pictures of artists.
-    fanart_key: Option<String>,
     popular_rows: ModelRows,
     /// The letters to jump to in the artists or albums shown, for `Library.letters`.
     letter_rows: ModelRows,
@@ -608,16 +614,16 @@ impl RecentCovers {
 }
 
 impl LibraryPanel {
-    /// A library kept at `path`, with album covers made in `covers` and the pictures of
-    /// artists downloaded kept in `pictures`.
-    pub fn new(path: Option<PathBuf>, covers: Option<PathBuf>, pictures: Option<PathBuf>) -> Self {
+    /// The library from `source`, with thumbnails of its covers and pictures made in
+    /// `covers`.
+    pub fn new(source: Option<LibrarySource>, covers: Option<PathBuf>) -> Self {
         Self {
-            path,
+            source,
             db: None,
-            service: None,
-            service_events: None,
-            pictures_dir: pictures.clone(),
-            covers_dir: covers.filter(|_| pictures.is_some()),
+            server: None,
+            server_events: None,
+            connected: false,
+            covers_dir: covers,
             opened: vec![Level::Artists],
             query: String::new(),
             items: Vec::new(),
@@ -644,10 +650,7 @@ impl LibraryPanel {
             recent_covers: RecentCovers::default(),
             covers_ready: 0,
             scanning: false,
-            folders: Vec::new(),
-            watch_folders: true,
-            scan_every: Some(Duration::from_secs(24 * 3600)),
-            scan_at_start: false,
+            settings: ServerSettings::default(),
             scan_folder: None,
             covers_progress: None,
             artists_progress: None,
@@ -664,12 +667,10 @@ impl LibraryPanel {
             album_page: None,
             artist_order: ArtistOrder::Name,
             artist_list: false,
-            online_pictures: true,
             artist_keys: HashMap::new(),
             artist_page: None,
             page_pictures: std::sync::mpsc::channel(),
             full_covers: std::sync::mpsc::channel(),
-            online_wikipedia: true,
             edits: HashMap::new(),
             draft: None,
             found_biography: String::new(),
@@ -694,8 +695,6 @@ impl LibraryPanel {
             album_covers: HashMap::new(),
             album_match_error: String::new(),
             album_rows: ModelRows::new(),
-            online_bios: true,
-            fanart_key: None,
             popular_rows: ModelRows::new(),
             letter_rows: ModelRows::new(),
             playlist_page: None,
@@ -723,11 +722,8 @@ impl LibraryPanel {
     }
 
     /// Shows the library in a skin window that has the `Library` global. The first time,
-    /// opens the library and scans `folders` for changes.
-    /// Opens the library for `ui`, the first time also bringing it in line with `folders`,
-    /// unless `scan` is false: when the settings were damaged, a missing folder list would
-    /// otherwise remove every track.
-    pub fn attach(&mut self, ui: &SkinWindow, folders: &[PathBuf], scan: bool) {
+    /// connects to the server that keeps it, which brings it in line with its folders.
+    pub fn attach(&mut self, ui: &SkinWindow) {
         let _ = ui.set_global_property("Library", "rows", self.rows.model_value());
         let _ = ui.set_global_property("Library", "popular", self.popular_rows.model_value());
         let _ = ui.set_global_property("Library", "letters", self.letter_rows.model_value());
@@ -756,29 +752,62 @@ impl LibraryPanel {
         if self.db.is_some() {
             return;
         }
-        let Some(path) = self.path.clone() else {
+        let Some(source) = self.source.clone() else {
             return;
         };
-        self.folders = folders.to_vec();
-        let config = ServiceConfig {
-            folders: self.folders.clone(),
-            scans_allowed: scan,
-            watch_folders: self.watch_folders,
-            scan_every: self.scan_every,
-            scan_at_start: self.scan_at_start,
-            online: self.online(),
-        };
-        let service = match Service::start(path, self.pictures_dir.clone(), config) {
-            Ok(service) => service,
-            Err(e) => {
-                log::warn!("{e}");
-                return;
+        let (api, server): (Arc<dyn LibraryApi>, Arc<dyn Server>) = match source {
+            LibrarySource::Local { address, program } => {
+                if let Err(e) = freya_client::start_local_server(&address, &program) {
+                    log::warn!("no library: {e}");
+                    return;
+                }
+                let remote = freya_client::connect(&address);
+                (Arc::clone(&remote) as _, remote)
+            }
+            #[cfg(test)]
+            LibrarySource::InProcess { database, pictures } => {
+                let config = ServiceConfig {
+                    settings: self.settings.clone(),
+                    settings_file: None,
+                    scans_allowed: true,
+                    lastfm: freya_server::lastfm(),
+                };
+                match Service::start(database, pictures, config) {
+                    Ok(service) => {
+                        let service = Arc::new(service);
+                        (service.api(), service)
+                    }
+                    Err(e) => {
+                        log::warn!("{e}");
+                        return;
+                    }
+                }
             }
         };
-        self.scanning = service.is_scanning();
-        self.service_events = Some(service.subscribe());
-        self.open(service.api());
-        self.service = Some(service);
+        match server.settings() {
+            Ok(settings) => self.settings = settings,
+            Err(e) => log::warn!("could not read the server's settings: {e}"),
+        }
+        match server.events() {
+            Ok(events) => self.server_events = Some(events),
+            Err(e) => log::warn!("could not follow the server: {e}"),
+        }
+        self.server = Some(server);
+        self.open(api);
+    }
+
+    /// How the server keeps the library, as the user set it; once it is open.
+    pub fn server_settings(&self) -> Option<&ServerSettings> {
+        self.server.as_ref().map(|_| &self.settings)
+    }
+
+    /// Tells the server the settings as they are now.
+    fn tell_settings(&self) {
+        if let Some(server) = &self.server
+            && let Err(e) = server.set_settings(&self.settings)
+        {
+            log::warn!("could not change the server's settings: {e}");
+        }
     }
 
     /// Shows the library `api`: its rows, and its pictures through thumbnails made in the
@@ -801,33 +830,27 @@ impl LibraryPanel {
 
     /// The library's folders now: those watched, and scanned later.
     pub fn set_folders(&mut self, folders: &[PathBuf]) {
-        self.folders = folders.to_vec();
-        if let Some(service) = &self.service {
-            service.set_folders(folders);
+        if self.settings.library_folders != folders {
+            self.settings.library_folders = folders.to_vec();
+            self.tell_settings();
         }
     }
 
     /// Whether the folders are watched, and what changes in them scanned at once.
     pub fn set_watch_folders(&mut self, watch: bool) {
-        self.watch_folders = watch;
-        if let Some(service) = &self.service {
-            service.set_watch_folders(watch);
-        }
+        self.settings.watch_folders = watch;
+        self.tell_settings();
     }
 
     /// How often the whole library is scanned, in hours; 0 for never.
     pub fn set_scan_every_hours(&mut self, hours: u32) {
-        self.scan_every = (hours > 0).then(|| Duration::from_secs(u64::from(hours) * 3600));
-        if let Some(service) = &self.service {
-            service.set_scan_every(self.scan_every);
-        }
+        self.settings.scan_every_hours = hours;
+        self.tell_settings();
     }
 
     pub fn set_scan_at_start(&mut self, scan: bool) {
-        self.scan_at_start = scan;
-        if let Some(service) = &self.service {
-            service.set_scan_at_start(scan);
-        }
+        self.settings.scan_at_start = scan;
+        self.tell_settings();
     }
 
     /// Takes away what an older Freya kept in the cache and keeps elsewhere now: pictures it
@@ -878,16 +901,20 @@ impl LibraryPanel {
     /// for what artists lack.
     pub fn rescan(&mut self, folders: &[PathBuf]) {
         self.set_folders(folders);
-        if let Some(service) = &self.service {
-            service.rescan();
+        if let Some(server) = &self.server
+            && let Err(e) = server.rescan()
+        {
+            log::warn!("could not scan: {e}");
         }
     }
 
     /// Reads every file in `folders` again and makes every cover again, changed or not.
     pub fn rescan_files(&mut self, folders: &[PathBuf]) {
         self.set_folders(folders);
-        if let Some(service) = &self.service {
-            service.rescan_files();
+        if let Some(server) = &self.server
+            && let Err(e) = server.rescan_files()
+        {
+            log::warn!("could not scan: {e}");
         }
     }
 
@@ -901,15 +928,19 @@ impl LibraryPanel {
     /// Looks through `added`, folders new in `folders`, only.
     pub fn scan_added(&mut self, folders: &[PathBuf], added: Vec<PathBuf>) {
         self.set_folders(folders);
-        if let Some(service) = &self.service {
-            service.scan_only(added);
+        if let Some(server) = &self.server
+            && let Err(e) = server.scan_only(&added)
+        {
+            log::warn!("could not scan: {e}");
         }
     }
 
     /// Stops the scan running; what it did so far is kept.
     pub fn stop_scan(&mut self) {
-        if let Some(service) = &self.service {
-            service.stop_scan();
+        if let Some(server) = &self.server
+            && let Err(e) = server.stop_scan()
+        {
+            log::warn!("could not stop the scan: {e}");
         }
     }
 
@@ -989,12 +1020,20 @@ impl LibraryPanel {
         }
         let mut finished = false;
         let events: Vec<ServiceEvent> = self
-            .service_events
+            .server_events
             .as_ref()
             .map(|events| events.try_iter().collect())
             .unwrap_or_default();
         for event in events {
             match event {
+                ServiceEvent::Connected { scanning } => {
+                    self.scanning = scanning;
+                    // What changed while the server could not tell is read anew.
+                    if std::mem::replace(&mut self.connected, true) {
+                        self.stale = true;
+                        self.pictures_stale = true;
+                    }
+                }
                 ServiceEvent::ScanStarted => self.scanning = true,
                 ServiceEvent::Scan(ScanEvent::Progress { done, total }) => {
                     self.progress = Some((done, total));
@@ -1059,10 +1098,14 @@ impl LibraryPanel {
     /// Notes that a track was played just now.
     pub fn record_play(&mut self, path: PathBuf, part: Option<Part>) {
         // While a scan writes, the play waits rather than the window.
-        let written = self
-            .service
-            .as_ref()
-            .is_some_and(|service| service.record_play(&path, part, SystemTime::now()));
+        let written = self.server.as_ref().is_some_and(|server| {
+            server
+                .record_play(&path, part, SystemTime::now())
+                .unwrap_or_else(|e| {
+                    log::warn!("could not note a play of {}: {e}", path.display());
+                    false
+                })
+        });
         if written && self.shows_plays() {
             self.reload();
         }
@@ -1075,33 +1118,20 @@ impl LibraryPanel {
 
     /// Writes the plays noted, waiting for a scan if one is running. For when Freya quits.
     pub fn save(&mut self) {
-        if let Some(service) = &self.service {
-            service.save();
-        }
-    }
-
-    /// What a scan may ask of the internet about artists, as the user allows.
-    fn online(&self) -> Online {
-        Online {
-            deezer: self.online_pictures,
-            fanart_key: self.fanart_key.clone(),
-            lastfm: self.online_bios.then(super::artist_info::lastfm).flatten(),
-            wikipedia: self.online_wikipedia,
+        if let Some(server) = &self.server
+            && let Err(e) = server.save()
+        {
+            log::warn!("could not write the plays: {e}");
         }
     }
 
     /// Asks the internet what `artists` lack, every artist when none, once no scan runs:
-    /// after the user matched them to another artist or allowed another service.
+    /// after the user matched them to another artist.
     fn fetch(&mut self, artists: Option<Vec<String>>) {
-        if let Some(service) = &self.service {
-            service.fetch(artists);
-        }
-    }
-
-    /// Tells the service what scans may ask the internet now.
-    fn tell_online(&self) {
-        if let Some(service) = &self.service {
-            service.set_online(self.online());
+        if let Some(server) = &self.server
+            && let Err(e) = server.fetch(artists.as_deref())
+        {
+            log::warn!("could not ask the server to look: {e}");
         }
     }
 
@@ -1552,34 +1582,23 @@ impl LibraryPanel {
     /// The user's personal fanart.tv key, or none: with a new one, fanart.tv is asked for
     /// the pictures artists lack.
     pub fn set_fanart_key(&mut self, key: Option<String>) {
-        if self.fanart_key != key {
-            self.fanart_key = key;
-            self.tell_online();
-            if self.fanart_key.is_some() {
-                self.fetch(None);
-            }
+        if self.settings.fanart_key != key {
+            self.settings.fanart_key = key;
+            self.tell_settings();
         }
     }
 
     /// Whether a scan may ask Wikipedia for articles on artists: allowed, it is asked now for
     /// those who lack one.
     pub fn set_online_wikipedia(&mut self, online: bool) {
-        let allowed = online && !self.online_wikipedia;
-        self.online_wikipedia = online;
-        self.tell_online();
-        if allowed {
-            self.fetch(None);
-        }
+        self.settings.artist_wikipedia_online = online;
+        self.tell_settings();
     }
 
     /// Whether a scan may ask Last.fm what it says of artists; as for Wikipedia.
     pub fn set_online_bios(&mut self, online: bool) {
-        let allowed = online && !self.online_bios;
-        self.online_bios = online;
-        self.tell_online();
-        if allowed {
-            self.fetch(None);
-        }
+        self.settings.artist_bios_online = online;
+        self.tell_settings();
     }
 
     /// Takes the album page's color from its cover, once the cover's thumbnail is made.
@@ -1667,10 +1686,10 @@ impl LibraryPanel {
         }
         let request = Request {
             name: freya_protocol::plain_name(name).to_owned(),
-            deezer: self.online_pictures,
+            deezer: self.settings.artist_pictures_online,
             mbid: self.known_mbid(Some(name)),
             search: true,
-            fanart_key: self.fanart_key.clone(),
+            fanart_key: self.settings.fanart_key.clone(),
             kept,
             covers: self.artist_source(Some(name)).covers,
         };
@@ -1915,7 +1934,8 @@ impl LibraryPanel {
         self.artist_match = self.artist_page.as_ref().map(|page| page.name.clone());
         if let Some(Some(name)) = &self.artist_match {
             let name = plain_name(name).to_owned();
-            self.match_finder.find(name, self.fanart_key.clone());
+            self.match_finder
+                .find(name, self.settings.fanart_key.clone());
         }
     }
 
@@ -1998,7 +2018,7 @@ impl LibraryPanel {
         self.matches.clear();
         self.show_matches();
         self.match_finder
-            .find(query.to_owned(), self.fanart_key.clone());
+            .find(query.to_owned(), self.settings.fanart_key.clone());
     }
 
     fn forget_matches(&mut self) {
@@ -2358,8 +2378,8 @@ impl LibraryPanel {
 
     /// Whether pictures of artists may come from Deezer, when they have none of their own.
     pub fn set_online_pictures(&mut self, online: bool) {
-        self.online_pictures = online;
-        self.tell_online();
+        self.settings.artist_pictures_online = online;
+        self.tell_settings();
     }
 
     fn reload_artists(&mut self) {
@@ -3148,14 +3168,17 @@ impl LibraryPanel {
             ("reveals", Value::Number(f64::from(self.reveals))),
             ("album-page", self.album_page_value()),
             ("artist-page", self.artist_page_value()),
-            ("artist-bios-online", Value::Bool(self.online_bios)),
+            (
+                "artist-bios-online",
+                Value::Bool(self.settings.artist_bios_online),
+            ),
             (
                 "artist-wikipedia-online",
-                Value::Bool(self.online_wikipedia),
+                Value::Bool(self.settings.artist_wikipedia_online),
             ),
             (
                 "fanart-key",
-                string(self.fanart_key.clone().unwrap_or_default()),
+                string(self.settings.fanart_key.clone().unwrap_or_default()),
             ),
             ("artist-draft", self.draft_value()),
             ("genre-draft", self.genre_draft_value()),
@@ -3182,16 +3205,16 @@ impl LibraryPanel {
                 "artist-view",
                 string(if self.artist_list { "list" } else { "grid" }),
             ),
-            ("artist-pictures-online", Value::Bool(self.online_pictures)),
-            ("watch-folders", Value::Bool(self.watch_folders)),
+            (
+                "artist-pictures-online",
+                Value::Bool(self.settings.artist_pictures_online),
+            ),
+            ("watch-folders", Value::Bool(self.settings.watch_folders)),
             (
                 "scan-every-hours",
-                Value::Number(
-                    self.scan_every
-                        .map_or(0.0, |every| (every.as_secs() / 3600) as f64),
-                ),
+                Value::Number(f64::from(self.settings.scan_every_hours)),
             ),
-            ("scan-at-start", Value::Bool(self.scan_at_start)),
+            ("scan-at-start", Value::Bool(self.settings.scan_at_start)),
             ("album-sort", string(self.album_sort.name())),
             (
                 "album-view",
@@ -3842,7 +3865,7 @@ mod tests {
 
     #[test]
     fn shows_what_a_scan_kept_of_an_artist() {
-        let mut panel = LibraryPanel::new(None, None, None);
+        let mut panel = LibraryPanel::new(None, None);
         let db = Library::open_in_memory().unwrap();
         db.set_artist_picture(
             "Shining",
@@ -3914,7 +3937,7 @@ mod tests {
         let mut db = Library::open_in_memory().unwrap();
         let cancel = std::sync::atomic::AtomicBool::new(false);
         freya_library::library::scan(&mut db, std::slice::from_ref(&dir), &cancel, |_| {}).unwrap();
-        let mut panel = LibraryPanel::new(None, None, None);
+        let mut panel = LibraryPanel::new(None, None);
         panel.open(local(db, None));
         panel.reload();
 
@@ -3962,9 +3985,9 @@ mod tests {
         db.set_artist_edit(artist.as_deref().unwrap(), &edit)
             .unwrap();
 
-        let mut panel = LibraryPanel::new(None, None, None);
+        let mut panel = LibraryPanel::new(None, None);
         panel.open(local(db, None));
-        panel.online_bios = false;
+        panel.settings.artist_bios_online = false;
         panel.reload();
         let Value::Model(rows) = panel.rows.model_value() else {
             panic!("a model");
@@ -4009,9 +4032,9 @@ mod tests {
         .unwrap();
         db.set_searched_artist_id("Freya", Some("found-id"), SystemTime::now())
             .unwrap();
-        let mut panel = LibraryPanel::new(None, None, None);
+        let mut panel = LibraryPanel::new(None, None);
         panel.open(local(db, None));
-        panel.online_bios = false;
+        panel.settings.artist_bios_online = false;
         panel.opened = vec![
             Level::Artists,
             Level::ArtistAlbums {
@@ -4076,10 +4099,10 @@ mod tests {
             .unwrap()
             .and_then(|row| row.picture)
             .expect("the folder's, taken in by the scan");
-        let mut panel = LibraryPanel::new(None, None, Some(dir.join("pictures")));
+        let mut panel = LibraryPanel::new(None, None);
         panel.open(local(db, Some(dir.join("pictures"))));
-        panel.online_pictures = false;
-        panel.online_bios = false;
+        panel.settings.artist_pictures_online = false;
+        panel.settings.artist_bios_online = false;
         panel.opened = vec![
             Level::Artists,
             Level::ArtistAlbums {
@@ -4167,9 +4190,9 @@ mod tests {
         let cancel = std::sync::atomic::AtomicBool::new(false);
         freya_library::library::scan(&mut db, std::slice::from_ref(&dir), &cancel, |_| {}).unwrap();
         let album = db.all_albums().unwrap()[0].name.clone();
-        let mut panel = LibraryPanel::new(None, None, None);
+        let mut panel = LibraryPanel::new(None, None);
         panel.open(local(db, None));
-        panel.online_bios = false;
+        panel.settings.artist_bios_online = false;
         let candidate = |mbid: &str| freya_protocol::AlbumCandidate {
             release_group: format!("rg-{mbid}"),
             title: "Sines".into(),
@@ -4230,9 +4253,9 @@ mod tests {
         freya_library::library::scan(&mut db, std::slice::from_ref(&dir), &cancel, |_| {}).unwrap();
         db.set_searched_artist_id("Freya", Some("se"), SystemTime::now())
             .unwrap();
-        let mut panel = LibraryPanel::new(None, None, None);
+        let mut panel = LibraryPanel::new(None, None);
         panel.open(local(db, None));
-        panel.online_bios = false;
+        panel.settings.artist_bios_online = false;
         panel.opened = vec![
             Level::Artists,
             Level::ArtistAlbums {
@@ -4338,7 +4361,7 @@ mod tests {
         let cancel = std::sync::atomic::AtomicBool::new(false);
         freya_library::library::scan(&mut db, std::slice::from_ref(&dir), &cancel, |_| {}).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
-        let mut panel = LibraryPanel::new(None, None, None);
+        let mut panel = LibraryPanel::new(None, None);
         panel.open(local(db, None));
         panel.opened = vec![Level::Albums];
         panel.reload();
@@ -4468,7 +4491,7 @@ mod tests {
 
     #[test]
     fn a_track_in_a_discography_plays_its_own_album() {
-        let mut panel = LibraryPanel::new(None, None, None);
+        let mut panel = LibraryPanel::new(None, None);
         panel.opened = vec![Level::ArtistAlbums {
             artist: Some("Shores of Null".into()),
         }];
@@ -4497,7 +4520,7 @@ mod tests {
 
     #[test]
     fn the_track_playing_is_marked_by_its_file_and_part() {
-        let mut panel = LibraryPanel::new(None, None, None);
+        let mut panel = LibraryPanel::new(None, None);
         let disc = |n: u64| Track {
             path: PathBuf::from("/music/disc.flac"),
             part: Some(Part {
@@ -4556,7 +4579,7 @@ mod tests {
             .next()
             .expect("an album");
 
-        let mut panel = LibraryPanel::new(None, None, None);
+        let mut panel = LibraryPanel::new(None, None);
         panel.open(local(db, None));
         panel.opened = vec![
             Level::Albums,
@@ -4634,9 +4657,9 @@ mod tests {
             .expect("an artist")
             .name;
 
-        let mut panel = LibraryPanel::new(None, None, None);
+        let mut panel = LibraryPanel::new(None, None);
         panel.open(local(db, None));
-        panel.online_bios = false;
+        panel.settings.artist_bios_online = false;
         panel.opened = vec![
             Level::Artists,
             Level::ArtistAlbums {
@@ -4688,7 +4711,7 @@ mod tests {
 
     #[test]
     fn typing_a_search_is_one_place() {
-        let mut panel = LibraryPanel::new(None, None, None);
+        let mut panel = LibraryPanel::new(None, None);
         let browsing = panel.place();
         panel.search("sho");
         let searching = panel.place();

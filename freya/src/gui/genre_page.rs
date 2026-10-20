@@ -278,7 +278,7 @@ mod tests {
         };
         db.set_genre_article("Ambient", Some(&article), SystemTime::now())
             .unwrap();
-        let mut panel = LibraryPanel::new(None, None, None);
+        let mut panel = LibraryPanel::new(None, None);
         panel.open(crate::gui::library::tests::local(db, None));
         panel.load_genre_page("Ambient".into(), false);
         let page = panel.artist_page.as_ref().unwrap();

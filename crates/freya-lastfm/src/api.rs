@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use super::md5;
+use crate::md5;
 
 const ENDPOINT: &str = "https://ws.audioscrobbler.com/2.0/";
 /// Where the user lets Freya scrobble to their account.

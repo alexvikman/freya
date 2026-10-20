@@ -4,8 +4,6 @@
 //! hands it what plays, and reads back how it is going. Plays wait in a queue on disk until
 //! Last.fm has them, and are sent again with growing pauses while it cannot be reached.
 
-mod api;
-mod md5;
 mod queue;
 mod session;
 
@@ -14,7 +12,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime};
 
-pub use api::{Client, Credentials, Scrobble, Track};
+pub use freya_lastfm::{Client, Credentials, Scrobble, Track};
 use queue::Queue;
 
 /// While the user decides on Last.fm's page, Freya asks this often whether they have allowed it.
@@ -387,7 +385,7 @@ impl Worker {
             return;
         };
         while !self.queue.is_empty() {
-            let batch = self.queue.oldest(api::MAX_BATCH).to_vec();
+            let batch = self.queue.oldest(freya_lastfm::MAX_BATCH).to_vec();
             match client.scrobble(key, &batch) {
                 Ok(accepted) => {
                     if accepted < batch.len() {
@@ -451,7 +449,7 @@ impl Worker {
     }
 
     /// Sends the waiting plays again after `delay`, and shows why they wait.
-    fn wait_to_retry(&mut self, error: &api::Error, delay: Duration) {
+    fn wait_to_retry(&mut self, error: &freya_lastfm::Error, delay: Duration) {
         self.retry = Some(Instant::now() + delay);
         let waiting = self.queue.len();
         let error = error.to_string();
@@ -463,7 +461,7 @@ impl Worker {
 
     /// Last.fm no longer takes the session: the user has to connect again. Their waiting
     /// plays stay, for when they do.
-    fn session_lost(&mut self, error: &api::Error) {
+    fn session_lost(&mut self, error: &freya_lastfm::Error) {
         if let Some((user, _)) = self.session.take() {
             session::delete(&user);
         }

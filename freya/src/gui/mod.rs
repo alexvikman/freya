@@ -2,7 +2,6 @@
 
 mod app;
 mod app_icon;
-mod artist_info;
 mod bindings;
 mod builtin_skin;
 mod cover_decoder;
@@ -134,9 +133,11 @@ pub fn run(options: Options) -> anyhow::Result<()> {
         window_events.clone(),
         app::Collections {
             library: library::LibraryPanel::new(
-                crate::settings::library_path(),
+                server_program().map(|program| library::LibrarySource::Local {
+                    address: format!("http://{}", freya_server::LOCAL_ADDRESS),
+                    program,
+                }),
                 crate::settings::cache_dir().map(|dir| dir.join("covers")),
-                crate::settings::pictures_dir(),
             ),
             stations: radio::Stations::load(crate::settings::stations_path()),
             playlists: playlists::Playlists::load(crate::settings::playlists_dir()),
@@ -271,4 +272,10 @@ fn select_backend(requested: Option<String>, events: &WindowEvents) -> anyhow::R
                 .context("could not start the window system")
         }
     }
+}
+
+/// Freya's server, beside this program.
+fn server_program() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    Some(exe.with_file_name(format!("freya-server{}", std::env::consts::EXE_SUFFIX)))
 }

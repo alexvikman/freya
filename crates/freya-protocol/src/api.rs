@@ -1,6 +1,10 @@
-//! What a client can ask of the library: [`LibraryApi`].
+//! What a client can ask of the library ([`LibraryApi`]) and of the server that keeps it
+//! ([`ServerControl`]).
 
 use std::path::Path;
+use std::sync::mpsc::Receiver;
+
+use crate::ServiceEvent;
 
 /// Why the library could not do what it was asked.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -16,12 +20,14 @@ impl std::error::Error for ApiError {}
 
 pub type ApiResult<T> = Result<T, ApiError>;
 
-/// Calls `$then!` with every call of [`LibraryData`]: each as the library's own method of the
-/// name takes it. The one list the trait, and what serves and calls it, are made from.
+/// Calls `$then!` with what is in the braces and every call of [`LibraryData`]: each as the
+/// library's own method of the name takes it. The one list the trait, and what serves and
+/// calls it, are made from.
 #[macro_export]
 macro_rules! with_library_data {
-    ($then:ident) => {
+    ($then:ident { $($pre:tt)* }) => {
         $then! {
+            $($pre)*
             /// Totals of the whole library.
             fn stats() -> $crate::Stats;
             fn artists() -> Vec<$crate::Artist>;
@@ -100,22 +106,99 @@ macro_rules! with_library_data {
     };
 }
 
-macro_rules! define_library_data {
-    ($(
-        $(#[doc = $doc:literal])*
-        fn $name:ident($($arg:ident: $ty:ty),* $(,)?) -> $ret:ty;
-    )*) => {
-        /// What the library holds, and what the user changes in it.
-        pub trait LibraryData: Send + Sync {
+/// Every call of [`ServerControl`]: what the server is asked to do, beyond the library.
+macro_rules! with_server_control {
+    ($then:ident { $($pre:tt)* }) => {
+        $then! {
+            $($pre)*
+            /// How the server keeps the library, as the user set it.
+            fn settings() -> $crate::ServerSettings;
+            /// Keeps `settings` and works by them from now on: a service newly allowed is
+            /// asked what artists lack.
+            fn set_settings(settings: &$crate::ServerSettings) -> ();
+            /// Brings the library in line with its folders.
+            fn rescan() -> ();
+            /// Reads every file again and makes every cover again.
+            fn rescan_files() -> ();
+            /// Looks through `folders`, within the library's, only.
+            fn scan_only(folders: &[::std::path::PathBuf]) -> ();
+            fn stop_scan() -> ();
+            /// Asks the internet what `artists` lack, every artist when none, once no scan runs.
+            fn fetch(artists: Option<&[String]>) -> ();
+            /// Notes that the track at `path` was played at `at`; whether it is in the library
+            /// yet, as a scan may be writing.
+            fn record_play(
+                path: &::std::path::Path,
+                part: Option<$crate::Part>,
+                at: ::std::time::SystemTime,
+            ) -> bool;
+            /// Writes the plays noted, whether a scan runs or not.
+            fn save() -> ();
+            fn is_scanning() -> bool;
+        }
+    };
+}
+
+/// A trait of calls, the dispatch that answers them, and a remote implementation that makes
+/// them through a [`Transport`].
+macro_rules! calls {
+    (
+        $(#[doc = $trait_doc:literal])*
+        trait $trait_name:ident, $dispatch:ident
+        $(
+            $(#[doc = $doc:literal])*
+            fn $name:ident($($arg:ident: $ty:ty),* $(,)?) -> $ret:ty;
+        )*
+    ) => {
+        $(#[doc = $trait_doc])*
+        pub trait $trait_name: Send + Sync {
             $(
                 $(#[doc = $doc])*
                 fn $name(&self, $($arg: $ty),*) -> ApiResult<$ret>;
             )*
         }
+
+        /// Answers the call of `method` with `args`, as [`Remote`] sent them, from `api`; the
+        /// arguments back when there is no such call.
+        pub fn $dispatch(
+            api: &dyn $trait_name,
+            method: &str,
+            args: serde_json::Value,
+        ) -> Result<ApiResult<serde_json::Value>, serde_json::Value> {
+            match method {
+                $(
+                    stringify!($name) => Ok((|| {
+                        let ($($arg,)*): ($(<$ty as WireArg<'_>>::Owned,)*) =
+                            serde_json::from_value(args).map_err(wire_error)?;
+                        let answer = api.$name($(<$ty as WireArg<'_>>::lend(&$arg)),*)?;
+                        serde_json::to_value(answer).map_err(wire_error)
+                    })()),
+                )*
+                _ => Err(args),
+            }
+        }
+
+        impl<T: Transport> $trait_name for Remote<T> {
+            $(
+                fn $name(&self, $($arg: $ty),*) -> ApiResult<$ret> {
+                    let args = serde_json::to_value(($($arg,)*)).map_err(wire_error)?;
+                    let answer = self.0.call(stringify!($name), args)?;
+                    serde_json::from_value(answer).map_err(wire_error)
+                }
+            )*
+        }
     };
 }
 
-with_library_data!(define_library_data);
+with_library_data!(calls {
+    /// What the library holds, and what the user changes in it.
+    trait LibraryData, dispatch_data
+});
+
+with_server_control!(calls {
+    /// What the server that keeps the library is asked to do.
+    trait ServerControl, dispatch_control
+});
 
 /// How an argument of a call goes over the network: as its owned form, which the call is lent.
 pub trait WireArg<'a> {
@@ -157,6 +240,7 @@ macro_rules! lent_args {
 }
 
 lent_args!(
+    crate::ServerSettings,
     crate::ArtistEdit,
     crate::GenreInfo,
     crate::AlbumMatch,
@@ -184,6 +268,27 @@ impl<'a> WireArg<'a> for &'a Path {
     }
 }
 
+impl<'a> WireArg<'a> for &'a [std::path::PathBuf] {
+    type Owned = Vec<std::path::PathBuf>;
+    fn lend(owned: &'a Vec<std::path::PathBuf>) -> Self {
+        owned
+    }
+}
+
+impl<'a> WireArg<'a> for Option<&'a [String]> {
+    type Owned = Option<Vec<String>>;
+    fn lend(owned: &'a Option<Vec<String>>) -> Self {
+        owned.as_deref()
+    }
+}
+
+impl<'a> WireArg<'a> for Option<crate::Part> {
+    type Owned = Option<crate::Part>;
+    fn lend(owned: &'a Option<crate::Part>) -> Self {
+        *owned
+    }
+}
+
 impl<'a> WireArg<'a> for &'a [crate::PlaylistTrack] {
     type Owned = Vec<crate::PlaylistTrack>;
     fn lend(owned: &'a Vec<crate::PlaylistTrack>) -> Self {
@@ -195,43 +300,6 @@ fn wire_error(e: impl std::fmt::Display) -> ApiError {
     ApiError(format!("could not read what was sent: {e}"))
 }
 
-macro_rules! wire_library_data {
-    ($(
-        $(#[doc = $doc:literal])*
-        fn $name:ident($($arg:ident: $ty:ty),* $(,)?) -> $ret:ty;
-    )*) => {
-        /// Answers the call of `method` with `args`, as [`Remote`] sent them, from `api`; none
-        /// for a method there is no such call of.
-        pub fn dispatch(
-            api: &dyn LibraryData,
-            method: &str,
-            args: serde_json::Value,
-        ) -> Option<ApiResult<serde_json::Value>> {
-            match method {
-                $(
-                    stringify!($name) => Some((|| {
-                        let ($($arg,)*): ($(<$ty as WireArg<'_>>::Owned,)*) =
-                            serde_json::from_value(args).map_err(wire_error)?;
-                        let answer = api.$name($(<$ty as WireArg<'_>>::lend(&$arg)),*)?;
-                        serde_json::to_value(answer).map_err(wire_error)
-                    })()),
-                )*
-                _ => None,
-            }
-        }
-
-        impl<T: Transport> LibraryData for Remote<T> {
-            $(
-                fn $name(&self, $($arg: $ty),*) -> ApiResult<$ret> {
-                    let args = serde_json::to_value(($($arg,)*)).map_err(wire_error)?;
-                    let answer = self.0.call(stringify!($name), args)?;
-                    serde_json::from_value(answer).map_err(wire_error)
-                }
-            )*
-        }
-    };
-}
-
 /// What carries a call to a library elsewhere and brings back its answer.
 pub trait Transport: Send + Sync {
     fn call(&self, method: &str, args: serde_json::Value) -> ApiResult<serde_json::Value>;
@@ -240,6 +308,14 @@ pub trait Transport: Send + Sync {
     /// Keeps the picture in `bytes`, at most `largest` wide or high when given: its checksum.
     fn keep_picture(&self, bytes: &[u8], largest: Option<u32>) -> ApiResult<String>;
     fn album_art(&self, track: &Path, largest: u32) -> ApiResult<Option<Vec<u8>>>;
+    /// What happens at the server from now on, as it happens.
+    fn events(&self) -> ApiResult<Receiver<ServiceEvent>>;
+}
+
+impl<T: Transport> ServerEvents for Remote<T> {
+    fn events(&self) -> ApiResult<Receiver<ServiceEvent>> {
+        self.0.events()
+    }
 }
 
 impl<T: Transport> LibraryPictures for Remote<T> {
@@ -272,8 +348,6 @@ pub const API_PATH: &str = "/api/v1";
 /// A library elsewhere, called through `T`.
 pub struct Remote<T>(pub T);
 
-with_library_data!(wire_library_data);
-
 /// The library's pictures, and its music's covers.
 pub trait LibraryPictures: Send + Sync {
     /// The picture kept as `checksum`, as it was kept.
@@ -291,3 +365,14 @@ pub trait LibraryPictures: Send + Sync {
 pub trait LibraryApi: LibraryData + LibraryPictures {}
 
 impl<T: LibraryData + LibraryPictures> LibraryApi for T {}
+
+/// What happens at the server, as it happens.
+pub trait ServerEvents: Send + Sync {
+    /// From now on. The first is [`ServiceEvent::Connected`], which says whether a scan runs.
+    fn events(&self) -> ApiResult<Receiver<ServiceEvent>>;
+}
+
+/// All a client can ask of the server, beyond the library.
+pub trait Server: ServerControl + ServerEvents {}
+
+impl<T: ServerControl + ServerEvents> Server for T {}

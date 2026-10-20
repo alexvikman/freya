@@ -1,22 +1,33 @@
 //! A library elsewhere, as Freya's client asks of it: over HTTP, from a Freya server.
 
+use std::io::BufRead;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::time::{Duration, Instant};
 
-use freya_protocol::{API_PATH, ApiError, ApiResult, LibraryApi, Remote, Transport};
+use freya_protocol::{API_PATH, ApiError, ApiResult, Remote, ServiceEvent, Transport};
+
+/// How long the client waits before it looks for the server again, when the event stream
+/// ended.
+const RECONNECT: Duration = Duration::from_secs(2);
+/// How long a server started here may take to answer.
+const STARTING: Duration = Duration::from_secs(15);
 
 /// The largest answer taken: every track of a large library, as JSON.
 const MAX_ANSWER: u64 = 512 * 1024 * 1024;
 
-/// The library of the server at `address`, such as `http://127.0.0.1:47474`.
-pub fn connect(address: &str) -> Arc<dyn LibraryApi> {
+/// The server at `address`, such as `http://127.0.0.1:47474`: its library, and what it is
+/// asked to do.
+pub fn connect(address: &str) -> Arc<Remote<Http>> {
     Arc::new(Remote(Http::new(address)))
 }
 
 /// Calls carried over HTTP.
 pub struct Http {
     agent: ureq::Agent,
+    /// For the event stream, which stays open.
+    streaming: ureq::Agent,
     base: String,
 }
 
@@ -30,10 +41,51 @@ impl Http {
             .http_status_as_error(false)
             .build()
             .into();
+        let streaming = ureq::Agent::config_builder()
+            .timeout_connect(Some(Duration::from_secs(10)))
+            .user_agent(concat!("Freya/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .into();
         Self {
             agent,
+            streaming,
             base: format!("{}{API_PATH}", address.trim_end_matches('/')),
         }
+    }
+
+    /// The server's version; an error when none answers.
+    pub fn version(&self) -> ApiResult<String> {
+        let answer = self
+            .agent
+            .get(&self.url("/version"))
+            .call()
+            .map_err(failed)?;
+        let version = json(answer)?;
+        Ok(version["version"].as_str().unwrap_or_default().to_owned())
+    }
+
+    /// Asks the server to stop: one on this computer only.
+    pub fn quit(&self) -> ApiResult<()> {
+        let answer = self
+            .agent
+            .post(&self.url("/quit"))
+            .send_empty()
+            .map_err(failed)?;
+        json(answer).map(drop)
+    }
+
+    /// The event stream, opened.
+    fn open_events(&self) -> ApiResult<ureq::BodyReader<'static>> {
+        let answer = self
+            .streaming
+            .get(&self.url("/events"))
+            .call()
+            .map_err(failed)?;
+        if answer.status().as_u16() != 200 {
+            let (status, body) = read(answer)?;
+            return Err(error(status, &body));
+        }
+        Ok(answer.into_body().into_reader())
     }
 
     fn url(&self, path: &str) -> String {
@@ -125,6 +177,91 @@ impl Transport for Http {
             .send(asked.to_string())
             .map_err(failed)?;
         bytes_or_none(answer)
+    }
+
+    fn events(&self) -> ApiResult<Receiver<ServiceEvent>> {
+        let (tell, events) = channel();
+        // Opened now, so a server that is not there is told now.
+        let first = self.open_events()?;
+        let http = Http {
+            agent: self.agent.clone(),
+            streaming: self.streaming.clone(),
+            base: self.base.clone(),
+        };
+        std::thread::Builder::new()
+            .name("freya-server-events".into())
+            .spawn(move || follow_events(&http, first, &tell))
+            .map_err(failed)?;
+        Ok(events)
+    }
+}
+
+/// Tells `tell` of the events read from `stream`, and opens it again when it ends, until
+/// nobody listens.
+fn follow_events(http: &Http, mut stream: ureq::BodyReader<'static>, tell: &Sender<ServiceEvent>) {
+    loop {
+        for line in std::io::BufReader::new(stream).lines() {
+            let Ok(line) = line else {
+                break;
+            };
+            if line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str(&line) {
+                Ok(event) => {
+                    if tell.send(event).is_err() {
+                        return;
+                    }
+                }
+                Err(e) => log::debug!("an event that could not be read: {e}"),
+            }
+        }
+        log::info!("lost the server's events; looking for it again");
+        stream = loop {
+            std::thread::sleep(RECONNECT);
+            if let Ok(stream) = http.open_events() {
+                break stream;
+            }
+        };
+    }
+}
+
+/// Makes sure Freya's server answers at `address` on this computer, as the same version as
+/// this client: starts `program` when none does, and an older or newer one is stopped first.
+pub fn start_local_server(address: &str, program: &Path) -> Result<(), String> {
+    let http = Http::new(address);
+    match http.version() {
+        Ok(version) if version == env!("CARGO_PKG_VERSION") => return Ok(()),
+        Ok(version) => {
+            log::info!("the server here is version {version}; starting this version's");
+            http.quit()
+                .map_err(|e| format!("could not stop the server: {e}"))?;
+            let gone = Instant::now() + STARTING;
+            while http.version().is_ok() {
+                if Instant::now() > gone {
+                    return Err("the server did not stop".into());
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+        Err(_) => {}
+    }
+    log::info!("starting {}", program.display());
+    std::process::Command::new(program)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("could not start {}: {e}", program.display()))?;
+    let deadline = Instant::now() + STARTING;
+    loop {
+        if http.version().is_ok() {
+            return Ok(());
+        }
+        if Instant::now() > deadline {
+            return Err(format!("{} did not answer", program.display()));
+        }
+        std::thread::sleep(Duration::from_millis(100));
     }
 }
 

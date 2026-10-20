@@ -595,7 +595,7 @@ mod tests {
 
     #[test]
     fn shows_a_playlist_in_the_order_picked() {
-        let mut panel = LibraryPanel::new(None, None, None);
+        let mut panel = LibraryPanel::new(None, None);
         panel.open(crate::gui::library::tests::local(
             Library::open_in_memory().unwrap(),
             None,
@@ -629,7 +629,7 @@ mod tests {
 
     #[test]
     fn keeps_a_playlists_description() {
-        let mut panel = LibraryPanel::new(None, None, None);
+        let mut panel = LibraryPanel::new(None, None);
         panel.open(crate::gui::library::tests::local(
             Library::open_in_memory().unwrap(),
             None,

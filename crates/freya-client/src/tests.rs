@@ -3,9 +3,12 @@ use std::sync::atomic::AtomicBool;
 
 use freya_library::Library;
 use freya_library::pictures::Pictures;
-use freya_protocol::{AlbumOrder, ArtistEdit, LibraryApi};
-use freya_server::LocalLibrary;
+use freya_protocol::{
+    AlbumOrder, ArtistEdit, LibraryApi, LibraryData, ServerControl, ServerEvents, ServerSettings,
+    ServiceEvent,
+};
 use freya_server::http::Server;
+use freya_server::{LocalLibrary, Served, Service, ServiceConfig};
 
 use super::*;
 
@@ -30,14 +33,12 @@ fn served(name: &str) -> (Server, Arc<dyn LibraryApi>, Arc<dyn LibraryApi>, Path
     .unwrap();
     let pictures = || Some(Pictures::new(dir.join("pictures")));
     let local: Arc<dyn LibraryApi> = Arc::new(LocalLibrary::new(db, pictures()));
-    let server = Server::start(
-        "127.0.0.1:0",
-        freya_server::handler(Arc::new(LocalLibrary::new(
-            Library::open(&path).unwrap(),
-            pictures(),
-        ))),
-    )
-    .unwrap();
+    let served = Served {
+        library: Arc::new(LocalLibrary::new(Library::open(&path).unwrap(), pictures())),
+        server: None,
+        quit: None,
+    };
+    let server = Server::start("127.0.0.1:0", freya_server::handler(served)).unwrap();
     let remote = connect(&format!("http://{}", server.address()));
     (server, remote, local, dir)
 }
@@ -106,5 +107,81 @@ fn a_failed_call_says_why() {
     drop(remote);
     let gone = connect("http://127.0.0.1:1").stats();
     assert!(gone.unwrap_err().0.contains("could not reach the server"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_server_is_told_what_to_do_and_tells_what_happens() {
+    let dir = std::env::temp_dir().join(format!("freya-client-control-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("music")).unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../freya-audio/tests/fixtures");
+    std::fs::copy(fixtures.join("sine.flac"), dir.join("music/sine.flac")).unwrap();
+    let settings = ServerSettings {
+        library_folders: vec![dir.join("music")],
+        watch_folders: false,
+        ..ServerSettings::default()
+    };
+    // Scanned once, so it is not scanning when the client comes.
+    {
+        let mut db = Library::open(&dir.join("library.db")).unwrap();
+        freya_library::library::scan(
+            &mut db,
+            &settings.library_folders,
+            &AtomicBool::new(false),
+            |_| {},
+        )
+        .unwrap();
+        db.note_full_scan(std::time::SystemTime::now()).unwrap();
+    }
+    let config = ServiceConfig {
+        settings: settings.clone(),
+        settings_file: Some(dir.join("settings.toml")),
+        scans_allowed: true,
+        lastfm: None,
+    };
+    let service = Arc::new(Service::start(dir.join("library.db"), None, config).unwrap());
+    let served = Served {
+        library: service.api(),
+        server: Some(Arc::clone(&service) as _),
+        quit: None,
+    };
+    let server = Server::start("127.0.0.1:0", freya_server::handler(served)).unwrap();
+    let remote = connect(&format!("http://{}", server.address()));
+
+    assert_eq!(remote.settings().unwrap(), settings);
+    let changed = ServerSettings {
+        scan_every_hours: 6,
+        ..settings
+    };
+    remote.set_settings(&changed).unwrap();
+    assert_eq!(service.settings().unwrap(), changed);
+    assert_eq!(
+        freya_server::settings::load(&dir.join("settings.toml")).0,
+        changed
+    );
+
+    let events = remote.events().unwrap();
+    let next = || {
+        events
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .unwrap()
+    };
+    assert_eq!(next(), ServiceEvent::Connected { scanning: false });
+    remote.rescan().unwrap();
+    assert_eq!(next(), ServiceEvent::ScanStarted);
+    while next() != ServiceEvent::ScanEnded {}
+    assert!(!remote.is_scanning().unwrap());
+    assert!(
+        remote
+            .record_play(
+                &dir.join("music/sine.flac"),
+                None,
+                std::time::SystemTime::now()
+            )
+            .unwrap()
+    );
+    drop(server);
+    drop(service);
     let _ = std::fs::remove_dir_all(&dir);
 }

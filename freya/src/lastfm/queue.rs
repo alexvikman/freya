@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use super::api::Scrobble;
+use freya_lastfm::Scrobble;
 
 /// At most this many plays wait; beyond it the oldest go. Last.fm ignores plays older than two
 /// weeks anyway, and this is more than that of listening.
@@ -93,7 +93,7 @@ impl Queue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lastfm::api::Track;
+    use freya_lastfm::Track;
 
     fn play(started: u64) -> Scrobble {
         Scrobble {

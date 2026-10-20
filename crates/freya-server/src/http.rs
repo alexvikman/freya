@@ -22,6 +22,8 @@ const IDLE: Duration = Duration::from_secs(120);
 /// A request, as the handler sees it.
 #[derive(Debug)]
 pub struct Request {
+    /// Who sent it.
+    pub peer: Option<SocketAddr>,
     pub method: String,
     /// Without the query.
     pub path: String,
@@ -208,6 +210,7 @@ impl Connection {
             match parsed.parse(&buffer) {
                 Ok(httparse::Status::Complete(length)) => {
                     let request = Request {
+                        peer: self.stream.peer_addr().ok(),
                         method: parsed.method.unwrap_or_default().to_owned(),
                         path: String::new(),
                         query: String::new(),
