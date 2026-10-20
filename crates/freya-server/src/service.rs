@@ -13,11 +13,12 @@ use freya_library::Library;
 use freya_library::library::{LastFm, Online, ScanOptions, Scanner};
 use freya_library::pictures::Pictures;
 use freya_protocol::{
-    ApiError, ApiResult, LibraryApi, LibraryData, LibraryPictures, Part, ScanEvent, ServerControl,
-    ServerEvents, ServerSettings, ServiceEvent,
+    ApiError, ApiResult, LibraryApi, LibraryData, LibraryPictures, Part, PlaylistEntry,
+    SavedPlaylist, ScanEvent, ServerControl, ServerEvents, ServerSettings, ServiceEvent,
 };
 
 use crate::folder_watch::FolderWatch;
+use crate::playlists::Playlists;
 
 /// How often the service looks at the scan running, the folders' watch and the time.
 const TICK: Duration = Duration::from_millis(100);
@@ -37,6 +38,8 @@ pub struct ServiceConfig {
     pub scans_allowed: bool,
     /// Last.fm, for what it says of artists, when this build may ask it.
     pub lastfm: Option<Arc<dyn LastFm>>,
+    /// Where the user's playlists are kept; without, there are none.
+    pub playlists: Option<PathBuf>,
 }
 
 impl ServiceConfig {
@@ -66,6 +69,7 @@ pub struct Service {
 
 struct Shared {
     state: Mutex<State>,
+    playlists: Option<Playlists>,
     stop: AtomicBool,
     listeners: Mutex<Vec<Sender<ServiceEvent>>>,
     /// What clients ask of the library is read and written here, not waiting for a scan.
@@ -104,8 +108,10 @@ impl Service {
             plays: Vec::new(),
             outbox: Vec::new(),
         };
+        let playlists = state.config.playlists.clone().map(Playlists::new);
         let shared = Arc::new(Shared {
             state: Mutex::new(state),
+            playlists,
             stop: AtomicBool::new(false),
             listeners: Mutex::new(Vec::new()),
             api: Arc::new(LocalLibrary::new(reader, pictures)),
@@ -214,6 +220,47 @@ impl ServerControl for Service {
     fn is_scanning(&self) -> ApiResult<bool> {
         Ok(lock(&self.shared.state).scanning)
     }
+
+    fn playlists(&self) -> ApiResult<Vec<SavedPlaylist>> {
+        Ok(self
+            .shared
+            .playlists
+            .as_ref()
+            .map(Playlists::all)
+            .unwrap_or_default())
+    }
+
+    fn save_playlist(&self, name: &str, entries: &[PlaylistEntry]) -> ApiResult<()> {
+        self.playlists_changed(|playlists| playlists.save(name, entries))
+    }
+
+    fn rename_saved_playlist(&self, from: &str, to: &str) -> ApiResult<()> {
+        self.playlists_changed(|playlists| playlists.rename(from, to))?;
+        // What the library keeps of it follows it.
+        self.shared.api.with_db(|db| db.rename_playlist(from, to))
+    }
+
+    fn delete_playlist(&self, name: &str) -> ApiResult<()> {
+        self.playlists_changed(|playlists| playlists.delete(name))?;
+        self.shared.api.with_db(|db| db.forget_playlist(name))
+    }
+}
+
+impl Service {
+    /// Changes the playlists as `change` does, and tells the clients.
+    fn playlists_changed(
+        &self,
+        change: impl FnOnce(&Playlists) -> Result<(), String>,
+    ) -> ApiResult<()> {
+        let playlists = self
+            .shared
+            .playlists
+            .as_ref()
+            .ok_or_else(|| ApiError("the server keeps no playlists".into()))?;
+        change(playlists).map_err(ApiError)?;
+        self.with(|state| state.outbox.push(ServiceEvent::PlaylistsChanged));
+        Ok(())
+    }
 }
 
 impl ServerEvents for Service {
@@ -255,6 +302,14 @@ impl LocalLibrary {
             db: Mutex::new(db),
             pictures,
         }
+    }
+
+    /// Runs `f` on the library's own connection.
+    fn with_db<T>(
+        &self,
+        f: impl FnOnce(&mut Library) -> freya_library::library::Result<T>,
+    ) -> ApiResult<T> {
+        f(&mut lock(&self.db)).map_err(api_error)
     }
 
     fn pictures(&self) -> ApiResult<&Pictures> {

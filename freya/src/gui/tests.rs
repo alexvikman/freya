@@ -173,7 +173,7 @@ fn skin_callbacks_drive_the_app() {
                 Some(temp_dir("covers")),
             ),
             stations: radio::Stations::load(Some(temp_dir("radio").join("stations.m3u8"))),
-            playlists: playlists::Playlists::load(Some(temp_dir("playlists"))),
+            playlists: playlists::Playlists::new(),
         },
     )));
     bindings::connect(&ui, &app);
@@ -602,7 +602,7 @@ fn silent_app(name: &str) -> Rc<RefCell<App>> {
         app::Collections {
             library: library::LibraryPanel::new(None, None),
             stations: radio::Stations::load(Some(temp_dir(name).join("stations.m3u8"))),
-            playlists: playlists::Playlists::load(Some(temp_dir(name).join("playlists"))),
+            playlists: playlists::Playlists::new(),
         },
     )));
     bindings::connect(&ui, &app);

@@ -58,6 +58,7 @@ fn run(address: &str, data: &Path, freya: Option<&Path>) -> Result<(), String> {
         settings_file: Some(settings_file),
         scans_allowed: !damaged,
         lastfm: freya_server::lastfm(),
+        playlists: Some(data.join("playlists")),
     };
     let service = Arc::new(Service::start(
         data.join("library.sqlite3"),
@@ -95,17 +96,25 @@ fn run(address: &str, data: &Path, freya: Option<&Path>) -> Result<(), String> {
     Ok(())
 }
 
-/// Takes in, the first time, what Freya kept in its own folder `freya` before the server kept
-/// it: the library and its pictures are moved into `data`, and the library's settings are
-/// read from Freya's.
+/// Takes in what Freya kept in its own folder `freya` before the server kept it, each the
+/// first time the server has none of its own: the library, its pictures and the playlists are
+/// moved into `data`, and the library's settings are read from Freya's.
 fn take_in(freya: &Path, data: &Path, settings_file: &Path) {
-    if !data.join("library.sqlite3").exists() {
-        for name in [
+    // The database with its journal, together.
+    let groups: [&[&str]; 3] = [
+        &[
             "library.sqlite3",
             "library.sqlite3-wal",
             "library.sqlite3-shm",
-            "pictures",
-        ] {
+        ],
+        &["pictures"],
+        &["playlists"],
+    ];
+    for group in groups {
+        if data.join(group[0]).exists() || !freya.join(group[0]).exists() {
+            continue;
+        }
+        for name in group {
             let (from, to) = (freya.join(name), data.join(name));
             if from.exists() {
                 match std::fs::rename(&from, &to) {

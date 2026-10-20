@@ -204,3 +204,24 @@ fn file_stem(path: &Path) -> String {
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default()
 }
+
+/// A track in one of the user's playlists, as its file keeps it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct PlaylistEntry {
+    pub path: PathBuf,
+    /// The part of the file it plays, for a track of a CUE sheet.
+    pub part: Option<Part>,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub duration: Option<Duration>,
+}
+
+/// One of the user's playlists.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct SavedPlaylist {
+    pub name: String,
+    /// When it was made, as its file says.
+    pub created: Option<SystemTime>,
+    pub entries: Vec<PlaylistEntry>,
+}

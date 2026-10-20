@@ -218,6 +218,8 @@ pub struct LibraryPanel {
     server: Option<Arc<dyn Server>>,
     server_events: Option<Receiver<ServiceEvent>>,
     connected: bool,
+    /// The server told that the playlists changed, since the app last asked.
+    playlists_changed: bool,
     /// Where thumbnails of covers and pictures are made, once the library is open.
     covers_dir: Option<PathBuf>,
     /// The lists opened, the section's own list first; `back` returns to the one before.
@@ -623,6 +625,7 @@ impl LibraryPanel {
             server: None,
             server_events: None,
             connected: false,
+            playlists_changed: false,
             covers_dir: covers,
             opened: vec![Level::Artists],
             query: String::new(),
@@ -771,6 +774,7 @@ impl LibraryPanel {
                     settings_file: None,
                     scans_allowed: true,
                     lastfm: freya_server::lastfm(),
+                    playlists: database.parent().map(|dir| dir.join("playlists")),
                 };
                 match Service::start(database, pictures, config) {
                     Ok(service) => {
@@ -794,6 +798,16 @@ impl LibraryPanel {
         }
         self.server = Some(server);
         self.open(api);
+    }
+
+    /// The server that keeps the library, once connected.
+    pub fn server(&self) -> Option<Arc<dyn Server>> {
+        self.server.clone()
+    }
+
+    /// Whether the server told that the playlists changed since this was last asked.
+    pub fn take_playlists_changed(&mut self) -> bool {
+        std::mem::take(&mut self.playlists_changed)
     }
 
     /// How the server keeps the library, as the user set it; once it is open.
@@ -1069,6 +1083,7 @@ impl LibraryPanel {
                 }
                 // Plays noted while the scan wrote.
                 ServiceEvent::PlaysWritten => self.stale |= self.shows_plays(),
+                ServiceEvent::PlaylistsChanged => self.playlists_changed = true,
             }
         }
         // Covers and pictures found so far show as they come; and what was said of the artist

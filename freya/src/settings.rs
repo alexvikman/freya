@@ -138,11 +138,6 @@ pub fn playlist_path() -> Option<PathBuf> {
     dirs().map(|d| d.data_dir().join("playlist.m3u8"))
 }
 
-/// The folder the user's playlists are kept in, one M3U file each.
-pub fn playlists_dir() -> Option<PathBuf> {
-    dirs().map(|d| d.data_dir().join("playlists"))
-}
-
 /// Saved radio stations, as an M3U playlist.
 pub fn stations_path() -> Option<PathBuf> {
     dirs().map(|d| d.data_dir().join("stations.m3u8"))

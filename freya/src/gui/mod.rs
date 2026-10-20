@@ -140,7 +140,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 crate::settings::cache_dir().map(|dir| dir.join("covers")),
             ),
             stations: radio::Stations::load(crate::settings::stations_path()),
-            playlists: playlists::Playlists::load(crate::settings::playlists_dir()),
+            playlists: playlists::Playlists::new(),
         },
     )));
     if !skin_error.is_empty() {

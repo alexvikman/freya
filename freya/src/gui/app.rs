@@ -737,6 +737,9 @@ impl App {
     fn attach_library(&mut self) {
         if self.view.library_out.available {
             self.library.attach(&self.view.ui);
+            if let Some(server) = self.library.server() {
+                self.playlists.connect(server);
+            }
             // The server's settings, as the settings page shows them.
             if let Some(server) = self.library.server_settings().cloned() {
                 let settings = &mut self.settings;
@@ -872,9 +875,6 @@ impl App {
                 Ok(index) => {
                     self.shown_playlist = Some(index);
                     self.playlists_error.clear();
-                    if let Some(before) = &before {
-                        self.library.rename_playlist(before, name);
-                    }
                 }
                 Err(e) => {
                     self.library.set_playlist_draft_error(e);
@@ -923,15 +923,10 @@ impl App {
         let Some(index) = self.shown_playlist else {
             return;
         };
-        let before = self.playlists.get(index).map(|p| p.name.clone());
         match self.playlists.rename(index, name) {
             Ok(index) => {
                 self.shown_playlist = Some(index);
                 self.playlists_error.clear();
-                if let (Some(before), Some(after)) = (before, self.playlists.get(index)) {
-                    let after = after.name.clone();
-                    self.library.rename_playlist(&before, &after);
-                }
             }
             Err(e) => self.playlists_error = e,
         }
@@ -939,10 +934,6 @@ impl App {
 
     pub fn delete_playlist(&mut self) {
         if let Some(index) = self.shown_playlist.take() {
-            if let Some(playlist) = self.playlists.get(index) {
-                let name = playlist.name.clone();
-                self.library.forget_playlist(&name);
-            }
             self.playlists.delete(index);
         }
     }
@@ -1311,6 +1302,10 @@ impl App {
         self.lastfm_was_playing = playing;
 
         self.library.poll();
+        // Changed by another client, or by this one.
+        if self.library.take_playlists_changed() {
+            self.playlists.reload();
+        }
         self.follow_updates();
         self.check_skin_files();
         self.refresh();

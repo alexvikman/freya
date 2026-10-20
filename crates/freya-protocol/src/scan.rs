@@ -54,6 +54,8 @@ pub enum ServiceEvent {
     ScanEnded,
     /// Plays noted while a scan wrote are in the library now.
     PlaysWritten,
+    /// The user's playlists changed: one was made, changed, renamed or taken away.
+    PlaylistsChanged,
 }
 
 /// How the server keeps the library, as the user set it.

@@ -1,27 +1,30 @@
-//! Playlists the user keeps in Freya. Each is an M3U file in Freya's data folder, named after
-//! the playlist, so the files are also easy to find and share. Up Next, the queue, is not one
-//! of them: it is the app's `Playlist`.
+//! Playlists the user keeps in Freya, which the server keeps for it (see
+//! `freya_server::playlists`). Up Next, the queue, is not one of them: it is the app's
+//! `Playlist`.
 
-use std::path::PathBuf;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
-use freya_library::{Entry, playlist_file};
+use freya_library::Entry;
+use freya_protocol::{PlaylistEntry, Server};
 use slint_interpreter::{Struct, Value};
 
 use super::skin_state::{format_time, string};
 
-/// Characters a file name cannot hold on some system, so a playlist's name cannot either.
+/// Characters a file name cannot hold on some system, so a playlist's name cannot either: the
+/// server keeps each as a file named after it.
 const FORBIDDEN: [char; 9] = ['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
-const EXTENSION: &str = "m3u8";
 
 pub struct SavedPlaylist {
     pub name: String,
     pub entries: Vec<Entry>,
+    /// When it was made.
+    created: Option<SystemTime>,
 }
 
 pub struct Playlists {
-    /// Where the files are; `None` keeps playlists only while Freya runs.
-    dir: Option<PathBuf>,
+    /// The server that keeps them; without one, they are kept only while Freya runs.
+    server: Option<Arc<dyn Server>>,
     /// By name, ignoring case.
     list: Vec<SavedPlaylist>,
     /// Goes up with every change, so the skin's rows are only rebuilt after one.
@@ -29,33 +32,43 @@ pub struct Playlists {
 }
 
 impl Playlists {
-    /// The playlists in `dir`.
-    pub fn load(dir: Option<PathBuf>) -> Self {
-        let mut list: Vec<SavedPlaylist> = dir
-            .as_deref()
-            .and_then(|dir| std::fs::read_dir(dir).ok())
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|file| file.path())
-            .filter(|path| path.extension().is_some_and(|ext| ext == EXTENSION))
-            .filter_map(|path| {
-                let name = path.file_stem()?.to_str()?.to_owned();
-                match playlist_file::load(&path) {
-                    Ok(entries) => Some(SavedPlaylist { name, entries }),
-                    Err(e) => {
-                        log::warn!("could not read the playlist {}: {e}", path.display());
-                        None
-                    }
-                }
-            })
-            .collect();
-        list.sort_by_key(|p| p.name.to_lowercase());
+    /// None yet: they come from the server once connected.
+    pub fn new() -> Self {
         Self {
-            dir,
-            list,
+            server: None,
+            list: Vec::new(),
             version: 0,
         }
+    }
+
+    /// Takes the playlists `server` keeps, which keeps them from now on.
+    pub fn connect(&mut self, server: Arc<dyn Server>) {
+        self.server = Some(server);
+        self.reload();
+    }
+
+    /// Reads the playlists from the server again: another client changed them.
+    pub fn reload(&mut self) {
+        let Some(server) = &self.server else {
+            return;
+        };
+        let saved = match server.playlists() {
+            Ok(saved) => saved,
+            Err(e) => {
+                log::warn!("could not read the playlists: {e}");
+                return;
+            }
+        };
+        self.list = saved
+            .into_iter()
+            .map(|playlist| SavedPlaylist {
+                name: playlist.name,
+                entries: playlist.entries.into_iter().map(from_wire).collect(),
+                created: playlist.created,
+            })
+            .collect();
+        self.list.sort_by_key(|p| p.name.to_lowercase());
+        self.version += 1;
     }
 
     pub fn version(&self) -> u64 {
@@ -70,11 +83,9 @@ impl Playlists {
         self.list.get(index)
     }
 
-    /// When the `index`th playlist was made, as its file says.
-    pub fn created(&self, index: usize) -> Option<std::time::SystemTime> {
-        let file = self.file(&self.list.get(index)?.name)?;
-        let metadata = std::fs::metadata(file).ok()?;
-        metadata.created().or_else(|_| metadata.modified()).ok()
+    /// When the `index`th playlist was made.
+    pub fn created(&self, index: usize) -> Option<SystemTime> {
+        self.list.get(index)?.created
     }
 
     /// Where the playlist named `name` is, ignoring case.
@@ -89,6 +100,7 @@ impl Playlists {
         let playlist = SavedPlaylist {
             name,
             entries: entries.into_iter().map(unselected).collect(),
+            created: Some(SystemTime::now()),
         };
         self.save(&playlist);
         Ok(self.insert(playlist))
@@ -101,10 +113,10 @@ impl Playlists {
             return Err("No such playlist".to_owned());
         }
         let mut playlist = self.list.remove(index);
-        if let (Some(old), Some(new)) = (self.file(&playlist.name), self.file(&name))
-            && let Err(e) = std::fs::rename(&old, &new)
+        if let Some(server) = &self.server
+            && let Err(e) = server.rename_saved_playlist(&playlist.name, &name)
         {
-            log::warn!("could not rename {}: {e}", old.display());
+            log::warn!("could not rename the playlist {}: {e}", playlist.name);
         }
         playlist.name = name;
         Ok(self.insert(playlist))
@@ -116,10 +128,10 @@ impl Playlists {
         }
         self.version += 1;
         let playlist = self.list.remove(index);
-        if let Some(file) = self.file(&playlist.name)
-            && let Err(e) = std::fs::remove_file(&file)
+        if let Some(server) = &self.server
+            && let Err(e) = server.delete_playlist(&playlist.name)
         {
-            log::warn!("could not delete {}: {e}", file.display());
+            log::warn!("could not delete the playlist {}: {e}", playlist.name);
         }
     }
 
@@ -210,22 +222,36 @@ impl Playlists {
         index
     }
 
-    fn file(&self, name: &str) -> Option<PathBuf> {
-        self.dir
-            .as_deref()
-            .map(|dir| dir.join(format!("{name}.{EXTENSION}")))
-    }
-
     fn save(&self, playlist: &SavedPlaylist) {
-        let Some(file) = self.file(&playlist.name) else {
+        let Some(server) = &self.server else {
             return;
         };
-        if let Some(dir) = file.parent() {
-            let _ = std::fs::create_dir_all(dir);
+        let entries: Vec<PlaylistEntry> = playlist.entries.iter().map(to_wire).collect();
+        if let Err(e) = server.save_playlist(&playlist.name, &entries) {
+            log::warn!("could not save the playlist {}: {e}", playlist.name);
         }
-        if let Err(e) = playlist_file::save(&file, &playlist.entries) {
-            log::warn!("could not save the playlist {}: {e}", file.display());
-        }
+    }
+}
+
+fn to_wire(entry: &Entry) -> PlaylistEntry {
+    PlaylistEntry {
+        path: entry.path.clone(),
+        part: entry.part,
+        title: entry.title.clone(),
+        artist: entry.artist.clone(),
+        album: entry.album.clone(),
+        duration: entry.duration,
+    }
+}
+
+fn from_wire(entry: PlaylistEntry) -> Entry {
+    Entry {
+        part: entry.part,
+        title: entry.title,
+        artist: entry.artist,
+        album: entry.album,
+        duration: entry.duration,
+        ..Entry::new(entry.path)
     }
 }
 
@@ -239,13 +265,6 @@ fn unselected(mut entry: Entry) -> Entry {
 mod tests {
     use super::*;
 
-    fn temp_dir(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("freya-playlists-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        dir
-    }
-
     fn names(playlists: &Playlists) -> Vec<&str> {
         playlists.list.iter().map(|p| p.name.as_str()).collect()
     }
@@ -257,40 +276,29 @@ mod tests {
     }
 
     #[test]
-    fn keeps_playlists_as_files_in_name_order() {
-        let dir = temp_dir("files");
-        // Absolute on every system, unlike "/m" on Windows.
-        let music = std::env::temp_dir().join("m");
-        let track = |name: &str| entry(&music.join(name).to_string_lossy());
-        let mut playlists = Playlists::load(Some(dir.clone()));
+    fn keeps_playlists_in_name_order() {
+        let mut playlists = Playlists::new();
         assert_eq!(playlists.len(), 0);
-
-        assert_eq!(playlists.create("Road trip", vec![track("a.flac")]), Ok(0));
+        assert_eq!(
+            playlists.create("Road trip", vec![entry("/m/a.flac")]),
+            Ok(0)
+        );
         assert_eq!(playlists.create("calm", Vec::new()), Ok(0));
-        playlists.add(1, vec![track("b.flac")]);
+        playlists.add(1, vec![entry("/m/b.flac")]);
         playlists.remove_track(1, 0);
         assert_eq!(playlists.rename(0, "Calm evenings"), Ok(0));
         assert_eq!(playlists.create("Workout", Vec::new()), Ok(2));
         playlists.delete(2);
-
-        let again = Playlists::load(Some(dir.clone()));
-        assert_eq!(names(&again), ["Calm evenings", "Road trip"]);
-        let road = again.get(1).unwrap();
+        assert_eq!(names(&playlists), ["Calm evenings", "Road trip"]);
+        let road = playlists.get(1).unwrap();
         assert_eq!(road.entries.len(), 1);
-        assert_eq!(road.entries[0].path, music.join("b.flac"));
         assert!(!road.entries[0].selected, "selection is not kept");
-        let files: Vec<PathBuf> = std::fs::read_dir(&dir)
-            .unwrap()
-            .flatten()
-            .map(|f| f.path())
-            .filter(|p| p.extension().is_some_and(|ext| ext == EXTENSION))
-            .collect();
-        assert_eq!(files.len(), 2);
+        assert!(playlists.created(1).is_some());
     }
 
     #[test]
     fn names_must_be_new_and_usable_as_file_names() {
-        let mut playlists = Playlists::load(None);
+        let mut playlists = Playlists::new();
         playlists.create("Calm", Vec::new()).unwrap();
         assert_eq!(
             playlists.create("  ", Vec::new()),

@@ -139,6 +139,7 @@ fn the_server_is_told_what_to_do_and_tells_what_happens() {
         settings_file: Some(dir.join("settings.toml")),
         scans_allowed: true,
         lastfm: None,
+        playlists: Some(dir.join("playlists")),
     };
     let service = Arc::new(Service::start(dir.join("library.db"), None, config).unwrap());
     let served = Served {
@@ -181,6 +182,33 @@ fn the_server_is_told_what_to_do_and_tells_what_happens() {
             )
             .unwrap()
     );
+
+    // Playlists, kept by the server; every client is told of a change.
+    let entry = freya_protocol::PlaylistEntry {
+        path: dir.join("music/sine.flac"),
+        part: None,
+        title: Some("Sine".into()),
+        artist: None,
+        album: None,
+        duration: Some(std::time::Duration::from_secs(1)),
+    };
+    remote
+        .save_playlist("Calm", std::slice::from_ref(&entry))
+        .unwrap();
+    assert_eq!(next(), ServiceEvent::PlaylistsChanged);
+    let saved = remote.playlists().unwrap();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(
+        (saved[0].name.as_str(), &saved[0].entries),
+        ("Calm", &vec![entry])
+    );
+    remote
+        .rename_saved_playlist("Calm", "Calm evenings")
+        .unwrap();
+    assert_eq!(remote.playlists().unwrap()[0].name, "Calm evenings");
+    remote.delete_playlist("Calm evenings").unwrap();
+    assert!(remote.playlists().unwrap().is_empty());
+    assert!(remote.save_playlist("../escape", &[]).is_err());
     drop(server);
     drop(service);
     let _ = std::fs::remove_dir_all(&dir);

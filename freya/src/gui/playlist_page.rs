@@ -327,24 +327,6 @@ impl LibraryPanel {
         }
     }
 
-    /// Keeps what the playlist `from` has under its new name `to`.
-    pub fn rename_playlist(&mut self, from: &str, to: &str) {
-        if let Some(db) = &mut self.db
-            && let Err(e) = db.rename_playlist(from, to)
-        {
-            log::warn!("could not keep what {from} has under its new name: {e}");
-        }
-    }
-
-    /// Forgets what the playlist `name` had: it was deleted.
-    pub fn forget_playlist(&mut self, name: &str) {
-        if let Some(db) = &mut self.db
-            && let Err(e) = db.forget_playlist(name)
-        {
-            log::warn!("could not forget what {name} had: {e}");
-        }
-    }
-
     /// The page's wide picture, and a color from it or from its picture, once made; asked of a
     /// thread the first time.
     pub(super) fn show_playlist_picture(&mut self) {

@@ -4,6 +4,7 @@
 mod folder_watch;
 pub mod http;
 mod lastfm;
+mod playlists;
 mod serve;
 mod service;
 pub mod settings;

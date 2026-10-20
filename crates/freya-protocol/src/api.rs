@@ -97,8 +97,6 @@ macro_rules! with_library_data {
             fn forget_artist_text(artist: &str) -> ();
             fn playlist_info(playlist: &str) -> $crate::PlaylistInfo;
             fn set_playlist_info(playlist: &str, info: &$crate::PlaylistInfo) -> ();
-            fn rename_playlist(from: &str, to: &str) -> ();
-            fn forget_playlist(playlist: &str) -> ();
             /// When each of a playlist's tracks was added to it.
             fn playlist_added(playlist: &str) -> Vec<($crate::PlaylistTrack, ::std::time::SystemTime)>;
             fn note_playlist_added(playlist: &str, tracks: &[$crate::PlaylistTrack], at: ::std::time::SystemTime) -> ();
@@ -135,6 +133,14 @@ macro_rules! with_server_control {
             /// Writes the plays noted, whether a scan runs or not.
             fn save() -> ();
             fn is_scanning() -> bool;
+            /// The user's playlists, by name.
+            fn playlists() -> Vec<$crate::SavedPlaylist>;
+            /// Keeps the playlist `name` with `entries`, made or written anew.
+            fn save_playlist(name: &str, entries: &[$crate::PlaylistEntry]) -> ();
+            /// Names the playlist `from` `to`, with what the library keeps of it.
+            fn rename_saved_playlist(from: &str, to: &str) -> ();
+            /// Takes the playlist `name` away, with what the library keeps of it.
+            fn delete_playlist(name: &str) -> ();
         }
     };
 }
@@ -286,6 +292,13 @@ impl<'a> WireArg<'a> for Option<crate::Part> {
     type Owned = Option<crate::Part>;
     fn lend(owned: &'a Option<crate::Part>) -> Self {
         *owned
+    }
+}
+
+impl<'a> WireArg<'a> for &'a [crate::PlaylistEntry] {
+    type Owned = Vec<crate::PlaylistEntry>;
+    fn lend(owned: &'a Vec<crate::PlaylistEntry>) -> Self {
+        owned
     }
 }
 
