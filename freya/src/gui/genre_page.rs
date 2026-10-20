@@ -6,12 +6,12 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use freya_library::library::GenreInfo;
 use freya_library::thumbnails::{ArtistSource, Thumbnails};
+use freya_protocol::GenreInfo;
 use slint::Image;
 use slint_interpreter::{Struct, Value};
 
-use super::playlist_page::preview;
+use super::playlist_page::{preview, take_file};
 use super::{ArtistPage, LibraryPanel, POPULAR_MORE, count, cover_key, long_time, string};
 
 /// The longest side of a genre's own picture, and of its wide one.
@@ -158,7 +158,7 @@ impl LibraryPanel {
             return;
         };
         let info = self.genre_info_of(&name).cloned().unwrap_or_default();
-        let thumbnails = self.thumbnails.as_ref();
+        let thumbnails = self.db.as_deref();
         self.genre_draft = Some(GenreDraft {
             description: info
                 .description
@@ -175,14 +175,14 @@ impl LibraryPanel {
 
     /// Takes the picture in `file` for the genre being changed: "picture" or "backdrop".
     pub fn pick_genre_picture(&mut self, kind: &str, file: &std::path::Path) {
-        let (Some(draft), Some(thumbnails)) = (&mut self.genre_draft, &self.thumbnails) else {
+        let (Some(draft), Some(api)) = (&mut self.genre_draft, &self.db) else {
             return;
         };
         let largest = if kind == "backdrop" { WIDE } else { PICTURE };
-        match thumbnails.pictures().take_file(file, largest) {
+        match take_file(api.as_ref(), file, largest) {
             Ok(checksum) => {
                 draft.error.clear();
-                let shown = preview(Some(thumbnails), Some(&checksum));
+                let shown = preview(Some(api.as_ref()), Some(&checksum));
                 match kind {
                     "backdrop" => (draft.backdrop, draft.backdrop_shown) = (Some(checksum), shown),
                     _ => (draft.picture, draft.picture_shown) = (Some(checksum), shown),
@@ -263,7 +263,7 @@ mod tests {
     use std::time::SystemTime;
 
     use freya_library::Library;
-    use freya_library::library::GenreArticle;
+    use freya_protocol::GenreArticle;
 
     use super::*;
 
@@ -279,7 +279,7 @@ mod tests {
         db.set_genre_article("Ambient", Some(&article), SystemTime::now())
             .unwrap();
         let mut panel = LibraryPanel::new(None, None, None);
-        panel.db = Some(db);
+        panel.open(crate::gui::library::tests::local(db, None));
         panel.load_genre_page("Ambient".into(), false);
         let page = panel.artist_page.as_ref().unwrap();
         assert!(page.genre);

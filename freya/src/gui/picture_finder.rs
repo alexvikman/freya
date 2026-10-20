@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use freya_library::artist_image;
-use freya_library::library::PictureKind;
-use freya_library::pictures::Pictures;
+use freya_protocol::LibraryApi;
+use freya_protocol::PictureKind;
 use slint::{Rgba8Pixel, SharedPixelBuffer};
 
 /// At most this many of each kind from each source: fanart.tv has dozens of some artists.
@@ -70,7 +70,7 @@ enum Message {
 }
 
 pub struct PictureFinder {
-    pictures: Option<Pictures>,
+    pictures: Option<Arc<dyn LibraryApi>>,
     known: Known,
     /// Counted up for each search, so a thread still running for an earlier one is ignored.
     generation: u64,
@@ -79,7 +79,7 @@ pub struct PictureFinder {
 }
 
 impl PictureFinder {
-    pub fn new(pictures: Option<Pictures>) -> Self {
+    pub fn new(pictures: Option<Arc<dyn LibraryApi>>) -> Self {
         Self {
             pictures,
             known: Known::default(),
@@ -101,7 +101,7 @@ impl PictureFinder {
         let started = std::thread::Builder::new()
             .name("freya-picture-finder".into())
             .spawn(move || {
-                look(&request, &pictures, &known, &|found| {
+                look(&request, pictures.as_ref(), &known, &|found| {
                     let _ = results.send(Message::Found(generation, found));
                 });
                 let _ = results.send(Message::Done(generation));
@@ -122,7 +122,7 @@ impl PictureFinder {
             .name("freya-picture-download".into())
             .spawn(move || {
                 let message = artist_image::download(&url)
-                    .and_then(|bytes| keep(&pictures, kind, "Web", &bytes))
+                    .and_then(|bytes| keep(pictures.as_ref(), kind, "Web", &bytes))
                     .map(|found| Found {
                         choose: true,
                         order: usize::MAX,
@@ -143,7 +143,7 @@ impl PictureFinder {
     /// Keeps the picture in `bytes`, the user's own, as one to choose.
     pub fn add(&self, kind: PictureKind, bytes: &[u8]) -> Result<Found, String> {
         let pictures = self.pictures.as_ref().ok_or("no place for pictures")?;
-        keep(pictures, kind, "Your picture", bytes).map(|found| Found {
+        keep(pictures.as_ref(), kind, "Your picture", bytes).map(|found| Found {
             choose: true,
             order: usize::MAX,
             ..found
@@ -182,7 +182,12 @@ impl PictureFinder {
 
 /// Looks for pictures as `request` says, telling `send` of each: what Freya has first, then
 /// what the internet has, downloaded a few at a time, square ones first.
-fn look(request: &Request, pictures: &Pictures, known: &Known, send: &(dyn Fn(Found) + Sync)) {
+fn look(
+    request: &Request,
+    pictures: &dyn LibraryApi,
+    known: &Known,
+    send: &(dyn Fn(Found) + Sync),
+) {
     let started = Instant::now();
     let mut order = 0;
     let mut next = || {
@@ -193,7 +198,7 @@ fn look(request: &Request, pictures: &Pictures, known: &Known, send: &(dyn Fn(Fo
     let covers = request
         .covers
         .iter()
-        .filter_map(|checksum| image::load_from_memory(&pictures.read(checksum)?).ok())
+        .filter_map(|checksum| image::load_from_memory(&pictures.picture(checksum).ok()??).ok())
         .take(4)
         .collect();
     if let Some(collage) = artist_image::collage_of(covers, PREVIEW) {
@@ -215,7 +220,9 @@ fn look(request: &Request, pictures: &Pictures, known: &Known, send: &(dyn Fn(Fo
     }
     for (kind, checksum, source) in &request.kept {
         let shown = pictures
-            .read(checksum)
+            .picture(checksum)
+            .ok()
+            .flatten()
             .ok_or_else(|| "gone".to_owned())
             .and_then(|bytes| preview(&bytes));
         if let Ok((width, height, preview)) = shown {
@@ -309,14 +316,14 @@ fn fetch(
     url: &str,
     kind: PictureKind,
     source: &str,
-    pictures: &Pictures,
+    pictures: &dyn LibraryApi,
     known: &Known,
 ) -> Result<Found, String> {
     let kept = known
         .lock()
         .ok()
         .and_then(|known| known.get(url).cloned())
-        .and_then(|checksum| pictures.read(&checksum));
+        .and_then(|checksum| pictures.picture(&checksum).ok().flatten());
     let bytes = match kept {
         Some(bytes) => bytes,
         None => artist_image::download(url)?,
@@ -330,13 +337,13 @@ fn fetch(
 
 /// Keeps `bytes` among the downloaded pictures, as one of `kind` to choose.
 fn keep(
-    pictures: &Pictures,
+    pictures: &dyn LibraryApi,
     kind: PictureKind,
     source: &str,
     bytes: &[u8],
 ) -> Result<Found, String> {
     let (width, height, preview) = preview(bytes)?;
-    let checksum = pictures.put(bytes).map_err(|e| e.to_string())?;
+    let checksum = pictures.put_picture(bytes).map_err(|e| e.to_string())?;
     Ok(Found {
         kind,
         pick: Pick::Kept(checksum),
@@ -364,6 +371,8 @@ fn preview(bytes: &[u8]) -> Result<(u32, u32, SharedPixelBuffer<Rgba8Pixel>), St
 
 #[cfg(test)]
 mod tests {
+    use freya_library::pictures::Pictures;
+
     use super::*;
 
     #[test]
@@ -384,7 +393,11 @@ mod tests {
         let pictures = Pictures::new(dir.join("pictures"));
         let folder = pictures.put(&jpeg([0, 0, 200], 1920, 1080)).unwrap();
         let kept = pictures.put(&jpeg([200, 0, 0], 1000, 1000)).unwrap();
-        let mut finder = PictureFinder::new(Some(pictures));
+        let library = freya_library::Library::open_in_memory().unwrap();
+        let mut finder = PictureFinder::new(Some(Arc::new(freya_server::LocalLibrary::new(
+            library,
+            Some(pictures),
+        ))));
         finder.find(Request {
             name: "Ghost".into(),
             deezer: false,

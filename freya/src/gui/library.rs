@@ -3,18 +3,18 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant, SystemTime};
 
-use freya_library::cue::Part;
-use freya_library::library::{
-    Album, AlbumKey, AlbumMatch, AlbumOrder, Artist, ArtistEdit, ArtistOrder, CHOSEN, Genre,
-    Header, Online, PictureKind, PictureRow, Played, ScanEvent, Track, plain_name, split_artist,
-};
-use freya_library::pictures::Pictures;
+use freya_library::Entry;
+use freya_library::library::Online;
 use freya_library::thumbnails::{ArtistSource, Thumbnail, Thumbnails};
-use freya_library::{Entry, Library};
-use freya_protocol::ServiceEvent;
+use freya_protocol::{
+    Album, AlbumKey, AlbumMatch, AlbumOrder, Artist, ArtistEdit, ArtistOrder, CHOSEN, Genre,
+    Header, LibraryApi, Part, PictureKind, PictureRow, Played, ScanEvent, ServiceEvent, Track,
+    plain_name, split_artist,
+};
 use freya_server::{Service, ServiceConfig};
 use slint::{Image, ModelRc, VecModel};
 use slint_interpreter::{Struct, Value};
@@ -196,13 +196,15 @@ impl Item {
 pub struct LibraryPanel {
     /// Where the database is kept.
     path: Option<PathBuf>,
-    /// Opened when a skin first shows the library.
-    db: Option<Library>,
+    /// The library, opened when a skin first shows it.
+    db: Option<Arc<dyn LibraryApi>>,
     /// The library's scans, started with it; what it tells of them, and where it keeps
     /// pictures.
     service: Option<Service>,
     service_events: Option<Receiver<ServiceEvent>>,
     pictures_dir: Option<PathBuf>,
+    /// Where thumbnails of covers and pictures are made, once the library is open.
+    covers_dir: Option<PathBuf>,
     /// The lists opened, the section's own list first; `back` returns to the one before.
     opened: Vec<Level>,
     /// Search text; when not empty, search results are shown instead of `level`.
@@ -225,7 +227,7 @@ pub struct LibraryPanel {
     thumbnails: Option<Thumbnails>,
     /// Each album's cover as the last scan made it, by the album's key; and each artist's
     /// pictures, square and wide, as kept, by the artist.
-    made_covers: HashMap<String, freya_library::library::AlbumCover>,
+    made_covers: HashMap<String, freya_protocol::AlbumCover>,
     portraits: HashMap<String, String>,
     backdrops: HashMap<String, String>,
     recent_covers: RecentCovers,
@@ -309,7 +311,7 @@ pub struct LibraryPanel {
     /// with pictures by their id.
     artist_match: Option<Option<String>>,
     match_finder: MatchFinder,
-    matches: Vec<freya_library::artist_image::ArtistMatch>,
+    matches: Vec<freya_protocol::ArtistMatch>,
     match_pictures: HashMap<String, Image>,
     match_error: String,
     match_rows: ModelRows,
@@ -317,7 +319,7 @@ pub struct LibraryPanel {
     /// and the albums MusicBrainz found, with covers by their release group.
     album_draft: Option<(Option<String>, Option<String>)>,
     album_finder: AlbumFinder,
-    album_candidates: Vec<freya_library::artist_image::AlbumCandidate>,
+    album_candidates: Vec<freya_protocol::AlbumCandidate>,
     album_covers: HashMap<String, Image>,
     album_match_error: String,
     album_rows: ModelRows,
@@ -347,7 +349,7 @@ pub struct LibraryPanel {
     playlists_by_name: bool,
     /// What the user gave genres, by their names in lower case; the genres shown, by their
     /// pictures' keys; and the one being changed.
-    genre_infos: HashMap<String, freya_library::library::GenreInfo>,
+    genre_infos: HashMap<String, freya_protocol::GenreInfo>,
     genre_keys: HashMap<String, Option<String>>,
     genre_draft: Option<GenreDraft>,
     search_filter: SearchFilter,
@@ -418,7 +420,7 @@ struct Choice {
 }
 
 /// What tells an artist MusicBrainz knows from others: "Group · Norway · 1999–".
-fn match_facts(artist: &freya_library::artist_image::ArtistMatch) -> String {
+fn match_facts(artist: &freya_protocol::ArtistMatch) -> String {
     let years = match (artist.begin.get(..4), artist.end.get(..4)) {
         (Some(begin), Some(end)) if begin == end => begin.to_owned(),
         (Some(begin), end) => format!("{begin}–{}", end.unwrap_or("")),
@@ -615,6 +617,7 @@ impl LibraryPanel {
             service: None,
             service_events: None,
             pictures_dir: pictures.clone(),
+            covers_dir: covers.filter(|_| pictures.is_some()),
             opened: vec![Level::Artists],
             query: String::new(),
             items: Vec::new(),
@@ -627,9 +630,7 @@ impl LibraryPanel {
             reloaded: Instant::now(),
             folders_shown: None,
             draft_shown: None,
-            thumbnails: covers
-                .zip(pictures.clone())
-                .map(|(covers, pictures)| Thumbnails::new(covers, Pictures::new(pictures))),
+            thumbnails: None,
             prepare: VecDeque::new(),
             decoder: CoverDecoder::new(),
             cover_order: Vec::new(),
@@ -673,7 +674,7 @@ impl LibraryPanel {
             draft: None,
             found_biography: String::new(),
             found_biography_from: String::new(),
-            finder: PictureFinder::new(pictures.clone().map(Pictures::new)),
+            finder: PictureFinder::new(None),
             choices: Vec::new(),
             none_shown: HashMap::new(),
             picked_before: HashMap::new(),
@@ -758,17 +759,6 @@ impl LibraryPanel {
         let Some(path) = self.path.clone() else {
             return;
         };
-        match Library::open(&path) {
-            Ok(db) => self.db = Some(db),
-            Err(e) => {
-                log::warn!("could not open the library at {}: {e}", path.display());
-                return;
-            }
-        }
-        self.find_playing_album();
-        self.clear_older_cache();
-        self.prepare_all();
-        self.reload();
         self.folders = folders.to_vec();
         let config = ServiceConfig {
             folders: self.folders.clone(),
@@ -778,14 +768,35 @@ impl LibraryPanel {
             scan_at_start: self.scan_at_start,
             online: self.online(),
         };
-        match Service::start(path, self.pictures_dir.clone(), config) {
-            Ok(service) => {
-                self.scanning = service.is_scanning();
-                self.service_events = Some(service.subscribe());
-                self.service = Some(service);
+        let service = match Service::start(path, self.pictures_dir.clone(), config) {
+            Ok(service) => service,
+            Err(e) => {
+                log::warn!("{e}");
+                return;
             }
-            Err(e) => log::warn!("{e}"),
+        };
+        self.scanning = service.is_scanning();
+        self.service_events = Some(service.subscribe());
+        self.open(service.api());
+        self.service = Some(service);
+    }
+
+    /// Shows the library `api`: its rows, and its pictures through thumbnails made in the
+    /// covers folder.
+    fn open(&mut self, api: Arc<dyn LibraryApi>) {
+        if let Some(covers) = self.covers_dir.clone() {
+            let source = Arc::clone(&api);
+            self.thumbnails = Some(Thumbnails::new(
+                covers,
+                Arc::new(move |checksum| source.picture(checksum).ok().flatten()),
+            ));
         }
+        self.finder = PictureFinder::new(Some(Arc::clone(&api)));
+        self.db = Some(api);
+        self.find_playing_album();
+        self.clear_older_cache();
+        self.prepare_all();
+        self.reload();
     }
 
     /// The library's folders now: those watched, and scanned later.
@@ -1646,7 +1657,7 @@ impl LibraryPanel {
                 let source = match source.as_str() {
                     "deezer" => "Deezer",
                     "fanart.tv" => "fanart.tv",
-                    freya_library::library::FOLDER => "Folder",
+                    freya_protocol::FOLDER => "Folder",
                     _ => "Chosen before",
                 };
                 kept.push((kind, checksum, source.to_owned()));
@@ -1654,7 +1665,7 @@ impl LibraryPanel {
             picked.insert(kind, pick);
         }
         let request = Request {
-            name: freya_library::library::plain_name(name).to_owned(),
+            name: freya_protocol::plain_name(name).to_owned(),
             deezer: self.online_pictures,
             mbid: self.known_mbid(Some(name)),
             search: true,
@@ -2201,7 +2212,7 @@ impl LibraryPanel {
         Value::Struct(Struct::from_iter([
             (
                 "artist".to_owned(),
-                text(artist.map(|a| freya_library::library::plain_name(&a).to_owned())),
+                text(artist.map(|a| freya_protocol::plain_name(&a).to_owned())),
             ),
             ("name".to_owned(), text(edit.name)),
             ("sort-name".to_owned(), text(edit.sort_name)),
@@ -2485,7 +2496,7 @@ impl LibraryPanel {
             let Some(db) = &self.db else {
                 return;
             };
-            self.load(db)
+            self.load(db.as_ref())
         };
         let Some(db) = &self.db else {
             return;
@@ -2620,7 +2631,7 @@ impl LibraryPanel {
             .collect()
     }
 
-    fn load(&self, db: &Library) -> freya_library::library::Result<Vec<Item>> {
+    fn load(&self, db: &dyn LibraryApi) -> freya_protocol::ApiResult<Vec<Item>> {
         if self.searching() {
             let tracks = db.search(&self.query, SEARCH_LIMIT)?;
             return Ok(tracks.into_iter().map(Item::Track).collect());
@@ -3330,12 +3341,20 @@ impl LibraryPanel {
         let Some(page) = self.album_page.as_ref().filter(|p| p.cover_full.is_none()) else {
             return;
         };
+        let Some(api) = self.db.clone() else {
+            return;
+        };
         let (key, track) = (page.cover.clone(), page.track.clone());
         let read = self.full_covers.0.clone();
         let started = std::thread::Builder::new()
             .name("freya-album-cover".into())
             .spawn(move || {
-                if let Some(picture) = freya_library::cover::album_art_large(&track, COVER_FULL) {
+                let picture = api
+                    .album_art(&track, COVER_FULL)
+                    .ok()
+                    .flatten()
+                    .and_then(|bytes| image::load_from_memory(&bytes).ok());
+                if let Some(picture) = picture {
                     let rgb = picture.to_rgb8();
                     let buffer = slint::SharedPixelBuffer::clone_from_slice(
                         rgb.as_raw(),
@@ -3650,7 +3669,7 @@ fn page_backdrop<'a>(
     page: &ArtistPage,
     backdrops: &'a HashMap<String, String>,
     edits: &HashMap<String, ArtistEdit>,
-    genre_infos: &'a HashMap<String, freya_library::library::GenreInfo>,
+    genre_infos: &'a HashMap<String, freya_protocol::GenreInfo>,
 ) -> Option<&'a String> {
     let name = page.name.as_deref()?;
     if page.genre {
@@ -3751,7 +3770,7 @@ fn cover_key(album: &Album) -> String {
 }
 
 fn artist_name(name: Option<&str>) -> String {
-    name.map_or("Unknown artist", freya_library::library::plain_name)
+    name.map_or("Unknown artist", freya_protocol::plain_name)
         .to_owned()
 }
 
@@ -3763,7 +3782,7 @@ fn genre_name(name: Option<&str>) -> String {
     name.unwrap_or("Unknown genre").to_owned()
 }
 
-fn stats_text(stats: &freya_library::library::Stats) -> String {
+fn stats_text(stats: &freya_protocol::Stats) -> String {
     if stats.tracks == 0 {
         return String::new();
     }
@@ -3804,7 +3823,18 @@ fn display_path(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    use freya_library::Library;
+    use freya_library::pictures::Pictures;
+
     use super::*;
+
+    /// `db` as a library to show, with its pictures in `pictures`.
+    pub(super) fn local(db: Library, pictures: Option<PathBuf>) -> Arc<dyn LibraryApi> {
+        Arc::new(freya_server::LocalLibrary::new(
+            db,
+            pictures.map(Pictures::new),
+        ))
+    }
 
     #[test]
     fn shows_what_a_scan_kept_of_an_artist() {
@@ -3834,7 +3864,7 @@ mod tests {
             },
         )
         .unwrap();
-        let article = freya_library::wikipedia::Article {
+        let article = freya_protocol::Article {
             title: "Shining (Swedish band)".into(),
             summary: "A Swedish band.".into(),
             biography: "A Swedish band.".into(),
@@ -3842,7 +3872,7 @@ mod tests {
         };
         db.set_artist_article("Shining", "swedish", Some(&article), SystemTime::now())
             .unwrap();
-        panel.db = Some(db);
+        panel.open(local(db, None));
         panel.reload();
         let source = panel.artist_source(Some("Shining"));
         assert_eq!(source.picture.as_deref(), Some("square"));
@@ -3881,7 +3911,7 @@ mod tests {
         let cancel = std::sync::atomic::AtomicBool::new(false);
         freya_library::library::scan(&mut db, std::slice::from_ref(&dir), &cancel, |_| {}).unwrap();
         let mut panel = LibraryPanel::new(None, None, None);
-        panel.db = Some(db);
+        panel.open(local(db, None));
         panel.reload();
 
         // Not in the library: nothing opens.
@@ -3929,7 +3959,7 @@ mod tests {
             .unwrap();
 
         let mut panel = LibraryPanel::new(None, None, None);
-        panel.db = Some(db);
+        panel.open(local(db, None));
         panel.online_bios = false;
         panel.reload();
         let Value::Model(rows) = panel.rows.model_value() else {
@@ -3976,7 +4006,7 @@ mod tests {
         db.set_searched_artist_id("Freya", Some("found-id"), SystemTime::now())
             .unwrap();
         let mut panel = LibraryPanel::new(None, None, None);
-        panel.db = Some(db);
+        panel.open(local(db, None));
         panel.online_bios = false;
         panel.opened = vec![
             Level::Artists,
@@ -4043,7 +4073,7 @@ mod tests {
             .and_then(|row| row.picture)
             .expect("the folder's, taken in by the scan");
         let mut panel = LibraryPanel::new(None, None, Some(dir.join("pictures")));
-        panel.db = Some(db);
+        panel.open(local(db, Some(dir.join("pictures"))));
         panel.online_pictures = false;
         panel.online_bios = false;
         panel.opened = vec![
@@ -4134,12 +4164,12 @@ mod tests {
         freya_library::library::scan(&mut db, std::slice::from_ref(&dir), &cancel, |_| {}).unwrap();
         let album = db.all_albums().unwrap()[0].name.clone();
         let mut panel = LibraryPanel::new(None, None, None);
-        panel.db = Some(db);
+        panel.open(local(db, None));
         panel.online_bios = false;
-        let candidate = |mbid: &str| freya_library::artist_image::AlbumCandidate {
+        let candidate = |mbid: &str| freya_protocol::AlbumCandidate {
             release_group: format!("rg-{mbid}"),
             title: "Sines".into(),
-            artist: freya_library::artist_image::ArtistMatch {
+            artist: freya_protocol::ArtistMatch {
                 mbid: mbid.into(),
                 name: "Freya".into(),
                 disambiguation: format!("the {mbid} one"),
@@ -4197,7 +4227,7 @@ mod tests {
         db.set_searched_artist_id("Freya", Some("se"), SystemTime::now())
             .unwrap();
         let mut panel = LibraryPanel::new(None, None, None);
-        panel.db = Some(db);
+        panel.open(local(db, None));
         panel.online_bios = false;
         panel.opened = vec![
             Level::Artists,
@@ -4207,7 +4237,7 @@ mod tests {
         ];
         panel.reload();
         panel.edit_artist();
-        panel.matches = vec![freya_library::artist_image::ArtistMatch {
+        panel.matches = vec![freya_protocol::ArtistMatch {
             mbid: "no".into(),
             name: "Freya".into(),
             disambiguation: "Norwegian group".into(),
@@ -4231,14 +4261,12 @@ mod tests {
 
     #[test]
     fn tells_what_sets_an_artist_apart() {
-        let artist = |kind: &str, area: &str, begin: &str, end: &str| {
-            freya_library::artist_image::ArtistMatch {
-                kind: kind.into(),
-                area: area.into(),
-                begin: begin.into(),
-                end: end.into(),
-                ..Default::default()
-            }
+        let artist = |kind: &str, area: &str, begin: &str, end: &str| freya_protocol::ArtistMatch {
+            kind: kind.into(),
+            area: area.into(),
+            begin: begin.into(),
+            end: end.into(),
+            ..Default::default()
         };
         assert_eq!(
             match_facts(&artist("Group", "Norway", "1999", "")),
@@ -4307,7 +4335,7 @@ mod tests {
         freya_library::library::scan(&mut db, std::slice::from_ref(&dir), &cancel, |_| {}).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         let mut panel = LibraryPanel::new(None, None, None);
-        panel.db = Some(db);
+        panel.open(local(db, None));
         panel.opened = vec![Level::Albums];
         panel.reload();
         let favorite = |panel: &LibraryPanel| {
@@ -4525,7 +4553,7 @@ mod tests {
             .expect("an album");
 
         let mut panel = LibraryPanel::new(None, None, None);
-        panel.db = Some(db);
+        panel.open(local(db, None));
         panel.opened = vec![
             Level::Albums,
             Level::AlbumTracks {
@@ -4603,7 +4631,7 @@ mod tests {
             .name;
 
         let mut panel = LibraryPanel::new(None, None, None);
-        panel.db = Some(db);
+        panel.open(local(db, None));
         panel.online_bios = false;
         panel.opened = vec![
             Level::Artists,

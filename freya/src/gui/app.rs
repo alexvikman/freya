@@ -8,9 +8,10 @@ use std::time::{Duration, Instant, SystemTime};
 
 use freya_audio::{Event, Media, MediaTags, PlaybackState, Player, TrackInfo};
 use freya_library::cover::{Cover, read_cover};
-use freya_library::cue::{self, Found, Part};
-use freya_library::library::Track;
+use freya_library::cue::{self, Found};
 use freya_library::{Entry, Playlist, TagLoader, playlist_file};
+use freya_protocol::Part;
+use freya_protocol::Track;
 use freya_skin::SkinSource;
 use slint::winit_030::WinitWindowAccessor;
 use slint::{ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};

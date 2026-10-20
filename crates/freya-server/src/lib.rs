@@ -4,4 +4,4 @@
 mod folder_watch;
 mod service;
 
-pub use service::{Service, ServiceConfig};
+pub use service::{LocalLibrary, Service, ServiceConfig};

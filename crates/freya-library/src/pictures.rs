@@ -22,7 +22,13 @@ pub struct Pictures {
 impl Pictures {
     /// The picture in `file`, at most `largest` wide or high, kept among these: its checksum.
     pub fn take_file(&self, file: &Path, largest: u32) -> Result<String, String> {
-        let picture = image::open(file).map_err(|e| e.to_string())?;
+        let bytes = std::fs::read(file).map_err(|e| e.to_string())?;
+        self.take_bytes(&bytes, largest)
+    }
+
+    /// The picture in `bytes`, at most `largest` wide or high, kept among these: its checksum.
+    pub fn take_bytes(&self, bytes: &[u8], largest: u32) -> Result<String, String> {
+        let picture = image::load_from_memory(bytes).map_err(|e| e.to_string())?;
         let picture = if picture.width() > largest || picture.height() > largest {
             picture.resize(largest, largest, image::imageops::FilterType::Lanczos3)
         } else {

@@ -12,7 +12,9 @@ use std::time::{Duration, Instant, SystemTime};
 use freya_library::Library;
 use freya_library::library::{Online, ScanOptions, Scanner};
 use freya_library::pictures::Pictures;
-use freya_protocol::{Part, ScanEvent, ServiceEvent};
+use freya_protocol::{
+    ApiError, ApiResult, LibraryApi, LibraryData, LibraryPictures, Part, ScanEvent, ServiceEvent,
+};
 
 use crate::folder_watch::FolderWatch;
 
@@ -63,6 +65,8 @@ struct Shared {
     state: Mutex<State>,
     stop: AtomicBool,
     listeners: Mutex<Vec<Sender<ServiceEvent>>>,
+    /// What clients ask of the library is read and written here, not waiting for a scan.
+    api: Arc<LocalLibrary>,
 }
 
 impl Service {
@@ -75,12 +79,16 @@ impl Service {
         pictures: Option<PathBuf>,
         config: ServiceConfig,
     ) -> Result<Self, String> {
-        let db = Library::open(&database)
-            .map_err(|e| format!("could not open the library at {}: {e}", database.display()))?;
+        let open = || {
+            Library::open(&database)
+                .map_err(|e| format!("could not open the library at {}: {e}", database.display()))
+        };
+        let (db, reader) = (open()?, open()?);
+        let pictures = pictures.map(Pictures::new);
         let state = State {
-            database,
+            database: database.clone(),
             db,
-            pictures: pictures.map(Pictures::new),
+            pictures: pictures.clone(),
             scanner: Scanner::new(),
             scanning: false,
             config,
@@ -97,6 +105,7 @@ impl Service {
             state: Mutex::new(state),
             stop: AtomicBool::new(false),
             listeners: Mutex::new(Vec::new()),
+            api: Arc::new(LocalLibrary::new(reader, pictures)),
         });
         let mut service = Self {
             shared,
@@ -116,6 +125,11 @@ impl Service {
                 .map_err(|e| format!("could not start the library's thread: {e}"))?,
         );
         Ok(service)
+    }
+
+    /// The library, for a client to ask of.
+    pub fn api(&self) -> Arc<dyn LibraryApi> {
+        Arc::clone(&self.shared.api) as _
     }
 
     /// What happens from now on, as it happens.
@@ -238,6 +252,77 @@ impl Drop for Service {
         let mut state = lock(&self.shared.state);
         state.scanner.stop();
         state.write_plays();
+    }
+}
+
+/// The library in this process, as a client asks of it: what it holds, read and written on a
+/// connection of its own, and its pictures.
+pub struct LocalLibrary {
+    db: Mutex<Library>,
+    pictures: Option<Pictures>,
+}
+
+impl LocalLibrary {
+    pub fn new(db: Library, pictures: Option<Pictures>) -> Self {
+        Self {
+            db: Mutex::new(db),
+            pictures,
+        }
+    }
+
+    fn pictures(&self) -> ApiResult<&Pictures> {
+        self.pictures
+            .as_ref()
+            .ok_or_else(|| ApiError("the library keeps no pictures".into()))
+    }
+}
+
+fn api_error(e: impl std::fmt::Display) -> ApiError {
+    ApiError(e.to_string())
+}
+
+macro_rules! serve_library_data {
+    ($(
+        $(#[doc = $doc:literal])*
+        fn $name:ident($($arg:ident: $ty:ty),* $(,)?) -> $ret:ty;
+    )*) => {
+        impl LibraryData for LocalLibrary {
+            $(
+                fn $name(&self, $($arg: $ty),*) -> ApiResult<$ret> {
+                    lock(&self.db).$name($($arg),*).map_err(api_error)
+                }
+            )*
+        }
+    };
+}
+
+freya_protocol::with_library_data!(serve_library_data);
+
+impl LibraryPictures for LocalLibrary {
+    fn picture(&self, checksum: &str) -> ApiResult<Option<Vec<u8>>> {
+        Ok(self.pictures()?.read(checksum))
+    }
+
+    fn put_picture(&self, bytes: &[u8]) -> ApiResult<String> {
+        self.pictures()?.put(bytes).map_err(api_error)
+    }
+
+    fn take_picture(&self, bytes: &[u8], largest: u32) -> ApiResult<String> {
+        self.pictures()?
+            .take_bytes(bytes, largest)
+            .map_err(api_error)
+    }
+
+    fn album_art(&self, track: &Path, largest: u32) -> ApiResult<Option<Vec<u8>>> {
+        let Some(picture) = freya_library::cover::album_art_large(track, largest) else {
+            return Ok(None);
+        };
+        // Shown whole and large: a high quality.
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 92)
+            .encode_image(&picture.to_rgb8())
+            .map_err(api_error)?;
+        Ok(Some(jpeg))
     }
 }
 

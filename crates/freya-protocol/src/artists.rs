@@ -205,3 +205,14 @@ pub struct AlbumCandidate {
     pub date: String,
     pub artist: ArtistMatch,
 }
+
+/// The opening of an artist's article on Wikipedia, in plain text.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct Article {
+    pub title: String,
+    /// Its first paragraph.
+    pub summary: String,
+    /// The whole opening, before the first heading.
+    pub biography: String,
+    pub url: String,
+}

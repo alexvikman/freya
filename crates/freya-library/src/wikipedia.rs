@@ -8,16 +8,7 @@ const MUSICBRAINZ_ARTIST: &str = "https://musicbrainz.org/ws/2/artist";
 const WIKIDATA: &str = "https://www.wikidata.org/w/api.php";
 const WIKIPEDIA: &str = "https://en.wikipedia.org/w/api.php";
 
-/// The opening of an artist's article on Wikipedia, in plain text.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Article {
-    pub title: String,
-    /// Its first paragraph.
-    pub summary: String,
-    /// The whole opening, before the first heading.
-    pub biography: String,
-    pub url: String,
-}
+pub use freya_protocol::Article;
 
 /// The English Wikipedia article on the artist with the MusicBrainz id `mbid`; none when
 /// MusicBrainz links them to none. An error means a service could not be asked.

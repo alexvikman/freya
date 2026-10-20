@@ -13,6 +13,14 @@ use std::time::Duration;
 use crate::artist_image;
 use crate::pictures::Pictures;
 
+/// Where the pictures thumbnails are made from come from: the picture kept as a checksum.
+pub type PictureSource = std::sync::Arc<dyn Fn(&str) -> Option<Vec<u8>> + Send + Sync>;
+
+/// The pictures in `pictures`, as a source of them.
+pub fn source(pictures: Pictures) -> PictureSource {
+    std::sync::Arc::new(move |checksum| pictures.read(checksum))
+}
+
 /// The longest side of a thumbnail, in pixels: sharp in a 150-point grid tile on a Retina
 /// screen, about 30 KB as a JPEG.
 pub const SIZE: u32 = 300;
@@ -120,7 +128,7 @@ impl<J: Send + 'static> Worker<J> {
 
 pub struct Thumbnails {
     dir: PathBuf,
-    pictures: Pictures,
+    pictures: PictureSource,
     /// Albums and artists asked for, with what is known about them.
     known: HashMap<String, Thumbnail>,
     /// The large picture of each artist asked for, by their key, once made.
@@ -142,7 +150,7 @@ pub struct Thumbnails {
 impl Thumbnails {
     /// Thumbnails kept in `dir`, which is created when the first one is made, from covers and
     /// from the downloaded `pictures`.
-    pub fn new(dir: PathBuf, pictures: Pictures) -> Self {
+    pub fn new(dir: PathBuf, pictures: PictureSource) -> Self {
         let (finished_tx, finished) = channel();
         Self {
             dir,
@@ -194,10 +202,6 @@ impl Thumbnails {
 
     pub fn dir(&self) -> &Path {
         &self.dir
-    }
-
-    pub fn pictures(&self) -> &Pictures {
-        &self.pictures
     }
 
     /// A name for an artist's picture that stays the same between runs, apart from any
@@ -517,7 +521,7 @@ impl Thumbnails {
 /// Makes the picture for the artist `key` as `work` says, from Freya's pictures only.
 fn make_artist(
     dir: &Path,
-    pictures: &Pictures,
+    pictures: &PictureSource,
     key: &str,
     work: ArtistWork,
 ) -> Result<Made, String> {
@@ -550,12 +554,12 @@ fn portrait_files(dir: &Path, base: &str) -> (PathBuf, PathBuf) {
 
 /// The portrait made from the downloaded picture `checksum`, made now if missing; none when
 /// the picture is gone.
-fn from_kept(dir: &Path, pictures: &Pictures, checksum: &str) -> Result<Option<Made>, String> {
+fn from_kept(dir: &Path, pictures: &PictureSource, checksum: &str) -> Result<Option<Made>, String> {
     let (shown, large) = portrait_files(dir, checksum);
     if shown.exists() && large.exists() {
         return Ok(Some((Some(shown), Some(large), false)));
     }
-    let Some(bytes) = pictures.read(checksum) else {
+    let Some(bytes) = pictures(checksum) else {
         return Ok(None);
     };
     let picture = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
@@ -591,7 +595,7 @@ fn save_portrait(
 /// have none.
 fn collage_of(
     dir: &Path,
-    pictures: &Pictures,
+    pictures: &PictureSource,
     key: &str,
     covers: &[String],
 ) -> Result<Made, String> {
@@ -602,7 +606,7 @@ fn collage_of(
     }
     let images: Vec<image::DynamicImage> = covers
         .iter()
-        .filter_map(|checksum| image::load_from_memory(&pictures.read(checksum)?).ok())
+        .filter_map(|checksum| image::load_from_memory(&pictures(checksum)?).ok())
         .take(4)
         .collect();
     let Some(collage) = artist_image::collage_of(images, SIZE) else {
@@ -614,8 +618,8 @@ fn collage_of(
 
 /// The kept picture `checksum` in the grid's size, made from Freya's copy; none when that is
 /// gone.
-fn shrink(dir: &Path, pictures: &Pictures, checksum: &str) -> Result<Option<PathBuf>, String> {
-    let Some(bytes) = pictures.read(checksum) else {
+fn shrink(dir: &Path, pictures: &PictureSource, checksum: &str) -> Result<Option<PathBuf>, String> {
+    let Some(bytes) = pictures(checksum) else {
         return Ok(None);
     };
     let picture = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
@@ -631,8 +635,8 @@ fn shrink(dir: &Path, pictures: &Pictures, checksum: &str) -> Result<Option<Path
 
 /// Makes the kept picture `checksum` in the size of a wide picture across an artist's page.
 /// Returns false when the picture is gone.
-fn make_backdrop(dir: &Path, pictures: &Pictures, checksum: &str) -> Result<bool, String> {
-    let Some(bytes) = pictures.read(checksum) else {
+fn make_backdrop(dir: &Path, pictures: &PictureSource, checksum: &str) -> Result<bool, String> {
+    let Some(bytes) = pictures(checksum) else {
         return Ok(false);
     };
     let picture = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
@@ -686,7 +690,17 @@ mod tests {
     }
 
     fn thumbnails(dir: &Path) -> Thumbnails {
-        Thumbnails::new(dir.join("covers"), Pictures::new(dir.join("pictures")))
+        Thumbnails::new(dir.join("covers"), source(pictures_of(dir)))
+    }
+
+    /// The pictures thumbnails in `dir` are made from.
+    fn pictures_of(dir: &Path) -> Pictures {
+        Pictures::new(dir.join("pictures"))
+    }
+
+    /// The pictures `thumbnails` are made from.
+    fn pictures(thumbnails: &Thumbnails) -> Pictures {
+        pictures_of(thumbnails.dir().parent().unwrap())
     }
 
     /// Until the threads have done all they were asked.
@@ -711,7 +725,7 @@ mod tests {
                 image::ImageFormat::Jpeg,
             )
             .unwrap();
-        thumbnails.pictures().put(&jpeg).unwrap()
+        pictures(thumbnails).put(&jpeg).unwrap()
     }
 
     /// The color in the middle of the picture shown for `key`, once made.
@@ -862,7 +876,7 @@ mod tests {
                 image::ImageFormat::Jpeg,
             )
             .unwrap();
-        let checksum = thumbnails.pictures().put(&jpeg).unwrap();
+        let checksum = pictures(&thumbnails).put(&jpeg).unwrap();
         assert_eq!(thumbnails.get_picture(&checksum), Thumbnail::Pending);
         assert_eq!(
             thumbnails.get_picture(&checksum),

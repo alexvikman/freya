@@ -581,7 +581,7 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
                 Some(Value::String(s)) => Some(s.to_string()),
                 _ => None,
             };
-            let edit = freya_library::library::ArtistEdit {
+            let edit = freya_protocol::ArtistEdit {
                 name: text(0),
                 sort_name: text(1),
                 mbid: text(2),
@@ -590,7 +590,7 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
                 note: None,
                 header: text(4)
                     .as_deref()
-                    .and_then(freya_library::library::Header::from_name),
+                    .and_then(freya_protocol::Header::from_name),
             };
             app.library.save_artist(&edit);
         }),

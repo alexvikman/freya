@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use freya_library::cue::Part;
+use freya_protocol::Part;
 
 /// Listening this long makes any track played.
 const ENOUGH: Duration = Duration::from_secs(4 * 60);

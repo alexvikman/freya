@@ -3,7 +3,8 @@
 
 use std::sync::Arc;
 
-use freya_library::library::{ArtistText, LastFm, plain_name};
+use freya_library::library::LastFm;
+use freya_protocol::{ArtistText, plain_name};
 
 use crate::lastfm::{Client, Credentials};
 

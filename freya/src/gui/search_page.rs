@@ -7,9 +7,9 @@
 use std::cmp::Reverse;
 
 use freya_library::Entry;
-use freya_library::library::{Album, Artist, Genre, Track, plain_name};
 use freya_library::search::{Rank, fold, rank};
 use freya_library::thumbnails::{ArtistSource, Thumbnails};
+use freya_protocol::{Album, Artist, Genre, Track, plain_name};
 use slint_interpreter::{Struct, Value};
 
 use super::{Item, Level, LibraryPanel, SEARCH_LIMIT, string};
@@ -325,7 +325,7 @@ impl LibraryPanel {
             ),
             Item::Genre(genre) => (Level::Genres, Level::GenreAlbums { genre: genre.name }),
             Item::Playlist(playlist) => return Some(Opened::Playlist(playlist.name)),
-            Item::Track(track) | Item::Played(freya_library::library::Played { track, .. }) => {
+            Item::Track(track) | Item::Played(freya_protocol::Played { track, .. }) => {
                 return Some(Opened::Play(vec![track], 0));
             }
         };
@@ -433,7 +433,7 @@ mod tests {
         freya_library::library::scan(&mut db, std::slice::from_ref(&dir), &cancel, |_| {}).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         let mut panel = LibraryPanel::new(None, None, None);
-        panel.db = Some(db);
+        panel.open(crate::gui::library::tests::local(db, None));
         panel.set_playlists(&[("Freya's favourites".to_owned(), &[][..], None)]);
         panel
     }

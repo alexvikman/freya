@@ -2,10 +2,12 @@
 //! genres and playlists, what is known of them, and how scans go. Plain data, the same on both
 //! sides.
 
+pub mod api;
 pub mod artists;
 pub mod library;
 pub mod scan;
 
+pub use api::*;
 pub use artists::*;
 pub use library::*;
 pub use scan::*;

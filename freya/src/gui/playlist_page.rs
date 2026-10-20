@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use freya_library::Entry;
-use freya_library::library::{PlaylistInfo, PlaylistTrack};
 use freya_library::thumbnails::{ArtistSource, Thumbnail, Thumbnails};
+use freya_protocol::LibraryApi;
+use freya_protocol::{PlaylistInfo, PlaylistTrack};
 use slint::Image;
 use slint_interpreter::{Struct, Value};
 
@@ -86,10 +87,17 @@ pub(super) struct PlaylistDraft {
     pub(super) error: String,
 }
 
+/// Keeps the picture in `file` among the library's, at most `largest` wide or high: its
+/// checksum.
+pub(super) fn take_file(api: &dyn LibraryApi, file: &Path, largest: u32) -> Result<String, String> {
+    let bytes = std::fs::read(file).map_err(|e| e.to_string())?;
+    api.take_picture(&bytes, largest).map_err(|e| e.to_string())
+}
+
 /// The picture `checksum` among Freya's, small enough for the dialog.
-pub(super) fn preview(thumbnails: Option<&Thumbnails>, checksum: Option<&String>) -> Image {
+pub(super) fn preview(api: Option<&dyn LibraryApi>, checksum: Option<&String>) -> Image {
     let small = || {
-        let bytes = thumbnails?.pictures().read(checksum?)?;
+        let bytes = api?.picture(checksum?).ok()??;
         let rgb = image::load_from_memory(&bytes)
             .ok()?
             .thumbnail(800, 800)
@@ -445,7 +453,7 @@ impl LibraryPanel {
 
     /// Starts changing the playlist shown.
     pub fn edit_playlist(&mut self) {
-        let thumbnails = self.thumbnails.as_ref();
+        let thumbnails = self.db.as_deref();
         self.playlist_draft = self.playlist_page.as_ref().map(|page| PlaylistDraft {
             name: page.name.clone(),
             description: page.info.description.clone().unwrap_or_default(),
@@ -459,14 +467,14 @@ impl LibraryPanel {
 
     /// Takes the picture in `file` for the playlist being changed: "picture" or "backdrop".
     pub fn pick_playlist_picture(&mut self, kind: &str, file: &Path) {
-        let (Some(draft), Some(thumbnails)) = (&mut self.playlist_draft, &self.thumbnails) else {
+        let (Some(draft), Some(api)) = (&mut self.playlist_draft, &self.db) else {
             return;
         };
         let largest = if kind == "backdrop" { WIDE } else { PICTURE };
-        match thumbnails.pictures().take_file(file, largest) {
+        match take_file(api.as_ref(), file, largest) {
             Ok(checksum) => {
                 draft.error.clear();
-                let shown = preview(Some(thumbnails), Some(&checksum));
+                let shown = preview(Some(api.as_ref()), Some(&checksum));
                 match kind {
                     "backdrop" => (draft.backdrop, draft.backdrop_shown) = (Some(checksum), shown),
                     _ => (draft.picture, draft.picture_shown) = (Some(checksum), shown),
@@ -586,7 +594,10 @@ mod tests {
     #[test]
     fn shows_a_playlist_in_the_order_picked() {
         let mut panel = LibraryPanel::new(None, None, None);
-        panel.db = Some(Library::open_in_memory().unwrap());
+        panel.open(crate::gui::library::tests::local(
+            Library::open_in_memory().unwrap(),
+            None,
+        ));
         let entries = [
             entry("Swan Lake", "Tchaikovsky", 167),
             entry("Fur Elise", "Beethoven", 360),
@@ -617,7 +628,10 @@ mod tests {
     #[test]
     fn keeps_a_playlists_description() {
         let mut panel = LibraryPanel::new(None, None, None);
-        panel.db = Some(Library::open_in_memory().unwrap());
+        panel.open(crate::gui::library::tests::local(
+            Library::open_in_memory().unwrap(),
+            None,
+        ));
         panel.show_playlist(Some("Royal"), &[]);
         panel.edit_playlist();
         assert_eq!(
