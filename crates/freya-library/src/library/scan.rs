@@ -74,6 +74,38 @@ fn is_offline(folder: &Path) -> bool {
     }
 }
 
+/// How long each part of a scan took, for the log.
+struct Laps {
+    since: Instant,
+    took: Vec<(&'static str, Duration)>,
+}
+
+impl Laps {
+    fn new() -> Self {
+        Self {
+            since: Instant::now(),
+            took: Vec::new(),
+        }
+    }
+
+    /// `what` is done: the time since the last lap was its.
+    fn lap(&mut self, what: &'static str) {
+        self.took.push((what, self.since.elapsed()));
+        self.since = Instant::now();
+    }
+}
+
+impl std::fmt::Display for Laps {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let parts: Vec<String> = self
+            .took
+            .iter()
+            .map(|(what, took)| format!("{what} {:.1}s", took.as_secs_f64()))
+            .collect();
+        f.write_str(&parts.join(", "))
+    }
+}
+
 /// Brings the library in line with `folders`. Files under a folder that is offline are kept,
 /// so they need not be read again when it comes back: one that does not exist (an unplugged
 /// drive), cannot be read, or is empty (a mount point with nothing mounted on it). Files
@@ -116,7 +148,8 @@ pub fn scan_with(
     let partial = !options.only.is_empty();
     let walked = if partial { &options.only[..] } else { folders };
     let within = |path: &Path| !partial || walked.iter().any(|f| path.starts_with(f));
-    let (found, images) = find(walked, cancel, &mut progress);
+    let mut laps = Laps::new();
+    let (found, images, stamps) = find(walked, cancel, &mut progress, &mut laps);
     let known = library.sources()?;
     // Tracks found from now on came into the library now, except on the library's first scan:
     // everything comes in at once then, and the files' own dates say more.
@@ -126,6 +159,7 @@ pub fn scan_with(
 
     // Of the library's folders: a folder within one that is gone was taken away.
     let offline: Vec<&PathBuf> = folders.iter().filter(|f| is_offline(f)).collect();
+    laps.lap("offline");
     let gone: Vec<&PathBuf> = {
         let found: HashSet<&Path> = found.iter().map(|(f, _)| f.source()).collect();
         known
@@ -226,15 +260,18 @@ pub fn scan_with(
         tx.commit()?;
         Ok(())
     })?;
+    laps.lap("tracks");
     if let Some(pictures) = &options.pictures
         && !cancel.load(Ordering::Relaxed)
     {
         if !library.cover_colors_current()? {
             library.make_cover_colors(pictures, cancel)?;
+            laps.lap("colors");
         }
         make_covers(
             library,
             &images,
+            &stamps,
             &changed_sources,
             options.rescan,
             &within,
@@ -242,8 +279,10 @@ pub fn scan_with(
             cancel,
             &mut progress,
         )?;
+        laps.lap("covers");
         if !cancel.load(Ordering::Relaxed) {
             take_artists_pictures(library, &images, options.rescan, pictures)?;
+            laps.lap("folder pictures");
         }
         if !cancel.load(Ordering::Relaxed) {
             fetch_artists(
@@ -254,14 +293,18 @@ pub fn scan_with(
                 cancel,
                 &mut progress,
             )?;
+            laps.lap("artists online");
         }
         if !cancel.load(Ordering::Relaxed) {
             fetch_genres(library, &options.online, cancel, &mut progress)?;
+            laps.lap("genres online");
         }
         if !cancel.load(Ordering::Relaxed) && options.online.any() {
             fetch_album_covers(library, pictures, cancel)?;
+            laps.lap("covers online");
         }
     }
+    log::info!("scan parts: {laps}");
     if !partial && !cancel.load(Ordering::Relaxed) {
         library.note_full_scan(SystemTime::now())?;
     }
@@ -384,6 +427,7 @@ fn take_artists_pictures(
 fn make_covers(
     library: &mut Library,
     images: &[PathBuf],
+    stamps: &HashMap<PathBuf, FileStamp>,
     changed_sources: &[PathBuf],
     rescan: bool,
     within: &dyn Fn(&Path) -> bool,
@@ -404,7 +448,7 @@ fn make_covers(
             changed.insert(album?);
         }
     }
-    let stamps = ImageStamps::new(images);
+    let stamps = ImageStamps::new(images, stamps);
     let kept = library.album_covers()?;
     let mut keys = HashSet::new();
     let mut work = Vec::new();
@@ -497,10 +541,12 @@ fn make_covers(
 /// "Covers": it changes when one is added, taken away or changed.
 struct ImageStamps<'a> {
     by_folder: HashMap<&'a Path, Vec<&'a Path>>,
+    stamps: &'a HashMap<PathBuf, FileStamp>,
 }
 
 impl<'a> ImageStamps<'a> {
-    fn new(images: &'a [PathBuf]) -> Self {
+    /// With the `stamps` the walk took of `images`.
+    fn new(images: &'a [PathBuf], stamps: &'a HashMap<PathBuf, FileStamp>) -> Self {
         let mut by_folder: HashMap<&Path, Vec<&Path>> = HashMap::new();
         for image in images {
             if let Some(folder) = image.parent() {
@@ -515,7 +561,7 @@ impl<'a> ImageStamps<'a> {
                 }
             }
         }
-        Self { by_folder }
+        Self { by_folder, stamps }
     }
 
     /// The stamp of `folder`'s pictures: their names, sizes and times, hashed.
@@ -528,12 +574,10 @@ impl<'a> ImageStamps<'a> {
         let mut images = images.clone();
         images.sort();
         for image in images {
-            let stamp = std::fs::metadata(image)
-                .map(|m| FileStamp::of(&m))
-                .unwrap_or(FileStamp {
-                    size: 0,
-                    modified: 0,
-                });
+            let stamp = stamp_at(image, self.stamps).unwrap_or(FileStamp {
+                size: 0,
+                modified: 0,
+            });
             let text = format!("{}\0{}\0{}\0", image.display(), stamp.size, stamp.modified);
             for byte in text.bytes() {
                 hash ^= u64::from(byte);
@@ -546,12 +590,19 @@ impl<'a> ImageStamps<'a> {
 
 /// What there is to read under `folders`: audio files, and the discs of CUE sheets in place of
 /// the files they cut, each with the stamp of what it is read from. Each is listed once, even
-/// when folders overlap. With the pictures in the folders, which covers may be.
+/// when folders overlap. With the pictures in the folders, which covers may be, and the stamps
+/// of all of them.
+#[allow(clippy::type_complexity)]
 fn find(
     folders: &[PathBuf],
     cancel: &AtomicBool,
     progress: &mut impl FnMut(ScanEvent),
-) -> (Vec<(Found, FileStamp)>, Vec<PathBuf>) {
+    laps: &mut Laps,
+) -> (
+    Vec<(Found, FileStamp)>,
+    Vec<PathBuf>,
+    HashMap<PathBuf, FileStamp>,
+) {
     let mut seen = HashSet::new();
     let mut found = Vec::new();
     let mut told: Option<Instant> = None;
@@ -562,6 +613,7 @@ fn find(
         }
     };
     let walked = files::walk_library(folders, cancel, &mut entering);
+    laps.lap("walk");
     for item in cue::apply_sheets(walked.files) {
         if cancel.load(Ordering::Relaxed) {
             break;
@@ -569,17 +621,26 @@ fn find(
         if !seen.insert(item.source().to_owned()) {
             continue;
         }
-        if let Some(stamp) = stamp_of(&item) {
+        if let Some(stamp) = stamp_of(&item, &walked.stamps) {
             found.push((item, stamp));
         }
     }
-    (found, walked.images)
+    laps.lap("sheets");
+    (found, walked.images, walked.stamps)
+}
+
+/// The stamp of `path`: the one the walk took, else the file's now.
+fn stamp_at(path: &Path, walked: &HashMap<PathBuf, FileStamp>) -> Option<FileStamp> {
+    walked
+        .get(path)
+        .copied()
+        .or_else(|| Some(FileStamp::of(&std::fs::metadata(path).ok()?)))
 }
 
 /// The stamp of what `found` is read from. For a disc, that is its sheet and its audio files
 /// together, so that a change to any of them is noticed.
-fn stamp_of(found: &Found) -> Option<FileStamp> {
-    let stamp = |path: &Path| Some(FileStamp::of(&std::fs::metadata(path).ok()?));
+fn stamp_of(found: &Found, walked: &HashMap<PathBuf, FileStamp>) -> Option<FileStamp> {
+    let stamp = |path: &Path| stamp_at(path, walked);
     match found {
         Found::File(path) => stamp(path),
         Found::Disc(disc) => {

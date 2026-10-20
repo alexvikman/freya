@@ -1,26 +1,31 @@
 //! Finding playable files.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::channel;
 
 use crate::cue;
+use crate::library::FileStamp;
 
 pub const AUDIO_EXTENSIONS: &[&str] = &[
     "mp3", "mp2", "flac", "wav", "aif", "aiff", "ogg", "oga", "opus", "m4a", "mp4", "aac", "caf",
     "mka", "webm", "ape",
 ];
 
+/// Folders are read by up to this many threads at once: on a network drive, reading a folder
+/// and each file's size and time is mostly waiting for an answer, and the waits overlap.
+const WALKERS: usize = 16;
+
 /// Expands folders (recursively, sorted) into the audio files they contain. Files are kept
 /// as given. Hidden files and folders are skipped, like macOS's `._name.mp3` companion files.
 pub fn collect(paths: &[PathBuf]) -> Vec<PathBuf> {
-    collect_matching(
-        paths,
-        is_audio,
-        &AtomicBool::new(false),
-        &mut |_| {},
-        &mut None,
-    )
+    let want = Want {
+        files: is_audio,
+        images: false,
+        stamps: false,
+    };
+    collect_matching(paths, &want, &AtomicBool::new(false), &mut |_| {}).files
 }
 
 /// Like [`collect`], but also finds CUE sheets, which cut audio files into tracks; see
@@ -32,13 +37,12 @@ pub fn collect_with_sheets(paths: &[PathBuf]) -> Vec<PathBuf> {
 /// Like [`collect_with_sheets`], but gives up, with what it found so far, once `cancel` is
 /// set: walking a large or slow drive can take minutes.
 pub fn collect_with_sheets_until(paths: &[PathBuf], cancel: &AtomicBool) -> Vec<PathBuf> {
-    collect_matching(
-        paths,
-        |path| is_audio(path) || cue::is_sheet(path),
-        cancel,
-        &mut |_| {},
-        &mut None,
-    )
+    let want = Want {
+        files: is_audio_or_sheet,
+        images: false,
+        stamps: false,
+    };
+    collect_matching(paths, &want, cancel, &mut |_| {}).files
 }
 
 /// What a walk through the music's folders found: audio files and CUE sheets, and the
@@ -47,95 +51,212 @@ pub fn collect_with_sheets_until(paths: &[PathBuf], cancel: &AtomicBool) -> Vec<
 pub struct Walked {
     pub files: Vec<PathBuf>,
     pub images: Vec<PathBuf>,
+    /// The size and time of each file and picture found in a folder, taken as it was walked.
+    pub stamps: HashMap<PathBuf, FileStamp>,
 }
 
-/// Like [`collect_with_sheets_until`], with the pictures in the folders too, telling
-/// `entering` of each folder as it is walked: the one walk a scan makes through them.
+/// Like [`collect_with_sheets_until`], with the pictures in the folders and the stamps of
+/// what was found too, telling `entering` of each folder as it is walked: the one walk a scan
+/// makes through them.
 pub fn walk_library(
     paths: &[PathBuf],
     cancel: &AtomicBool,
     entering: &mut dyn FnMut(&Path),
 ) -> Walked {
-    let mut walked = Walked::default();
-    let mut images = Some(&mut walked.images);
-    let files = collect_matching(
-        paths,
-        |path| is_audio(path) || cue::is_sheet(path),
-        cancel,
-        entering,
-        &mut images,
-    );
-    walked.files = files;
-    walked
+    let want = Want {
+        files: is_audio_or_sheet,
+        images: true,
+        stamps: true,
+    };
+    collect_matching(paths, &want, cancel, entering)
+}
+
+fn is_audio_or_sheet(path: &Path) -> bool {
+    is_audio(path) || cue::is_sheet(path)
+}
+
+/// What a walk looks for.
+struct Want {
+    files: fn(&Path) -> bool,
+    /// The pictures too.
+    images: bool,
+    /// The size and time of what it finds.
+    stamps: bool,
 }
 
 fn collect_matching(
     paths: &[PathBuf],
-    wanted: fn(&Path) -> bool,
+    want: &Want,
     cancel: &AtomicBool,
     entering: &mut dyn FnMut(&Path),
-    images: &mut Option<&mut Vec<PathBuf>>,
-) -> Vec<PathBuf> {
-    let mut files = Vec::new();
+) -> Walked {
+    let mut walked = Walked::default();
     for path in paths {
         if path.is_dir() {
-            let mut found = Vec::new();
-            walk(
-                path,
-                wanted,
-                &mut found,
-                &mut HashSet::new(),
-                cancel,
-                entering,
-                images,
-            );
-            found.sort();
-            files.extend(found);
+            let mut files = Vec::new();
+            walk(path, want, cancel, entering, &mut files, &mut walked);
+            files.sort();
+            walked.files.extend(files);
         } else {
-            files.push(path.clone());
+            walked.files.push(path.clone());
         }
     }
-    files
+    walked.images.sort();
+    walked
 }
 
-/// `visited` holds the folders already walked, so links that lead back up the tree end.
+/// A folder to read, and where it really is, to know links that lead back up the tree.
+struct Folder {
+    path: PathBuf,
+    real: PathBuf,
+}
+
+/// What is in one folder.
+#[derive(Default)]
+struct Read {
+    folders: Vec<Folder>,
+    files: Vec<PathBuf>,
+    images: Vec<PathBuf>,
+    stamps: Vec<(PathBuf, FileStamp)>,
+}
+
+/// Walks `root` a level at a time, the folders of each level read side by side, into `files`
+/// and `walked`'s pictures and stamps.
 fn walk(
-    dir: &Path,
-    wanted: fn(&Path) -> bool,
-    out: &mut Vec<PathBuf>,
-    visited: &mut HashSet<PathBuf>,
+    root: &Path,
+    want: &Want,
     cancel: &AtomicBool,
     entering: &mut dyn FnMut(&Path),
-    images: &mut Option<&mut Vec<PathBuf>>,
+    files: &mut Vec<PathBuf>,
+    walked: &mut Walked,
 ) {
-    if cancel.load(Ordering::Relaxed) {
-        return;
-    }
-    entering(dir);
-    let Ok(real) = dir.canonicalize() else {
+    let Ok(real) = root.canonicalize() else {
         return;
     };
-    if !visited.insert(real) {
-        return;
+    // The folders already walked, so links that lead back up the tree end.
+    let mut visited = HashSet::from([real.clone()]);
+    let mut level = vec![Folder {
+        path: root.to_owned(),
+        real,
+    }];
+    while !level.is_empty() && !cancel.load(Ordering::Relaxed) {
+        let mut below = Vec::new();
+        let next = AtomicUsize::new(0);
+        std::thread::scope(|threads| {
+            let (send, reads) = channel();
+            for _ in 0..WALKERS.min(level.len()) {
+                let send = send.clone();
+                let (level, next) = (&level, &next);
+                threads.spawn(move || {
+                    while !cancel.load(Ordering::Relaxed) {
+                        let Some(folder) = level.get(next.fetch_add(1, Ordering::Relaxed)) else {
+                            break;
+                        };
+                        if send.send((folder, read_folder(folder, want))).is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            drop(send);
+            for (folder, read) in reads {
+                entering(&folder.path);
+                files.extend(read.files);
+                walked.images.extend(read.images);
+                walked.stamps.extend(read.stamps);
+                below.extend(
+                    read.folders
+                        .into_iter()
+                        .filter(|sub| visited.insert(sub.real.clone())),
+                );
+            }
+        });
+        level = below;
     }
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+}
+
+/// Reads `folder`: what `want` asks for in it, and the folders in it.
+fn read_folder(folder: &Folder, want: &Want) -> Read {
+    let mut read = Read::default();
+    let Ok(entries) = std::fs::read_dir(&folder.path) else {
+        return read;
     };
     for entry in entries.flatten() {
-        if entry.file_name().to_string_lossy().starts_with('.') {
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with('.') {
             continue;
         }
         let path = entry.path();
-        if path.is_dir() {
-            walk(&path, wanted, out, visited, cancel, entering, images);
-        } else if wanted(&path) {
-            out.push(path);
-        } else if let Some(images) = images
-            && is_image(&path)
-        {
-            images.push(path);
+        // The folder's listing tells what each entry is, without asking again; a link is
+        // followed to what it leads to.
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        let linked = kind.is_symlink();
+        if (linked && path.is_dir()) || kind.is_dir() {
+            let real = if linked {
+                let Ok(real) = path.canonicalize() else {
+                    continue;
+                };
+                real
+            } else {
+                folder.real.join(&name)
+            };
+            read.folders.push(Folder { path, real });
+            continue;
+        }
+        let file = (want.files)(&path);
+        if !file && !(want.images && is_image(&path)) {
+            continue;
+        }
+        if want.stamps {
+            // Right after the listing, while a network drive still has it at hand.
+            let metadata = if linked {
+                std::fs::metadata(&path)
+            } else {
+                entry.metadata()
+            };
+            if let Ok(metadata) = metadata {
+                read.stamps.push((path.clone(), FileStamp::of(&metadata)));
+            }
+        }
+        if file {
+            read.files.push(path);
+        } else {
+            read.images.push(path);
         }
     }
+    read
+}
+
+/// `f` of each of `items`, in their order, on up to [`WALKERS`] threads: for work that is
+/// mostly waiting for a drive.
+pub(crate) fn side_by_side<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let next = AtomicUsize::new(0);
+    let mut done: Vec<Option<R>> = std::iter::repeat_with(|| None).take(items.len()).collect();
+    std::thread::scope(|threads| {
+        let (send, results) = channel();
+        for _ in 0..WALKERS.min(items.len()) {
+            let send = send.clone();
+            let (next, f) = (&next, &f);
+            threads.spawn(move || {
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(item) = items.get(i) else {
+                        break;
+                    };
+                    if send.send((i, f(item))).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(send);
+        for (i, result) in results {
+            done[i] = Some(result);
+        }
+    });
+    done.into_iter().flatten().collect()
 }
 
 /// A picture a cover may be: JPEG or PNG.
@@ -169,6 +290,56 @@ mod tests {
         assert_eq!(collect_with_sheets(&folders).len(), 2);
         assert!(collect_with_sheets_until(&folders, &AtomicBool::new(true)).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_walk_follows_links_but_not_back_up_and_stamps_what_it_finds() {
+        let dir = std::env::temp_dir().join(format!("freya-walk-links-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (music, elsewhere) = (dir.join("music"), dir.join("elsewhere"));
+        for sub in ["b/deep", "a", ".hidden"] {
+            std::fs::create_dir_all(music.join(sub)).unwrap();
+        }
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(music.join("b/deep/2.flac"), b"two").unwrap();
+        std::fs::write(music.join("b/deep/cover.jpg"), b"jpeg").unwrap();
+        std::fs::write(music.join("a/1.mp3"), b"one").unwrap();
+        std::fs::write(music.join(".hidden/3.mp3"), b"").unwrap();
+        std::fs::write(music.join("a/notes.txt"), b"").unwrap();
+        std::fs::write(elsewhere.join("4.ogg"), b"four").unwrap();
+        std::os::unix::fs::symlink(&music, music.join("b/up")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, music.join("linked")).unwrap();
+
+        let mut entered = 0;
+        let walked = walk_library(
+            std::slice::from_ref(&music),
+            &AtomicBool::new(false),
+            &mut |_| entered += 1,
+        );
+        assert_eq!(
+            walked.files,
+            [
+                music.join("a/1.mp3"),
+                music.join("b/deep/2.flac"),
+                music.join("linked/4.ogg"),
+            ]
+        );
+        assert_eq!(walked.images, [music.join("b/deep/cover.jpg")]);
+        assert_eq!(entered, 5, "music, a, b, deep, linked; not up again");
+        assert_eq!(walked.stamps.len(), 4);
+        assert_eq!(walked.stamps[&music.join("b/deep/2.flac")].size, 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn work_side_by_side_keeps_its_order() {
+        let items: Vec<u32> = (0..100).collect();
+        assert_eq!(
+            side_by_side(&items, |i| i * 2),
+            items.iter().map(|i| i * 2).collect::<Vec<_>>()
+        );
+        assert!(side_by_side(&[] as &[u32], |i| *i).is_empty());
     }
 }
 

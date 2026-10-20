@@ -103,7 +103,10 @@ pub fn is_sheet(path: &Path) -> bool {
 pub fn apply_sheets(found: Vec<PathBuf>) -> Vec<Found> {
     let (sheets, audio): (Vec<PathBuf>, Vec<PathBuf>) =
         found.into_iter().partition(|path| is_sheet(path));
-    let mut discs: Vec<Disc> = sheets.iter().filter_map(|sheet| read_disc(sheet)).collect();
+    let mut discs: Vec<Disc> = files::side_by_side(&sheets, |sheet| read_disc(sheet))
+        .into_iter()
+        .flatten()
+        .collect();
     // A stable sort: otherwise the order they were found in.
     discs.sort_by_key(|disc| !disc.named_after_its_file());
     let mut cut = HashSet::new();
