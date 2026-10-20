@@ -193,7 +193,9 @@ only then sign with the new key; remove the old key a release later.
 | `.deb`, Windows, or run from a build | — | Shows the update; *Download* opens the release page |
 
 The new Freya is started once the old one has quit, with the old one's environment, and
-removes what the update left beside the app. A list of releases at the address in `FREYA_UPDATE_FEED`
+removes what the update left beside the app. Freya's server, `freya-server`, comes in every
+package beside Freya; the new Freya finds the old server still running, stops it, and starts
+its own. A list of releases at the address in `FREYA_UPDATE_FEED`
 takes the place of GitHub's, to try a release before publishing it; its files must still carry
 a valid signature.
 

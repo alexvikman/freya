@@ -33,14 +33,18 @@ if [ "${1:-}" != "--skip-build" ]; then
     cargo packager -p freya --release --formats app
 fi
 
-# Inside out would matter for frameworks or helpers; Freya is one executable, so signing the
-# bundle signs it and seals the bundle's resources.
+# Inside out: the server beside Freya first, then the bundle, which signs Freya itself and
+# seals the bundle's resources.
 xattr -cr "$app"
-if [ "$identity" = "-" ]; then
-    codesign --force --options runtime --sign - "$app"
-else
-    codesign --force --options runtime --timestamp --sign "$identity" "$app"
-fi
+sign() {
+    if [ "$identity" = "-" ]; then
+        codesign --force --options runtime --sign - "$1"
+    else
+        codesign --force --options runtime --timestamp --sign "$identity" "$1"
+    fi
+}
+sign "$app/Contents/MacOS/freya-server"
+sign "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 
 notarize() {

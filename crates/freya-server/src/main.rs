@@ -1,6 +1,6 @@
 //! `freya-server`: the library as a service for Freya's clients, on this computer.
 //!
-//! `freya-server [--address HOST:PORT] [--data FOLDER]`. It keeps its library, pictures,
+//! `freya-server [--address HOST:PORT] [--data FOLDER]`, or `--version`. It keeps its library, pictures,
 //! settings and log in its own folder, the first time taking in what Freya kept in its folder
 //! before the server was its own. It runs until stopped: Ctrl-C, SIGTERM, or `POST /quit` from
 //! this computer.
@@ -17,11 +17,15 @@ fn main() {
     let mut data = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
+        if arg == "--version" {
+            println!("freya-server {}", env!("CARGO_PKG_VERSION"));
+            return;
+        }
         match (arg.as_str(), args.next()) {
             ("--address", Some(value)) => address = value,
             ("--data", Some(value)) => data = Some(PathBuf::from(value)),
             _ => {
-                eprintln!("usage: freya-server [--address HOST:PORT] [--data FOLDER]");
+                eprintln!("usage: freya-server [--address HOST:PORT] [--data FOLDER] | --version");
                 std::process::exit(2);
             }
         }

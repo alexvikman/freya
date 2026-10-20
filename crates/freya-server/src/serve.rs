@@ -11,6 +11,11 @@
 //!   a line, and an empty line now and then while nothing does.
 //! - `GET /version`: `{"version": ...}`.
 //! - `POST /quit`: the server stops; only from this computer.
+//!
+//! Only Freya's clients are answered, never a web page: until clients log in, a page in the
+//! user's browser could otherwise call the server on this computer. A request a browser sends
+//! for a page carries an `Origin`; one through a name that leads to this computer by DNS, a
+//! `Host` other than this computer's; and a form, a body of another type. Each is refused.
 
 use std::sync::Arc;
 use std::sync::mpsc::RecvTimeoutError;
@@ -38,7 +43,34 @@ pub fn handler(served: Served) -> Handler {
     Arc::new(move |request| answer(&served, request))
 }
 
+/// Why `request` is refused, if it is: see the module's documentation.
+fn refused(request: &Request) -> Option<&'static str> {
+    if request.header("origin").is_some() {
+        return Some("web pages are not answered");
+    }
+    let host = request.header("host").unwrap_or_default();
+    let name = match host.rsplit_once(':') {
+        Some((name, port)) if port.bytes().all(|b| b.is_ascii_digit()) => name,
+        _ => host,
+    };
+    if !["127.0.0.1", "localhost", "[::1]"].contains(&name.to_ascii_lowercase().as_str()) {
+        return Some("only this computer's name is answered");
+    }
+    let typed = request.header("content-type").is_some_and(|kind| {
+        let kind = kind.split(';').next().unwrap_or_default().trim();
+        kind.eq_ignore_ascii_case("application/json")
+            || kind.eq_ignore_ascii_case("application/octet-stream")
+    });
+    if !request.body.is_empty() && !typed {
+        return Some("a body must be JSON or bytes");
+    }
+    None
+}
+
 fn answer(served: &Served, request: Request) -> Response {
+    if let Some(why) = refused(&request) {
+        return Response::error(403, why);
+    }
     let Some(path) = request.path.strip_prefix(API_PATH) else {
         return Response::error(404, "no such page");
     };
@@ -144,4 +176,45 @@ fn event_line(event: &ServiceEvent) -> String {
     let mut line = serde_json::to_string(event).unwrap_or_default();
     line.push('\n');
     line
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(headers: &[(&str, &str)], body: &[u8]) -> Request {
+        Request {
+            peer: None,
+            method: "POST".into(),
+            path: format!("{API_PATH}/call/stats"),
+            query: String::new(),
+            headers: headers
+                .iter()
+                .map(|(n, v)| ((*n).to_owned(), (*v).to_owned()))
+                .collect(),
+            body: body.to_vec(),
+        }
+    }
+
+    #[test]
+    fn only_freyas_clients_are_answered() {
+        let host = ("Host", "127.0.0.1:47474");
+        let json = ("Content-Type", "application/json");
+        assert_eq!(refused(&request(&[host, json], b"null")), None);
+        assert_eq!(refused(&request(&[("Host", "localhost:47474")], b"")), None);
+        assert_eq!(refused(&request(&[("Host", "[::1]:47474")], b"")), None);
+        // A page's own call, or a form it sends.
+        assert!(
+            refused(&request(
+                &[host, json, ("Origin", "https://evil.example")],
+                b"null"
+            ))
+            .is_some()
+        );
+        assert!(refused(&request(&[host, ("Content-Type", "text/plain")], b"null")).is_some());
+        assert!(refused(&request(&[host], b"null")).is_some());
+        // A name that leads here by DNS.
+        assert!(refused(&request(&[("Host", "evil.example:47474"), json], b"null")).is_some());
+        assert!(refused(&request(&[json], b"null")).is_some());
+    }
 }

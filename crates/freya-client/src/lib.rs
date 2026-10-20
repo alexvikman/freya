@@ -164,7 +164,10 @@ impl Transport for Http {
         if let Some(largest) = largest {
             request = request.query("largest", largest.to_string());
         }
-        let answer = request.send(bytes).map_err(failed)?;
+        let answer = request
+            .header("Content-Type", "application/octet-stream")
+            .send(bytes)
+            .map_err(failed)?;
         serde_json::from_value(json(answer)?).map_err(failed)
     }
 
@@ -247,10 +250,19 @@ pub fn start_local_server(address: &str, program: &Path) -> Result<(), String> {
         Err(_) => {}
     }
     log::info!("starting {}", program.display());
-    std::process::Command::new(program)
+    let mut command = std::process::Command::new(program);
+    command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // A console program, started without a console window of its own.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
         .spawn()
         .map_err(|e| format!("could not start {}: {e}", program.display()))?;
     let deadline = Instant::now() + STARTING;

@@ -125,6 +125,8 @@ jobs:
       - name: Smoke test
         run: |
           target/packages/Freya.app/Contents/MacOS/freya --version | grep -qx "freya $VERSION"
+          target/packages/Freya.app/Contents/MacOS/freya-server --version |
+            grep -qx "freya-server $VERSION"
           test -f "target/dist/Freya-$VERSION-macos-${{ matrix.arch }}.app.zip"
       - name: Remove signing material
         if: always()
@@ -175,6 +177,7 @@ jobs:
       - name: Smoke test and name the packages
         run: |
           target/release/freya --version | grep -qx "freya $VERSION"
+          target/release/freya-server --version | grep -qx "freya-server $VERSION"
           mkdir -p dist
           mv target/packages/*.AppImage "dist/Freya-$VERSION-linux-${{ matrix.arch }}.AppImage"
           mv target/packages/*.deb "dist/Freya-$VERSION-linux-${{ matrix.arch }}.deb"
@@ -215,6 +218,7 @@ jobs:
             tr -d '\r' | grep -qx "$VERSION"
           # The terminal launcher, a console program, prints it and passes the exit code on.
           target/release/freya-cli.exe --version | tr -d '\r' | grep -qx "freya $VERSION"
+          target/release/freya-server.exe --version | tr -d '\r' | grep -qx "freya-server $VERSION"
           mkdir -p dist
           mv target/packages/*.msi "dist/Freya-$VERSION-windows-x86_64.msi"
       # Signing goes here, once there is a certificate or a signing service (e.g. Azure Trusted

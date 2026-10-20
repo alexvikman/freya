@@ -24,10 +24,11 @@ category = "Music"
 description = "A skinnable music player"
 long-description = "Freya plays MP3, FLAC, APE, Ogg, Opus, AAC, ALAC, WAV and internet radio, with a playlist, a media library, a 10-band equalizer and skins."
 copyright = "Freya contributors. MIT OR Apache-2.0. The interface uses Slint under its royalty-free license."
-before-packaging-command = "cargo build --locked --release -p freya"
+before-packaging-command = "cargo build --locked --release -p freya -p freya-server"
 out-dir = "../target/packages"
 binaries-dir = "../target/release"
-binaries = [{ path = "freya", main = true }]
+# The server beside the client, which starts it (see crates/freya-server).
+binaries = [{ path = "freya", main = true }, { path = "freya-server", main = false }]
 icons = [
     "../assets/icons/32x32.png",
     "../assets/icons/64x64.png",
