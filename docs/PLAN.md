@@ -151,8 +151,8 @@ A client always needs a server.
 
 | # | Milestone | Done when |
 |---|---|---|
-| **K1** | **The client stops touching the database**: the shared types move to `freya-protocol`; a `Service` in `freya-server` takes over scans, the watch and the schedule; the client uses the library through one interface, in the same process for now | No `Library`, `Pictures` or library files used in the GUI's code |
-| **K2** | **The server is a program of its own**: `freya-server` serves the API on `localhost`; scans, the watch, the schedule, the internet and Last.fm move there; the event stream and the client's picture cache; the user's data moves to the server's folder | Client and server run as two processes and everything works as before |
+| **K1** ✓ | **The client stops touching the database**: the shared types move to `freya-protocol`; a `Service` in `freya-server` takes over scans, the watch and the schedule; the client uses the library through one interface, in the same process for now | No `Library`, `Pictures` or library files used in the GUI's code |
+| **K2** ✓ | **The server is a program of its own**: `freya-server` serves the API on `localhost`; scans, the watch, the schedule, the internet and Last.fm move there; the event stream and the client's picture cache; the user's data moves to the server's folder | Client and server run as two processes and everything works as before |
 | **K3** | **Audio from the server**: a seekable HTTP source in `freya-audio`, with Range requests and a buffer; CUE tracks as parts of a file as now | Playing, seeking and the queue work against the server; a dropped connection does not crash playback |
 | **K4** | **Security and users**: TLS with pinning, users and passwords, device tokens, pairing on the same computer, plays, favourites, playlists and Last.fm per user | The server refuses all without a valid token |
 | **K5** | **The home network**: the server listens on the network and announces itself by Bonjour; choosing a server and logging in; reconnecting when the connection drops; pictures uploaded from the client; choosing music folders among the server's | A Windows client is used fully against a Mac |
@@ -506,6 +506,32 @@ full-screen rows with the skin read from its folder, which costs a little more.
   NEON (SIMD) code already, about 0.2 %. What
   cost was how often things woke and how much was copied, not how fast code ran; the
   hologram's shader runs on the graphics card, whose instruction set Apple does not publish.
+
+## Results: client and server, K1 and K2 (2026-10-20)
+
+- **`freya-protocol`** holds the shared data and the API as two lists of calls: what the
+  library holds and what the user changes in it (`LibraryData`), and what the server is asked
+  to do (`ServerControl`). The traits, the server's dispatch and the client's remote calls are
+  all made from them, so a call is written once. Each argument goes as JSON in its owned form
+  and is lent to the call; answers that were maps keyed by tuples are lists of pairs.
+- **`freya-server`** is a program and a library. Its `Service` runs scans, the folders'
+  watch, the schedule, what is asked of the internet, playlists and Last.fm scrobbling, and
+  tells clients what happens as a stream of events, one JSON line each, starting with whether a
+  scan runs. Its HTTP server is Freya's own, about 400 lines on `httparse` (already trusted),
+  so no new crates came in. It answers only Freya's clients: a request with an `Origin`, a
+  `Host` other than this computer's, or a body that is neither JSON nor bytes is refused, so a
+  web page cannot call it before clients log in (K4).
+- **`freya-client`** calls a server over HTTP with `ureq`, follows its events and connects
+  again when they stop, starts `freya-server` beside it when none answers on this computer,
+  and stops one of another version first, so an update does not leave the old one running.
+  It keeps pictures of a server on another computer by their checksum.
+- **Data**: the server keeps the library, pictures, playlists, its settings and Last.fm's
+  session, queue and user in `…/Freya/server/`, taking each in from Freya's folders the first
+  time it has none of its own.
+- **Packages** carry `freya-server` beside Freya on every platform; on macOS it is signed
+  inside the app before the app.
+- Last.fm's web service is `freya-lastfm`, used by the server for what it says of artists and
+  for scrobbling.
 
 ## Risks and open questions
 

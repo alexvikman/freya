@@ -84,7 +84,6 @@ env_logger = "0.11.11"
 # Local time in the log (see src/log_capture.rs), as env_logger already brings it.
 jiff = "0.2.38"
 freya-skin = { path = "../crates/freya-skin" }
-freya-lastfm = { path = "../crates/freya-lastfm" }
 freya-library = { path = "../crates/freya-library" }
 freya-client = { path = "../crates/freya-client" }
 freya-protocol = { path = "../crates/freya-protocol" }

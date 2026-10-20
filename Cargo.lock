@@ -1665,7 +1665,6 @@ dependencies = [
  "env_logger",
  "freya-audio",
  "freya-client",
- "freya-lastfm",
  "freya-library",
  "freya-protocol",
  "freya-server",

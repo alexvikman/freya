@@ -11,6 +11,9 @@ pub use freya_protocol::{
 
 /// Tracks this short are never scrobbled, as Last.fm asks.
 const MIN_DURATION: Duration = Duration::from_secs(30);
+/// Where Last.fm asks the user to let Freya scrobble: the only page a server may have the
+/// client open.
+const AUTH_PAGE: &str = "https://www.last.fm/api/auth/";
 
 pub struct LastFm {
     /// The server that scrobbles; none until connected.
@@ -52,7 +55,11 @@ impl LastFm {
             return;
         };
         match server.lastfm_connect() {
-            Ok(page) => crate::update::open_page(&page),
+            Ok(page) if is_auth_page(&page) => crate::update::open_page(&page),
+            Ok(page) => {
+                log::warn!("the server gave a page that is not Last.fm's: {page}");
+                self.status.error = "The server gave a page that is not Last.fm's.".into();
+            }
             Err(e) => self.status.error = e.to_string(),
         }
     }
@@ -88,6 +95,12 @@ impl LastFm {
             log::warn!("could not {what}: {e}");
         }
     }
+}
+
+/// Whether `page` is Last.fm's page for letting Freya scrobble, and nothing else a server
+/// could have this computer open.
+fn is_auth_page(page: &str) -> bool {
+    page.starts_with(AUTH_PAGE) && !page.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
 /// The track Last.fm is told about, if it may be: tagged with an artist and a title (never
@@ -148,6 +161,17 @@ mod tests {
         assert!(super::track(None, Some("Song"), None, None).is_none());
         assert!(super::track(Some("Unknown Artist"), Some("Song"), None, None).is_none());
         assert!(super::track(Some("Artist"), Some("  "), None, None).is_none());
+    }
+
+    #[test]
+    fn only_lastfms_page_is_opened() {
+        assert!(is_auth_page(
+            "https://www.last.fm/api/auth/?api_key=k&token=t"
+        ));
+        assert!(!is_auth_page("file:///etc/passwd"));
+        assert!(!is_auth_page("https://www.last.fm.evil.example/api/auth/"));
+        assert!(!is_auth_page("https://www.last.fm/api/auth/?x=1 --args"));
+        assert!(!is_auth_page("-a Terminal"));
     }
 
     #[test]
