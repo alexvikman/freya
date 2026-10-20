@@ -12,21 +12,25 @@ use super::{Library, Result, epoch_millis, from_epoch_millis};
 pub use freya_protocol::{PlaylistInfo, PlaylistTrack};
 
 pub(super) const SCHEMA: &str = "
+    -- Each user's (see users.rs).
     CREATE TABLE IF NOT EXISTS playlist_info (
-        playlist TEXT NOT NULL PRIMARY KEY,
+        user INTEGER NOT NULL DEFAULT 1,
+        playlist TEXT NOT NULL,
         description TEXT,
         -- Pictures among Freya's own, by their SHA-256.
         picture TEXT,
-        backdrop TEXT
+        backdrop TEXT,
+        PRIMARY KEY (user, playlist)
     );
     CREATE TABLE IF NOT EXISTS playlist_added (
+        user INTEGER NOT NULL DEFAULT 1,
         playlist TEXT NOT NULL,
         path TEXT NOT NULL,
         -- Where a track of a CUE sheet starts, in milliseconds; 0 for a whole file.
         start_ms INTEGER NOT NULL,
         -- When it was added, in milliseconds since 1970.
         added INTEGER NOT NULL,
-        PRIMARY KEY (playlist, path, start_ms)
+        PRIMARY KEY (user, playlist, path, start_ms)
     );
 ";
 

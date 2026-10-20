@@ -14,6 +14,7 @@ mod matches;
 mod online;
 mod playlists;
 mod scan;
+pub mod users;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -104,7 +105,9 @@ const HISTORY: &str = "
         path TEXT NOT NULL,
         start_ms INTEGER,
         -- When, in milliseconds since 1970.
-        played INTEGER NOT NULL
+        played INTEGER NOT NULL,
+        -- Who played it (see users.rs).
+        user INTEGER NOT NULL DEFAULT 1
     );
     CREATE INDEX IF NOT EXISTS plays_by_track ON plays (path, start_ms);
     -- When things last happened to the library, by name, in milliseconds since 1970:
@@ -254,6 +257,7 @@ impl Library {
         db.execute_batch(playlists::SCHEMA)?;
         db.execute_batch(genres::SCHEMA)?;
         db.execute_batch(favorites::SCHEMA)?;
+        users::migrate(&db, &[HISTORY, playlists::SCHEMA, favorites::SCHEMA])?;
         Ok(Self { db })
     }
 

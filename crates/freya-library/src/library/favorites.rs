@@ -11,22 +11,28 @@ use super::{Album, Library, Result, album_from_row, epoch_millis, from_epoch_mil
 pub use freya_protocol::{AlbumKey, AlbumOrder};
 
 pub(super) const SCHEMA: &str = "
+    -- Each user's (see users.rs).
     CREATE TABLE IF NOT EXISTS album_favorites (
+        user INTEGER NOT NULL DEFAULT 1,
         -- The album as it is filed: its album artist and title, '' for none.
         album_artist TEXT NOT NULL,
         album TEXT NOT NULL,
         -- When it was made a favourite, in milliseconds since 1970.
         at INTEGER NOT NULL,
-        PRIMARY KEY (album_artist, album)
+        PRIMARY KEY (user, album_artist, album)
     );
     -- Artists as their tags name them; playlists by their names.
     CREATE TABLE IF NOT EXISTS artist_favorites (
-        artist TEXT NOT NULL PRIMARY KEY,
-        at INTEGER NOT NULL
+        user INTEGER NOT NULL DEFAULT 1,
+        artist TEXT NOT NULL,
+        at INTEGER NOT NULL,
+        PRIMARY KEY (user, artist)
     );
     CREATE TABLE IF NOT EXISTS playlist_favorites (
-        playlist TEXT NOT NULL PRIMARY KEY,
-        at INTEGER NOT NULL
+        user INTEGER NOT NULL DEFAULT 1,
+        playlist TEXT NOT NULL,
+        at INTEGER NOT NULL,
+        PRIMARY KEY (user, playlist)
     );
 ";
 
