@@ -14,23 +14,7 @@ use std::time::Duration;
 
 use crate::files;
 use crate::tags::TagInfo;
-
-/// The part of an audio file that one track is: from `start` to `end`, or to the end of the
-/// file. Positions are whole milliseconds, wherever they come from, so that the end of one
-/// track and the start of the next compare equal.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Part {
-    pub start: Duration,
-    pub end: Option<Duration>,
-}
-
-impl Part {
-    /// How long the track is; `file` is the length of the whole file, needed when the track
-    /// runs to its end.
-    pub fn duration(&self, file: Option<Duration>) -> Option<Duration> {
-        self.end.or(file).map(|end| end.saturating_sub(self.start))
-    }
-}
+pub use freya_protocol::Part;
 
 /// One track of a CUE sheet.
 #[derive(Clone, Debug, PartialEq)]

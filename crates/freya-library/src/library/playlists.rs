@@ -9,6 +9,7 @@ use std::time::SystemTime;
 use rusqlite::{OptionalExtension, params};
 
 use super::{Library, Result, epoch_millis, from_epoch_millis};
+pub use freya_protocol::{PlaylistInfo, PlaylistTrack};
 
 pub(super) const SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS playlist_info (
@@ -28,17 +29,6 @@ pub(super) const SCHEMA: &str = "
         PRIMARY KEY (playlist, path, start_ms)
     );
 ";
-
-/// What a playlist has beside its tracks; each `None` when the user gave none.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct PlaylistInfo {
-    pub description: Option<String>,
-    pub picture: Option<String>,
-    pub backdrop: Option<String>,
-}
-
-/// A track in a playlist: its file, and where in it it starts, in milliseconds.
-pub type PlaylistTrack = (PathBuf, i64);
 
 impl Library {
     pub fn playlist_info(&self, playlist: &str) -> Result<PlaylistInfo> {

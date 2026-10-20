@@ -8,6 +8,7 @@ use std::time::SystemTime;
 use rusqlite::params;
 
 use super::{Album, Library, Result, album_from_row, epoch_millis, from_epoch_millis};
+pub use freya_protocol::{AlbumKey, AlbumOrder};
 
 pub(super) const SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS album_favorites (
@@ -28,23 +29,6 @@ pub(super) const SCHEMA: &str = "
         at INTEGER NOT NULL
     );
 ";
-
-/// How the albums are ordered.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum AlbumOrder {
-    /// By when they came into the library, or were made favourites, the latest first.
-    #[default]
-    Added,
-    /// By when they were last played, the latest first; those never played last.
-    Played,
-    /// By title.
-    Name,
-    /// By artist, then year.
-    Artist,
-}
-
-/// An album as its favourite is kept: its album artist and title.
-pub type AlbumKey = (Option<String>, Option<String>);
 
 impl Library {
     /// Makes the album `artist` / `album` a favourite at `at`, or not one.

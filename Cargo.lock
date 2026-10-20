@@ -1721,6 +1721,7 @@ dependencies = [
 name = "freya-library"
 version = "0.2.1"
 dependencies = [
+ "freya-protocol",
  "image",
  "lofty",
  "log",
@@ -1728,6 +1729,13 @@ dependencies = [
  "rusqlite",
  "serde_json",
  "ureq",
+]
+
+[[package]]
+name = "freya-protocol"
+version = "0.2.1"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

@@ -2,26 +2,10 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::time::Duration;
 
+pub use freya_protocol::TagInfo;
 use lofty::prelude::*;
 use lofty::tag::ItemKey;
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct TagInfo {
-    pub title: Option<String>,
-    pub artist: Option<String>,
-    pub album: Option<String>,
-    pub album_artist: Option<String>,
-    /// MusicBrainz's id of the album's artist, as Picard writes it: of the album artist, else
-    /// of the artist.
-    pub artist_mbid: Option<String>,
-    pub genre: Option<String>,
-    pub year: Option<u32>,
-    pub track: Option<u32>,
-    pub disc: Option<u32>,
-    pub duration: Option<Duration>,
-}
 
 /// Reads tags and duration from a file. Returns `None` if the file cannot be parsed.
 pub fn read_tags(path: &Path) -> Option<TagInfo> {
@@ -116,6 +100,8 @@ impl TagLoader {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     fn fixture(name: &str) -> PathBuf {

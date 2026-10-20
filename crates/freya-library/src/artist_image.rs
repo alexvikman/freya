@@ -8,6 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+pub use freya_protocol::{AlbumCandidate, ArtistMatch};
 use image::{DynamicImage, RgbImage, imageops::FilterType};
 
 /// Names of an artist's picture in their folder, the one holding their albums' folders.
@@ -213,22 +214,6 @@ pub fn musicbrainz_id(name: &str) -> Result<Option<String>, String> {
     Ok(artist_id(&answer, name))
 }
 
-/// An artist MusicBrainz knows, with what tells them from others of the same name.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ArtistMatch {
-    pub mbid: String,
-    pub name: String,
-    /// MusicBrainz's words to tell them apart: "Norwegian jazz/metal/rock group".
-    pub disambiguation: String,
-    /// "Group", "Person".
-    pub kind: String,
-    /// Where they are from: "Norway".
-    pub area: String,
-    /// When they began, and ended, as MusicBrainz has it: "1999", "1999-05".
-    pub begin: String,
-    pub end: String,
-}
-
 /// The artists MusicBrainz finds for the words in `query`, the best matches first.
 pub fn musicbrainz_artists(query: &str) -> Result<Vec<ArtistMatch>, String> {
     // Every character Lucene would read as syntax is escaped.
@@ -243,18 +228,6 @@ pub fn musicbrainz_artists(query: &str) -> Result<Vec<ArtistMatch>, String> {
         })
         .collect();
     Ok(artist_matches(&musicbrainz_search(escaped.trim())?))
-}
-
-/// An album MusicBrainz knows (a release group), with the artist who made it.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct AlbumCandidate {
-    pub release_group: String,
-    pub title: String,
-    /// "Album", "EP", "Single".
-    pub kind: String,
-    /// When it first came out: "2010-01-18".
-    pub date: String,
-    pub artist: ArtistMatch,
 }
 
 /// The albums MusicBrainz finds titled `title`, by an artist named `artist` when it is not

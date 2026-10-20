@@ -9,6 +9,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+freya-protocol = { path = "../freya-protocol" }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 lofty = "0.25.4"
 log = "0.4.34"

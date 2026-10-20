@@ -3,11 +3,14 @@
 //! with the user's plays, as getting them again takes the internet: never dropped.
 
 use std::collections::{HashMap, HashSet};
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use rusqlite::{OptionalExtension, params};
 
 use super::{Library, Result, epoch_millis, from_epoch_millis};
+pub use freya_protocol::{
+    ASK_AGAIN_AFTER, ArtistText, Asked, CHOSEN, FOLDER, PictureKind, PictureRow,
+};
 
 pub(super) const SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS artist_pictures (
@@ -50,83 +53,6 @@ pub(super) const SCHEMA: &str = "
         asked INTEGER NOT NULL
     );
 ";
-
-/// How long an answer is believed before the internet is asked again: pictures are added,
-/// and biographies written, all the time.
-pub const ASK_AGAIN_AFTER: Duration = Duration::from_secs(30 * 24 * 3600);
-
-/// A picture of an artist.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum PictureKind {
-    /// Square, for the grid of artists and beside their name.
-    Portrait,
-    /// Wide, across the top of their page.
-    Backdrop,
-}
-
-impl PictureKind {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Portrait => "portrait",
-            Self::Backdrop => "backdrop",
-        }
-    }
-}
-
-/// The source of a picture the user chose themselves.
-pub const CHOSEN: &str = "user";
-/// The source of a picture a scan found in the artist's folder.
-pub const FOLDER: &str = "folder";
-
-/// Which downloaded picture is an artist's, where from, and when it was asked for.
-#[derive(Clone, Debug, PartialEq)]
-pub struct PictureRow {
-    /// Its SHA-256 among the downloaded pictures; none when the source had none, or the user
-    /// chose none.
-    pub picture: Option<String>,
-    pub source: String,
-    pub asked: SystemTime,
-}
-
-impl PictureRow {
-    /// Whether the user chose it.
-    pub fn chosen(&self) -> bool {
-        self.source == CHOSEN
-    }
-
-    /// Whether it is recent enough not to ask again.
-    pub fn recent(&self) -> bool {
-        self.asked.elapsed().is_ok_and(|age| age < ASK_AGAIN_AFTER)
-    }
-
-    /// Whether it came from the internet: neither the user's choice nor their folder's.
-    pub fn from_internet(&self) -> bool {
-        self.source != CHOSEN && self.source != FOLDER
-    }
-}
-
-/// An answer from the internet, and when it was given.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Asked<T> {
-    pub answer: T,
-    pub asked: SystemTime,
-}
-
-impl<T> Asked<T> {
-    /// Whether it is recent enough not to ask again.
-    pub fn recent(&self) -> bool {
-        self.asked.elapsed().is_ok_and(|age| age < ASK_AGAIN_AFTER)
-    }
-}
-
-/// What Last.fm says of an artist, in plain text.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct ArtistText {
-    pub summary: String,
-    pub biography: String,
-    pub tags: Vec<String>,
-    pub url: String,
-}
 
 impl Library {
     /// Which downloaded picture is the artist's, if one; where from, and when.
@@ -350,6 +276,8 @@ impl Library {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     fn at(seconds: u64) -> SystemTime {

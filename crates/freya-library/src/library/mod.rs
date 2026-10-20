@@ -28,6 +28,7 @@ pub use covers::AlbumCover;
 pub use edits::{ArtistEdit, Header};
 pub use favorites::{AlbumKey, AlbumOrder};
 pub use fetch::{LastFm, Online};
+pub use freya_protocol::{Album, Artist, ArtistOrder, ArtistSummary, Genre, Played, Stats, Track};
 pub use genres::{GenreArticle, GenreInfo};
 pub use matches::{AlbumMatch, plain_name, split_artist};
 pub use online::{ASK_AGAIN_AFTER, ArtistText, Asked, CHOSEN, FOLDER, PictureKind, PictureRow};
@@ -121,7 +122,7 @@ const PLAYED: &str = "(SELECT path, start_ms, count(*) AS n, max(played) AS last
                        JOIN tracks ON tracks.path = plays.path
                                   AND tracks.start_ms IS plays.start_ms";
 
-/// Columns of `tracks` read into a [`Track`], in [`Track::from_row`]'s order.
+/// Columns of `tracks` read into a [`Track`], in [`track_from_row`]'s order.
 const TRACK_COLUMNS: &str = "tracks.id, tracks.path, tracks.start_ms, end_ms, title, artist, \
      album, album_artist, year, track, disc, duration_ms";
 
@@ -129,130 +130,26 @@ const TRACK_COLUMNS: &str = "tracks.id, tracks.path, tracks.start_ms, end_ms, ti
 const ALBUM_ORDER: &str =
     "album_artist IS NULL, album_artist COLLATE NOCASE, album COLLATE NOCASE, disc, track, path";
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct Track {
-    pub id: i64,
-    pub path: PathBuf,
-    /// The part of the file this track is, for a track of a CUE sheet.
-    pub part: Option<Part>,
-    pub title: Option<String>,
-    pub artist: Option<String>,
-    pub album: Option<String>,
-    pub album_artist: Option<String>,
-    pub year: Option<u32>,
-    pub track: Option<u32>,
-    pub disc: Option<u32>,
-    pub duration: Option<Duration>,
-}
-
-impl Track {
-    fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
-        let start: Option<i64> = row.get(2)?;
-        let end: Option<i64> = row.get(3)?;
-        Ok(Self {
-            id: row.get(0)?,
-            path: PathBuf::from(row.get::<_, String>(1)?),
-            part: start.map(|start| Part {
-                start: from_millis(start),
-                end: end.map(from_millis),
-            }),
-            title: row.get(4)?,
-            artist: row.get(5)?,
-            album: row.get(6)?,
-            album_artist: row.get(7)?,
-            year: row.get(8)?,
-            track: row.get(9)?,
-            disc: row.get(10)?,
-            duration: row.get::<_, Option<i64>>(11)?.map(from_millis),
-        })
-    }
-
-    /// The title, or the file name when the track has none.
-    pub fn display_title(&self) -> String {
-        self.title.clone().unwrap_or_else(|| file_stem(&self.path))
-    }
-
-    /// The tags as the playlist wants them.
-    pub fn tags(&self) -> TagInfo {
-        TagInfo {
-            title: self.title.clone(),
-            artist: self.artist.clone(),
-            album: self.album.clone(),
-            album_artist: self.album_artist.clone(),
-            artist_mbid: None,
-            genre: None,
-            year: self.year,
-            track: self.track,
-            disc: self.disc,
-            duration: self.duration,
-        }
-    }
-}
-
-/// What an artist's page says of them.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ArtistSummary {
-    pub albums: u32,
-    pub tracks: u32,
-    pub duration: Duration,
-    /// Their most frequent genres, most first.
-    pub genres: Vec<String>,
-}
-
-/// How artists are listed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ArtistOrder {
-    Name,
-    /// Most played first, counting every play of every one of their tracks.
-    MostPlayed,
-    /// The one whose music came last first.
-    RecentlyAdded,
-}
-
-/// An artist the library has albums by. `name` is `None` for untagged tracks.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Artist {
-    /// As the tags name them; how they are known.
-    pub name: Option<String>,
-    /// The name the user gave them in Freya, when they did.
-    pub shown_name: Option<String>,
-    pub albums: u32,
-    pub tracks: u32,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Album {
-    pub artist: Option<String>,
-    pub name: Option<String>,
-    pub year: Option<u32>,
-    pub tracks: u32,
-    /// One of the album's tracks, to find its cover from.
-    pub track: PathBuf,
-}
-
-/// A genre the library has tracks in. `name` is `None` for tracks without one.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Genre {
-    pub name: Option<String>,
-    pub albums: u32,
-    pub tracks: u32,
-}
-
-/// A track that has been played.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Played {
-    pub track: Track,
-    /// How many times.
-    pub plays: u32,
-    /// When it was last played.
-    pub last: SystemTime,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Stats {
-    pub tracks: u32,
-    pub albums: u32,
-    pub artists: u32,
+/// A track from a row of `TRACK_COLUMNS`.
+fn track_from_row(row: &Row<'_>) -> rusqlite::Result<Track> {
+    let start: Option<i64> = row.get(2)?;
+    let end: Option<i64> = row.get(3)?;
+    Ok(Track {
+        id: row.get(0)?,
+        path: PathBuf::from(row.get::<_, String>(1)?),
+        part: start.map(|start| Part {
+            start: from_millis(start),
+            end: end.map(from_millis),
+        }),
+        title: row.get(4)?,
+        artist: row.get(5)?,
+        album: row.get(6)?,
+        album_artist: row.get(7)?,
+        year: row.get(8)?,
+        track: row.get(9)?,
+        disc: row.get(10)?,
+        duration: row.get::<_, Option<i64>>(11)?.map(from_millis),
+    })
 }
 
 /// Size and modification time of a file, to tell whether it changed since it was read.
@@ -438,7 +335,7 @@ impl Library {
                 "SELECT {TRACK_COLUMNS} FROM tracks
                  WHERE path = ?1 AND ifnull(start_ms, 0) = ?2 LIMIT 1"
             ))?
-            .query_row(params![path, start.as_millis() as i64], Track::from_row)
+            .query_row(params![path, start.as_millis() as i64], track_from_row)
             .optional()
     }
 
@@ -450,7 +347,7 @@ impl Library {
              ORDER BY disc, track, path"
         ))?;
         query
-            .query_map(params![artist, album], Track::from_row)?
+            .query_map(params![artist, album], track_from_row)?
             .collect()
     }
 
@@ -461,7 +358,7 @@ impl Library {
              WHERE album_artist IS ?1
              ORDER BY album IS NULL, year IS NULL, year, album COLLATE NOCASE, disc, track, path"
         ))?;
-        query.query_map([artist], Track::from_row)?.collect()
+        query.query_map([artist], track_from_row)?.collect()
     }
 
     /// Every album, by name; albums without a name last.
@@ -526,7 +423,7 @@ impl Library {
                    ELSE id IN (SELECT track FROM track_genres WHERE genre = ?1 COLLATE NOCASE) END
              ORDER BY {ALBUM_ORDER}"
         ))?;
-        query.query_map([genre], Track::from_row)?.collect()
+        query.query_map([genre], track_from_row)?.collect()
     }
 
     /// Every track, by title, then artist; tracks without a title last.
@@ -535,7 +432,7 @@ impl Library {
             "SELECT {TRACK_COLUMNS} FROM tracks
              ORDER BY title IS NULL, title COLLATE NOCASE, artist COLLATE NOCASE, path"
         ))?;
-        query.query_map([], Track::from_row)?.collect()
+        query.query_map([], track_from_row)?.collect()
     }
 
     /// The albums that came into the library last, newest first. At most `limit`.
@@ -570,7 +467,7 @@ impl Library {
         query
             .query_map([limit as i64], |row| {
                 Ok(Played {
-                    track: Track::from_row(row)?,
+                    track: track_from_row(row)?,
                     plays: row.get(12)?,
                     last: from_epoch_millis(row.get(13)?),
                 })
@@ -629,7 +526,7 @@ impl Library {
         query
             .query_map(params![artist, limit as i64], |row| {
                 Ok(Played {
-                    track: Track::from_row(row)?,
+                    track: track_from_row(row)?,
                     plays: row.get(12)?,
                     last: from_epoch_millis(row.get(13)?),
                 })
@@ -648,7 +545,7 @@ impl Library {
         query
             .query_map(params![genre, limit as i64], |row| {
                 Ok(Played {
-                    track: Track::from_row(row)?,
+                    track: track_from_row(row)?,
                     plays: row.get(12)?,
                     last: from_epoch_millis(row.get(13)?),
                 })
@@ -670,7 +567,7 @@ impl Library {
              LIMIT ?2"
         ))?;
         query
-            .query_map(params![pattern, limit as i64], Track::from_row)?
+            .query_map(params![pattern, limit as i64], track_from_row)?
             .collect()
     }
 

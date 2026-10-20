@@ -11,6 +11,7 @@ use rusqlite::{OptionalExtension, params};
 const COLORS: i64 = 2;
 
 use super::{Library, Result};
+pub use freya_protocol::AlbumCover;
 
 pub(super) const SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS album_covers (
@@ -37,15 +38,6 @@ pub(super) const SCHEMA: &str = "
         asked INTEGER NOT NULL
     );
 ";
-
-/// An album's cover as the last scan made it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AlbumCover {
-    pub cover: Option<String>,
-    pub color: Option<[u8; 3]>,
-    pub track: String,
-    pub images: i64,
-}
 
 impl Library {
     /// Every album's cover, by the album's key.

@@ -123,6 +123,43 @@ navigation is meant to grow over time.
 | **U6** | **macOS window**: the window buttons inside the navigation, without a separate title bar | |
 | **U7** | **Advanced visualizer**: new modes drawn by the graphics card (Metal, Direct3D, OpenGL/Vulkan) through a native layer like the spectrum's | Planned with the user when U1–U6 are done |
 
+### Client and server (from 2026-10-20)
+
+Freya splits in two: a server that keeps the music, the library and everything known of it,
+and a client that shows it and plays it. A client on another computer, or later a phone, uses
+a server elsewhere on the home network; on the server's own computer a client runs beside it.
+A client always needs a server.
+
+- **`freya-server`** runs as a service without a window. It owns the database, the pictures,
+  scans, the folders' watch and schedule, what is asked of the internet, and Last.fm
+  scrobbling.
+- **`freya`**, the client, finds a server on its own computer by itself, and others by
+  Bonjour or an address typed in.
+- **`freya-protocol`** holds what the two say to each other: plain data, with serde.
+- The API is HTTP with JSON. Each track's audio has an address of its own, read with Range
+  requests so it can be sought in, unchanged from its file. Changes on the server (scans,
+  new pictures) reach clients as a stream of events. Clients keep pictures by their checksum,
+  which never changes for a picture.
+- TLS with a certificate the server makes itself, pinned by the client the first time.
+  A client on the server's computer pairs itself through a one-time key in the server's
+  data folder; others log in with a password, and each device gets a token of its own that
+  can be revoked. One user now; the data model is ready for more.
+- Kept by the server: the library, pictures, genres, what the user changed about artists,
+  matches, music folders and scans; and for each user plays, favourites, playlists, the
+  albums' order and Last.fm. Kept by the client: the skin, the window, volume, equalizer,
+  visualizer, audio output and the queue.
+
+| # | Milestone | Done when |
+|---|---|---|
+| **K1** | **The client stops touching the database**: the shared types move to `freya-protocol`; a `Service` in `freya-server` takes over scans, the watch and the schedule; the client uses the library through one interface, in the same process for now | No `Library`, `Pictures` or library files used in the GUI's code |
+| **K2** | **The server is a program of its own**: `freya-server` serves the API on `localhost`; scans, the watch, the schedule, the internet and Last.fm move there; the event stream and the client's picture cache; the user's data moves to the server's folder | Client and server run as two processes and everything works as before |
+| **K3** | **Audio from the server**: a seekable HTTP source in `freya-audio`, with Range requests and a buffer; CUE tracks as parts of a file as now | Playing, seeking and the queue work against the server; a dropped connection does not crash playback |
+| **K4** | **Security and users**: TLS with pinning, users and passwords, device tokens, pairing on the same computer, plays, favourites, playlists and Last.fm per user | The server refuses all without a valid token |
+| **K5** | **The home network**: the server listens on the network and announces itself by Bonjour; choosing a server and logging in; reconnecting when the connection drops; pictures uploaded from the client; choosing music folders among the server's | A Windows client is used fully against a Mac |
+| **K6** | **The service**: launchd with a menu bar icon on macOS, systemd on Linux, a service on Windows; the server in releases and updated by the signed updater | The server starts with the computer and runs without any client open |
+
+Later: AirPlay, transcoding, offline, a phone app, and more than one user.
+
 ### U7: the hologram (from 2026-10-17)
 
 The advanced visualizer becomes a hologram in the style of Joi in Blade Runner 2049: a woman

@@ -18,6 +18,7 @@ use crate::files;
 use crate::pictures::Pictures;
 use crate::tags::{TagInfo, read_tags};
 use crate::thumbnails::Thumbnails;
+pub use freya_protocol::{ScanEvent, ScanSummary};
 
 /// Changes are written in batches, at least this often, so the library fills up visibly
 /// during a long first scan without a transaction per file.
@@ -26,43 +27,6 @@ const COMMIT_INTERVAL: Duration = Duration::from_millis(500);
 const MAX_READERS: usize = 8;
 /// The folder being read is told at most this often.
 const LOOKING_INTERVAL: Duration = Duration::from_millis(200);
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ScanEvent {
-    /// `done` of `total` new or changed files (audio files or CUE sheets) have been read and
-    /// written.
-    Progress {
-        done: usize,
-        total: usize,
-    },
-    /// The folder being looked through or read now, told every so often.
-    Looking(PathBuf),
-    /// `done` of `total` albums' covers have been made.
-    Covers {
-        done: usize,
-        total: usize,
-    },
-    /// The internet was asked what `done` of the `total` artists who lack something lack.
-    Artists {
-        done: usize,
-        total: usize,
-    },
-    /// And of the `total` genres it has not said anything of.
-    Genres {
-        done: usize,
-        total: usize,
-    },
-    Finished(ScanSummary),
-    Failed(String),
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ScanSummary {
-    pub added: usize,
-    pub updated: usize,
-    pub removed: usize,
-    pub unchanged: usize,
-}
 
 /// Whether `folder` looks like a drive that is not there, rather than one whose music is gone:
 /// missing, unreadable, or empty, as a mount point is while nothing is mounted on it. A folder

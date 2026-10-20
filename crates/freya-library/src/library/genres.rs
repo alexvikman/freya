@@ -8,6 +8,7 @@ use std::time::SystemTime;
 use rusqlite::{OptionalExtension, params};
 
 use super::{Asked, Library, Result, epoch_millis, from_epoch_millis};
+pub use freya_protocol::{GenreArticle, GenreInfo};
 
 pub(super) const SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS genre_info (
@@ -29,25 +30,6 @@ pub(super) const SCHEMA: &str = "
         asked INTEGER NOT NULL
     );
 ";
-
-/// What the user gave a genre; each `None` when they gave none.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct GenreInfo {
-    pub picture: Option<String>,
-    pub backdrop: Option<String>,
-    pub description: Option<String>,
-}
-
-/// What the internet says of a genre.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct GenreArticle {
-    /// Its first paragraph, and the whole.
-    pub summary: String,
-    pub description: String,
-    pub url: String,
-    /// "Wikipedia" or "Last.fm".
-    pub source: String,
-}
 
 impl Library {
     pub fn genre_info(&self, genre: &str) -> Result<GenreInfo> {

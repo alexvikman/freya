@@ -6,6 +6,7 @@
 use rusqlite::{OptionalExtension, params};
 
 use super::{Library, Result};
+pub use freya_protocol::{AlbumMatch, plain_name, split_artist};
 
 pub(super) const SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS album_matches (
@@ -20,32 +21,6 @@ pub(super) const SCHEMA: &str = "
         PRIMARY KEY (album_artist, album)
     );
 ";
-
-/// Between an artist's name and the MusicBrainz id in the name of an artist split off.
-const SPLIT: char = '\u{1f}';
-
-/// The artist an album is filed under once matched to `mbid`, another artist than the one
-/// its tags name `name`.
-pub fn split_artist(name: &str, mbid: &str) -> String {
-    format!("{name}{SPLIT}{mbid}")
-}
-
-/// An artist's name as their name in the library has it: without the id of one split off.
-pub fn plain_name(artist: &str) -> &str {
-    artist.split(SPLIT).next().unwrap_or(artist)
-}
-
-/// An album matched to the artist in MusicBrainz who made it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AlbumMatch {
-    /// The album as its tags name it.
-    pub album_artist: String,
-    pub album: String,
-    pub release_group: Option<String>,
-    pub artist_mbid: String,
-    /// The artist it is filed under, when not `album_artist`.
-    pub artist_key: Option<String>,
-}
 
 impl Library {
     /// Keeps `album`'s match, and files its tracks under the artist it says.

@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use rusqlite::{OptionalExtension, params};
 
 use super::{Library, Result};
+pub use freya_protocol::{ArtistEdit, Header};
 
 pub(super) const SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS artist_edits (
@@ -38,80 +39,12 @@ pub(super) fn migrate(db: &rusqlite::Connection) -> Result<()> {
     Ok(())
 }
 
-/// What the user changed about an artist; `None` where they changed nothing.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ArtistEdit {
-    /// The name shown instead of the tags' own.
-    pub name: Option<String>,
-    /// The name sorted by: "Beatles, The".
-    pub sort_name: Option<String>,
-    /// Their MusicBrainz id, over the tags' and MusicBrainz's search.
-    pub mbid: Option<String>,
-    /// Their biography, in place of what Last.fm says.
-    pub biography: Option<String>,
-    /// What tells them from others of the name, as MusicBrainz has it for `mbid`.
-    pub note: Option<String>,
-    /// What the top of their page shows: their wide picture, or their picture, whichever
-    /// they have; none for the wide one when they have one.
-    pub header: Option<Header>,
-}
-
-/// What the top of an artist's page shows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Header {
-    Wide,
-    Picture,
-}
-
-impl Header {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Wide => "wide",
-            Self::Picture => "picture",
-        }
-    }
-
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "wide" => Some(Self::Wide),
-            "picture" => Some(Self::Picture),
-            _ => None,
-        }
-    }
-}
-
-impl rusqlite::types::FromSql for Header {
-    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
-        let name = value.as_str()?;
-        Self::from_name(name).ok_or(rusqlite::types::FromSqlError::InvalidType)
-    }
-}
-
-impl ArtistEdit {
-    fn is_empty(&self) -> bool {
-        *self == Self::default()
-    }
-
-    /// The same, with blank fields as unchanged.
-    fn trimmed(&self) -> Self {
-        let field = |value: &Option<String>| {
-            value
-                .as_deref()
-                .map(str::trim)
-                .filter(|v| !v.is_empty())
-                .map(str::to_owned)
-        };
-        let mbid = field(&self.mbid);
-        Self {
-            name: field(&self.name),
-            sort_name: field(&self.sort_name),
-            // Of the id, and gone with it.
-            note: field(&self.note).filter(|_| mbid.is_some()),
-            mbid,
-            biography: field(&self.biography),
-            header: self.header,
-        }
-    }
+/// The header kept in column `i` of `row`: none for a name Freya does not know.
+fn header_at(row: &rusqlite::Row<'_>, i: usize) -> rusqlite::Result<Option<Header>> {
+    Ok(row
+        .get::<_, Option<String>>(i)?
+        .as_deref()
+        .and_then(Header::from_name))
 }
 
 impl Library {
@@ -142,7 +75,7 @@ impl Library {
                     mbid: row.get(3)?,
                     biography: row.get(4)?,
                     note: row.get(5)?,
-                    header: row.get(6)?,
+                    header: header_at(row, 6)?,
                 },
             ))
         })?;
@@ -185,7 +118,7 @@ fn edit_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArtistEdit> {
         mbid: row.get(2)?,
         biography: row.get(3)?,
         note: row.get(4)?,
-        header: row.get(5)?,
+        header: header_at(row, 5)?,
     })
 }
 
