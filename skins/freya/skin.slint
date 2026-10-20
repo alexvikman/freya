@@ -9410,6 +9410,27 @@ export component FreyaSkin inherits Window {
         }
     }
 
+    // A server on another computer that cannot be reached, said where it shows on any view.
+    if Server.remote && Server.state == "unreachable": Rectangle {
+        x: (root.width - self.width) / 2;
+        y: 64px;
+        width: lost.preferred-width + 32px;
+        height: 32px;
+        border-radius: 16px;
+        background: Theme.surface;
+        border-width: 1px;
+        border-color: Theme.divider;
+        drop-shadow-blur: 12px;
+        drop-shadow-color: #00000033;
+
+        lost := Text {
+            text: "Freya cannot reach " + Server.name + ". It tries again by itself.";
+            font-size: 13px;
+            color: Theme.text;
+            accessible-role: text;
+        }
+    }
+
     if Playlist.drop-hover: Rectangle {
         border-width: 3px;
         border-color: Theme.accent;

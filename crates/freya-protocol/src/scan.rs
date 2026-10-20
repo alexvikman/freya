@@ -44,8 +44,13 @@ pub struct ScanSummary {
 /// What a server tells its clients as it happens.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum ServiceEvent {
-    /// The client is told what happens from now on; whether a scan runs now.
-    Connected { scanning: bool },
+    /// The client is told what happens from now on: whether a scan runs now, and how many
+    /// events the server told before, so a client following it again knows whether it missed
+    /// any.
+    Connected { scanning: bool, told: u64 },
+    /// The client lost the server's events, and looks for it again: told by the client itself,
+    /// never by a server.
+    Lost,
     /// A scan began, or asking the internet without one.
     ScanStarted,
     /// How it goes.

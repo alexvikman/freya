@@ -44,8 +44,10 @@ use crate::accounts::{Accounts, Caller};
 use crate::http::{Handler, Request, Response};
 
 /// How long the event stream says nothing before it sends an empty line, to find a client
-/// that is gone.
+/// that is gone; and how long it lasts before it ends, so a client following it notices a
+/// server that is gone too, and follows it again.
 const HEARTBEAT: Duration = Duration::from_secs(15);
+const STREAM_LASTS: Duration = Duration::from_secs(50);
 
 /// What a server serves.
 #[derive(Clone)]
@@ -197,7 +199,8 @@ fn answer(served: &Served, request: Request) -> Response {
             Response::stream(
                 "application/x-ndjson",
                 Box::new(move |out| {
-                    loop {
+                    let ends = std::time::Instant::now() + STREAM_LASTS;
+                    while std::time::Instant::now() < ends {
                         let line = match events.recv_timeout(HEARTBEAT) {
                             Ok(event) => event_line(&event),
                             Err(RecvTimeoutError::Timeout) => "\n".to_owned(),
@@ -206,6 +209,7 @@ fn answer(served: &Served, request: Request) -> Response {
                         // Fails once the client is gone.
                         out.write_all(line.as_bytes())?;
                     }
+                    Ok(())
                 }),
             )
         }

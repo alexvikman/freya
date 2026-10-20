@@ -77,7 +77,7 @@ struct Shared {
     playlists: Option<Playlists>,
     scrobbler: Option<Mutex<Scrobbler>>,
     stop: AtomicBool,
-    listeners: Arc<Mutex<Vec<Sender<ServiceEvent>>>>,
+    listeners: Arc<Mutex<Listeners>>,
     /// What clients ask of the library is read and written here, not waiting for a scan.
     api: Arc<LocalLibrary>,
 }
@@ -115,7 +115,7 @@ impl Service {
             outbox: Vec::new(),
         };
         let playlists = state.config.playlists.clone().map(Playlists::new);
-        let listeners: Arc<Mutex<Vec<Sender<ServiceEvent>>>> = Arc::default();
+        let listeners: Arc<Mutex<Listeners>> = Arc::default();
         let scrobbler = state.config.scrobbles.clone().map(|dir| {
             let listeners = Arc::clone(&listeners);
             let tell: crate::scrobbler::Tell = Arc::new(move |status| {
@@ -322,10 +322,12 @@ impl ServerEvents for Service {
         let (tell, events) = channel();
         // Told under the state's lock, so nothing it does is missed in between.
         let state = lock(&self.shared.state);
+        let mut listeners = lock(&self.shared.listeners);
         let _ = tell.send(ServiceEvent::Connected {
             scanning: state.scanning,
+            told: listeners.told,
         });
-        lock(&self.shared.listeners).push(tell);
+        listeners.senders.push(tell);
         drop(state);
         Ok(events)
     }
@@ -455,8 +457,19 @@ impl LibraryPictures for LocalLibrary {
 }
 
 /// Tells every listener of `event`; those gone are forgotten.
-fn tell_all(listeners: &Mutex<Vec<Sender<ServiceEvent>>>, event: ServiceEvent) {
-    lock(listeners).retain(|listener| listener.send(event.clone()).is_ok());
+fn tell_all(listeners: &Mutex<Listeners>, event: ServiceEvent) {
+    let mut listeners = lock(listeners);
+    listeners.told += 1;
+    listeners
+        .senders
+        .retain(|listener| listener.send(event.clone()).is_ok());
+}
+
+/// Who is told what happens, and how many events were told so far.
+#[derive(Default)]
+struct Listeners {
+    senders: Vec<Sender<ServiceEvent>>,
+    told: u64,
 }
 
 /// A lock, taken even when a thread panicked holding it: what it guards stays usable.
@@ -806,9 +819,14 @@ mod tests {
         };
         let service = Service::start(dir.join("library.db"), None, config).unwrap();
         let events = service.events().unwrap();
-        assert_eq!(
-            events.recv().unwrap(),
-            ServiceEvent::Connected { scanning: true },
+        assert!(
+            matches!(
+                events.recv().unwrap(),
+                ServiceEvent::Connected {
+                    scanning: true,
+                    ..
+                }
+            ),
             "an empty library is read at once"
         );
         // Noted while the scan writes: it waits for it.

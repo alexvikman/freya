@@ -9,8 +9,10 @@ use std::time::{Duration, Instant};
 use freya_protocol::{API_PATH, AccountInfo, ApiError, ApiResult, Remote, ServiceEvent, Transport};
 
 /// How long the client waits before it looks for the server again, when the event stream
-/// ended.
+/// ended; and how long a stream may last, a little longer than a server keeps one, so one
+/// that stopped saying anything is given up on.
 const RECONNECT: Duration = Duration::from_secs(2);
+const STREAM_LASTS: Duration = Duration::from_secs(70);
 /// How long a server started here may take to answer.
 const STARTING: Duration = Duration::from_secs(15);
 /// The most the picture cache keeps; beyond it, the pictures used longest ago go.
@@ -339,6 +341,7 @@ impl Http {
         let streaming = make_agent(
             ureq::Agent::config_builder()
                 .timeout_connect(Some(Duration::from_secs(10)))
+                .timeout_global(Some(STREAM_LASTS))
                 .user_agent(concat!("Freya/", env!("CARGO_PKG_VERSION"))),
             pin.as_ref(),
         );
@@ -608,7 +611,7 @@ impl Transport for Http {
 }
 
 /// Tells `tell` of the events read from `stream`, and opens it again when it ends, until
-/// nobody listens.
+/// nobody listens; [`ServiceEvent::Lost`] while it cannot be.
 fn follow_events(http: &Http, mut stream: ureq::BodyReader<'static>, tell: &Sender<ServiceEvent>) {
     loop {
         for line in std::io::BufReader::new(stream).lines() {
@@ -627,7 +630,15 @@ fn follow_events(http: &Http, mut stream: ureq::BodyReader<'static>, tell: &Send
                 Err(e) => log::debug!("an event that could not be read: {e}"),
             }
         }
+        // A stream the server ended, as it does now and then, is opened again at once.
+        if let Ok(again) = http.open_events() {
+            stream = again;
+            continue;
+        }
         log::info!("lost the server's events; looking for it again");
+        if tell.send(ServiceEvent::Lost).is_err() {
+            return;
+        }
         stream = loop {
             std::thread::sleep(RECONNECT);
             if let Ok(stream) = http.open_events() {

@@ -233,6 +233,9 @@ pub struct LibraryPanel {
     server: Option<Arc<dyn Server>>,
     server_events: Option<Receiver<ServiceEvent>>,
     connected: bool,
+    /// How many events the server had told, as far as heard: a client following it again
+    /// knows whether it missed any.
+    told: Option<u64>,
     /// The server as this client calls it: for its account, and reading tracks from it.
     remote: Option<Arc<freya_protocol::Remote<freya_client::Http>>>,
     /// Where its tracks are read from, and how; made once connected.
@@ -651,6 +654,7 @@ impl LibraryPanel {
             server: None,
             server_events: None,
             connected: false,
+            told: None,
             remote: None,
             audio: None,
             server_state: "connecting",
@@ -924,7 +928,9 @@ impl LibraryPanel {
 
     /// Whether to connect again now: the server could not be reached, a while ago.
     pub fn wants_reconnect(&mut self) -> bool {
+        // Once connected, the events follow the server again by themselves.
         let due = self.server_state == "unreachable"
+            && self.db.is_none()
             && self.tried.is_none_or(|at| at.elapsed() >= RECONNECT_EVERY);
         if due {
             self.tried = Some(Instant::now());
@@ -1192,14 +1198,25 @@ impl LibraryPanel {
             .map(|events| events.try_iter().collect())
             .unwrap_or_default();
         for event in events {
+            if !matches!(event, ServiceEvent::Connected { .. } | ServiceEvent::Lost) {
+                self.told = self.told.map(|told| told + 1);
+            }
             match event {
-                ServiceEvent::Connected { scanning } => {
+                ServiceEvent::Connected { scanning, told } => {
                     self.scanning = scanning;
+                    self.server_state = "connected";
+                    self.server_error.clear();
                     // What changed while the server could not tell is read anew.
-                    if std::mem::replace(&mut self.connected, true) {
+                    let missed = self.told.is_some_and(|expected| expected != told);
+                    if std::mem::replace(&mut self.connected, true) && missed {
                         self.stale = true;
                         self.pictures_stale = true;
                     }
+                    self.told = Some(told);
+                }
+                ServiceEvent::Lost => {
+                    self.server_state = "unreachable";
+                    self.server_error = "Its connection was lost.".into();
                 }
                 ServiceEvent::ScanStarted => self.scanning = true,
                 ServiceEvent::Scan(ScanEvent::Progress { done, total }) => {

@@ -173,7 +173,13 @@ fn the_server_is_told_what_to_do_and_tells_what_happens() {
             .recv_timeout(std::time::Duration::from_secs(20))
             .unwrap()
     };
-    assert_eq!(next(), ServiceEvent::Connected { scanning: false });
+    assert!(matches!(
+        next(),
+        ServiceEvent::Connected {
+            scanning: false,
+            ..
+        }
+    ));
     remote.rescan().unwrap();
     assert_eq!(next(), ServiceEvent::ScanStarted);
     while next() != ServiceEvent::ScanEnded {}
