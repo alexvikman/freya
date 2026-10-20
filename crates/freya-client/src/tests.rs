@@ -39,7 +39,7 @@ fn served(name: &str) -> (Server, Arc<dyn LibraryApi>, Arc<dyn LibraryApi>, Path
         quit: None,
     };
     let server = Server::start("127.0.0.1:0", freya_server::handler(served)).unwrap();
-    let remote = connect(&format!("http://{}", server.address()));
+    let remote = connect(&format!("http://{}", server.address()), None);
     (server, remote, local, dir)
 }
 
@@ -105,7 +105,7 @@ fn a_failed_call_says_why() {
     let bad = http.call("search", serde_json::json!(["only one"]));
     assert!(bad.unwrap_err().0.contains("could not read what was sent"));
     drop(remote);
-    let gone = connect("http://127.0.0.1:1").stats();
+    let gone = connect("http://127.0.0.1:1", None).stats();
     assert!(gone.unwrap_err().0.contains("could not reach the server"));
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -140,6 +140,7 @@ fn the_server_is_told_what_to_do_and_tells_what_happens() {
         scans_allowed: true,
         lastfm: None,
         playlists: Some(dir.join("playlists")),
+        scrobbles: None,
     };
     let service = Arc::new(Service::start(dir.join("library.db"), None, config).unwrap());
     let served = Served {
@@ -148,7 +149,7 @@ fn the_server_is_told_what_to_do_and_tells_what_happens() {
         quit: None,
     };
     let server = Server::start("127.0.0.1:0", freya_server::handler(served)).unwrap();
-    let remote = connect(&format!("http://{}", server.address()));
+    let remote = connect(&format!("http://{}", server.address()), None);
 
     assert_eq!(remote.settings().unwrap(), settings);
     let changed = ServerSettings {
@@ -211,5 +212,34 @@ fn the_server_is_told_what_to_do_and_tells_what_happens() {
     assert!(remote.save_playlist("../escape", &[]).is_err());
     drop(server);
     drop(service);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_server_elsewhere_has_its_pictures_kept_here() {
+    assert!(is_this_computer("http://127.0.0.1:47474"));
+    assert!(is_this_computer("http://localhost:47474/"));
+    assert!(!is_this_computer("https://mini.local:47474"));
+
+    let dir = std::env::temp_dir().join(format!("freya-client-cache-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let cache = PictureCache::new(dir.join("cache"));
+    let checksum = "a".repeat(64);
+    assert_eq!(cache.get(&checksum), None);
+    cache.put(&checksum, b"picture");
+    assert_eq!(cache.get(&checksum).as_deref(), Some(&b"picture"[..]));
+    // Over the limit, those used longest ago go first.
+    let old = "b".repeat(64);
+    cache.put(&old, b"older one");
+    let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    std::fs::File::options()
+        .append(true)
+        .open(dir.join("cache").join(&old))
+        .unwrap()
+        .set_modified(long_ago)
+        .unwrap();
+    tidy(&dir.join("cache"), 10);
+    assert_eq!(cache.get(&old), None);
+    assert!(cache.get(&checksum).is_some());
     let _ = std::fs::remove_dir_all(&dir);
 }

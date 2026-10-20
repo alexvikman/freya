@@ -218,8 +218,10 @@ pub struct LibraryPanel {
     server: Option<Arc<dyn Server>>,
     server_events: Option<Receiver<ServiceEvent>>,
     connected: bool,
-    /// The server told that the playlists changed, since the app last asked.
+    /// The server told that the playlists changed, and how scrobbling goes, since the app
+    /// last asked.
     playlists_changed: bool,
+    lastfm_status: Option<freya_protocol::LastFmStatus>,
     /// Where thumbnails of covers and pictures are made, once the library is open.
     covers_dir: Option<PathBuf>,
     /// The lists opened, the section's own list first; `back` returns to the one before.
@@ -626,6 +628,7 @@ impl LibraryPanel {
             server_events: None,
             connected: false,
             playlists_changed: false,
+            lastfm_status: None,
             covers_dir: covers,
             opened: vec![Level::Artists],
             query: String::new(),
@@ -764,7 +767,8 @@ impl LibraryPanel {
                     log::warn!("no library: {e}");
                     return;
                 }
-                let remote = freya_client::connect(&address);
+                let cache = crate::settings::cache_dir().map(|dir| dir.join("pictures"));
+                let remote = freya_client::connect(&address, cache);
                 (Arc::clone(&remote) as _, remote)
             }
             #[cfg(test)]
@@ -775,6 +779,7 @@ impl LibraryPanel {
                     scans_allowed: true,
                     lastfm: freya_server::lastfm(),
                     playlists: database.parent().map(|dir| dir.join("playlists")),
+                    scrobbles: None,
                 };
                 match Service::start(database, pictures, config) {
                     Ok(service) => {
@@ -803,6 +808,11 @@ impl LibraryPanel {
     /// The server that keeps the library, once connected.
     pub fn server(&self) -> Option<Arc<dyn Server>> {
         self.server.clone()
+    }
+
+    /// How scrobbling goes, when the server told since this was last asked.
+    pub fn take_lastfm_status(&mut self) -> Option<freya_protocol::LastFmStatus> {
+        self.lastfm_status.take()
     }
 
     /// Whether the server told that the playlists changed since this was last asked.
@@ -1084,6 +1094,7 @@ impl LibraryPanel {
                 // Plays noted while the scan wrote.
                 ServiceEvent::PlaysWritten => self.stale |= self.shows_plays(),
                 ServiceEvent::PlaylistsChanged => self.playlists_changed = true,
+                ServiceEvent::LastFm(status) => self.lastfm_status = Some(status),
             }
         }
         // Covers and pictures found so far show as they come; and what was said of the artist

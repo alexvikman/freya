@@ -436,7 +436,7 @@ impl App {
         library.set_watch_folders(settings.watch_folders);
         library.set_scan_every_hours(settings.scan_every_hours);
         library.set_scan_at_start(settings.scan_at_start);
-        let lastfm = LastFm::start(settings.lastfm_user.clone());
+        let lastfm = LastFm::new();
         let mut app = Self {
             player,
             playlist: Playlist::new(),
@@ -738,7 +738,8 @@ impl App {
         if self.view.library_out.available {
             self.library.attach(&self.view.ui);
             if let Some(server) = self.library.server() {
-                self.playlists.connect(server);
+                self.playlists.connect(Arc::clone(&server));
+                self.lastfm.use_server(server);
             }
             // The server's settings, as the settings page shows them.
             if let Some(server) = self.library.server_settings().cloned() {
@@ -1306,6 +1307,9 @@ impl App {
         if self.library.take_playlists_changed() {
             self.playlists.reload();
         }
+        if let Some(status) = self.library.take_lastfm_status() {
+            self.lastfm.set_status(status);
+        }
         self.follow_updates();
         self.check_skin_files();
         self.refresh();
@@ -1722,7 +1726,6 @@ impl App {
     }
 
     pub fn save(&mut self) {
-        self.lastfm.finish();
         self.settings.volume = self.player.volume();
         let window = self.view.ui.window();
         // In full screen the window has the screen's size, not its own.

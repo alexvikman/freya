@@ -56,6 +56,8 @@ pub enum ServiceEvent {
     PlaysWritten,
     /// The user's playlists changed: one was made, changed, renamed or taken away.
     PlaylistsChanged,
+    /// How scrobbling to Last.fm goes, now that it changed.
+    LastFm(crate::LastFmStatus),
 }
 
 /// How the server keeps the library, as the user set it.

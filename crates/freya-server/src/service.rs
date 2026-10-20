@@ -13,12 +13,14 @@ use freya_library::Library;
 use freya_library::library::{LastFm, Online, ScanOptions, Scanner};
 use freya_library::pictures::Pictures;
 use freya_protocol::{
-    ApiError, ApiResult, LibraryApi, LibraryData, LibraryPictures, Part, PlaylistEntry,
-    SavedPlaylist, ScanEvent, ServerControl, ServerEvents, ServerSettings, ServiceEvent,
+    ApiError, ApiResult, LastFmStatus, LastFmTrack, LibraryApi, LibraryData, LibraryPictures, Part,
+    PlaylistEntry, SavedPlaylist, ScanEvent, Scrobble, ServerControl, ServerEvents, ServerSettings,
+    ServiceEvent,
 };
 
 use crate::folder_watch::FolderWatch;
 use crate::playlists::Playlists;
+use crate::scrobbler::Scrobbler;
 
 /// How often the service looks at the scan running, the folders' watch and the time.
 const TICK: Duration = Duration::from_millis(100);
@@ -40,6 +42,9 @@ pub struct ServiceConfig {
     pub lastfm: Option<Arc<dyn LastFm>>,
     /// Where the user's playlists are kept; without, there are none.
     pub playlists: Option<PathBuf>,
+    /// Where scrobbling to Last.fm keeps the session and the plays waiting; without, the server
+    /// does not scrobble.
+    pub scrobbles: Option<PathBuf>,
 }
 
 impl ServiceConfig {
@@ -70,8 +75,9 @@ pub struct Service {
 struct Shared {
     state: Mutex<State>,
     playlists: Option<Playlists>,
+    scrobbler: Option<Mutex<Scrobbler>>,
     stop: AtomicBool,
-    listeners: Mutex<Vec<Sender<ServiceEvent>>>,
+    listeners: Arc<Mutex<Vec<Sender<ServiceEvent>>>>,
     /// What clients ask of the library is read and written here, not waiting for a scan.
     api: Arc<LocalLibrary>,
 }
@@ -109,11 +115,20 @@ impl Service {
             outbox: Vec::new(),
         };
         let playlists = state.config.playlists.clone().map(Playlists::new);
+        let listeners: Arc<Mutex<Vec<Sender<ServiceEvent>>>> = Arc::default();
+        let scrobbler = state.config.scrobbles.clone().map(|dir| {
+            let listeners = Arc::clone(&listeners);
+            let tell: crate::scrobbler::Tell = Arc::new(move |status| {
+                tell_all(&listeners, ServiceEvent::LastFm(status));
+            });
+            Mutex::new(Scrobbler::start(dir, tell))
+        });
         let shared = Arc::new(Shared {
             state: Mutex::new(state),
             playlists,
+            scrobbler,
             stop: AtomicBool::new(false),
-            listeners: Mutex::new(Vec::new()),
+            listeners,
             api: Arc::new(LocalLibrary::new(reader, pictures)),
         });
         let mut service = Self {
@@ -152,13 +167,19 @@ impl Service {
             let result = f(&mut state);
             (result, std::mem::take(&mut state.outbox))
         };
-        if !events.is_empty() {
-            let mut listeners = lock(&shared.listeners);
-            for event in events {
-                listeners.retain(|listener| listener.send(event.clone()).is_ok());
-            }
+        for event in events {
+            tell_all(&shared.listeners, event);
         }
         result
+    }
+
+    /// The scrobbler, when the server scrobbles.
+    fn scrobbler(&self) -> ApiResult<MutexGuard<'_, Scrobbler>> {
+        self.shared
+            .scrobbler
+            .as_ref()
+            .map(lock)
+            .ok_or_else(|| ApiError("this server does not scrobble".into()))
     }
 }
 
@@ -244,6 +265,39 @@ impl ServerControl for Service {
         self.playlists_changed(|playlists| playlists.delete(name))?;
         self.shared.api.with_db(|db| db.forget_playlist(name))
     }
+
+    fn lastfm_status(&self) -> ApiResult<LastFmStatus> {
+        Ok(self
+            .shared
+            .scrobbler
+            .as_ref()
+            .map(|scrobbler| lock(scrobbler).status())
+            .unwrap_or_default())
+    }
+
+    fn lastfm_connect(&self) -> ApiResult<String> {
+        self.scrobbler()?.connect().map_err(ApiError)
+    }
+
+    fn lastfm_cancel(&self) -> ApiResult<()> {
+        self.scrobbler()?.cancel();
+        Ok(())
+    }
+
+    fn lastfm_disconnect(&self) -> ApiResult<()> {
+        self.scrobbler()?.disconnect();
+        Ok(())
+    }
+
+    fn lastfm_now_playing(&self, track: &LastFmTrack) -> ApiResult<()> {
+        self.scrobbler()?.now_playing(track.clone());
+        Ok(())
+    }
+
+    fn lastfm_scrobble(&self, scrobble: &Scrobble) -> ApiResult<()> {
+        self.scrobbler()?.scrobble(scrobble.clone());
+        Ok(())
+    }
 }
 
 impl Service {
@@ -286,6 +340,11 @@ impl Drop for Service {
         let mut state = lock(&self.shared.state);
         state.scanner.stop();
         state.write_plays();
+        drop(state);
+        // Plays to scrobble reach the queue on disk.
+        if let Some(scrobbler) = &self.shared.scrobbler {
+            lock(scrobbler).finish();
+        }
     }
 }
 
@@ -393,6 +452,11 @@ impl LibraryPictures for LocalLibrary {
             .map_err(api_error)?;
         Ok(Some(jpeg))
     }
+}
+
+/// Tells every listener of `event`; those gone are forgotten.
+fn tell_all(listeners: &Mutex<Vec<Sender<ServiceEvent>>>, event: ServiceEvent) {
+    lock(listeners).retain(|listener| listener.send(event.clone()).is_ok());
 }
 
 /// A lock, taken even when a thread panicked holding it: what it guards stays usable.

@@ -141,6 +141,18 @@ macro_rules! with_server_control {
             fn rename_saved_playlist(from: &str, to: &str) -> ();
             /// Takes the playlist `name` away, with what the library keeps of it.
             fn delete_playlist(name: &str) -> ();
+            /// How scrobbling to Last.fm goes.
+            fn lastfm_status() -> $crate::LastFmStatus;
+            /// Starts connecting the user's Last.fm account: the page, for the user's browser,
+            /// where they let Freya scrobble for them. The server waits for them to.
+            fn lastfm_connect() -> String;
+            /// Stops waiting for the user to allow Freya.
+            fn lastfm_cancel() -> ();
+            /// Forgets the session and the plays waiting.
+            fn lastfm_disconnect() -> ();
+            fn lastfm_now_playing(track: &$crate::LastFmTrack) -> ();
+            /// Keeps the play, and sends it once Last.fm can be reached.
+            fn lastfm_scrobble(scrobble: &$crate::Scrobble) -> ();
         }
     };
 }
@@ -246,6 +258,8 @@ macro_rules! lent_args {
 }
 
 lent_args!(
+    crate::LastFmTrack,
+    crate::Scrobble,
     crate::ServerSettings,
     crate::ArtistEdit,
     crate::GenreInfo,

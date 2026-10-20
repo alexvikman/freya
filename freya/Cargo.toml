@@ -143,7 +143,7 @@ objc2-metal = { version = "0.3.2", default-features = false, features = ["std", 
 
 [target.'cfg(windows)'.dependencies]
 # Printing to the terminal Freya was started from.
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Credentials", "Win32_System_Console"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }
 # The spectrum drawn with Windows.UI.Composition (see gui/native_spectrum.rs), and media keys
 # and the media overlay (see gui/system_media/smtc.rs).
 windows = { version = "0.62.2", features = [

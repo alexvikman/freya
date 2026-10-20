@@ -5,9 +5,11 @@ mod folder_watch;
 pub mod http;
 mod lastfm;
 mod playlists;
+mod scrobbler;
 mod serve;
 mod service;
 pub mod settings;
+pub mod take_in;
 
 pub use lastfm::lastfm;
 pub use serve::{Served, handler};

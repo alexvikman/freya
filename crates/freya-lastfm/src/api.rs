@@ -30,22 +30,7 @@ impl Credentials {
     }
 }
 
-/// A track as Last.fm is told about it.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct Track {
-    pub artist: String,
-    pub title: String,
-    pub album: Option<String>,
-    /// Whole seconds.
-    pub duration: Option<u64>,
-}
-
-/// A play to scrobble: the track, and when it started (seconds since 1970, UTC).
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct Scrobble {
-    pub track: Track,
-    pub started: u64,
-}
+pub use freya_protocol::{LastFmTrack as Track, Scrobble};
 
 /// What Last.fm says of an artist, in plain text: a short biography, the whole one, the tags
 /// listeners gave them, and their page. Empty for an artist Last.fm does not know.

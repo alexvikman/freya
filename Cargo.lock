@@ -1737,7 +1737,7 @@ dependencies = [
 name = "freya-lastfm"
 version = "0.2.1"
 dependencies = [
- "serde",
+ "freya-protocol",
  "serde_json",
  "ureq",
 ]
@@ -1781,6 +1781,7 @@ dependencies = [
  "serde",
  "serde_json",
  "toml",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

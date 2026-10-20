@@ -9,6 +9,6 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-serde = { version = "1.0.229", features = ["derive"] }
+freya-protocol = { path = "../freya-protocol" }
 serde_json = "1.0.152"
 ureq = "3"

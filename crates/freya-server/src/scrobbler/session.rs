@@ -1,6 +1,6 @@
 //! Where the Last.fm session key is kept between runs: the Credential Manager on Windows, and
-//! elsewhere a file in Freya's settings folder that only the user can read. The key lets Freya
-//! scrobble for the user until they disconnect, so it never goes in `settings.toml`.
+//! elsewhere a file in the server's folder that only the user can read. The key lets Freya
+//! scrobble for the user until they disconnect, so it never goes in the settings.
 //!
 //! Not the keychain on macOS: it lets an app read its items without asking only while the app
 //! keeps the signature it had when it saved them, and an app signed ad hoc, as Freya is
@@ -11,25 +11,37 @@
 /// The name the key is kept under, with the user's Last.fm name as the account.
 const SERVICE: &str = "Freya Last.fm";
 
-/// Keeps `key` as `user`'s session key.
-pub fn save(user: &str, key: &str) -> Result<(), String> {
-    platform::save(user, key)
+use std::path::Path;
+
+/// Keeps `key` as `user`'s session key; elsewhere than on Windows, in `dir`.
+pub fn save(dir: &Path, user: &str, key: &str) -> Result<(), String> {
+    platform::save(dir, user, key)
 }
 
 /// `user`'s session key: `Ok(None)` when none is kept, and an error when it could not be read,
 /// as when the Credential Manager is not available: the session may still be there, so the
 /// user is not forgotten for it.
-pub fn load(user: &str) -> Result<Option<String>, String> {
-    platform::load(user)
+pub fn load(dir: &Path, user: &str) -> Result<Option<String>, String> {
+    platform::load(dir, user)
 }
 
 /// Forgets `user`'s session key.
-pub fn delete(user: &str) {
-    platform::delete(user);
+pub fn delete(dir: &Path, user: &str) {
+    platform::delete(dir, user);
+}
+
+/// The file `user`'s session key is kept in, in `dir`, elsewhere than on Windows.
+pub fn file_name(user: &str) -> String {
+    let name: String = user
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    format!("{SERVICE} {name}.key")
 }
 
 #[cfg(windows)]
 mod platform {
+    use std::path::Path;
     use std::ptr;
 
     use windows_sys::Win32::Foundation::{ERROR_NOT_FOUND, GetLastError};
@@ -51,7 +63,7 @@ mod platform {
         unsafe_code,
         reason = "calls the Credential Manager with buffers that outlive the call"
     )]
-    pub fn save(user: &str, key: &str) -> Result<(), String> {
+    pub fn save(_dir: &Path, user: &str, key: &str) -> Result<(), String> {
         let mut target = target(user);
         let mut name: Vec<u16> = user.encode_utf16().chain(std::iter::once(0)).collect();
         let mut blob = key.as_bytes().to_vec();
@@ -76,7 +88,7 @@ mod platform {
         unsafe_code,
         reason = "calls the Credential Manager and frees what it returns"
     )]
-    pub fn load(user: &str) -> Result<Option<String>, String> {
+    pub fn load(_dir: &Path, user: &str) -> Result<Option<String>, String> {
         let target = target(user);
         let mut credential: *mut CREDENTIALW = ptr::null_mut();
         // SAFETY: a NUL-terminated target name, and a pointer for the result.
@@ -105,7 +117,7 @@ mod platform {
         unsafe_code,
         reason = "calls the Credential Manager with a NUL-terminated name"
     )]
-    pub fn delete(user: &str) {
+    pub fn delete(_dir: &Path, user: &str) {
         let target = target(user);
         // SAFETY: a NUL-terminated target name.
         unsafe { CredDeleteW(target.as_ptr(), CRED_TYPE_GENERIC, 0) };
@@ -117,19 +129,12 @@ mod platform {
     use std::io::Write;
     use std::path::{Path, PathBuf};
 
-    use super::SERVICE;
-
-    fn path(user: &str) -> Option<PathBuf> {
-        let dirs = directories::ProjectDirs::from("", "", "Freya")?;
-        let name: String = user
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-            .collect();
-        Some(dirs.config_dir().join(format!("{SERVICE} {name}.key")))
+    fn path(dir: &Path, user: &str) -> PathBuf {
+        dir.join(super::file_name(user))
     }
 
-    pub fn save(user: &str, key: &str) -> Result<(), String> {
-        save_at(&path(user).ok_or("no settings folder")?, key)
+    pub fn save(dir: &Path, user: &str, key: &str) -> Result<(), String> {
+        save_at(&path(dir, user), key)
     }
 
     pub fn save_at(path: &Path, key: &str) -> Result<(), String> {
@@ -155,11 +160,8 @@ mod platform {
         file.write_all(key.as_bytes()).map_err(|e| e.to_string())
     }
 
-    pub fn load(user: &str) -> Result<Option<String>, String> {
-        let Some(path) = path(user) else {
-            return Ok(None);
-        };
-        load_at(&path)
+    pub fn load(dir: &Path, user: &str) -> Result<Option<String>, String> {
+        load_at(&path(dir, user))
     }
 
     pub fn load_at(path: &Path) -> Result<Option<String>, String> {
@@ -170,10 +172,8 @@ mod platform {
         }
     }
 
-    pub fn delete(user: &str) {
-        if let Some(path) = path(user) {
-            let _ = std::fs::remove_file(path);
-        }
+    pub fn delete(dir: &Path, user: &str) {
+        let _ = std::fs::remove_file(path(dir, user));
     }
 }
 

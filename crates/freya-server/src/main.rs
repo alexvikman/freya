@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::sync::mpsc::channel;
 
 use freya_server::http::Server;
+use freya_server::take_in::{Folders, take_in};
 use freya_server::{LOCAL_ADDRESS, Served, Service, ServiceConfig, handler, settings};
 
 fn main() {
@@ -30,8 +31,9 @@ fn main() {
             }
         }
     }
-    let freya = directories::ProjectDirs::from("", "", "Freya").map(|d| d.data_dir().to_owned());
-    let Some(data) = data.or_else(|| freya.as_ref().map(|dir| dir.join("server"))) else {
+    let freya = directories::ProjectDirs::from("", "", "Freya");
+    let Some(data) = data.or_else(|| freya.as_ref().map(|dirs| dirs.data_dir().join("server")))
+    else {
         eprintln!("freya-server: no folder to keep the library in");
         std::process::exit(1);
     };
@@ -40,17 +42,24 @@ fn main() {
         std::process::exit(1);
     }
     start_log(&data.join("server.log"));
-    if let Err(e) = run(&address, &data, freya.as_deref()) {
+    if let Err(e) = run(&address, &data, freya.as_ref()) {
         log::error!("{e}");
         eprintln!("freya-server: {e}");
         std::process::exit(1);
     }
 }
 
-fn run(address: &str, data: &Path, freya: Option<&Path>) -> Result<(), String> {
+fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> Result<(), String> {
     let settings_file = data.join("settings.toml");
+    let scrobbles = data.join("lastfm");
     if let Some(freya) = freya {
-        take_in(freya, data, &settings_file);
+        take_in(&Folders {
+            freya_data: freya.data_dir(),
+            freya_settings: freya.config_dir(),
+            data,
+            settings_file: &settings_file,
+            scrobbles: &scrobbles,
+        });
     }
     let (settings, damaged) = settings::load(&settings_file);
     let config = ServiceConfig {
@@ -59,6 +68,7 @@ fn run(address: &str, data: &Path, freya: Option<&Path>) -> Result<(), String> {
         scans_allowed: !damaged,
         lastfm: freya_server::lastfm(),
         playlists: Some(data.join("playlists")),
+        scrobbles: Some(scrobbles),
     };
     let service = Arc::new(Service::start(
         data.join("library.sqlite3"),
@@ -94,52 +104,6 @@ fn run(address: &str, data: &Path, freya: Option<&Path>) -> Result<(), String> {
     drop(server);
     drop(service);
     Ok(())
-}
-
-/// Takes in what Freya kept in its own folder `freya` before the server kept it, each the
-/// first time the server has none of its own: the library, its pictures and the playlists are
-/// moved into `data`, and the library's settings are read from Freya's.
-fn take_in(freya: &Path, data: &Path, settings_file: &Path) {
-    // The database with its journal, together.
-    let groups: [&[&str]; 3] = [
-        &[
-            "library.sqlite3",
-            "library.sqlite3-wal",
-            "library.sqlite3-shm",
-        ],
-        &["pictures"],
-        &["playlists"],
-    ];
-    for group in groups {
-        if data.join(group[0]).exists() || !freya.join(group[0]).exists() {
-            continue;
-        }
-        for name in group {
-            let (from, to) = (freya.join(name), data.join(name));
-            if from.exists() {
-                match std::fs::rename(&from, &to) {
-                    Ok(()) => log::info!("moved {} to {}", from.display(), to.display()),
-                    Err(e) => log::warn!("could not move {}: {e}", from.display()),
-                }
-            }
-        }
-    }
-    let freya_settings = freya.join("settings.toml");
-    if !settings_file.exists()
-        && let Ok(text) = std::fs::read_to_string(&freya_settings)
-    {
-        // The library's settings have the same names there; the rest is the client's.
-        match toml::from_str::<freya_protocol::ServerSettings>(&text) {
-            Ok(taken) => match settings::save(settings_file, &taken) {
-                Ok(()) => log::info!(
-                    "took the library's settings from {}",
-                    freya_settings.display()
-                ),
-                Err(e) => log::warn!("could not keep the settings: {e}"),
-            },
-            Err(e) => log::warn!("could not read the library's settings from Freya's: {e}"),
-        }
-    }
 }
 
 /// Logs to `file`, from this run on, and to the terminal as `RUST_LOG` says.

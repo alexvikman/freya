@@ -1,7 +1,7 @@
 //! A library elsewhere, as Freya's client asks of it: over HTTP, from a Freya server.
 
 use std::io::BufRead;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
@@ -13,14 +13,36 @@ use freya_protocol::{API_PATH, ApiError, ApiResult, Remote, ServiceEvent, Transp
 const RECONNECT: Duration = Duration::from_secs(2);
 /// How long a server started here may take to answer.
 const STARTING: Duration = Duration::from_secs(15);
+/// The most the picture cache keeps; beyond it, the pictures used longest ago go.
+const CACHE_LIMIT: u64 = 1024 * 1024 * 1024;
 
 /// The largest answer taken: every track of a large library, as JSON.
 const MAX_ANSWER: u64 = 512 * 1024 * 1024;
 
 /// The server at `address`, such as `http://127.0.0.1:47474`: its library, and what it is
-/// asked to do.
-pub fn connect(address: &str) -> Arc<Remote<Http>> {
-    Arc::new(Remote(Http::new(address)))
+/// asked to do. Its pictures are kept in `cache`, unless it is on this computer.
+pub fn connect(address: &str, cache: Option<PathBuf>) -> Arc<Remote<Http>> {
+    let mut http = Http::new(address);
+    if !is_this_computer(address) {
+        http.cache = cache.map(PictureCache::new);
+    }
+    Arc::new(Remote(http))
+}
+
+/// Whether `address` is on this computer.
+fn is_this_computer(address: &str) -> bool {
+    let host = address
+        .split("://")
+        .last()
+        .unwrap_or(address)
+        .split('/')
+        .next()
+        .unwrap_or_default();
+    let name = match host.rsplit_once(':') {
+        Some((name, port)) if port.bytes().all(|b| b.is_ascii_digit()) => name,
+        _ => host,
+    };
+    ["127.0.0.1", "localhost", "[::1]"].contains(&name)
 }
 
 /// Calls carried over HTTP.
@@ -29,6 +51,76 @@ pub struct Http {
     /// For the event stream, which stays open.
     streaming: ureq::Agent,
     base: String,
+    /// Pictures already fetched, kept by their checksum.
+    cache: Option<PictureCache>,
+}
+
+/// Pictures kept on this computer by their checksum, which names one picture forever: what is
+/// kept is never out of date.
+pub struct PictureCache {
+    dir: PathBuf,
+}
+
+impl PictureCache {
+    /// Kept in `dir`, with those used longest ago taken away once it holds more than
+    /// [`CACHE_LIMIT`].
+    pub fn new(dir: PathBuf) -> Self {
+        let tidied = dir.clone();
+        let _ = std::thread::Builder::new()
+            .name("freya-picture-cache".into())
+            .spawn(move || tidy(&tidied, CACHE_LIMIT));
+        Self { dir }
+    }
+
+    fn file(&self, checksum: &str) -> PathBuf {
+        self.dir.join(checksum)
+    }
+
+    fn get(&self, checksum: &str) -> Option<Vec<u8>> {
+        let file = self.file(checksum);
+        let bytes = std::fs::read(&file).ok()?;
+        // Used now: kept longer than those not.
+        let _ = std::fs::File::options()
+            .append(true)
+            .open(&file)
+            .and_then(|f| f.set_modified(std::time::SystemTime::now()));
+        Some(bytes)
+    }
+
+    fn put(&self, checksum: &str, bytes: &[u8]) {
+        let file = self.file(checksum);
+        let partial = file.with_extension("partial");
+        let written = std::fs::create_dir_all(&self.dir)
+            .and_then(|()| std::fs::write(&partial, bytes))
+            .and_then(|()| std::fs::rename(&partial, &file));
+        if let Err(e) = written {
+            log::debug!("could not keep a picture in the cache: {e}");
+        }
+    }
+}
+
+/// Takes away the pictures in `dir` used longest ago, until it holds at most `limit` bytes.
+fn tidy(dir: &Path, limit: u64) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<(std::time::SystemTime, u64, PathBuf)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let metadata = entry.metadata().ok()?;
+            Some((metadata.modified().ok()?, metadata.len(), entry.path()))
+        })
+        .collect();
+    let mut total: u64 = files.iter().map(|(_, size, _)| size).sum();
+    files.sort();
+    for (_, size, file) in files {
+        if total <= limit {
+            break;
+        }
+        if std::fs::remove_file(&file).is_ok() {
+            total -= size;
+        }
+    }
 }
 
 impl Http {
@@ -50,6 +142,7 @@ impl Http {
             agent,
             streaming,
             base: format!("{}{API_PATH}", address.trim_end_matches('/')),
+            cache: None,
         }
     }
 
@@ -151,12 +244,19 @@ impl Transport for Http {
         if !freya_protocol::is_checksum(checksum) {
             return Ok(None);
         }
+        if let Some(bytes) = self.cache.as_ref().and_then(|cache| cache.get(checksum)) {
+            return Ok(Some(bytes));
+        }
         let answer = self
             .agent
             .get(&self.url(&format!("/pictures/{checksum}")))
             .call()
             .map_err(failed)?;
-        bytes_or_none(answer)
+        let bytes = bytes_or_none(answer)?;
+        if let (Some(cache), Some(bytes)) = (&self.cache, &bytes) {
+            cache.put(checksum, bytes);
+        }
+        Ok(bytes)
     }
 
     fn keep_picture(&self, bytes: &[u8], largest: Option<u32>) -> ApiResult<String> {
@@ -190,6 +290,7 @@ impl Transport for Http {
             agent: self.agent.clone(),
             streaming: self.streaming.clone(),
             base: self.base.clone(),
+            cache: None,
         };
         std::thread::Builder::new()
             .name("freya-server-events".into())

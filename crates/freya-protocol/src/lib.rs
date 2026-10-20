@@ -4,10 +4,12 @@
 
 pub mod api;
 pub mod artists;
+pub mod lastfm;
 pub mod library;
 pub mod scan;
 
 pub use api::*;
 pub use artists::*;
+pub use lastfm::*;
 pub use library::*;
 pub use scan::*;
