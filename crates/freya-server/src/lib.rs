@@ -2,6 +2,7 @@
 //! music's folders, for clients to show and play.
 
 pub mod accounts;
+pub mod discovery;
 mod folder_watch;
 pub mod http;
 mod lastfm;
@@ -11,9 +12,10 @@ mod serve;
 mod service;
 pub mod settings;
 pub mod take_in;
+pub mod tls;
 
 pub use lastfm::lastfm;
-pub use serve::{Served, handler};
+pub use serve::{Served, found, handler};
 pub use service::{LocalLibrary, Service, ServiceConfig};
 
 /// Where a server on this computer listens.

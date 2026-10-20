@@ -83,6 +83,10 @@ pub struct ServerSettings {
     pub artist_wikipedia_online: bool,
     /// The user's personal fanart.tv API key, for wide pictures across artists' pages.
     pub fanart_key: Option<String>,
+    /// Whether clients on other computers may connect, over TLS, and find the server.
+    pub network: bool,
+    /// What the server is called where clients find it; the computer's name when empty.
+    pub name: String,
 }
 
 impl Default for ServerSettings {
@@ -96,8 +100,29 @@ impl Default for ServerSettings {
             artist_bios_online: true,
             artist_wikipedia_online: true,
             fanart_key: None,
+            network: true,
+            name: String::new(),
         }
     }
+}
+
+/// Where a server takes clients on other computers, over TLS, and answers those looking for
+/// servers on the network.
+pub const NETWORK_PORT: u16 = 47475;
+pub const DISCOVERY_PORT: u16 = 47476;
+/// What a client looking for servers sends, to [`DISCOVERY_PORT`] of every computer on the
+/// network; a server answers with a [`ServerFound`] in JSON.
+pub const DISCOVERY_QUESTION: &[u8] = b"freya-server?";
+
+/// A server on the network, as it answers one looking for servers.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ServerFound {
+    pub name: String,
+    /// Where it takes clients over TLS.
+    pub port: u16,
+    /// Its certificate's fingerprint, for the user to compare.
+    pub fingerprint: String,
+    pub version: String,
 }
 
 /// What a user sees of their account.

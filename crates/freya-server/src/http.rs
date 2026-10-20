@@ -1,5 +1,5 @@
-//! A small HTTP/1.1 server: each connection on a thread of its own, its requests read with
-//! `httparse`, answered by a handler. Enough for Freya's clients: requests with a body of a
+//! A small HTTP/1.1 server, over TLS or not: each connection on a thread of its own, its
+//! requests read with `httparse`, answered by a handler. Enough for Freya's clients: requests with a body of a
 //! known length, answers of a known length or streamed in chunks, and connections kept open
 //! between requests.
 
@@ -22,8 +22,9 @@ const IDLE: Duration = Duration::from_secs(120);
 /// A request, as the handler sees it.
 #[derive(Debug)]
 pub struct Request {
-    /// Who sent it.
+    /// Who sent it, and whether over TLS.
     pub peer: Option<SocketAddr>,
+    pub secure: bool,
     pub method: String,
     /// Without the query.
     pub path: String,
@@ -124,6 +125,23 @@ pub struct Server {
 impl Server {
     /// Listens on `address`; port 0 takes any free one.
     pub fn start(address: impl ToSocketAddrs, handler: Handler) -> io::Result<Self> {
+        Self::listen(address, handler, None)
+    }
+
+    /// Listens on `address` over TLS as `tls` says.
+    pub fn start_tls(
+        address: impl ToSocketAddrs,
+        handler: Handler,
+        tls: Arc<rustls::ServerConfig>,
+    ) -> io::Result<Self> {
+        Self::listen(address, handler, Some(tls))
+    }
+
+    fn listen(
+        address: impl ToSocketAddrs,
+        handler: Handler,
+        tls: Option<Arc<rustls::ServerConfig>>,
+    ) -> io::Result<Self> {
         let listener = TcpListener::bind(address)?;
         let address = listener.local_addr()?;
         let stop = Arc::new(AtomicBool::new(false));
@@ -139,10 +157,13 @@ impl Server {
                         continue;
                     };
                     let handler = Arc::clone(&handler);
+                    let tls = tls.clone();
                     let started = std::thread::Builder::new()
                         .name("freya-http-connection".into())
                         .spawn(move || {
-                            if let Err(e) = Connection::new(stream).serve(&*handler) {
+                            let served = Connection::new(stream, tls)
+                                .and_then(|connection| connection.serve(&*handler));
+                            if let Err(e) = served {
                                 log::debug!("a connection ended: {e}");
                             }
                         });
@@ -174,8 +195,16 @@ impl Drop for Server {
     }
 }
 
+/// What a connection is read from and written to: the TCP stream, or TLS over it.
+trait Duplex: Read + Write + Send {}
+
+impl<T: Read + Write + Send> Duplex for T {}
+
 struct Connection {
-    stream: TcpStream,
+    stream: Box<dyn Duplex>,
+    /// The TCP stream itself, for who is at the other end and closing it.
+    tcp: TcpStream,
+    secure: bool,
     /// Read beyond the last request: the start of the next one.
     pending: Vec<u8>,
 }
@@ -184,13 +213,23 @@ struct Connection {
 struct Refused(u16, &'static str);
 
 impl Connection {
-    fn new(stream: TcpStream) -> Self {
-        let _ = stream.set_read_timeout(Some(IDLE));
-        let _ = stream.set_nodelay(true);
-        Self {
+    fn new(tcp: TcpStream, tls: Option<Arc<rustls::ServerConfig>>) -> io::Result<Self> {
+        let _ = tcp.set_read_timeout(Some(IDLE));
+        let _ = tcp.set_nodelay(true);
+        let stream: Box<dyn Duplex> = match &tls {
+            Some(config) => {
+                let session =
+                    rustls::ServerConnection::new(Arc::clone(config)).map_err(io::Error::other)?;
+                Box::new(rustls::StreamOwned::new(session, tcp.try_clone()?))
+            }
+            None => Box::new(tcp.try_clone()?),
+        };
+        Ok(Self {
             stream,
+            tcp,
+            secure: tls.is_some(),
             pending: Vec::new(),
-        }
+        })
     }
 
     fn serve(mut self, handler: &(dyn Fn(Request) -> Response + Send + Sync)) -> io::Result<()> {
@@ -227,7 +266,8 @@ impl Connection {
             match parsed.parse(&buffer) {
                 Ok(httparse::Status::Complete(length)) => {
                     let request = Request {
-                        peer: self.stream.peer_addr().ok(),
+                        peer: self.tcp.peer_addr().ok(),
+                        secure: self.secure,
                         method: parsed.method.unwrap_or_default().to_owned(),
                         path: String::new(),
                         query: String::new(),
@@ -301,12 +341,13 @@ impl Connection {
     /// Closes the connection gently after a request that was not read whole: what the client
     /// still sends is read and dropped for a moment, so its answer is not lost to a reset.
     fn linger(&mut self) {
-        let _ = self.stream.shutdown(std::net::Shutdown::Write);
-        let _ = self.stream.set_read_timeout(Some(Duration::from_secs(1)));
+        let _ = self.stream.flush();
+        let _ = self.tcp.shutdown(std::net::Shutdown::Write);
+        let _ = self.tcp.set_read_timeout(Some(Duration::from_secs(1)));
         let mut dropped = [0; 4096];
         let mut left = MAX_HEAD * 4;
         while left > 0 {
-            match self.stream.read(&mut dropped) {
+            match self.tcp.read(&mut dropped) {
                 Ok(0) | Err(_) => break,
                 Ok(read) => left = left.saturating_sub(read),
             }
@@ -344,7 +385,7 @@ impl Connection {
             Body::Stream(stream) => {
                 head.push_str("Transfer-Encoding: chunked\r\n\r\n");
                 self.stream.write_all(head.as_bytes())?;
-                let mut chunked = Chunked(&mut self.stream);
+                let mut chunked = Chunked(&mut *self.stream);
                 stream(&mut chunked)?;
                 self.stream.write_all(b"0\r\n\r\n")?;
                 self.stream.flush()
@@ -354,7 +395,7 @@ impl Connection {
 }
 
 /// Writes what it is given as chunks of a chunked answer, each sent at once.
-struct Chunked<'a>(&'a mut TcpStream);
+struct Chunked<'a>(&'a mut dyn Duplex);
 
 impl Write for Chunked<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {

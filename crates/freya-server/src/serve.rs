@@ -12,6 +12,10 @@
 //! - `GET /events`: what happens at the server, as it happens: one [`ServiceEvent`] in JSON
 //!   a line, and an empty line now and then while nothing does.
 //! - `GET /version`: `{"version": ...}`.
+//! - `GET /info`: what the server is called, where it takes clients on other computers and
+//!   its certificate's fingerprint, as it answers those looking for it.
+//! - `GET /certificate`: the server's TLS certificate, in DER, for a client to pin the first
+//!   time it connects.
 //! - `POST /quit`: the server stops; only from this computer.
 //! - `POST /pair`: `{"key", "device"}`, the pairing key a client on this computer read: a token
 //!   for the device. Only from this computer.
@@ -31,7 +35,10 @@ use std::sync::Arc;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
-use freya_protocol::{API_PATH, LibraryApi, Server, ServiceEvent, dispatch_control, dispatch_data};
+use freya_protocol::{
+    API_PATH, LibraryApi, NETWORK_PORT, Server, ServerFound, ServiceEvent, dispatch_control,
+    dispatch_data,
+};
 
 use crate::accounts::{Accounts, Caller};
 use crate::http::{Handler, Request, Response};
@@ -49,6 +56,8 @@ pub struct Served {
     pub quit: Option<Arc<dyn Fn() + Send + Sync>>,
     /// Who may call; without, anyone may, as in tests.
     pub accounts: Option<Arc<Accounts>>,
+    /// The server's TLS certificate, in DER, when clients on other computers may connect.
+    pub certificate: Option<Vec<u8>>,
 }
 
 /// Answers requests to the API as `served` says.
@@ -61,12 +70,15 @@ fn refused(request: &Request) -> Option<&'static str> {
     if request.header("origin").is_some() {
         return Some("web pages are not answered");
     }
+    // Over TLS a browser does not get as far as asking: it does not take the server's own
+    // certificate without the user's say.
     let host = request.header("host").unwrap_or_default();
     let name = match host.rsplit_once(':') {
         Some((name, port)) if port.bytes().all(|b| b.is_ascii_digit()) => name,
         _ => host,
     };
-    if !["127.0.0.1", "localhost", "[::1]"].contains(&name.to_ascii_lowercase().as_str()) {
+    let here = ["127.0.0.1", "localhost", "[::1]"].contains(&name.to_ascii_lowercase().as_str());
+    if !here && !request.secure {
         return Some("only this computer's name is answered");
     }
     let typed = request.header("content-type").is_some_and(|kind| {
@@ -87,6 +99,12 @@ fn answer(served: &Served, request: Request) -> Response {
     let Some(path) = request.path.strip_prefix(API_PATH) else {
         return Response::error(404, "no such page");
     };
+    if (request.method.as_str(), path) == ("GET", "/certificate") {
+        return match &served.certificate {
+            Some(certificate) => Response::bytes(200, "application/pkix-cert", certificate.clone()),
+            None => Response::error(404, "no certificate here"),
+        };
+    }
     let local = request.peer.is_some_and(|peer| peer.ip().is_loopback());
     let caller = match &served.accounts {
         None => None,
@@ -191,6 +209,10 @@ fn answer(served: &Served, request: Request) -> Response {
                 }),
             )
         }
+        ("GET", "/info") => match serde_json::to_value(found(served)) {
+            Ok(info) => Response::json(200, &info),
+            Err(e) => Response::error(500, e),
+        },
         ("GET", "/version") => Response::json(
             200,
             &serde_json::json!({ "version": env!("CARGO_PKG_VERSION") }),
@@ -314,6 +336,40 @@ fn audio_type(path: &std::path::Path) -> &'static str {
     }
 }
 
+/// What the server is called, where it takes clients on other computers and its certificate's
+/// fingerprint: as it answers those looking for servers.
+pub fn found(served: &Served) -> ServerFound {
+    let name = served
+        .server
+        .as_ref()
+        .and_then(|server| server.settings().ok())
+        .map(|settings| settings.name)
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(computer_name);
+    ServerFound {
+        name,
+        port: NETWORK_PORT,
+        fingerprint: served
+            .certificate
+            .as_deref()
+            .map(crate::tls::fingerprint)
+            .unwrap_or_default(),
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+    }
+}
+
+/// What this computer is called.
+fn computer_name() -> String {
+    let named = std::env::var("COMPUTERNAME").ok().or_else(|| {
+        let out = std::process::Command::new("hostname").output().ok()?;
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_owned())
+    });
+    named
+        .map(|name| name.trim_end_matches(".local").to_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "Freya".into())
+}
+
 /// `{"key", "device"}`: a token for the device, given the pairing key; only from this computer.
 fn pair(accounts: &Accounts, request: &Request, local: bool) -> Response {
     #[derive(serde::Deserialize)]
@@ -403,6 +459,7 @@ mod tests {
     fn request(headers: &[(&str, &str)], body: &[u8]) -> Request {
         Request {
             peer: None,
+            secure: false,
             method: "POST".into(),
             path: format!("{API_PATH}/call/stats"),
             query: String::new(),

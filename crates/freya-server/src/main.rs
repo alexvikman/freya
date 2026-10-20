@@ -9,9 +9,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::channel;
 
+use freya_protocol::{NETWORK_PORT, ServerControl};
 use freya_server::accounts::Accounts;
+use freya_server::discovery::Discovery;
 use freya_server::http::Server;
 use freya_server::take_in::{Folders, take_in};
+use freya_server::tls::Identity;
 use freya_server::{LOCAL_ADDRESS, PAIRING_KEY, Served, Service, ServiceConfig, handler, settings};
 
 fn main() {
@@ -87,6 +90,7 @@ fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> 
         let _ = stop.send(());
     })
     .map_err(|e| format!("could not listen for being stopped: {e}"))?;
+    let identity = Identity::load_or_make(data)?;
     let served = Served {
         library: service.api(),
         server: Some(Arc::clone(&service) as _),
@@ -95,9 +99,11 @@ fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> 
             Some(data.join("accounts.json")),
             Some(data.join(PAIRING_KEY)),
         ))),
+        certificate: Some(identity.certificate.clone()),
     };
-    let server = Server::start(address, handler(served))
+    let server = Server::start(address, handler(served.clone()))
         .map_err(|e| format!("could not listen on {address}: {e}"))?;
+    let network = Network::follow(served, Arc::clone(&service), identity);
     log::info!(
         "Freya's server {} serves {} on {}",
         env!("CARGO_PKG_VERSION"),
@@ -106,9 +112,78 @@ fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> 
     );
     let _ = stopped.recv();
     log::info!("stopping");
+    drop(network);
     drop(server);
     drop(service);
     Ok(())
+}
+
+/// Clients on other computers, taken over TLS and answered when looking for servers while
+/// the settings allow it; looked at every few seconds, so a change takes at once.
+struct Network {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Network {
+    fn follow(served: Served, service: Arc<Service>, identity: Identity) -> Self {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopped = Arc::clone(&stop);
+        let thread = std::thread::Builder::new()
+            .name("freya-network".into())
+            .spawn(move || {
+                let mut listening: Option<(Server, Option<Discovery>)> = None;
+                while !stopped.load(Ordering::Relaxed) {
+                    let allowed = service.settings().is_ok_and(|s| s.network);
+                    if allowed && listening.is_none() {
+                        listening = listen(&served, &identity);
+                    } else if !allowed && listening.is_some() {
+                        log::info!("no longer taking clients on other computers");
+                        listening = None;
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                }
+            })
+            .ok();
+        Self { stop, thread }
+    }
+}
+
+impl Drop for Network {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Takes clients on other computers over TLS, and answers those looking for servers.
+fn listen(served: &Served, identity: &Identity) -> Option<(Server, Option<Discovery>)> {
+    let tls = match identity.server_config() {
+        Ok(tls) => tls,
+        Err(e) => {
+            log::warn!("no TLS: {e}");
+            return None;
+        }
+    };
+    let server = match Server::start_tls(("0.0.0.0", NETWORK_PORT), handler(served.clone()), tls) {
+        Ok(server) => server,
+        Err(e) => {
+            log::warn!("could not take clients on other computers: {e}");
+            return None;
+        }
+    };
+    let answered = served.clone();
+    let discovery = Discovery::start(move || freya_server::found(&answered))
+        .map_err(|e| log::warn!("could not answer clients looking for servers: {e}"))
+        .ok();
+    log::info!(
+        "taking clients on other computers on port {NETWORK_PORT}; certificate {}",
+        identity.fingerprint()
+    );
+    Some((server, discovery))
 }
 
 /// Logs to `file`, from this run on, and to the terminal as `RUST_LOG` says.

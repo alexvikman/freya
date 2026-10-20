@@ -58,11 +58,20 @@ pub struct Media {
     pub remote: Option<RemoteSource>,
 }
 
-/// A file on a server: its address, and the token the server asks for.
-#[derive(Clone, PartialEq, Eq)]
+/// A file on a server: its address, the token the server asks for, and how to reach it when
+/// that is not the usual way, as for a server whose certificate the caller pinned.
+#[derive(Clone)]
 pub struct RemoteSource {
     pub url: String,
     pub token: Option<String>,
+    /// Asked each part in at most 20 seconds, its errors answered as they come.
+    pub agent: Option<std::sync::Arc<ureq::Agent>>,
+}
+
+impl PartialEq for RemoteSource {
+    fn eq(&self, other: &Self) -> bool {
+        self.url == other.url && self.token == other.token
+    }
 }
 
 /// Without the token, which is not for logs.

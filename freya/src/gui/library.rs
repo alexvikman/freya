@@ -851,6 +851,7 @@ impl LibraryPanel {
         (forced || !here).then(|| freya_audio::RemoteSource {
             url: freya_client::audio_url(address, path),
             token: self.token.clone(),
+            agent: None,
         })
     }
 

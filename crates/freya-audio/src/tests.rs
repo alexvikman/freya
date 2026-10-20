@@ -712,6 +712,7 @@ fn a_file_read_from_a_server_plays_as_the_file_itself() {
             remote: Some(crate::RemoteSource {
                 url: file_server(fixture(name), None),
                 token: None,
+                agent: None,
             }),
             ..local.clone()
         };
@@ -736,6 +737,7 @@ fn a_dropped_request_is_made_again() {
         remote: Some(crate::RemoteSource {
             url: file_server(fixture("sine.flac"), Some(3)),
             token: None,
+            agent: None,
         }),
         ..local.clone()
     };
@@ -756,7 +758,11 @@ fn a_server_that_never_answers_is_given_up_on() {
         }
     });
     let media = Media {
-        remote: Some(crate::RemoteSource { url, token: None }),
+        remote: Some(crate::RemoteSource {
+            url,
+            token: None,
+            agent: None,
+        }),
         ..Media::from(fixture("sine.flac"))
     };
     let started = std::time::Instant::now();

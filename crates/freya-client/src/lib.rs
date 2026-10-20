@@ -32,6 +32,14 @@ pub fn connect(address: &str, token: Option<String>, cache: Option<PathBuf>) -> 
 /// Where the server at `address` serves the file of the library's track at `path`, for
 /// playing it from there.
 pub fn audio_url(address: &str, path: &Path) -> String {
+    audio_url_at(
+        &format!("{}{API_PATH}/audio", address.trim_end_matches('/')),
+        path,
+    )
+}
+
+/// The address of the file of the track at `path`, at `audio`, where a server serves tracks.
+pub fn audio_url_at(audio: &str, path: &Path) -> String {
     let path = path.to_string_lossy();
     let mut encoded = String::with_capacity(path.len() * 3);
     for byte in path.bytes() {
@@ -41,10 +49,7 @@ pub fn audio_url(address: &str, path: &Path) -> String {
             encoded.push_str(&format!("%{byte:02X}"));
         }
     }
-    format!(
-        "{}{API_PATH}/audio?path={encoded}",
-        address.trim_end_matches('/')
-    )
+    format!("{audio}?path={encoded}")
 }
 
 /// Whether `address` is on this computer.
@@ -63,6 +68,129 @@ pub fn is_this_computer(address: &str) -> bool {
     ["127.0.0.1", "localhost", "[::1]"].contains(&name)
 }
 
+/// A server on another computer, as this client knows it: where it is, and the certificate it
+/// pinned the first time it connected.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pin {
+    pub address: std::net::SocketAddr,
+    pub certificate: Vec<u8>,
+}
+
+/// Looks every name up as the pinned server's address: a client calls the server
+/// `freya-server.invalid`, the name its certificate holds, whatever its address.
+#[derive(Debug)]
+struct PinnedAddress(std::net::SocketAddr);
+
+impl ureq::unversioned::resolver::Resolver for PinnedAddress {
+    fn resolve(
+        &self,
+        _uri: &ureq::http::Uri,
+        _config: &ureq::config::Config,
+        _timeout: ureq::unversioned::transport::NextTimeout,
+    ) -> Result<ureq::unversioned::resolver::ResolvedSocketAddrs, ureq::Error> {
+        let mut addresses = self.empty();
+        addresses.push(self.0);
+        Ok(addresses)
+    }
+}
+
+/// What the server's certificate names it.
+const TLS_NAME: &str = "freya-server.invalid";
+
+/// An agent as `config` says, to a pinned server when `pin` is given: only its certificate is
+/// trusted, under the name it holds, at the address it was found at.
+fn make_agent(
+    config: ureq::config::ConfigBuilder<ureq::typestate::AgentScope>,
+    pin: Option<&Pin>,
+) -> ureq::Agent {
+    let Some(pin) = pin else {
+        return config.build().into();
+    };
+    let certificate = ureq::tls::Certificate::from_der(&pin.certificate).to_owned();
+    let tls = ureq::tls::TlsConfig::builder()
+        .root_certs(ureq::tls::RootCerts::Specific(Arc::new(vec![certificate])))
+        .build();
+    ureq::Agent::with_parts(
+        config.tls_config(tls).build(),
+        ureq::unversioned::transport::DefaultConnector::new(),
+        PinnedAddress(pin.address),
+    )
+}
+
+/// The certificate of the server at `address`, asked for without checking it: for the user to
+/// compare its fingerprint, and to pin it.
+pub fn certificate_of(address: std::net::SocketAddr) -> ApiResult<Vec<u8>> {
+    let tls = ureq::tls::TlsConfig::builder()
+        .disable_verification(true)
+        .build();
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(10)))
+        .http_status_as_error(false)
+        .tls_config(tls)
+        .build();
+    let agent = ureq::Agent::with_parts(
+        config,
+        ureq::unversioned::transport::DefaultConnector::new(),
+        PinnedAddress(address),
+    );
+    let url = format!(
+        "https://{TLS_NAME}:{}{API_PATH}/certificate",
+        address.port()
+    );
+    let answer = agent.get(&url).call().map_err(failed)?;
+    match read(answer)? {
+        (200, certificate) => Ok(certificate),
+        (status, body) => Err(error(status, &body)),
+    }
+}
+
+/// A server found on the network: where it answered from, and what it said of itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Found {
+    /// Where it takes clients, over TLS.
+    pub address: std::net::SocketAddr,
+    pub server: freya_protocol::ServerFound,
+}
+
+/// The servers on the network that answer within `wait`: asked by a broadcast to every
+/// computer on it.
+pub fn find_servers(wait: Duration) -> Vec<Found> {
+    let everyone =
+        std::net::SocketAddr::from(([255, 255, 255, 255], freya_protocol::DISCOVERY_PORT));
+    ask_for_servers(everyone, wait).unwrap_or_else(|e| {
+        log::warn!("could not look for servers: {e}");
+        Vec::new()
+    })
+}
+
+/// The servers that answer `to` within `wait`, each once.
+fn ask_for_servers(to: std::net::SocketAddr, wait: Duration) -> std::io::Result<Vec<Found>> {
+    let socket = std::net::UdpSocket::bind(("0.0.0.0", 0))?;
+    socket.set_broadcast(true)?;
+    socket.send_to(freya_protocol::DISCOVERY_QUESTION, to)?;
+    let until = Instant::now() + wait;
+    let mut found: Vec<Found> = Vec::new();
+    let mut answer = [0; 2048];
+    loop {
+        let left = until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Ok(found);
+        }
+        socket.set_read_timeout(Some(left))?;
+        let Ok((read, from)) = socket.recv_from(&mut answer) else {
+            return Ok(found);
+        };
+        let Ok(server) = serde_json::from_slice::<freya_protocol::ServerFound>(&answer[..read])
+        else {
+            continue;
+        };
+        let address = std::net::SocketAddr::new(from.ip(), server.port);
+        if !found.iter().any(|f| f.address == address) {
+            found.push(Found { address, server });
+        }
+    }
+}
+
 /// Calls carried over HTTP.
 pub struct Http {
     agent: ureq::Agent,
@@ -71,6 +199,8 @@ pub struct Http {
     base: String,
     /// The token this device was given; none before it was.
     token: Option<String>,
+    /// The server on another computer, over TLS; none for one on this computer.
+    pin: Option<Pin>,
     /// Pictures already fetched, kept by their checksum.
     cache: Option<PictureCache>,
 }
@@ -144,27 +274,55 @@ fn tidy(dir: &Path, limit: u64) {
 }
 
 impl Http {
+    /// The server at `address`, on this computer: `http://127.0.0.1:47474`.
     pub fn new(address: &str) -> Self {
-        let agent = ureq::Agent::config_builder()
-            .timeout_connect(Some(Duration::from_secs(10)))
-            .timeout_global(Some(Duration::from_secs(120)))
-            .user_agent(concat!("Freya/", env!("CARGO_PKG_VERSION")))
-            // Errors come with a body that says what went wrong.
-            .http_status_as_error(false)
-            .build()
-            .into();
-        let streaming = ureq::Agent::config_builder()
-            .timeout_connect(Some(Duration::from_secs(10)))
-            .user_agent(concat!("Freya/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .into();
+        Self::with(address, None)
+    }
+
+    /// The server `pin` names, on another computer, over TLS.
+    pub fn pinned(pin: Pin) -> Self {
+        let base = format!("https://{TLS_NAME}:{}", pin.address.port());
+        Self::with(&base, Some(pin))
+    }
+
+    fn with(address: &str, pin: Option<Pin>) -> Self {
+        let agent = make_agent(
+            ureq::Agent::config_builder()
+                .timeout_connect(Some(Duration::from_secs(10)))
+                .timeout_global(Some(Duration::from_secs(120)))
+                .user_agent(concat!("Freya/", env!("CARGO_PKG_VERSION")))
+                // Errors come with a body that says what went wrong.
+                .http_status_as_error(false),
+            pin.as_ref(),
+        );
+        let streaming = make_agent(
+            ureq::Agent::config_builder()
+                .timeout_connect(Some(Duration::from_secs(10)))
+                .user_agent(concat!("Freya/", env!("CARGO_PKG_VERSION"))),
+            pin.as_ref(),
+        );
         Self {
             agent,
             streaming,
             base: format!("{}{API_PATH}", address.trim_end_matches('/')),
             token: None,
+            pin,
             cache: None,
         }
+    }
+
+    /// The address tracks are read from, `/audio`, and an agent that reaches it as this
+    /// client does: for the player, which reads a track a part at a time, each part in at
+    /// most `timeout`.
+    pub fn audio(&self, timeout: Duration) -> (String, ureq::Agent) {
+        let agent = make_agent(
+            ureq::Agent::config_builder()
+                .timeout_global(Some(timeout))
+                .user_agent(concat!("Freya/", env!("CARGO_PKG_VERSION")))
+                .http_status_as_error(false),
+            self.pin.as_ref(),
+        );
+        (self.url("/audio"), agent)
     }
 
     /// The token this device calls with.
@@ -235,6 +393,13 @@ impl Http {
             (200, _) => Ok(()),
             (status, body) => Err(error(status, &body)),
         }
+    }
+
+    /// What the server is called, where it takes clients on other computers and its
+    /// certificate's fingerprint.
+    pub fn info(&self) -> ApiResult<freya_protocol::ServerFound> {
+        let answer = self.get("/info").call().map_err(failed)?;
+        serde_json::from_value(json(answer)?).map_err(failed)
     }
 
     /// Takes the token of the account's device `device` back.
@@ -390,6 +555,7 @@ impl Transport for Http {
             streaming: self.streaming.clone(),
             base: self.base.clone(),
             token: self.token.clone(),
+            pin: self.pin.clone(),
             cache: None,
         };
         std::thread::Builder::new()

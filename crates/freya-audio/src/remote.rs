@@ -17,7 +17,7 @@ const CHUNK: u64 = 1024 * 1024;
 #[cfg(test)]
 const CHUNK: u64 = 4 * 1024;
 /// How long one request may take, and how often one that failed is made again.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const ATTEMPTS: u32 = 4;
 const FIRST_WAIT: Duration = Duration::from_millis(250);
 
@@ -110,12 +110,14 @@ pub(crate) struct RemoteFile {
 impl RemoteFile {
     /// The file `remote`, of a server that answers Range requests; its first chunk read.
     pub fn open(remote: &RemoteSource, interrupt: Interrupt) -> io::Result<Self> {
-        let agent: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_global(Some(REQUEST_TIMEOUT))
-            .user_agent(concat!("Freya/", env!("CARGO_PKG_VERSION")))
-            .http_status_as_error(false)
-            .build()
-            .into();
+        let agent = remote.agent.as_deref().cloned().unwrap_or_else(|| {
+            ureq::Agent::config_builder()
+                .timeout_global(Some(REQUEST_TIMEOUT))
+                .user_agent(concat!("Freya/", env!("CARGO_PKG_VERSION")))
+                .http_status_as_error(false)
+                .build()
+                .into()
+        });
         let fetcher = Fetcher {
             agent,
             url: remote.url.clone(),

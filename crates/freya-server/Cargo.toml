@@ -23,6 +23,8 @@ log = "0.4.34"
 notify = "8.2.0"
 # Tokens, pairing keys and passwords (see src/accounts.rs).
 ring = "0.17.14"
+# TLS for clients on other computers (see src/tls.rs), with the ring provider ureq already uses.
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.152"
 toml = "1.1.8"

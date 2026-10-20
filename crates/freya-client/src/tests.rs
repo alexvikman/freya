@@ -38,6 +38,7 @@ fn served(name: &str) -> (Server, Arc<dyn LibraryApi>, Arc<dyn LibraryApi>, Path
         server: None,
         quit: None,
         accounts: None,
+        certificate: None,
     };
     let server = Server::start("127.0.0.1:0", freya_server::handler(served)).unwrap();
     let remote = connect(&format!("http://{}", server.address()), None, None);
@@ -149,6 +150,7 @@ fn the_server_is_told_what_to_do_and_tells_what_happens() {
         server: Some(Arc::clone(&service) as _),
         quit: None,
         accounts: None,
+        certificate: None,
     };
     let server = Server::start("127.0.0.1:0", freya_server::handler(served)).unwrap();
     let remote = connect(&format!("http://{}", server.address()), None, None);
@@ -301,6 +303,7 @@ fn a_track_plays_from_the_server() {
         remote: Some(freya_audio::RemoteSource {
             url: audio_url(&address, &track.path),
             token: None,
+            agent: None,
         }),
         ..freya_audio::Media::from(&track.path)
     });
@@ -362,6 +365,7 @@ fn only_a_device_with_a_token_is_answered() {
         server: Some(Arc::clone(&service) as _),
         quit: None,
         accounts: Some(accounts),
+        certificate: None,
     };
     let server = Server::start("127.0.0.1:0", freya_server::handler(served)).unwrap();
     let address = format!("http://{}", server.address());
@@ -417,4 +421,93 @@ fn only_a_device_with_a_token_is_answered() {
     drop(server);
     drop(service);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_server_elsewhere_is_reached_over_tls_with_its_certificate_pinned() {
+    let (_plain, _remote, local, dir) = served("tls");
+    let identity = freya_server::tls::Identity::make().unwrap();
+    let served = Served {
+        library: Arc::clone(&local),
+        server: None,
+        quit: None,
+        accounts: None,
+        certificate: Some(identity.certificate.clone()),
+    };
+    let server = Server::start_tls(
+        "127.0.0.1:0",
+        freya_server::handler(served),
+        identity.server_config().unwrap(),
+    )
+    .unwrap();
+    let address = server.address();
+    // The first time, its certificate is taken unchecked, to pin.
+    let certificate = certificate_of(address).unwrap();
+    assert_eq!(certificate, identity.certificate);
+    let pin = Pin {
+        address,
+        certificate,
+    };
+    let remote = Arc::new(Remote(Http::pinned(pin.clone())));
+    assert_eq!(remote.stats().unwrap(), local.stats().unwrap());
+    // Another certificate is not taken.
+    let other = Pin {
+        certificate: freya_server::tls::Identity::make().unwrap().certificate,
+        ..pin.clone()
+    };
+    assert!(Remote(Http::pinned(other)).stats().is_err());
+    // Nor plain HTTP.
+    assert!(
+        connect(&format!("http://{address}"), None, None)
+            .stats()
+            .is_err()
+    );
+
+    // A track plays over it too.
+    let track = local.all_tracks().unwrap()[0].path.clone();
+    let (base, agent) = remote.0.audio(freya_audio::REMOTE_TIMEOUT);
+    let player = freya_audio::Player::silent(48_000);
+    player.play(freya_audio::Media {
+        remote: Some(freya_audio::RemoteSource {
+            url: audio_url_at(&base, &track),
+            token: None,
+            agent: Some(Arc::new(agent)),
+        }),
+        ..freya_audio::Media::from(&track)
+    });
+    let event = player
+        .events()
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .unwrap();
+    assert!(
+        matches!(event, freya_audio::Event::TrackStarted(_)),
+        "{event:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn servers_on_the_network_are_found() {
+    let found = freya_protocol::ServerFound {
+        name: "Mini".into(),
+        port: 47475,
+        fingerprint: "AB CD".into(),
+        version: "0".into(),
+    };
+    let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let at = socket.local_addr().unwrap();
+    let answer = found.clone();
+    std::thread::spawn(move || {
+        let mut question = [0; 64];
+        let (read, from) = socket.recv_from(&mut question).unwrap();
+        assert_eq!(&question[..read], freya_protocol::DISCOVERY_QUESTION);
+        let json = serde_json::to_vec(&answer).unwrap();
+        // Twice, as one on two networks would: told once.
+        socket.send_to(&json, from).unwrap();
+        socket.send_to(&json, from).unwrap();
+    });
+    let servers = ask_for_servers(at, std::time::Duration::from_millis(500)).unwrap();
+    assert_eq!(servers.len(), 1);
+    assert_eq!(servers[0].server, found);
+    assert_eq!(servers[0].address, "127.0.0.1:47475".parse().unwrap());
 }
