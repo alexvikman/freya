@@ -1,10 +1,11 @@
 //! A library elsewhere, as Freya's client asks of it: over HTTP, from a Freya server.
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -181,13 +182,22 @@ pub fn token_key(pin: &Pin) -> String {
 }
 
 /// The server `pin` names, on another computer, called as the device whose refresh token
-/// `store` keeps for it; its pictures kept in `cache`.
+/// `store` keeps for it; its pictures and its library's large answers kept in `cache`, a
+/// folder of the client's.
 pub fn connect_pinned(pin: Pin, store: TokenStore, cache: Option<PathBuf>) -> Arc<Remote<Http>> {
     let key = token_key(&pin);
     let refresh = store.get(&key).unwrap_or_default();
+    let server = hex(ring::digest::digest(&ring::digest::SHA256, &pin.certificate).as_ref());
     let mut http = Http::pinned(pin).with_session(refresh, None, Some((store, key)));
-    http.cache = cache.map(PictureCache::new);
+    if let Some(cache) = cache {
+        http.cache = Some(PictureCache::new(cache.join("pictures")));
+        http.kept_in(cache.join("answers").join(server));
+    }
     Arc::new(Remote(http))
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Whether the server `pin` names knows the connection code `typed`, shown on its computer:
@@ -327,6 +337,128 @@ pub struct Http {
     pin: Option<Pin>,
     /// Pictures already fetched, kept by their checksum.
     cache: Option<PictureCache>,
+    /// The library's answers, kept.
+    kept: Arc<Mutex<Kept>>,
+}
+
+/// The most of the library's answers kept in memory; and how large one is to be kept on disk
+/// too, between runs, so a client started again is told it has it rather than sent it.
+const KEPT_LIMIT: usize = 128 * 1024 * 1024;
+const KEPT_ON_DISK_FROM: usize = 16 * 1024;
+
+/// Answers to the calls that only read the library ([`freya_protocol::CACHED_CALLS`]), each
+/// with the server's tag for it. One is given again without asking while the server tells
+/// this client of every change and none came since it was asked; else it is asked for with
+/// its tag, and the server answers with no more than that when it is the same.
+#[derive(Default)]
+struct Kept {
+    answers: HashMap<(String, Vec<u8>), KeptAnswer>,
+    bytes: usize,
+    /// Whether the server tells this client of every change to the library, and the client
+    /// follows them.
+    told: bool,
+    /// Counted at each change: an answer asked for before one is not taken as current.
+    changes: u64,
+    /// Where large answers are kept between runs, for this server alone.
+    dir: Option<PathBuf>,
+}
+
+struct KeptAnswer {
+    tag: String,
+    json: Vec<u8>,
+    /// Whether it is the server's answer still, as far as this client was told.
+    current: bool,
+}
+
+impl Kept {
+    /// The answer to `call`, when it is known to be current.
+    fn current(&self, call: &(String, Vec<u8>)) -> Option<Vec<u8>> {
+        let kept = self.answers.get(call)?;
+        (self.told && kept.current).then(|| kept.json.clone())
+    }
+
+    /// The tag of the answer kept for `call`, from memory, or from disk into memory.
+    fn tag(&mut self, call: &(String, Vec<u8>)) -> Option<String> {
+        if let Some(kept) = self.answers.get(call) {
+            return Some(kept.tag.clone());
+        }
+        let file = std::fs::read(self.file(call)?).ok()?;
+        let at = file.iter().position(|&b| b == b'\n')?;
+        let tag = String::from_utf8(file[..at].to_vec()).ok()?;
+        let json = file[at + 1..].to_vec();
+        self.hold(call.clone(), tag.clone(), json, false);
+        Some(tag)
+    }
+
+    /// Keeps `json`, the answer to `call` the server tagged `tag`, asked for when the changes
+    /// counted were `asked`.
+    fn keep(&mut self, call: (String, Vec<u8>), tag: String, json: Vec<u8>, asked: u64) {
+        if json.len() >= KEPT_ON_DISK_FROM
+            && let Some(file) = self.file(&call)
+        {
+            let mut kept = Vec::with_capacity(tag.len() + 1 + json.len());
+            kept.extend_from_slice(tag.as_bytes());
+            kept.push(b'\n');
+            kept.extend_from_slice(&json);
+            if let Err(e) = write_private(&file, &kept) {
+                log::debug!("could not keep an answer on disk: {e}");
+            }
+        }
+        let current = self.changes == asked;
+        self.hold(call, tag, json, current);
+    }
+
+    /// The answer kept for `call`, which the server said is current when asked for at
+    /// `asked`.
+    fn confirmed(&mut self, call: &(String, Vec<u8>), asked: u64) -> Option<Vec<u8>> {
+        let current = self.changes == asked;
+        let kept = self.answers.get_mut(call)?;
+        kept.current |= current;
+        Some(kept.json.clone())
+    }
+
+    /// Forgets every answer, on disk too.
+    fn forget(&mut self) {
+        self.changed();
+        self.answers.clear();
+        self.bytes = 0;
+        if let Some(dir) = &self.dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    /// What the library holds may have changed: every answer is asked for again.
+    fn changed(&mut self) {
+        self.changes += 1;
+        for kept in self.answers.values_mut() {
+            kept.current = false;
+        }
+    }
+
+    fn hold(&mut self, call: (String, Vec<u8>), tag: String, json: Vec<u8>, current: bool) {
+        let size = |call: &(String, Vec<u8>), json: &[u8]| call.0.len() + call.1.len() + json.len();
+        if let Some(old) = self.answers.get(&call) {
+            self.bytes -= size(&call, &old.json);
+        }
+        if self.bytes + size(&call, &json) > KEPT_LIMIT {
+            // Those that are not current go first, then all.
+            self.answers.retain(|_, kept| kept.current);
+            if self.bytes + size(&call, &json) > KEPT_LIMIT {
+                self.answers.clear();
+            }
+            self.bytes = self.answers.iter().map(|(c, k)| size(c, &k.json)).sum();
+        }
+        self.bytes += size(&call, &json);
+        self.answers.insert(call, KeptAnswer { tag, json, current });
+    }
+
+    fn file(&self, call: &(String, Vec<u8>)) -> Option<PathBuf> {
+        let mut named = call.0.as_bytes().to_vec();
+        named.push(0);
+        named.extend_from_slice(&call.1);
+        let name = hex(ring::digest::digest(&ring::digest::SHA256, &named).as_ref());
+        Some(self.dir.as_ref()?.join(name))
+    }
 }
 
 /// Pictures kept on this computer by their checksum, which names one picture forever: what is
@@ -452,7 +584,17 @@ impl Http {
             token: None,
             pin,
             cache: None,
+            kept: Arc::default(),
         }
+    }
+
+    /// Keeps the library's large answers in `dir` between runs, as well as in memory.
+    pub fn kept_in(&mut self, dir: PathBuf) {
+        self.kept_answers().dir = Some(dir);
+    }
+
+    fn kept_answers(&self) -> std::sync::MutexGuard<'_, Kept> {
+        self.kept.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// The address tracks are read from, `/audio`, and an agent that reaches it as this
@@ -533,14 +675,21 @@ impl Http {
         let _held = HeldUp::by(|| "a request".into());
         let sent = self.session.as_ref().and_then(|_| self.access());
         let answer = send(self).map_err(failed)?;
-        match (&self.session, sent) {
+        let answer = match (&self.session, sent) {
             (Some(session), Some(sent))
                 if answer.status().as_u16() == 401 && session.renew_after(&sent) =>
             {
-                send(self).map_err(failed)
+                send(self).map_err(failed)?
             }
-            _ => Ok(answer),
+            _ => answer,
+        };
+        // Refused: what was kept is not given without asking, and is asked for again.
+        if answer.status().as_u16() == 401 {
+            let mut kept = self.kept_answers();
+            kept.changed();
+            kept.told = false;
         }
+        Ok(answer)
     }
 
     fn get(&self, path: &str) -> ureq::RequestBuilder<ureq::typestate::WithoutBody> {
@@ -660,7 +809,10 @@ impl Http {
     /// Takes this device's own token back: it has to log in again.
     pub fn log_out(&self) -> ApiResult<()> {
         let answer = self.send(|http| http.post("/account/log-out").send_empty())?;
-        small_json(answer).map(drop)
+        small_json(answer)?;
+        // A device logged out keeps nothing of the library.
+        self.kept_answers().forget();
+        Ok(())
     }
 
     /// Takes the token of the account's device `device` back.
@@ -875,13 +1027,50 @@ fn json_at_most(answer: Answer, limit: u64) -> ApiResult<serde_json::Value> {
 impl Transport for Http {
     fn call(&self, method: &str, args: Vec<u8>) -> ApiResult<Vec<u8>> {
         let _held = HeldUp::by(|| method.to_owned());
-        let answer = self.send(|http| {
-            http.post(&format!("/call/{method}"))
-                .header("Content-Type", "application/json")
-                .send(&args[..])
-        })?;
+        let send = |tag: Option<&str>| {
+            self.send(|http| {
+                let mut request = http
+                    .post(&format!("/call/{method}"))
+                    .header("Content-Type", "application/json");
+                if let Some(tag) = tag {
+                    request = request.header("If-None-Match", tag);
+                }
+                request.send(&args[..])
+            })
+        };
+        if !freya_protocol::CACHED_CALLS.contains(&method) {
+            let answered = send(None).and_then(|answer| read_at_most(answer, MAX_ANSWER));
+            // Whatever it did, it may have changed the library.
+            self.kept_answers().changed();
+            return match answered? {
+                (200, body) => Ok(body),
+                (status, body) => Err(error(status, &body)),
+            };
+        }
+        let call = (method.to_owned(), args.clone());
+        let (asked, tag) = {
+            let mut kept = self.kept_answers();
+            if let Some(json) = kept.current(&call) {
+                return Ok(json);
+            }
+            (kept.changes, kept.tag(&call))
+        };
+        let answer = send(tag.as_deref())?;
+        let tagged = answer
+            .headers()
+            .get("etag")
+            .and_then(|tag| tag.to_str().ok())
+            .map(str::to_owned);
         match read_at_most(answer, MAX_ANSWER)? {
-            (200, body) => Ok(body),
+            (304, _) => self.kept_answers().confirmed(&call, asked).ok_or_else(|| {
+                ApiError("the server said this client has an answer it has not".into())
+            }),
+            (200, body) => {
+                if let Some(tag) = tagged {
+                    self.kept_answers().keep(call, tag, body.clone(), asked);
+                }
+                Ok(body)
+            }
             (status, body) => Err(error(status, &body)),
         }
     }
@@ -944,6 +1133,7 @@ impl Transport for Http {
             token: self.token.clone(),
             pin: self.pin.clone(),
             cache: None,
+            kept: Arc::clone(&self.kept),
         };
         std::thread::Builder::new()
             .name("freya-server-events".into())
@@ -980,6 +1170,15 @@ fn follow_events(http: &Http, mut stream: ureq::BodyReader<'static>, tell: &Send
             }
             match serde_json::from_str(line) {
                 Ok(event) => {
+                    match &event {
+                        ServiceEvent::Changed => http.kept_answers().changed(),
+                        ServiceEvent::Connected { changes, .. } => {
+                            let mut kept = http.kept_answers();
+                            kept.changed();
+                            kept.told = *changes;
+                        }
+                        _ => {}
+                    }
                     if tell.send(event).is_err() {
                         return;
                     }
@@ -987,6 +1186,8 @@ fn follow_events(http: &Http, mut stream: ureq::BodyReader<'static>, tell: &Send
                 Err(e) => log::debug!("an event that could not be read: {e}"),
             }
         }
+        // Not told of changes while the stream is closed.
+        http.kept_answers().told = false;
         // A stream the server ended, as it does now and then, is opened again at once.
         if let Ok(again) = http.open_events() {
             stream = again;

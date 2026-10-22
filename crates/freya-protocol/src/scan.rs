@@ -44,10 +44,15 @@ pub struct ScanSummary {
 /// What a server tells its clients as it happens.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum ServiceEvent {
-    /// The client is told what happens from now on: whether a scan runs now, and how many
-    /// events the server told before, so a client following it again knows whether it missed
-    /// any.
-    Connected { scanning: bool, told: u64 },
+    /// The client is told what happens from now on: whether a scan runs now, how many events
+    /// the server told before, so a client following it again knows whether it missed any,
+    /// and whether it is told of each change to the library ([`ServiceEvent::Changed`]).
+    Connected {
+        scanning: bool,
+        told: u64,
+        #[serde(default)]
+        changes: bool,
+    },
     /// The client lost the server's events, and looks for it again: told by the client itself,
     /// never by a server.
     Lost,
@@ -61,6 +66,9 @@ pub enum ServiceEvent {
     PlaysWritten,
     /// The user's playlists changed: one was made, changed, renamed or taken away.
     PlaylistsChanged,
+    /// What the library holds changed, by a scan, a client or a play: answers kept of
+    /// [`crate::CACHED_CALLS`] are to be asked again.
+    Changed,
     /// How scrobbling to Last.fm goes, now that it changed.
     LastFm(crate::LastFmStatus),
 }

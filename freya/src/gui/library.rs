@@ -40,8 +40,8 @@ pub use search_page::{Opened, SearchFilter};
 /// Search results are cut off here; nobody scrolls through more, and building rows for the
 /// whole library on every keystroke would be wasted work.
 const SEARCH_LIMIT: usize = 1_000;
-/// While a scan runs, the rows are reloaded at most this often.
-const RELOAD_INTERVAL: Duration = Duration::from_secs(1);
+/// While a scan runs, the rows, covers and pictures are read anew at most this often.
+const RELOAD_INTERVAL: Duration = Duration::from_secs(3);
 /// Decoded covers kept: about 270 KB each, 70 MB in all. Those on screen, at most about 90 full
 /// screen on a 4K screen, and those decoded ahead of them both ways.
 const RECENT_COVERS: usize = 256;
@@ -308,8 +308,10 @@ pub struct LibraryPanel {
     covers_progress: Option<(usize, usize)>,
     artists_progress: Option<(usize, usize)>,
     genres_progress: Option<(usize, usize)>,
-    /// Whether the covers and pictures in the library changed since they were last read.
+    /// Whether the covers and pictures in the library changed since they were last read, and
+    /// when they were.
     pictures_stale: bool,
+    pictures_loaded: Instant,
     /// The track playing, by its file and where in it it starts, and its row, or -1.
     playing: Option<(PathBuf, Duration)>,
     playing_row: i32,
@@ -676,6 +678,7 @@ impl LibraryPanel {
             progress: None,
             stale: false,
             reloaded: Instant::now(),
+            pictures_loaded: Instant::now(),
             folders_shown: None,
             draft_shown: None,
             thumbnails: None,
@@ -832,8 +835,7 @@ impl LibraryPanel {
                     log::warn!("no library: no folder for Freya's files");
                     return;
                 };
-                let cache = crate::settings::cache_dir().map(|dir| dir.join("pictures"));
-                let remote = freya_client::connect_pinned(pin, store, cache);
+                let remote = freya_client::connect_pinned(pin, store, crate::settings::cache_dir());
                 match remote.0.account() {
                     Ok(Some(_)) => {}
                     Ok(None) => {
@@ -1228,7 +1230,7 @@ impl LibraryPanel {
                 self.told = self.told.map(|told| told + 1);
             }
             match event {
-                ServiceEvent::Connected { scanning, told } => {
+                ServiceEvent::Connected { scanning, told, .. } => {
                     self.scanning = scanning;
                     self.server_state = "connected";
                     self.server_error.clear();
@@ -1281,11 +1283,17 @@ impl LibraryPanel {
                 ServiceEvent::PlaysWritten => self.stale |= self.shows_plays(),
                 ServiceEvent::PlaylistsChanged => self.playlists_changed = true,
                 ServiceEvent::LastFm(status) => self.lastfm_status = Some(status),
+                // The answers kept are forgotten by the client; the rows are read anew when
+                // the events above say what changed them.
+                ServiceEvent::Changed => {}
             }
         }
-        // Covers and pictures found so far show as they come; and what was said of the artist
-        // on the page.
-        if self.pictures_stale {
+        // Covers and pictures found so far show as they come, every few seconds; and what was
+        // said of the artist on the page.
+        if self.pictures_stale
+            && (!self.scanning || finished || self.pictures_loaded.elapsed() >= RELOAD_INTERVAL)
+        {
+            self.pictures_loaded = Instant::now();
             self.load_pictures();
             self.show_artist_info();
         }

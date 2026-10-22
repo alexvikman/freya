@@ -48,11 +48,12 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
 use freya_protocol::{
-    API_PATH, LISTENER_CALLS, LibraryApi, NETWORK_PORT, Role, Server, ServerFound, ServiceEvent,
-    dispatch_control, dispatch_data,
+    API_PATH, CACHED_CALLS, LISTENER_CALLS, LibraryApi, NETWORK_PORT, Role, Server, ServerFound,
+    ServiceEvent, dispatch_control, dispatch_data,
 };
 
 use crate::accounts::{Accounts, Caller};
+use crate::answers::{Answer, Answers};
 use crate::http::{Admission, Admit, Handler, MAX_BODY, Request, Response};
 
 /// How long the event stream says nothing before it sends an empty line, to find a client
@@ -79,7 +80,8 @@ pub struct Served {
 
 /// Answers requests to the API as `served` says.
 pub fn handler(served: Served) -> Handler {
-    Arc::new(move |request| answer(&served, request))
+    let answers = Answers::default();
+    Arc::new(move |request| answer(&served, &answers, request))
 }
 
 /// The largest cover asked for, wide or high: more makes the server work for nothing.
@@ -153,7 +155,7 @@ pub(crate) fn is_here(request: &Request) -> bool {
     ["127.0.0.1", "localhost", "[::1]"].contains(&name.to_ascii_lowercase().as_str())
 }
 
-fn answer(served: &Served, request: Request) -> Response {
+fn answer(served: &Served, answers: &Answers, request: Request) -> Response {
     if let Some(page) = crate::pages::answer(served, &request) {
         return page;
     }
@@ -204,10 +206,10 @@ fn answer(served: &Served, request: Request) -> Response {
         ("POST", path) if path.starts_with("/call/") => {
             let method = &path["/call/".len()..];
             let args = &request.body;
-            let data = dispatch_data(library, method, args);
-            // The library's answers carry no secret, so may be compressed.
-            let compressible = data.is_some();
-            let answered = data.or_else(|| {
+            if CACHED_CALLS.contains(&method) {
+                return kept(library, answers, &request, method);
+            }
+            let answered = dispatch_data(library, method, args).or_else(|| {
                 served
                     .server
                     .as_ref()
@@ -216,7 +218,6 @@ fn answer(served: &Served, request: Request) -> Response {
             match answered {
                 None => Response::error(404, format!("no such call: {method}")),
                 Some(Err(e)) => Response::error(400, e),
-                Some(Ok(Ok(answer))) if compressible => json_for(&request, answer),
                 Some(Ok(Ok(answer))) => Response::bytes(200, "application/json", answer),
                 Some(Ok(Err(e))) => Response::error(500, e),
             }
@@ -283,6 +284,15 @@ fn answer(served: &Served, request: Request) -> Response {
                     while std::time::Instant::now() < ends {
                         let line = match events.recv_timeout(HEARTBEAT) {
                             Ok(event) if listener && !for_listeners(&event) => continue,
+                            // A listener is not told of changes, which a play of the owner's
+                            // makes too.
+                            Ok(ServiceEvent::Connected { scanning, told, .. }) if listener => {
+                                event_line(&ServiceEvent::Connected {
+                                    scanning,
+                                    told,
+                                    changes: false,
+                                })
+                            }
                             Ok(event) => event_line(&event),
                             Err(RecvTimeoutError::Timeout) => "\n".to_owned(),
                             Err(RecvTimeoutError::Disconnected) => return Ok(()),
@@ -345,37 +355,58 @@ fn is_music_file(served: &Served, path: &std::path::Path) -> bool {
 }
 
 /// The file of the library's track `?path=`, whole or the part `Range` asks for.
-/// JSON as large as an answer is gzipped beyond, when the client takes it so.
-const COMPRESSED_FROM: usize = 16 * 1024;
+/// The answer to `method`, a call that only reads the library: kept for the library's
+/// generation, or made and kept; no more than its tag when the client has it already.
+fn kept(
+    library: &dyn freya_protocol::LibraryApi,
+    answers: &Answers,
+    request: &Request,
+    method: &str,
+) -> Response {
+    let args = &request.body;
+    let generation = library.generation();
+    let answer = match generation.and_then(|generation| answers.get(generation, method, args)) {
+        Some(answer) => answer,
+        None => match dispatch_data(library, method, args) {
+            None => return Response::error(404, format!("no such call: {method}")),
+            Some(Err(e)) => return Response::error(400, e),
+            Some(Ok(Err(e))) => return Response::error(500, e),
+            Some(Ok(Ok(json))) => match generation {
+                Some(generation) => answers.keep(generation, method, args, json),
+                None => Arc::new(Answer::new(json)),
+            },
+        },
+    };
+    let mut response = if request.header("if-none-match") == Some(answer.tag.as_str()) {
+        Response::bytes(304, "application/json", Vec::new())
+    } else if answer.json.len() >= COMPRESSED_FROM
+        && takes_gzip(request)
+        && let Some(zipped) = answer.gzipped()
+    {
+        let mut response = Response::bytes(200, "application/json", zipped.to_vec());
+        response
+            .headers
+            .push(("Content-Encoding", "gzip".to_owned()));
+        response
+    } else {
+        Response::bytes(200, "application/json", answer.json.clone())
+    };
+    response.headers.push(("ETag", answer.tag.clone()));
+    response
+}
 
-/// `json` as the answer to `request`: gzipped when it is large and the client takes it so.
-fn json_for(request: &Request, json: Vec<u8>) -> Response {
-    let takes_gzip = request.header("accept-encoding").is_some_and(|accepted| {
+/// Whether the client takes answers gzipped.
+fn takes_gzip(request: &Request) -> bool {
+    request.header("accept-encoding").is_some_and(|accepted| {
         accepted
             .split(',')
             .any(|coding| coding.split(';').next().unwrap_or_default().trim() == "gzip")
-    });
-    if json.len() < COMPRESSED_FROM || !takes_gzip {
-        return Response::bytes(200, "application/json", json);
-    }
-    let mut zipped = flate2::write::GzEncoder::new(
-        Vec::with_capacity(json.len() / 6),
-        flate2::Compression::new(GZIP_LEVEL),
-    );
-    match std::io::Write::write_all(&mut zipped, &json).and_then(|()| zipped.finish()) {
-        Ok(zipped) => {
-            let mut response = Response::bytes(200, "application/json", zipped);
-            response
-                .headers
-                .push(("Content-Encoding", "gzip".to_owned()));
-            response
-        }
-        Err(_) => Response::bytes(200, "application/json", json),
-    }
+    })
 }
 
-/// How hard large answers are compressed: quickly, as most are made for the one who asks.
-const GZIP_LEVEL: u32 = 1;
+/// JSON as large as an answer is gzipped beyond, when the client takes it so: only the
+/// library's, which carry no secret.
+const COMPRESSED_FROM: usize = 16 * 1024;
 
 fn audio(served: &Served, request: &Request) -> Response {
     let library = served.library.as_ref();
@@ -696,6 +727,7 @@ fn for_listeners(event: &ServiceEvent) -> bool {
                 | ScanEvent::Finished(_)
         ),
         ServiceEvent::Lost
+        | ServiceEvent::Changed
         | ServiceEvent::PlaysWritten
         | ServiceEvent::PlaylistsChanged
         | ServiceEvent::LastFm(_) => false,

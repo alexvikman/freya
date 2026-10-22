@@ -103,7 +103,8 @@ An **admin** keeps the server. A **listener** may only make the calls
 not named there is refused, so one added later is too until named. Plays, favourites,
 playlists and Last.fm are the owner's until each user has their own, so a listener has none,
 and hears only how the shared library goes, not the folders a scan looks in. A listener does
-see the tracks' paths, which `/audio` is asked by, and with them where the music is. Only a
+see the tracks' paths, which `/audio` is asked by, and with them where the music is. A
+listener is not told when the library changes, which the owner's plays would show. Only a
 paired admin stops the server.
 
 ## The server under load
@@ -158,6 +159,8 @@ Nobody can wear it out before logging in:
 - A login's tokens go only with the server that gave them, never to one chosen meanwhile.
 - What answers on this computer's address without the user's certificate is given nothing.
 - The picture cache keeps and gives only bytes whose SHA-256 is their name.
+- The library's large answers of a server elsewhere are kept on disk for that server alone,
+  readable by the user alone, and forgotten when the device logs out.
 - The fingerprint shown is the certificate's the client pinned.
 - Only HTTPS pages, and Freya's own, are opened, in plain URL characters.
 

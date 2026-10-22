@@ -170,10 +170,14 @@ fn the_server_is_told_what_to_do_and_tells_what_happens() {
     );
 
     let events = remote.events().unwrap();
-    let next = || {
-        events
+    // What the library holds changes as the server works: the events of interest are others.
+    let next = || loop {
+        let event = events
             .recv_timeout(std::time::Duration::from_secs(20))
-            .unwrap()
+            .unwrap();
+        if event != ServiceEvent::Changed {
+            break event;
+        }
     };
     assert!(matches!(
         next(),
@@ -227,6 +231,68 @@ fn the_server_is_told_what_to_do_and_tells_what_happens() {
     remote.delete_playlist("Calm evenings").unwrap();
     assert!(remote.playlists().unwrap().is_empty());
     assert!(remote.save_playlist("../escape", &[]).is_err());
+    drop(server);
+    drop(service);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn answers_kept_are_never_out_of_date() {
+    let dir = std::env::temp_dir().join(format!("freya-client-kept-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("music")).unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../freya-audio/tests/fixtures");
+    std::fs::copy(fixtures.join("sine.flac"), dir.join("music/sine.flac")).unwrap();
+    let config = ServiceConfig {
+        settings: ServerSettings {
+            library_folders: vec![dir.join("music")],
+            watch_folders: false,
+            ..ServerSettings::default()
+        },
+        ..ServiceConfig::default()
+    };
+    let service = Arc::new(Service::start(dir.join("library.db"), None, config).unwrap());
+    let served = Served {
+        library: service.api(),
+        server: Some(Arc::clone(&service) as _),
+        quit: None,
+        accounts: None,
+        certificate: None,
+        callback_port: freya_protocol::CALLBACK_PORT,
+    };
+    let server = Server::start("127.0.0.1:0", freya_server::handler(served)).unwrap();
+    let address = format!("http://{}", server.address());
+    let (here, there) = (connect(&address, None, None), connect(&address, None, None));
+    let edit = |name: &str| ArtistEdit {
+        name: Some(name.into()),
+        ..ArtistEdit::default()
+    };
+    let named = |remote: &Remote<Http>| remote.artist_edit("Freya").unwrap().name;
+
+    // Not following the server's events, a client asks each time, and is told when what it
+    // has is current.
+    assert_eq!(named(&here), None);
+    there.set_artist_edit("Freya", &edit("Sines")).unwrap();
+    assert_eq!(named(&here).as_deref(), Some("Sines"));
+    // Its own change is read at once.
+    here.set_artist_edit("Freya", &edit("Waves")).unwrap();
+    assert_eq!(named(&here).as_deref(), Some("Waves"));
+
+    // Following them, it asks again once the server says the library changed.
+    let events = here.events().unwrap();
+    let wait_for = |wanted: fn(&ServiceEvent) -> bool| loop {
+        let event = events
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .unwrap();
+        if wanted(&event) {
+            break;
+        }
+    };
+    wait_for(|event| matches!(event, ServiceEvent::Connected { changes: true, .. }));
+    assert_eq!(named(&here).as_deref(), Some("Waves"));
+    there.set_artist_edit("Freya", &edit("Tides")).unwrap();
+    wait_for(|event| *event == ServiceEvent::Changed);
+    assert_eq!(named(&here).as_deref(), Some("Tides"));
     drop(server);
     drop(service);
     let _ = std::fs::remove_dir_all(&dir);
@@ -869,10 +935,10 @@ fn measure_a_real_library() {
         .and_then(|r| r.parse().ok())
         .unwrap_or(4);
     let served = Served {
-        library: Arc::new(LocalLibrary::with_connections(
-            (0..readers).map(|_| open()).collect(),
-            pictures(),
-        )),
+        library: Arc::new(
+            LocalLibrary::with_connections((0..readers).map(|_| open()).collect(), pictures())
+                .watched_by(open()),
+        ),
         server: None,
         quit: None,
         accounts: None,

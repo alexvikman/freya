@@ -591,6 +591,15 @@ impl Library {
 
     // ----- History ------------------------------------------------------------------------------
 
+    /// A number that changes each time another connection to the library's database writes
+    /// to it: one that only watches, never writing, sees every change there.
+    pub fn data_version(&self) -> Result<u64> {
+        Ok(self
+            .db
+            .pragma_query_value(None, "data_version", |row| row.get::<_, i64>(0))?
+            as u64)
+    }
+
     /// When a scan of all the library's folders last ended, if one ever did.
     pub fn last_full_scan(&self) -> Result<Option<SystemTime>> {
         let at: Option<i64> = self

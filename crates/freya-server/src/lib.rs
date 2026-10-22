@@ -2,6 +2,7 @@
 //! music's folders, for clients to show and play.
 
 pub mod accounts;
+mod answers;
 pub mod autostart;
 pub mod discovery;
 mod folder_watch;

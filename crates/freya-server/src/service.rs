@@ -3,7 +3,7 @@
 //! clients how that goes.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
@@ -98,6 +98,7 @@ impl Service {
         };
         let db = open()?;
         let readers = (0..READERS).map(|_| open()).collect::<Result<_, _>>()?;
+        let watch = open()?;
         let pictures = pictures.map(Pictures::new);
         let state = State {
             database: database.clone(),
@@ -130,7 +131,7 @@ impl Service {
             scrobbler,
             stop: AtomicBool::new(false),
             listeners,
-            api: Arc::new(LocalLibrary::with_connections(readers, pictures)),
+            api: Arc::new(LocalLibrary::with_connections(readers, pictures).watched_by(watch)),
         });
         let mut service = Self {
             shared,
@@ -142,9 +143,16 @@ impl Service {
             std::thread::Builder::new()
                 .name("freya-service".into())
                 .spawn(move || {
+                    let mut generation = shared.api.generation();
                     while !shared.stop.load(Ordering::Relaxed) {
                         std::thread::sleep(TICK);
                         Self::run(&shared, State::tick);
+                        // Whatever changed it, clients keeping answers are told.
+                        let now = shared.api.generation();
+                        if now != generation {
+                            generation = now;
+                            tell_all(&shared.listeners, ServiceEvent::Changed);
+                        }
                     }
                 })
                 .map_err(|e| format!("could not start the library's thread: {e}"))?,
@@ -331,6 +339,7 @@ impl ServerEvents for Service {
         let _ = tell.send(ServiceEvent::Connected {
             scanning: state.scanning,
             told: listeners.told,
+            changes: true,
         });
         listeners.senders.push(tell);
         drop(state);
@@ -366,6 +375,10 @@ pub struct LocalLibrary {
     /// Where the next call looks for a free connection first.
     next: AtomicUsize,
     pictures: Option<Pictures>,
+    /// A connection that only watches what is written to the database, by any other, and the
+    /// calls that may have written on these: together the library's generation.
+    watch: Option<Mutex<Library>>,
+    writes: AtomicU64,
 }
 
 impl LocalLibrary {
@@ -381,7 +394,16 @@ impl LocalLibrary {
             connections: connections.into_iter().map(Mutex::new).collect(),
             next: AtomicUsize::new(0),
             pictures,
+            watch: None,
+            writes: AtomicU64::new(0),
         }
+    }
+
+    /// The library, its generation told by `watch`, a connection to its database that only
+    /// watches it. Without one, it has none: it cannot see what others write.
+    pub fn watched_by(mut self, watch: Library) -> Self {
+        self.watch = Some(Mutex::new(watch));
+        self
     }
 
     /// A connection no other call uses, or when all are, the next one when it is.
@@ -401,7 +423,9 @@ impl LocalLibrary {
         &self,
         f: impl FnOnce(&mut Library) -> freya_library::library::Result<T>,
     ) -> ApiResult<T> {
-        f(&mut self.connection()).map_err(api_error)
+        let done = f(&mut self.connection()).map_err(api_error);
+        self.writes.fetch_add(1, Ordering::Relaxed);
+        done
     }
 
     fn pictures(&self) -> ApiResult<&Pictures> {
@@ -440,10 +464,14 @@ macro_rules! serve_library_data {
         impl LibraryData for LocalLibrary {
             $(
                 fn $name(&self, $($arg: $ty),*) -> ApiResult<$ret> {
-                    self.connection()
+                    let answer = self.connection()
                         .$name($($arg),*)
                         .map(IntoApi::into_api)
-                        .map_err(api_error)
+                        .map_err(api_error);
+                    if !freya_protocol::CACHED_CALLS.contains(&stringify!($name)) {
+                        self.writes.fetch_add(1, Ordering::Relaxed);
+                    }
+                    answer
                 }
             )*
         }
@@ -451,6 +479,14 @@ macro_rules! serve_library_data {
 }
 
 freya_protocol::with_library_data!(serve_library_data {});
+
+impl LibraryApi for LocalLibrary {
+    fn generation(&self) -> Option<u64> {
+        let watch = lock(self.watch.as_ref()?);
+        let written = watch.data_version().ok()?;
+        Some(written.wrapping_add(self.writes.load(Ordering::Relaxed)))
+    }
+}
 
 impl LibraryPictures for LocalLibrary {
     fn picture(&self, checksum: &str) -> ApiResult<Option<Vec<u8>>> {

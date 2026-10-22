@@ -227,7 +227,7 @@ what the hardening made: answers per user and role, nothing compressed that carr
 |---|---|---|
 | **P1** ✓ | **Measuring**: the rig for the library's calls, covers, the time to the first sound, seeking and the gap between tracks, at 0, 2 and 10 ms each way; the client logs every call made on the UI thread and how long it waited | Each number below has a before |
 | **P2** ✓ | **The server answers at once**: answers serialized straight to bytes; gzip for large answers; readers that do not wait for each other (a pool of SQLite connections), SQLite tuned (statement cache, cache, memory-mapped reads); a whole answer in one write, audio in 64 KB writes, a socket's deadline set only when it changes; connections and the event stream kept open minutes for known devices | `all_tracks` in under a third of the time and bytes |
-| **P3** | **Nothing fetched twice**: the library has a generation, bumped by every change; answers carry it as an ETag and a client that has them gets 304 with no body; the client keeps the answers in memory and the whole-library ones on disk, so it shows the library at once on start and checks it after; favourites and edits kept until they change; a scan's progress reloads the view at most every few seconds | Going back to a view costs one round trip without a body; the library shows before the server answers |
+| **P3** ✓ | **Nothing fetched twice**: the library has a generation, bumped by every change; answers carry it as an ETag and a client that has them gets 304 with no body; the client keeps the answers in memory and the whole-library ones on disk, so it shows the library at once on start and checks it after; favourites and edits kept until they change; a scan's progress reloads the view at most every few seconds | Going back to a view costs one round trip without a body; the library shows before the server answers |
 | **P4** | **Fewer round trips**: several calls in one request; a playlist's tracks in one call; an artist's page, a genre's page and search each one call on the server, search waiting for a pause in typing; no call per artist for its picture | A page is one round trip; a keystroke at most one |
 | **P5** | **The window never waits**: every call to the server made on a worker, its answer applied when it comes, an older one dropped; connecting and renewing tokens off the UI thread too | No call on the UI thread in the log; scrolling stays smooth with 100 ms each way |
 | **P6** | **Pictures**: thumbnails made and kept by the server in the sizes the grid asks for; several fetched at once, the ones in view first; the cover of what plays from what the scan kept instead of read from the file each time | 60 covers at 10 ms each way in under 0.2 s |
@@ -266,6 +266,22 @@ request, answers go out in 64 KB writes with their head. Not done: setting a soc
 deadline only when it changes, which costs a microsecond a write now that writes are large.
 Calls measured at 10 ms each way cost 23–30 ms, before and after: the rig's sleeping adds
 some.
+
+#### P3
+
+The calls that only read the library (`CACHED_CALLS`) are answered from what the server
+kept for the library's generation (SQLite's `data_version` on a connection that only
+watches, and the writes made on the others), tagged with half the SHA-256 of the answer, so
+an answer the same in a new generation has the same tag. A client asks with the tag it has
+and is answered 304 without a body; it keeps answers in memory, and those over 16 KB on disk
+for a server elsewhere, and gives them again without asking while the server's events say
+nothing changed (a listener is not told of changes, which the owner's plays make, and asks
+each time). Its own call that is not a read, a refusal and logging out make it ask again;
+logging out forgets them, on disk too. `all_tracks` asked again at 10 ms each way 72 → 36 ms
+(a round trip, the rig's sleep and 8 ms reading the JSON), and 0 when nothing changed. A
+scan reads rows and pictures anew every 3 s rather than every second. Not done here: the
+library shown before the server answers, which needs the calls off the window's thread
+(P5).
 
 ### U7: the hologram (from 2026-10-17)
 

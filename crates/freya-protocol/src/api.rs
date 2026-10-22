@@ -265,6 +265,53 @@ pub const LISTENER_CALLS: &[&str] = &[
     "is_scanning",
 ];
 
+/// The calls that only read what the library's database holds, and answer every caller the
+/// same: their answers may be kept, by the server while the library's generation is the same,
+/// and by a client until the server says the library changed. A call not named here is never
+/// kept, and a client's own call of it may have changed the library; so one added later is
+/// read anew each time until it is named.
+pub const CACHED_CALLS: &[&str] = &[
+    "stats",
+    "artists",
+    "artists_by",
+    "albums",
+    "albums_by",
+    "all_albums",
+    "track_at",
+    "album_tracks",
+    "artist_tracks",
+    "knows_file",
+    "genres",
+    "genre_albums",
+    "genre_tracks",
+    "all_tracks",
+    "recently_added",
+    "recently_played",
+    "most_played",
+    "search",
+    "album_plays",
+    "album_covers",
+    "artist_mbid",
+    "artist_summary",
+    "artist_popular",
+    "genre_popular",
+    "artist_edit",
+    "artist_edits",
+    "album_favorites",
+    "artist_favorites",
+    "playlist_favorites",
+    "genre_infos",
+    "genre_article",
+    "album_match",
+    "artist_picture",
+    "artist_pictures",
+    "searched_artist_id",
+    "artist_text",
+    "artist_article",
+    "playlist_info",
+    "playlist_added",
+];
+
 /// How an argument of a call goes over the network: as its owned form, which the call is lent.
 pub trait WireArg<'a> {
     type Owned: serde::Serialize + serde::de::DeserializeOwned;
@@ -453,9 +500,15 @@ pub trait LibraryPictures: Send + Sync {
 }
 
 /// All a client can ask of the library.
-pub trait LibraryApi: LibraryData + LibraryPictures {}
+pub trait LibraryApi: LibraryData + LibraryPictures {
+    /// A number that changes whenever what the library holds does, when the library can tell
+    /// so: a call of [`CACHED_CALLS`] asked again under the same number answers the same.
+    fn generation(&self) -> Option<u64> {
+        None
+    }
+}
 
-impl<T: LibraryData + LibraryPictures> LibraryApi for T {}
+impl<T: Transport> LibraryApi for Remote<T> {}
 
 /// What happens at the server, as it happens.
 pub trait ServerEvents: Send + Sync {
@@ -497,6 +550,21 @@ mod tests {
         ];
         for admins in owners {
             assert!(!LISTENER_CALLS.contains(&admins), "{admins}");
+        }
+    }
+
+    #[test]
+    fn only_what_reads_the_library_is_kept() {
+        let changes = ["set_", "forget_", "match_", "unmatch_", "note_"];
+        for call in LIBRARY_DATA_CALLS {
+            let changing = changes.iter().any(|c| call.starts_with(c));
+            assert_eq!(CACHED_CALLS.contains(call), !changing, "{call}");
+        }
+        for call in CACHED_CALLS {
+            assert!(
+                LIBRARY_DATA_CALLS.contains(call),
+                "{call} is not the library's"
+            );
         }
     }
 }
