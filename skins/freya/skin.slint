@@ -7345,6 +7345,39 @@ component SettingsSection inherits VerticalLayout {
     @children
 }
 
+/// One of a page's tabs, in a row under its title; the chosen one is underlined in the accent
+/// color.
+component PageTab inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    callback clicked;
+
+    width: label.preferred-width;
+    height: 34px;
+    accessible-role: tab;
+    accessible-label: text;
+    accessible-item-selected: selected;
+    accessible-action-default => { root.clicked(); }
+
+    label := Text {
+        y: 4px;
+        text: root.text;
+        font-size: 14px;
+        font-weight: root.selected ? 600 : 400;
+        color: root.selected || touch.has-hover ? Theme.text : Theme.text-secondary;
+    }
+    Rectangle {
+        y: parent.height - self.height;
+        height: 2px;
+        border-radius: 1px;
+        background: root.selected ? Theme.accent : transparent;
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
 /// One setting: what it is on the left, with an explanation below when it needs one, and its
 /// control at the far right.
 component SettingsRow inherits HorizontalLayout {
@@ -7700,7 +7733,7 @@ component SettingsPage inherits ScrollView {
         padding-right: max(40px, root.visible-width - 40px - 1200px);
         spacing: 32px;
 
-        Text {
+        if root.title != "": Text {
             text: root.title;
             font-size: 32px;
             font-weight: 800;
@@ -7710,8 +7743,11 @@ component SettingsPage inherits ScrollView {
     }
 }
 
-/// Settings: appearance, the music folders, the visualization and the skin.
+/// Settings, in tabs: Freya's look and the visualizer; the music folders, scans and artists; the
+/// server the library is on; and the account, with Last.fm.
 component SettingsView inherits Rectangle {
+    /// The tab shown: "general", "library", "server" or "account".
+    in-out property <string> tab: "general";
     /// Open the dialog for the library's folders, or for the fanart.tv key.
     callback manage-folders();
     callback edit-fanart-key();
@@ -7721,503 +7757,550 @@ component SettingsView inherits Rectangle {
 
     property <string> server-name;
 
-    SettingsPage {
-        width: 100%;
-        height: 100%;
-        title: "Settings";
+    VerticalLayout {
+        // The title and tabs stay put while a tab scrolls.
+        VerticalLayout {
+            vertical-stretch: 0;
+            padding-top: 28px;
+            padding-left: 40px;
+            padding-right: max(40px, root.width - 40px - 1200px);
+            spacing: 16px;
 
-        SettingsSection {
-            title: "Appearance";
+            Text {
+                text: "Settings";
+                font-size: 32px;
+                font-weight: 800;
+                color: Theme.text;
+            }
+            VerticalLayout {
+                HorizontalLayout {
+                    alignment: start;
+                    spacing: 24px;
 
-            SettingsRow {
-                label: "Color scheme";
-                detail: "System follows the light or dark mode of your computer.";
-
-                VerticalLayout {
-                    alignment: center;
-
-                    HorizontalLayout {
-                        spacing: 4px;
-
-                        ChoiceButton {
-                            text: "System";
-                            selected: App.theme == "system";
-                            clicked => { App.set-theme("system"); }
-                        }
-                        ChoiceButton {
-                            text: "Light";
-                            selected: App.theme == "light";
-                            clicked => { App.set-theme("light"); }
-                        }
-                        ChoiceButton {
-                            text: "Dark";
-                            selected: App.theme == "dark";
-                            clicked => { App.set-theme("dark"); }
-                        }
+                    PageTab {
+                        text: "General";
+                        selected: root.tab == "general";
+                        clicked => { root.tab = "general"; }
+                    }
+                    PageTab {
+                        text: "Library";
+                        selected: root.tab == "library";
+                        clicked => { root.tab = "library"; }
+                    }
+                    PageTab {
+                        text: "Server";
+                        selected: root.tab == "server";
+                        clicked => { root.tab = "server"; }
+                    }
+                    PageTab {
+                        text: "Account";
+                        selected: root.tab == "account";
+                        clicked => { root.tab = "account"; }
                     }
                 }
-            }
-            SettingsRow {
-                label: "Skin";
-                detail: "How Freya looks: this one, or one of your own.";
-
-                VerticalLayout {
-                    alignment: center;
-
-                    TextButton {
-                        text: "Choose Skin…";
-                        clicked => { App.show-skins(); }
-                    }
+                Rectangle {
+                    height: 1px;
+                    background: Theme.divider;
                 }
             }
         }
 
-        SettingsSection {
-            title: "Library";
+        SettingsPage {
+            vertical-stretch: 1;
 
-            if Library.folders.length == 0: SettingsRow {
-                label: "No music folders yet. Freya lists the music in them by artist and album.";
-            }
-            for folder[i] in Library.folders: SettingsRow {
-                label: folder;
+            if root.tab == "general": SettingsSection {
+                title: "Appearance";
 
-                if !Library.scanning: VerticalLayout {
-                    alignment: center;
+                SettingsRow {
+                    label: "Color scheme";
+                    detail: "System follows the light or dark mode of your computer.";
 
-                    TextButton {
-                        text: "Scan";
-                        clicked => { Library.scan-one-folder(i); }
-                    }
-                }
-            }
-            SettingsRow {
-                label: Library.scanning ? Library.status
-                    : "A scan reads new and changed files, makes their albums' covers, takes in the pictures in artists' folders, and asks the internet for what artists lack, as allowed below.";
+                    VerticalLayout {
+                        alignment: center;
 
-                VerticalLayout {
-                    alignment: center;
+                        HorizontalLayout {
+                            spacing: 4px;
 
-                    HorizontalLayout {
-                        spacing: 8px;
-
-                        if Library.scanning: TextButton {
-                            text: "Stop";
-                            clicked => { Library.stop-scan(); }
-                        }
-                        if !Library.scanning: TextButton {
-                            text: "Scan";
-                            clicked => { Library.rescan(); }
-                        }
-                        TextButton {
-                            text: "Manage Folders…";
-                            clicked => { root.manage-folders(); }
-                        }
-                    }
-                }
-            }
-            SettingsRow {
-                label: "Scan when files change";
-                detail: "Freya watches the music folders and scans what changed a few seconds after. Network drives may not tell of changes made from other computers.";
-
-                VerticalLayout {
-                    alignment: center;
-
-                    Toggle {
-                        label: "Scan when files change";
-                        checked: Library.watch-folders;
-                        toggled => { Library.set-watch-folders(!Library.watch-folders); }
-                    }
-                }
-            }
-            SettingsRow {
-                label: "Scan the whole library";
-                detail: "For what watching misses, such as changes on network drives.";
-
-                VerticalLayout {
-                    alignment: center;
-
-                    HorizontalLayout {
-                        spacing: 4px;
-
-                        ChoiceButton {
-                            text: "Never";
-                            selected: Library.scan-every-hours == 0;
-                            clicked => { Library.set-scan-every-hours(0); }
-                        }
-                        ChoiceButton {
-                            text: "Hourly";
-                            selected: Library.scan-every-hours == 1;
-                            clicked => { Library.set-scan-every-hours(1); }
-                        }
-                        ChoiceButton {
-                            text: "6 hours";
-                            selected: Library.scan-every-hours == 6;
-                            clicked => { Library.set-scan-every-hours(6); }
-                        }
-                        ChoiceButton {
-                            text: "12 hours";
-                            selected: Library.scan-every-hours == 12;
-                            clicked => { Library.set-scan-every-hours(12); }
-                        }
-                        ChoiceButton {
-                            text: "Daily";
-                            selected: Library.scan-every-hours == 24;
-                            clicked => { Library.set-scan-every-hours(24); }
-                        }
-                    }
-                }
-            }
-            SettingsRow {
-                label: "Scan when Freya starts";
-                detail: "The whole library, each time. Freya scans it the first time anyway.";
-
-                VerticalLayout {
-                    alignment: center;
-
-                    Toggle {
-                        label: "Scan when Freya starts";
-                        checked: Library.scan-at-start;
-                        toggled => { Library.set-scan-at-start(!Library.scan-at-start); }
-                    }
-                }
-            }
-            SettingsRow {
-                label: "Rescan files";
-                detail: "Reads every file and makes every album cover again, changed or not. Takes longer; for tags or covers that changed without the files' dates. Pictures and what the internet said of artists stay as they are.";
-
-                if !Library.scanning: VerticalLayout {
-                    alignment: center;
-
-                    TextButton {
-                        text: "Rescan";
-                        clicked => { Library.rescan-files(); }
-                    }
-                }
-            }
-        }
-
-        SettingsSection {
-            title: "Artists";
-
-            SettingsRow {
-                label: "A scan asks the internet only about artists who lack something. A picture an artist has stays theirs until you change it.";
-            }
-            SettingsRow {
-                label: "Artist biographies from Last.fm";
-                detail: "What Last.fm's listeners wrote about each artist, on their page. Last.fm is told the artists' names.";
-
-                VerticalLayout {
-                    alignment: center;
-
-                    Toggle {
-                        label: "Artist biographies from Last.fm";
-                        checked: Library.artist-bios-online;
-                        toggled => { Library.set-artist-bios-online(!Library.artist-bios-online); }
-                    }
-                }
-            }
-            SettingsRow {
-                label: "Artist biographies from Wikipedia";
-                detail: "The opening of the artist's Wikipedia article, before what Last.fm says. MusicBrainz, Wikidata and Wikipedia are told the artist's MusicBrainz id and article.";
-
-                VerticalLayout {
-                    alignment: center;
-
-                    Toggle {
-                        label: "Artist biographies from Wikipedia";
-                        checked: Library.artist-wikipedia-online;
-                        toggled => { Library.set-artist-wikipedia-online(!Library.artist-wikipedia-online); }
-                    }
-                }
-            }
-            SettingsRow {
-                label: "Artist pictures from Deezer";
-                detail: "For artists without a picture in their folder (artist.jpg) or from fanart.tv. Deezer is told the artists' names. Without one, their album covers stand in.";
-
-                VerticalLayout {
-                    alignment: center;
-
-                    Toggle {
-                        label: "Artist pictures from Deezer";
-                        checked: Library.artist-pictures-online;
-                        toggled => { Library.set-artist-pictures-online(!Library.artist-pictures-online); }
-                    }
-                }
-            }
-            SettingsRow {
-                label: "Artist pictures from fanart.tv";
-                detail: Library.fanart-key == "" ? "Add your personal fanart.tv API key for pictures of artists, and a wide one across the top of their page. Pictures in the artist's folder (artist.jpg, fanart.jpg) come first."
-                    : "Your personal API key is saved. Pictures in the artist's folder (artist.jpg, fanart.jpg) come first.";
-
-                VerticalLayout {
-                    alignment: center;
-
-                    TextButton {
-                        text: Library.fanart-key == "" ? "Add Key…" : "Change Key…";
-                        clicked => { root.edit-fanart-key(); }
-                    }
-                }
-            }
-        }
-
-        SettingsSection {
-            title: "Server";
-
-            if !Server.remote: SettingsRow {
-                label: "The library is on this computer";
-                detail: "Freya's server here keeps it, with its pictures, playlists and plays.";
-
-                VerticalLayout {
-                    alignment: center;
-
-                    TextButton {
-                        text: "Use Another Computer's…";
-                        clicked => { root.find-servers(); }
-                    }
-                }
-            }
-            if !Server.remote: SettingsRow {
-                label: "Let other computers use this library";
-                detail: Server.network
-                    ? "They find it on your network as " + Server.server-name + ", and log in with your password. Its certificate's fingerprint, which they show the first time: " + Server.fingerprint
-                    : "Only this computer uses it.";
-
-                VerticalLayout {
-                    alignment: center;
-
-                    Toggle {
-                        label: "Let other computers use this library";
-                        checked: Server.network;
-                        toggled => { Server.set-network(!Server.network); }
-                    }
-                }
-            }
-            if !Server.remote: SettingsRow {
-                label: "Start the server when you log in";
-                detail: Server.autostart ? "It keeps the library up to date, and other computers can use it, while Freya is closed."
-                    : "It runs while Freya is open.";
-
-                VerticalLayout {
-                    alignment: center;
-
-                    Toggle {
-                        label: "Start the server when you log in";
-                        checked: Server.autostart;
-                        toggled => { Server.set-autostart(!Server.autostart); }
-                    }
-                }
-            }
-            if !Server.remote && Server.network: SettingsRow {
-                label: "Name on the network";
-
-                VerticalLayout {
-                    alignment: center;
-
-                    FormField {
-                        width: 220px;
-                        placeholder: Server.server-name;
-                        text <=> root.server-name;
-                        accepted => {
-                            Server.set-server-name(root.server-name);
-                            root.server-name = "";
-                        }
-                    }
-                }
-            }
-            if Server.remote: SettingsRow {
-                label: "The library is on " + Server.name + " (" + Server.address + ")";
-                detail: Server.state == "unreachable" ? "Freya cannot reach it, and tries again by itself. " + Server.error
-                    : Server.state == "log-in" ? Server.error
-                    : Server.state == "connecting" ? "Connecting…"
-                    : "Its certificate's fingerprint: " + Server.fingerprint;
-
-                VerticalLayout {
-                    alignment: center;
-
-                    HorizontalLayout {
-                        spacing: 8px;
-
-                        if Server.state == "log-in": TextButton {
-                            text: "Log In…";
-                            primary: true;
-                            clicked => {
-                                Server.choose-address(Server.address);
-                                root.find-servers();
+                            ChoiceButton {
+                                text: "System";
+                                selected: App.theme == "system";
+                                clicked => { App.set-theme("system"); }
+                            }
+                            ChoiceButton {
+                                text: "Light";
+                                selected: App.theme == "light";
+                                clicked => { App.set-theme("light"); }
+                            }
+                            ChoiceButton {
+                                text: "Dark";
+                                selected: App.theme == "dark";
+                                clicked => { App.set-theme("dark"); }
                             }
                         }
+                    }
+                }
+                SettingsRow {
+                    label: "Skin";
+                    detail: "How Freya looks: this one, or one of your own.";
+
+                    VerticalLayout {
+                        alignment: center;
+
                         TextButton {
-                            text: "Another Server…";
+                            text: "Choose Skin…";
+                            clicked => { App.show-skins(); }
+                        }
+                    }
+                }
+            }
+
+            if root.tab == "library": SettingsSection {
+                title: "Library";
+
+                if Library.folders.length == 0: SettingsRow {
+                    label: "No music folders yet. Freya lists the music in them by artist and album.";
+                }
+                for folder[i] in Library.folders: SettingsRow {
+                    label: folder;
+
+                    if !Library.scanning: VerticalLayout {
+                        alignment: center;
+
+                        TextButton {
+                            text: "Scan";
+                            clicked => { Library.scan-one-folder(i); }
+                        }
+                    }
+                }
+                SettingsRow {
+                    label: Library.scanning ? Library.status
+                        : "A scan reads new and changed files, makes their albums' covers, takes in the pictures in artists' folders, and asks the internet for what artists lack, as allowed below.";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        HorizontalLayout {
+                            spacing: 8px;
+
+                            if Library.scanning: TextButton {
+                                text: "Stop";
+                                clicked => { Library.stop-scan(); }
+                            }
+                            if !Library.scanning: TextButton {
+                                text: "Scan";
+                                clicked => { Library.rescan(); }
+                            }
+                            TextButton {
+                                text: "Manage Folders…";
+                                clicked => { root.manage-folders(); }
+                            }
+                        }
+                    }
+                }
+                SettingsRow {
+                    label: "Scan when files change";
+                    detail: "Freya watches the music folders and scans what changed a few seconds after. Network drives may not tell of changes made from other computers.";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        Toggle {
+                            label: "Scan when files change";
+                            checked: Library.watch-folders;
+                            toggled => { Library.set-watch-folders(!Library.watch-folders); }
+                        }
+                    }
+                }
+                SettingsRow {
+                    label: "Scan the whole library";
+                    detail: "For what watching misses, such as changes on network drives.";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        HorizontalLayout {
+                            spacing: 4px;
+
+                            ChoiceButton {
+                                text: "Never";
+                                selected: Library.scan-every-hours == 0;
+                                clicked => { Library.set-scan-every-hours(0); }
+                            }
+                            ChoiceButton {
+                                text: "Hourly";
+                                selected: Library.scan-every-hours == 1;
+                                clicked => { Library.set-scan-every-hours(1); }
+                            }
+                            ChoiceButton {
+                                text: "6 hours";
+                                selected: Library.scan-every-hours == 6;
+                                clicked => { Library.set-scan-every-hours(6); }
+                            }
+                            ChoiceButton {
+                                text: "12 hours";
+                                selected: Library.scan-every-hours == 12;
+                                clicked => { Library.set-scan-every-hours(12); }
+                            }
+                            ChoiceButton {
+                                text: "Daily";
+                                selected: Library.scan-every-hours == 24;
+                                clicked => { Library.set-scan-every-hours(24); }
+                            }
+                        }
+                    }
+                }
+                SettingsRow {
+                    label: "Scan when Freya starts";
+                    detail: "The whole library, each time. Freya scans it the first time anyway.";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        Toggle {
+                            label: "Scan when Freya starts";
+                            checked: Library.scan-at-start;
+                            toggled => { Library.set-scan-at-start(!Library.scan-at-start); }
+                        }
+                    }
+                }
+                SettingsRow {
+                    label: "Rescan files";
+                    detail: "Reads every file and makes every album cover again, changed or not. Takes longer; for tags or covers that changed without the files' dates. Pictures and what the internet said of artists stay as they are.";
+
+                    if !Library.scanning: VerticalLayout {
+                        alignment: center;
+
+                        TextButton {
+                            text: "Rescan";
+                            clicked => { Library.rescan-files(); }
+                        }
+                    }
+                }
+            }
+
+            if root.tab == "library": SettingsSection {
+                title: "Artists";
+
+                SettingsRow {
+                    label: "A scan asks the internet only about artists who lack something. A picture an artist has stays theirs until you change it.";
+                }
+                SettingsRow {
+                    label: "Artist biographies from Last.fm";
+                    detail: "What Last.fm's listeners wrote about each artist, on their page. Last.fm is told the artists' names.";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        Toggle {
+                            label: "Artist biographies from Last.fm";
+                            checked: Library.artist-bios-online;
+                            toggled => { Library.set-artist-bios-online(!Library.artist-bios-online); }
+                        }
+                    }
+                }
+                SettingsRow {
+                    label: "Artist biographies from Wikipedia";
+                    detail: "The opening of the artist's Wikipedia article, before what Last.fm says. MusicBrainz, Wikidata and Wikipedia are told the artist's MusicBrainz id and article.";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        Toggle {
+                            label: "Artist biographies from Wikipedia";
+                            checked: Library.artist-wikipedia-online;
+                            toggled => { Library.set-artist-wikipedia-online(!Library.artist-wikipedia-online); }
+                        }
+                    }
+                }
+                SettingsRow {
+                    label: "Artist pictures from Deezer";
+                    detail: "For artists without a picture in their folder (artist.jpg) or from fanart.tv. Deezer is told the artists' names. Without one, their album covers stand in.";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        Toggle {
+                            label: "Artist pictures from Deezer";
+                            checked: Library.artist-pictures-online;
+                            toggled => { Library.set-artist-pictures-online(!Library.artist-pictures-online); }
+                        }
+                    }
+                }
+                SettingsRow {
+                    label: "Artist pictures from fanart.tv";
+                    detail: Library.fanart-key == "" ? "Add your personal fanart.tv API key for pictures of artists, and a wide one across the top of their page. Pictures in the artist's folder (artist.jpg, fanart.jpg) come first."
+                        : "Your personal API key is saved. Pictures in the artist's folder (artist.jpg, fanart.jpg) come first.";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        TextButton {
+                            text: Library.fanart-key == "" ? "Add Key…" : "Change Key…";
+                            clicked => { root.edit-fanart-key(); }
+                        }
+                    }
+                }
+            }
+
+            if root.tab == "server": SettingsSection {
+                title: "Server";
+
+                if !Server.remote: SettingsRow {
+                    label: "The library is on this computer";
+                    detail: "Freya's server here keeps it, with its pictures, playlists and plays.";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        TextButton {
+                            text: "Use Another Computer's…";
                             clicked => { root.find-servers(); }
                         }
-                        TextButton {
-                            text: "Use This Computer";
-                            clicked => { Server.use-this-computer(); }
+                    }
+                }
+                if !Server.remote: SettingsRow {
+                    label: "Let other computers use this library";
+                    detail: Server.network
+                        ? "They find it on your network as " + Server.server-name + ", and log in with your password. Its certificate's fingerprint, which they show the first time: " + Server.fingerprint
+                        : "Only this computer uses it.";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        Toggle {
+                            label: "Let other computers use this library";
+                            checked: Server.network;
+                            toggled => { Server.set-network(!Server.network); }
+                        }
+                    }
+                }
+                if !Server.remote: SettingsRow {
+                    label: "Start the server when you log in";
+                    detail: Server.autostart ? "It keeps the library up to date, and other computers can use it, while Freya is closed."
+                        : "It runs while Freya is open.";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        Toggle {
+                            label: "Start the server when you log in";
+                            checked: Server.autostart;
+                            toggled => { Server.set-autostart(!Server.autostart); }
+                        }
+                    }
+                }
+                if !Server.remote && Server.network: SettingsRow {
+                    label: "Name on the network";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        FormField {
+                            width: 220px;
+                            placeholder: Server.server-name;
+                            text <=> root.server-name;
+                            accepted => {
+                                Server.set-server-name(root.server-name);
+                                root.server-name = "";
+                            }
+                        }
+                    }
+                }
+                if Server.remote: SettingsRow {
+                    label: "The library is on " + Server.name + " (" + Server.address + ")";
+                    detail: Server.state == "unreachable" ? "Freya cannot reach it, and tries again by itself. " + Server.error
+                        : Server.state == "log-in" ? Server.error
+                        : Server.state == "connecting" ? "Connecting…"
+                        : "Its certificate's fingerprint: " + Server.fingerprint;
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        HorizontalLayout {
+                            spacing: 8px;
+
+                            if Server.state == "log-in": TextButton {
+                                text: "Log In…";
+                                primary: true;
+                                clicked => {
+                                    Server.choose-address(Server.address);
+                                    root.find-servers();
+                                }
+                            }
+                            TextButton {
+                                text: "Another Server…";
+                                clicked => { root.find-servers(); }
+                            }
+                            TextButton {
+                                text: "Use This Computer";
+                                clicked => { Server.use-this-computer(); }
+                            }
                         }
                     }
                 }
             }
-        }
 
-        if Server.user != "": SettingsSection {
-            title: "Account";
+            if root.tab == "account" && Server.user != "": SettingsSection {
+                title: "Account";
 
-            SettingsRow {
-                label: "Connected as " + Server.user;
-                detail: Server.has-password ? "Other computers log in with your password."
-                    : "Set a password to use this library from other computers.";
+                SettingsRow {
+                    label: "Connected as " + Server.user;
+                    detail: Server.has-password ? "Other computers log in with your password."
+                        : "Set a password to use this library from other computers.";
 
-                VerticalLayout {
-                    alignment: center;
-
-                    TextButton {
-                        text: Server.has-password ? "Change Password…" : "Set a Password…";
-                        clicked => { root.set-password(); }
-                    }
-                }
-            }
-            for device in Server.devices: SettingsRow {
-                label: device.name + (device.this ? " (this computer)" : "");
-                detail: "Connected " + device.connected;
-
-                if !device.this: VerticalLayout {
-                    alignment: center;
-
-                    TextButton {
-                        text: "Disconnect";
-                        clicked => { Server.revoke(device.id); }
-                    }
-                }
-            }
-        }
-
-        SettingsSection {
-            title: "Last.fm";
-
-            if LastFm.state == "unavailable": SettingsRow {
-                label: "Scrobbling is not available in this build of Freya.";
-                detail: "Release builds have it; a build made without Freya's Last.fm API key does not.";
-            }
-            if LastFm.state == "disconnected": SettingsRow {
-                label: "Scrobble what you play to your Last.fm profile";
-                detail: LastFm.error != "" ? LastFm.error
-                    : "Tracks count once heard for half their length or four minutes. Radio is never scrobbled.";
-
-                VerticalLayout {
-                    alignment: center;
-
-                    TextButton {
-                        text: "Connect…";
-                        primary: true;
-                        clicked => { LastFm.connect(); }
-                    }
-                }
-            }
-            if LastFm.state == "authorizing": SettingsRow {
-                label: "Allow Freya on the Last.fm page that opened in your browser";
-                detail: "Freya connects by itself once you have.";
-
-                VerticalLayout {
-                    alignment: center;
-
-                    HorizontalLayout {
-                        spacing: 8px;
+                    VerticalLayout {
+                        alignment: center;
 
                         TextButton {
-                            text: "Open the Page Again";
+                            text: Server.has-password ? "Change Password…" : "Set a Password…";
+                            clicked => { root.set-password(); }
+                        }
+                    }
+                }
+                for device in Server.devices: SettingsRow {
+                    label: device.name + (device.this ? " (this computer)" : "");
+                    detail: "Connected " + device.connected;
+
+                    if !device.this: VerticalLayout {
+                        alignment: center;
+
+                        TextButton {
+                            text: "Disconnect";
+                            clicked => { Server.revoke(device.id); }
+                        }
+                    }
+                }
+            }
+
+            if root.tab == "account": SettingsSection {
+                title: "Last.fm";
+
+                if LastFm.state == "unavailable": SettingsRow {
+                    label: "Scrobbling is not available in this build of Freya.";
+                    detail: "Release builds have it; a build made without Freya's Last.fm API key does not.";
+                }
+                if LastFm.state == "disconnected": SettingsRow {
+                    label: "Scrobble what you play to your Last.fm profile";
+                    detail: LastFm.error != "" ? LastFm.error
+                        : "Tracks count once heard for half their length or four minutes. Radio is never scrobbled.";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        TextButton {
+                            text: "Connect…";
+                            primary: true;
                             clicked => { LastFm.connect(); }
                         }
+                    }
+                }
+                if LastFm.state == "authorizing": SettingsRow {
+                    label: "Allow Freya on the Last.fm page that opened in your browser";
+                    detail: "Freya connects by itself once you have.";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        HorizontalLayout {
+                            spacing: 8px;
+
+                            TextButton {
+                                text: "Open the Page Again";
+                                clicked => { LastFm.connect(); }
+                            }
+                            TextButton {
+                                text: "Cancel";
+                                clicked => { LastFm.cancel(); }
+                            }
+                        }
+                    }
+                }
+                if LastFm.state == "connected": SettingsRow {
+                    label: "Connected as " + LastFm.user;
+
+                    VerticalLayout {
+                        alignment: center;
+
                         TextButton {
-                            text: "Cancel";
-                            clicked => { LastFm.cancel(); }
+                            text: "Disconnect";
+                            clicked => { LastFm.disconnect(); }
+                        }
+                    }
+                }
+                if LastFm.state == "connected": SettingsRow {
+                    label: "Scrobble what you play";
+                    detail: LastFm.error != "" ? LastFm.error
+                        : LastFm.waiting == 1 ? "1 play waits to be sent."
+                        : LastFm.waiting > 1 ? LastFm.waiting + " plays wait to be sent."
+                        : "";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        Toggle {
+                            label: "Scrobble what you play";
+                            checked: LastFm.scrobbling;
+                            toggled => { LastFm.set-scrobbling(!LastFm.scrobbling); }
                         }
                     }
                 }
             }
-            if LastFm.state == "connected": SettingsRow {
-                label: "Connected as " + LastFm.user;
 
-                VerticalLayout {
-                    alignment: center;
+            if root.tab == "general": SettingsSection {
+                title: "Visualizer";
 
-                    TextButton {
-                        text: "Disconnect";
-                        clicked => { LastFm.disconnect(); }
-                    }
-                }
-            }
-            if LastFm.state == "connected": SettingsRow {
-                label: "Scrobble what you play";
-                detail: LastFm.error != "" ? LastFm.error
-                    : LastFm.waiting == 1 ? "1 play waits to be sent."
-                    : LastFm.waiting > 1 ? LastFm.waiting + " plays wait to be sent."
-                    : "";
+                SettingsRow {
+                    label: "Visualization";
 
-                VerticalLayout {
-                    alignment: center;
+                    VerticalLayout {
+                        alignment: center;
 
-                    Toggle {
-                        label: "Scrobble what you play";
-                        checked: LastFm.scrobbling;
-                        toggled => { LastFm.set-scrobbling(!LastFm.scrobbling); }
-                    }
-                }
-            }
-        }
+                        HorizontalLayout {
+                            spacing: 4px;
 
-        SettingsSection {
-            title: "Visualizer";
-
-            SettingsRow {
-                label: "Visualization";
-
-                VerticalLayout {
-                    alignment: center;
-
-                    HorizontalLayout {
-                        spacing: 4px;
-
-                        ChoiceButton {
-                            text: "Spectrum";
-                            selected: Visualizer.mode == "spectrum";
-                            clicked => { Visualizer.set-mode("spectrum"); }
-                        }
-                        ChoiceButton {
-                            text: "Oscilloscope";
-                            selected: Visualizer.mode == "oscilloscope";
-                            clicked => { Visualizer.set-mode("oscilloscope"); }
-                        }
-                        ChoiceButton {
-                            text: "Hologram";
-                            selected: Visualizer.mode == "hologram";
-                            clicked => { Visualizer.set-mode("hologram"); }
-                        }
-                        ChoiceButton {
-                            text: "Off";
-                            selected: Visualizer.mode == "off";
-                            clicked => { Visualizer.set-mode("off"); }
+                            ChoiceButton {
+                                text: "Spectrum";
+                                selected: Visualizer.mode == "spectrum";
+                                clicked => { Visualizer.set-mode("spectrum"); }
+                            }
+                            ChoiceButton {
+                                text: "Oscilloscope";
+                                selected: Visualizer.mode == "oscilloscope";
+                                clicked => { Visualizer.set-mode("oscilloscope"); }
+                            }
+                            ChoiceButton {
+                                text: "Hologram";
+                                selected: Visualizer.mode == "hologram";
+                                clicked => { Visualizer.set-mode("hologram"); }
+                            }
+                            ChoiceButton {
+                                text: "Off";
+                                selected: Visualizer.mode == "off";
+                                clicked => { Visualizer.set-mode("off"); }
+                            }
                         }
                     }
                 }
-            }
-            SettingsRow {
-                label: "Frame rate";
-                detail: "60 moves more smoothly and uses a little more power. The hologram always draws 60.";
+                SettingsRow {
+                    label: "Frame rate";
+                    detail: "60 moves more smoothly and uses a little more power. The hologram always draws 60.";
 
-                VerticalLayout {
-                    alignment: center;
+                    VerticalLayout {
+                        alignment: center;
 
-                    HorizontalLayout {
-                        spacing: 4px;
+                        HorizontalLayout {
+                            spacing: 4px;
 
-                        ChoiceButton {
-                            text: "30 fps";
-                            selected: Visualizer.fps == 30;
-                            clicked => { Visualizer.set-fps(30); }
-                        }
-                        ChoiceButton {
-                            text: "60 fps";
-                            selected: Visualizer.fps == 60;
-                            clicked => { Visualizer.set-fps(60); }
+                            ChoiceButton {
+                                text: "30 fps";
+                                selected: Visualizer.fps == 30;
+                                clicked => { Visualizer.set-fps(30); }
+                            }
+                            ChoiceButton {
+                                text: "60 fps";
+                                selected: Visualizer.fps == 60;
+                                clicked => { Visualizer.set-fps(60); }
+                            }
                         }
                     }
                 }
@@ -8908,6 +8991,8 @@ export component FreyaSkin inherits Window {
     in-out property <string> view <=> App.view;
     /// The view the visualizer and equalizer buttons go back to.
     property <string> music-view: "queue";
+    /// The tab Settings opens on: the one it was left on.
+    property <string> settings-tab: "general";
     /// Whether the navigation shows; the toolbar's first button toggles it.
     property <bool> sidebar-shown: true;
     /// Whether the visualizer fills the screen, for a TV; the view to go back to after, and
@@ -9162,6 +9247,7 @@ export component FreyaSkin inherits Window {
                             if root.view == "settings": SettingsView {
                                 width: 100%;
                                 height: 100%;
+                                tab <=> root.settings-tab;
                                 manage-folders => { root.manage-folders(); }
                                 edit-fanart-key => { fanart-popup.show(); }
                                 find-servers => { server-popup.show(); }

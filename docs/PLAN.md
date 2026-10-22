@@ -160,6 +160,26 @@ A client always needs a server.
 
 Later: AirPlay, transcoding, offline, a phone app, and more than one user.
 
+### Better log-in (from 2026-10-22)
+
+Logging in moves to the browser, so a password manager fills it in and keeps it, and the
+tokens it gives stop working by themselves. Decided with the user: no logging in with Google
+or Apple for now, no second factor, and roles for the users to come; the server is to be
+reached from the internet later, so it is built to stand that.
+
+The server's certificate is its own, so a browser opened on the server itself would warn about
+it, and a password manager would find no steady address to keep the login for. Freya instead
+opens the login page on `http://127.0.0.1:47477` and carries it to the server over the pinned
+TLS connection: nothing leaves the computer unencrypted, and the address is the same on every
+computer. The flow is OAuth's authorization code with PKCE, which the phone app can use later.
+
+| # | Milestone | Done when |
+|---|---|---|
+| **A1** ✓ | **Settings in tabs**: General (appearance, visualizer), Library (folders, scans, artists), Server (which server, the network, starting at login) and Account (the user, devices, Last.fm) | Each tab fits without searching |
+| **A2** | **Logging in in the browser**: the server's login page, opened by the client on 127.0.0.1:47477; changing the password there too, so the password manager keeps the new one; the login form in the app goes | The password manager fills in the login and Freya is logged in after |
+| **A3** | **Tokens that end**: an access token for an hour, renewed with a refresh token that changes each time; one used twice locks the device out; the client's tokens in the system's keychain (Keychain, Credential Manager, Secret Service); devices logged in already move over without logging in again | A stolen token stops working by itself |
+| **A4** | **Guessing slowed, and roles**: a growing wait after wrong passwords, per account and per address; admin and listener in the data model, the server checking the role for settings, folders, scans and accounts; the first user is admin | A listener can play but not change the server; a thousand guesses take hours |
+
 ### U7: the hologram (from 2026-10-17)
 
 The advanced visualizer becomes a hologram in the style of Joi in Blade Runner 2049: a woman
