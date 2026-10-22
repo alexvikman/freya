@@ -7346,21 +7346,29 @@ component SettingsSection inherits VerticalLayout {
 }
 
 /// One of a page's tabs, in a row under its title; the chosen one is underlined in the accent
-/// color.
+/// color. As wide as its bold text always, so choosing a tab moves none of the others.
 component PageTab inherits Rectangle {
     in property <string> text;
     in property <bool> selected;
     callback clicked;
 
-    width: label.preferred-width;
+    width: bold.preferred-width;
     height: 34px;
     accessible-role: tab;
     accessible-label: text;
     accessible-item-selected: selected;
     accessible-action-default => { root.clicked(); }
 
-    label := Text {
+    bold := Text {
+        visible: false;
+        text: root.text;
+        font-size: 14px;
+        font-weight: 600;
+    }
+    Text {
+        x: (parent.width - self.preferred-width) / 2;
         y: 4px;
+        width: self.preferred-width;
         text: root.text;
         font-size: 14px;
         font-weight: root.selected ? 600 : 400;
