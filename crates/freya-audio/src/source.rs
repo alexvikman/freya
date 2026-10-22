@@ -56,6 +56,9 @@ pub struct Media {
     /// Where the file is read from instead of `path`, which still names it: a server that
     /// answers Range requests for it, as Freya's does.
     pub remote: Option<RemoteSource>,
+    /// Whether a stream may only be asked of computers beyond this one and its network: as one
+    /// a server elsewhere named, which could otherwise have Freya ask the user's router.
+    pub far_only: bool,
 }
 
 /// A file on a server: its address, the token the server asks for, and how to reach it when
@@ -134,6 +137,8 @@ pub struct TrackInfo {
     pub station: Option<String>,
     /// Where the file is read from, as in [`Media::remote`].
     pub remote: Option<RemoteSource>,
+    /// As in [`Media::far_only`].
+    pub far_only: bool,
 }
 
 impl TrackInfo {
@@ -150,6 +155,7 @@ impl TrackInfo {
             },
             id: self.id,
             remote: self.remote.clone(),
+            far_only: self.far_only,
         }
     }
 
@@ -231,7 +237,8 @@ impl Source {
                 Box::new(file)
             }
             Some(url) => {
-                let (stream, info, stream_titles) = Stream::open(url, interrupt.clone())?;
+                let (stream, info, stream_titles) =
+                    Stream::open(url, media.far_only, interrupt.clone())?;
                 if let Some(ext) = info.extension_hint() {
                     hint.with_extension(ext);
                 }
@@ -309,6 +316,7 @@ impl Source {
             bitrate_kbps,
             station: station.and_then(|s| s.name),
             remote: media.remote.clone(),
+            far_only: media.far_only,
             ..Default::default()
         };
         if let Some(rev) = format.metadata().skip_to_latest() {

@@ -169,11 +169,24 @@ struct Live {
     next: AtomicU64,
 }
 
-/// A connection served: where from, its stream to end it, and whether it is a known device's.
+/// A connection served: the network it came from, its stream to end it, and whether it is a
+/// known device's.
 struct Served {
     from: IpAddr,
     stream: TcpStream,
     known: bool,
+}
+
+/// The address `ip` counts as: itself, or for IPv6 its /64, but a link-local one alone, as
+/// every computer's is in the same /64.
+fn network(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v6) if !v6.is_unicast_link_local() && v6.to_ipv4_mapped().is_none() => {
+            IpAddr::V6((v6.to_bits() & !u128::from(u64::MAX)).into())
+        }
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, IpAddr::V4),
+        IpAddr::V4(_) => ip,
+    }
 }
 
 impl Live {
@@ -182,9 +195,10 @@ impl Live {
     }
 
     /// `stream` counted among those served, unless strangers' are too many, in all or from its
-    /// address, or all are.
+    /// address, or all are. An IPv6 address counts by its /64, which one computer may have all
+    /// of.
     fn admit(self: &Arc<Self>, stream: &TcpStream) -> Option<Admitted> {
-        let ip = stream.peer_addr().ok()?.ip();
+        let ip = network(stream.peer_addr().ok()?.ip());
         let kept = stream.try_clone().ok()?;
         let mut connections = self.connections();
         let (all, from_it) = connections
@@ -760,6 +774,19 @@ fn reason(status: u16) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_ipv6_computer_counts_by_its_network() {
+        let counted = |ip: &str| network(ip.parse().unwrap()).to_string();
+        assert_eq!(
+            counted("2001:db8:1:2:aaaa::1"),
+            counted("2001:db8:1:2:bbbb::9")
+        );
+        assert_ne!(counted("2001:db8:1:2::1"), counted("2001:db8:1:3::1"));
+        assert_ne!(counted("fe80::1"), counted("fe80::2"));
+        assert_eq!(counted("::ffff:192.168.1.2"), "192.168.1.2");
+        assert_eq!(counted("192.168.1.2"), "192.168.1.2");
+    }
 
     fn echo() -> Server {
         Server::start(

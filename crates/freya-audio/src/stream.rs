@@ -8,9 +8,15 @@
 
 use std::collections::VecDeque;
 use std::io::Read;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
+
+use ureq::config::Config;
+use ureq::http::Uri;
+use ureq::unversioned::resolver::{DefaultResolver, ResolvedSocketAddrs, Resolver};
+use ureq::unversioned::transport::{DefaultConnector, NextTimeout};
 
 use crate::Error;
 
@@ -55,6 +61,63 @@ impl Interrupt {
 pub fn is_url(path: &str) -> bool {
     let lower = path.get(..8).unwrap_or(path).to_ascii_lowercase();
     lower.starts_with("http://") || lower.starts_with("https://")
+}
+
+/// Whether `ip` is on this computer or its network: a loopback, private, link-local, shared
+/// (carrier-grade NAT), multicast or unspecified address, or an IPv6 one standing for one.
+pub fn is_near(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            let [first, second, ..] = ip.octets();
+            first == 0
+                || ip.is_loopback()
+                || ip.is_private()
+                || ip.is_link_local()
+                || ip.is_broadcast()
+                || ip.is_multicast()
+                || (first == 100 && second & 0xc0 == 64)
+        }
+        IpAddr::V6(ip) => {
+            // An IPv4 address in IPv6: mapped, compatible, or behind NAT64's prefix.
+            let nat64 = ip.segments()[..6] == [0x64, 0xff9b, 0, 0, 0, 0];
+            let within = ip
+                .to_ipv4()
+                .or_else(|| nat64.then(|| Ipv4Addr::from_bits(ip.to_bits() as u32)));
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_unique_local()
+                || ip.is_unicast_link_local()
+                || ip.is_multicast()
+                || ip.segments()[0] & 0xffc0 == 0xfec0
+                || within.is_some_and(|ip| is_near(IpAddr::V4(ip)))
+        }
+    }
+}
+
+/// Resolves names as ureq does, but only to addresses beyond this computer and its network.
+/// Each request is resolved, a redirect's too, so whatever a URL says, and wherever it leads,
+/// nothing near is asked.
+#[derive(Debug, Default)]
+struct Far(DefaultResolver);
+
+impl Resolver for Far {
+    fn resolve(
+        &self,
+        uri: &Uri,
+        config: &Config,
+        timeout: NextTimeout,
+    ) -> Result<ResolvedSocketAddrs, ureq::Error> {
+        let mut far = self.empty();
+        for address in self.0.resolve(uri, config, timeout)?.iter() {
+            if !is_near(address.ip()) {
+                far.push(*address);
+            }
+        }
+        if far.is_empty() {
+            return Err(ureq::Error::HostNotFound);
+        }
+        Ok(far)
+    }
 }
 
 /// What the station says about itself in its response headers.
@@ -114,15 +177,25 @@ pub(crate) struct Stream {
 
 impl Stream {
     /// Connects to `url` and waits until a little audio is buffered. Gives up, with
-    /// [`Error::Interrupted`], as soon as `interrupt` is raised.
-    pub fn open(url: &str, interrupt: Interrupt) -> Result<(Self, StationInfo, Titles), Error> {
+    /// [`Error::Interrupted`], as soon as `interrupt` is raised. `far_only`, only addresses
+    /// beyond this computer and its network are asked, and no proxy, which would resolve the
+    /// name itself.
+    pub fn open(
+        url: &str,
+        far_only: bool,
+        interrupt: Interrupt,
+    ) -> Result<(Self, StationInfo, Titles), Error> {
         let fail = |msg: String| Error::Open(url.into(), msg);
-        let agent: ureq::Agent = ureq::Agent::config_builder()
+        let config = ureq::Agent::config_builder()
             .timeout_connect(Some(CONNECT_TIMEOUT))
             .timeout_recv_response(Some(CONNECT_TIMEOUT))
-            .user_agent(concat!("Freya/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .into();
+            .user_agent(concat!("Freya/", env!("CARGO_PKG_VERSION")));
+        let agent = if far_only {
+            let config = config.proxy(None).build();
+            ureq::Agent::with_parts(config, DefaultConnector::new(), Far::default())
+        } else {
+            config.build().into()
+        };
         // Connecting can take the timeouts twice over; on its own thread, so playing something
         // else, stopping or quitting need not wait for it.
         let (sender, receiver) = crossbeam_channel::bounded(1);
@@ -537,6 +610,42 @@ mod tests {
         assert!(is_url("https://ice1.somafm.com/groovesalad-128-mp3"));
         assert!(is_url("HTTP://example.com"));
         assert!(!is_url("/music/http.mp3"));
+    }
+
+    #[test]
+    fn near_addresses_are_this_computers_and_its_networks() {
+        for near in [
+            "127.0.0.1",
+            "0.0.0.0",
+            "0.1.2.3",
+            "10.0.0.5",
+            "172.16.0.1",
+            "192.168.1.1",
+            "169.254.1.1",
+            "100.64.0.1",
+            "255.255.255.255",
+            "224.0.0.1",
+            "::1",
+            "::",
+            "fe80::1",
+            "fd00::1",
+            "fec0::1",
+            "ff02::1",
+            "::ffff:192.168.1.1",
+            "::127.0.0.1",
+            "64:ff9b::a00:1",
+        ] {
+            assert!(is_near(near.parse().unwrap()), "{near}");
+        }
+        for far in [
+            "8.8.8.8",
+            "100.128.0.1",
+            "2001:db8::1",
+            "::ffff:8.8.8.8",
+            "64:ff9b::808:808",
+        ] {
+            assert!(!is_near(far.parse().unwrap()), "{far}");
+        }
         let station = StationInfo {
             content_type: Some("audio/aacp; charset=x".into()),
             ..Default::default()

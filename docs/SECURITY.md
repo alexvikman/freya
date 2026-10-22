@@ -110,9 +110,9 @@ paired admin stops the server.
 
 Nobody can wear it out before logging in:
 
-- at most 128 connections of strangers, 16 from one address, on each of its two listeners: a
-  connection that sent a request with a valid token is a known device's, and strangers' do
-  not crowd it out; 512 in all;
+- at most 128 connections of strangers, 16 from one address (an IPv6 one by its /64), on each
+  of its two listeners: a connection that sent a request with a valid token is a known
+  device's, and strangers' do not crowd it out; 512 in all;
 - the TLS handshake and a request's head within 10 seconds, its body at 32 KB a second at
   least, an answer taken within 30 seconds and a second more for each 32 KB, each in all,
   inside TLS too, and 15 seconds' wait for the next request;
@@ -146,7 +146,9 @@ Nobody can wear it out before logging in:
 - A library on another computer is always streamed through its server: a path it names is
   never looked for on the client, where it could name a local file or a Windows share. Up Next
   is restored only for the library it was saved from, and emptied when another is chosen.
-- A stream a server elsewhere names is not played when it is on this computer or its network.
+- A stream a server elsewhere names is asked only of addresses beyond this computer and its
+  network: each name is resolved and every near address dropped, a redirect's too, and no
+  proxy is used, which would resolve it itself.
 - What a server sends is bounded: 1 MB for small answers and each event line, 32 MB for a
   picture, 512 MB for the library's calls, read straight into their types; every picture is
   decoded within 12,000 pixels a side and 256 MB.
@@ -166,8 +168,9 @@ Nobody can wear it out before logging in:
   user who chooses to fill in the password there gives it to that server.
 - **A server elsewhere's settings**, its fanart.tv key among them, are kept in the client's own
   settings file while it is shown, for the settings page; an admin's device only.
-- **A host name on the network**, `printer.example` resolving to a private address, is not
-  caught when a server elsewhere names a stream there: only addresses and local names are.
+- **A new connection of a known device** is a stranger's until its first request: while
+  strangers from eight addresses hold every stranger's place, it waits, though one open goes
+  on.
 - **A server reached from the internet** has not been the goal so far: discovery and the
   connection code assume a home network, and the server's own certificate is not one browsers
   trust.

@@ -163,6 +163,7 @@ fn part(path: &Path, start_ms: u64, end_ms: Option<u64>) -> Media {
         tags: MediaTags::default(),
         id: 0,
         remote: None,
+        far_only: false,
     }
 }
 
@@ -626,6 +627,20 @@ fn connecting_to_a_station_can_be_cut_short() {
 }
 
 #[test]
+fn a_stream_far_only_is_not_asked_of_this_computer() {
+    let url = radio_station(
+        "HTTP/1.0 200 OK\r\nContent-Type: audio/mpeg\r\n\r\n",
+        vec![0x55; 1000],
+    );
+    let localhost = url.replace("127.0.0.1", "localhost");
+    for url in [&url, &localhost] {
+        let opened = crate::stream::Stream::open(url, true, crate::stream::Interrupt::default());
+        assert!(opened.is_err(), "{url}");
+    }
+    assert!(crate::stream::Stream::open(&url, false, crate::stream::Interrupt::default()).is_ok());
+}
+
+#[test]
 fn a_stream_stays_ended_for_every_read() {
     // The end was reported once; a decoder reading again, in the middle of a frame, waited
     // for the station for 15 s.
@@ -635,7 +650,7 @@ fn a_stream_stays_ended_for_every_read() {
         vec![0x55; 1000],
     );
     let (mut stream, _, _) =
-        crate::stream::Stream::open(&url, crate::stream::Interrupt::default()).unwrap();
+        crate::stream::Stream::open(&url, false, crate::stream::Interrupt::default()).unwrap();
     let mut out = [0; 4096];
     while stream.read(&mut out).unwrap() > 0 {}
     let started = Instant::now();

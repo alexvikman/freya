@@ -1952,6 +1952,7 @@ fn media(entry: &Entry, library: &LibraryPanel) -> Media {
         return Media {
             id: entry.id,
             remote,
+            far_only: library.elsewhere(),
             ..Media::from(&entry.path)
         };
     };
@@ -1966,6 +1967,7 @@ fn media(entry: &Entry, library: &LibraryPanel) -> Media {
         },
         id: entry.id,
         remote,
+        far_only: library.elsewhere(),
     }
 }
 
