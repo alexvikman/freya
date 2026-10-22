@@ -4,7 +4,9 @@
 
 //! `freya-server`: the library as a service for Freya's clients, on this computer.
 //!
-//! `freya-server [--address HOST:PORT] [--data FOLDER]`, or `--version`. It keeps its library, pictures,
+//! `freya-server [--address HOST:PORT] [--data FOLDER] [--forget-password]`, or `--version`.
+//! `--forget-password` forgets the owner's password, with the server stopped, for one who
+//! forgot it to set anew. It keeps its library, pictures,
 //! settings and log in its own folder, the first time taking in what Freya kept in its folder
 //! before the server was its own. It runs until stopped: Ctrl-C, SIGTERM, or `POST /quit` from
 //! a device paired on this computer. It serves this computer over TLS too, with the
@@ -28,17 +30,24 @@ use freya_server::{LOCAL_ADDRESS, PAIRING_KEY, Served, Service, ServiceConfig, h
 fn main() {
     let mut address = LOCAL_ADDRESS.to_owned();
     let mut data = None;
+    let mut forget_password = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         if arg == "--version" {
             println!("freya-server {}", env!("CARGO_PKG_VERSION"));
             return;
         }
+        if arg == "--forget-password" {
+            forget_password = true;
+            continue;
+        }
         match (arg.as_str(), args.next()) {
             ("--address", Some(value)) => address = value,
             ("--data", Some(value)) => data = Some(PathBuf::from(value)),
             _ => {
-                eprintln!("usage: freya-server [--address HOST:PORT] [--data FOLDER] | --version");
+                eprintln!(
+                    "usage: freya-server [--address HOST:PORT] [--data FOLDER] [--forget-password] | --version"
+                );
                 std::process::exit(2);
             }
         }
@@ -52,6 +61,9 @@ fn main() {
     if let Err(e) = std::fs::create_dir_all(&data) {
         eprintln!("freya-server: could not make {}: {e}", data.display());
         std::process::exit(1);
+    }
+    if forget_password {
+        std::process::exit(forget_owner_password(&address, &data));
     }
     start_log(&data.join("server.log"));
     if let Err(e) = run(&address, &data, freya.as_ref()) {
@@ -166,6 +178,32 @@ fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> 
     #[cfg(not(target_os = "macos"))]
     close();
     Ok(())
+}
+
+/// Forgets the owner's password in `data`, while no server answers at `address`: the code to
+/// end with.
+fn forget_owner_password(address: &str, data: &Path) -> i32 {
+    let running = address.parse().is_ok_and(|at| {
+        std::net::TcpStream::connect_timeout(&at, std::time::Duration::from_secs(1)).is_ok()
+    });
+    if running {
+        eprintln!(
+            "freya-server: stop Freya's server first: quit Freya, and its server in the menu bar"
+        );
+        return 1;
+    }
+    match Accounts::forget_owner_password(&data.join("accounts.json")) {
+        Ok(name) => {
+            println!(
+                "The password of {name} is forgotten. Set a new one in Freya's settings, under Account."
+            );
+            0
+        }
+        Err(e) => {
+            eprintln!("freya-server: could not forget the password: {e}");
+            1
+        }
+    }
 }
 
 /// Clients on other computers, taken over TLS and answered when looking for servers while

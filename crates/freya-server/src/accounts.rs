@@ -7,7 +7,11 @@
 //! writes to a file of its own, readable only by the user it runs as, and makes anew once
 //! used, so only a program of that user, on that computer, connects so. The client does not
 //! send the key, only an HMAC with it over a nonce of its own; a wrong one leaves the key as it
-//! is, so nobody else can keep the user from pairing, and a few a minute are tried.
+//! is, so nobody else can keep the user from pairing, and holds the answer up a moment.
+//!
+//! A password, once set, is changed only by giving it: on any device. One forgotten is
+//! forgotten on the server's computer, with the server stopped: `freya-server
+//! --forget-password`, and then set anew.
 //!
 //! Other devices log in in the browser, as OAuth's authorization code with PKCE has it: the
 //! login page gives a code for the password, which only the client that asked for it can trade
@@ -61,8 +65,8 @@ const USED_EVERY: u64 = 60 * 60;
 /// How long a connection code lasts, and how many proofs an address may ask before waiting.
 const CONNECTION_CODE_LASTS: Duration = Duration::from_secs(10 * 60);
 const PROOFS_FREE: u32 = 10;
-/// Wrong pairing proofs taken before the next has to wait.
-const PAIRINGS_FREE: u32 = 10;
+/// How long a wrong pairing proof holds up the answer.
+const WRONG_PAIRING_WAIT: Duration = Duration::from_millis(100);
 /// How long an access token lasts, in seconds.
 pub const ACCESS_LASTS: u64 = 60 * 60;
 /// How long after it was renewed a refresh token still renews: for a client whose answer was
@@ -168,7 +172,6 @@ struct Ticket {
     /// The SHA-256 of the ticket, hex.
     ticket: String,
     user: u32,
-    local: bool,
     until: Instant,
 }
 
@@ -370,14 +373,6 @@ impl Accounts {
     /// key over `nonce` and the name; none for another. The key is made anew once used; a
     /// wrong proof leaves it, and a few a minute are tried.
     pub fn pair(&self, nonce: &[u8], proof: &[u8], name: &str) -> Option<Granted> {
-        let tried = [("pairing".to_owned(), PAIRINGS_FREE)];
-        {
-            let mut tries = self.tries.lock().unwrap_or_else(|e| e.into_inner());
-            if tries.wait(&tried).is_some() {
-                return None;
-            }
-            tries.count(&tried);
-        }
         let right = {
             let pairing = self.pairing.lock().unwrap_or_else(|e| e.into_inner());
             pairing.as_ref().is_some_and(|key| {
@@ -387,12 +382,10 @@ impl Accounts {
             })
         };
         if !right {
+            // The key cannot be guessed; the wait only keeps a loop from heating the computer.
+            std::thread::sleep(WRONG_PAIRING_WAIT);
             return None;
         }
-        self.tries
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .right(&tried);
         self.new_pairing_key();
         let name = device_name(name);
         self.kept()
@@ -443,6 +436,23 @@ impl Accounts {
                 Err(Refused::Wrong)
             }
         }
+    }
+
+    /// Forgets the password of the user the server started with, in the accounts kept in
+    /// `file`, while no server holds them: their name. They set one anew without it.
+    pub fn forget_owner_password(file: &Path) -> Result<String, String> {
+        let text = std::fs::read_to_string(file).map_err(|e| e.to_string())?;
+        let mut kept: Kept = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+        let owner = kept
+            .users
+            .iter_mut()
+            .find(|u| u.id == OWNER)
+            .ok_or("no owner in the accounts")?;
+        owner.password = None;
+        let name = owner.name.clone();
+        let json = serde_json::to_vec_pretty(&kept).map_err(|e| e.to_string())?;
+        write_private(file, &json).map_err(|e| e.to_string())?;
+        Ok(name)
     }
 
     /// A user named `name` with the role `role`, and the password they start with: their id.
@@ -620,14 +630,13 @@ impl Accounts {
 
     /// A ticket that opens the password page of `caller`'s user; `local` when they call from
     /// the server's own computer.
-    pub fn ticket(&self, caller: &Caller, local: bool) -> String {
+    pub fn ticket(&self, caller: &Caller) -> String {
         let ticket = random_hex(32);
         let mut tickets = self.tickets.lock().unwrap_or_else(|e| e.into_inner());
         tickets.retain(|t| t.until > Instant::now());
         tickets.push(Ticket {
             ticket: sha256(ticket.as_bytes()),
             user: caller.user,
-            local,
             until: Instant::now() + TICKET_LASTS,
         });
         ticket
@@ -635,19 +644,19 @@ impl Accounts {
 
     /// Whose password page `ticket` opens, while it does.
     pub fn password_page(&self, ticket: &str) -> Option<PasswordPage> {
-        let (user, local) = {
+        let user = {
             let tickets = self.tickets.lock().unwrap_or_else(|e| e.into_inner());
             let hash = sha256(ticket.as_bytes());
-            let t = tickets
+            tickets
                 .iter()
-                .find(|t| t.ticket == hash && t.until > Instant::now())?;
-            (t.user, t.local)
+                .find(|t| t.ticket == hash && t.until > Instant::now())?
+                .user
         };
         let kept = self.kept();
         let user = kept.users.iter().find(|u| u.id == user)?;
         Some(PasswordPage {
             user: user.name.clone(),
-            asks_current: !local && user.password.is_some(),
+            asks_current: user.password.is_some(),
         })
     }
 
@@ -996,8 +1005,8 @@ mod tests {
         let sent = challenge(verifier);
         assert_eq!(accounts.grant(&owner, "", &sent, redirect, None).ok(), None);
 
-        // The Mac, on the server's computer, sets one without giving one now.
-        let ticket = accounts.ticket(&mac, true);
+        // The first one is set without one before it.
+        let ticket = accounts.ticket(&mac);
         assert!(!accounts.password_page(&ticket).unwrap().asks_current);
         assert!(
             accounts
@@ -1047,8 +1056,10 @@ mod tests {
         let pc_tokens = accounts.redeem(&code, verifier, redirect, "PC").unwrap();
         let pc = accounts.caller(&pc_tokens.access).unwrap();
 
-        // Elsewhere, the password now is asked for to change it.
-        let ticket = accounts.ticket(&pc, false);
+        // Once set, it is asked for to change it, from any device.
+        let ticket = accounts.ticket(&mac);
+        assert!(accounts.password_page(&ticket).unwrap().asks_current);
+        let ticket = accounts.ticket(&pc);
         assert!(accounts.password_page(&ticket).unwrap().asks_current);
         assert!(
             accounts

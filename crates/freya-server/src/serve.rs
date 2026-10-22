@@ -535,9 +535,7 @@ fn account(
         },
         ("POST", "/account/password-page") => Response::json(
             200,
-            // On the server's computer, the password is changed without the one now: for a
-            // device paired there, not any that calls from there.
-            &serde_json::json!({ "ticket": accounts.ticket(caller, caller.paired) }),
+            &serde_json::json!({ "ticket": accounts.ticket(caller) }),
         ),
         ("POST", "/account/connection-code") => {
             if caller.role != Role::Admin {
