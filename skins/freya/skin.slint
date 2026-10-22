@@ -7546,6 +7546,7 @@ component ServerForm inherits MenuSurface {
     callback closed();
 
     property <string> typed;
+    property <string> code;
     /// Closed once the library is the server logged in to.
     property <string> address: Server.address;
     changed address => { root.closed(); }
@@ -7627,26 +7628,27 @@ component ServerForm inherits MenuSurface {
                 spacing: 4px;
 
                 Text {
-                    text: "Log in to " + Server.login-address;
+                    text: (Server.login-verified ? "Log in to " : "Connect to ") + Server.login-address;
                     font-size: 17px;
                     font-weight: 600;
                     color: Theme.text;
                 }
                 Text {
-                    text: "Its certificate's fingerprint, which Settings on that computer shows too. If they differ, another computer answered in its place: cancel.";
+                    text: Server.login-verified
+                        ? "It is the server whose computer showed the code, or the one this computer used before."
+                        : "Type the code Freya shows on that computer, under Settings, Server, Add a Device. It proves that computer answered, and not another in its place.";
                     font-size: 13px;
                     color: Theme.text-secondary;
                     wrap: word-wrap;
                 }
-                Text {
-                    text: Server.login-fingerprint;
-                    font-size: 13px;
-                    font-weight: 600;
-                    color: Theme.text;
-                    wrap: word-wrap;
-                }
             }
-            Text {
+            if !Server.login-verified: FormField {
+                label: "Connection code";
+                placeholder: "K7Q2-M9XD";
+                text <=> root.code;
+                accepted => { Server.verify-code(root.code); }
+            }
+            if Server.login-verified: Text {
                 text: Server.login-waiting
                     ? "Log in on the page that opened in your browser. Freya uses the library there once you have."
                     : "You log in in your browser, where your password manager can fill in the user and password.";
@@ -7668,7 +7670,12 @@ component ServerForm inherits MenuSurface {
                     clicked => { Server.cancel-login(); }
                 }
                 Rectangle { horizontal-stretch: 1; }
-                TextButton {
+                if !Server.login-verified: TextButton {
+                    text: Server.login-busy ? "Checking…" : "Check Code";
+                    primary: true;
+                    clicked => { Server.verify-code(root.code); }
+                }
+                if Server.login-verified: TextButton {
                     text: Server.login-waiting ? "Open the Page Again" : "Log In in Browser…";
                     primary: !Server.login-waiting;
                     clicked => { Server.log-in(); }
@@ -8018,7 +8025,7 @@ component SettingsView inherits Rectangle {
                 if !Server.remote: SettingsRow {
                     label: "Let other computers use this library";
                     detail: Server.network
-                        ? "They find it on your network as " + Server.server-name + ", and log in with your password. Its certificate's fingerprint, which they show the first time: " + Server.fingerprint
+                        ? "They find it on your network as " + Server.server-name + ", prove it with a code shown here, and log in with your password. Its certificate's fingerprint: " + Server.fingerprint
                         : "Only this computer uses it.";
 
                     VerticalLayout {
@@ -8043,6 +8050,35 @@ component SettingsView inherits Rectangle {
                             label: "Start the server when you log in";
                             checked: Server.autostart;
                             toggled => { Server.set-autostart(!Server.autostart); }
+                        }
+                    }
+                }
+                if !Server.remote && Server.network: SettingsRow {
+                    label: "Add a device";
+                    detail: Server.connection-code != ""
+                        ? "Type the code on the other device. It works once, until " + Server.connection-code-until + "."
+                        : "A new device proves it reached this computer with a code shown here, once.";
+
+                    HorizontalLayout {
+                        spacing: 16px;
+
+                        if Server.connection-code != "": Text {
+                            text: Server.connection-code;
+                            font-size: 24px;
+                            font-weight: 700;
+                            letter-spacing: 1px;
+                            color: Theme.text;
+                            vertical-alignment: center;
+                            accessible-role: text;
+                            accessible-label: "Connection code " + Server.connection-code;
+                        }
+                        VerticalLayout {
+                            alignment: center;
+
+                            TextButton {
+                                text: Server.connection-code != "" ? "New Code" : "Show Code";
+                                clicked => { Server.show-connection-code(); }
+                            }
                         }
                     }
                 }

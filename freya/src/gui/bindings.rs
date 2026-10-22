@@ -917,6 +917,19 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     bind("Server", "log-out", Box::new(|app, _| app.log_out()));
     bind(
         "Server",
+        "verify-code",
+        Box::new(|app, args| app.server.verify_code(&text_arg(args, 0))),
+    );
+    bind(
+        "Server",
+        "show-connection-code",
+        Box::new(|app, _| {
+            let remote = app.library.remote();
+            app.server.show_connection_code(remote.as_deref());
+        }),
+    );
+    bind(
+        "Server",
         "revoke",
         Box::new(|app, args| {
             let remote = app.library.remote();

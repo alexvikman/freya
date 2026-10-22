@@ -1,11 +1,11 @@
 //! The server the library is on, as the user chooses it: this computer's, or one on another
-//! computer that they find on the network or type in, and log in to in the browser, its
-//! certificate pinned; and the account this computer is connected to, its password changed in
+//! computer that they find on the network or type in, prove with the connection code its
+//! computer shows, and log in to in the browser, its certificate pinned; and the account this computer is connected to, its password changed in
 //! the browser too. Asking the network happens on threads, so the window never waits for it.
 
 use std::net::SocketAddr;
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use freya_client::{Found, Http, Login, Pin};
 use std::path::{Path, PathBuf};
@@ -29,6 +29,8 @@ struct Pending {
 enum Done {
     Found(Vec<Found>),
     Certificate(Result<(Pending, String), String>),
+    /// Whether the server knew the connection code typed.
+    Verified(Result<(), String>),
 }
 
 /// A server the user logged in to, for the app to show the library of.
@@ -47,6 +49,12 @@ pub struct ServerPanel {
     login_fingerprint: String,
     login_busy: bool,
     login_error: String,
+    /// Whether the server chosen proved it knows the connection code, or is the one this
+    /// computer knew already, by its certificate.
+    login_verified: bool,
+    known_certificate: Option<Vec<u8>>,
+    /// The connection code shown on this computer, for a new device, and until when.
+    connection_code: Option<(String, SystemTime)>,
     /// While the login page or the password page is open in the browser.
     login_waiting: bool,
     password_waiting: bool,
@@ -75,6 +83,9 @@ impl ServerPanel {
             login_fingerprint: String::new(),
             login_busy: false,
             login_error: String::new(),
+            login_verified: false,
+            known_certificate: None,
+            connection_code: None,
             login_waiting: false,
             password_waiting: false,
             account: None,
@@ -138,6 +149,40 @@ impl ServerPanel {
         self.spawn(move || Done::Certificate(certificate(address, name)));
     }
 
+    /// The certificate of the server this computer uses, once it knew it: one that gives the
+    /// same is known without a code, at whatever address.
+    pub fn set_known(&mut self, certificate: Option<Vec<u8>>) {
+        self.known_certificate = certificate;
+    }
+
+    /// Asks the server chosen to prove it knows the connection code `typed`.
+    pub fn verify_code(&mut self, typed: &str) {
+        let Some(pin) = self.login.as_ref().map(|pending| pending.pin.clone()) else {
+            return;
+        };
+        if self.login_busy {
+            return;
+        }
+        let typed = typed.to_owned();
+        self.login_busy = true;
+        self.login_error.clear();
+        self.spawn(move || Done::Verified(freya_client::verify_server(&pin, &typed)));
+    }
+
+    /// Shows a new connection code for a device to type, made by the server on this computer.
+    pub fn show_connection_code(&mut self, remote: Option<&Remote<Http>>) {
+        let Some(remote) = remote else {
+            return;
+        };
+        match remote.0.connection_code() {
+            Ok((code, lasts)) => {
+                self.connection_code =
+                    Some((freya_protocol::show_code(&code), SystemTime::now() + lasts));
+            }
+            Err(e) => log::warn!("could not make a connection code: {e}"),
+        }
+    }
+
     /// The server's pages in the browser, opened the first time.
     fn proxy(&mut self) -> Result<&PageProxy, String> {
         if self.proxy.is_none() {
@@ -157,6 +202,9 @@ impl ServerPanel {
         let Some(pin) = self.login.as_ref().map(|pending| pending.pin.clone()) else {
             return;
         };
+        if !self.login_verified {
+            return;
+        }
         self.login_error.clear();
         let page = match self.proxy() {
             Ok(proxy) => {
@@ -176,6 +224,7 @@ impl ServerPanel {
 
     pub fn cancel_login(&mut self) {
         self.login = None;
+        self.login_verified = false;
         self.login_busy = false;
         self.login_waiting = false;
         self.login_error.clear();
@@ -192,7 +241,16 @@ impl ServerPanel {
                 Done::Certificate(Ok((pending, fingerprint))) => {
                     self.login_busy = false;
                     self.login_fingerprint = fingerprint;
+                    self.login_verified =
+                        self.known_certificate.as_ref() == Some(&pending.pin.certificate);
                     self.login = Some(pending);
+                }
+                Done::Verified(verified) => {
+                    self.login_busy = false;
+                    match verified {
+                        Ok(()) => self.login_verified = true,
+                        Err(e) => self.login_error = e,
+                    }
                 }
                 Done::Certificate(Err(e)) => {
                     self.login_busy = false;
@@ -348,6 +406,24 @@ impl ServerPanel {
                 .unwrap_or_default(),
         );
         let info = self.info.as_ref();
+        // Shown only while it lasts.
+        if self
+            .connection_code
+            .as_ref()
+            .is_some_and(|(_, until)| *until <= SystemTime::now())
+        {
+            self.connection_code = None;
+        }
+        let code = self.connection_code.clone();
+        let code_until = code
+            .as_ref()
+            .and_then(|(_, until)| jiff::Timestamp::try_from(*until).ok())
+            .map(|at| {
+                at.to_zoned(jiff::tz::TimeZone::system())
+                    .strftime("%H:%M")
+                    .to_string()
+            })
+            .unwrap_or_default();
         vec![
             ("browsing", Value::Bool(browse.is_some())),
             (
@@ -391,6 +467,16 @@ impl ServerPanel {
             ("login-fingerprint", string(&self.login_fingerprint)),
             ("login-busy", Value::Bool(self.login_busy)),
             ("login-waiting", Value::Bool(self.login_waiting)),
+            ("login-verified", Value::Bool(self.login_verified)),
+            (
+                "connection-code",
+                string(
+                    code.as_ref()
+                        .map(|(code, _)| code.clone())
+                        .unwrap_or_default(),
+                ),
+            ),
+            ("connection-code-until", string(code_until)),
             ("login-error", string(&self.login_error)),
         ]
     }

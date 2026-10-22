@@ -1100,6 +1100,9 @@ skin_api! {
         Server."login-fingerprint" => set_login_fingerprint, get_login_fingerprint;
         Server."login-busy" => set_login_busy, get_login_busy;
         Server."login-waiting" => set_login_waiting, get_login_waiting;
+        Server."login-verified" => set_login_verified, get_login_verified;
+        Server."connection-code" => set_connection_code, get_connection_code;
+        Server."connection-code-until" => set_connection_code_until, get_connection_code_until;
         Server."login-error" => set_login_error, get_login_error;
         Server."browsing" => set_browsing, get_browsing;
         Server."browse-folder" => set_browse_folder, get_browse_folder;
@@ -1264,6 +1267,8 @@ skin_api! {
         Server."change-password" => on_change_password, invoke_change_password();
         Server."revoke" => on_revoke, invoke_revoke(id: SharedString);
         Server."log-out" => on_log_out, invoke_log_out();
+        Server."verify-code" => on_verify_code, invoke_verify_code(code: SharedString);
+        Server."show-connection-code" => on_show_connection_code, invoke_show_connection_code();
         Server."set-network" => on_set_network, invoke_set_network(on: bool);
         Server."set-server-name" => on_set_server_name, invoke_set_server_name(name: SharedString);
         Server."set-autostart" => on_set_autostart, invoke_set_autostart(on: bool);

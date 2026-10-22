@@ -15,7 +15,12 @@
 //! with the server's own secret, so nothing is kept of it and it outlasts a restart. It renews
 //! it with a refresh token, which changes each time. A refresh token already used, coming
 //! again, was copied: the device's tokens are all taken back, so whoever has them logs in again.
-//! A device connected before refresh tokens renews with the token it has. Passwords are set and changed in
+//! A device connected before refresh tokens renews with the token it has.
+//!
+//! A new device first knows the server by a connection code, shown on the server's computer:
+//! the server proves it knows the code with an HMAC over the device's nonce and the server's
+//! own certificate. A code lasts ten minutes and is used up by the first proof, right or not,
+//! so it cannot be found by asking again. Passwords are set and changed in
 //! the browser too, on a page a device's ticket opens.
 
 use std::collections::HashMap;
@@ -50,6 +55,8 @@ const OWNER: u32 = 1;
 /// How often when a device was last used is kept: no more than this, so calling the server
 /// does not write the accounts every time.
 const USED_EVERY: u64 = 60 * 60;
+/// How long a connection code lasts.
+const CONNECTION_CODE_LASTS: Duration = Duration::from_secs(10 * 60);
 /// How long an access token lasts, in seconds.
 pub const ACCESS_LASTS: u64 = 60 * 60;
 /// How long after it was renewed a refresh token still renews: for a client whose answer was
@@ -264,6 +271,8 @@ pub struct Accounts {
     grants: Mutex<Vec<Grant>>,
     tickets: Mutex<Vec<Ticket>>,
     tries: Mutex<Tries>,
+    /// The connection code shown now, and until when.
+    connection: Mutex<Option<(String, Instant)>>,
 }
 
 impl Accounts {
@@ -300,6 +309,7 @@ impl Accounts {
             grants: Mutex::new(Vec::new()),
             tickets: Mutex::new(Vec::new()),
             tries: Mutex::new(Tries::default()),
+            connection: Mutex::new(None),
         };
         accounts.save(&accounts.kept());
         accounts.new_pairing_key();
@@ -532,6 +542,35 @@ impl Accounts {
             self.save(&kept);
         }
         None
+    }
+
+    /// A new connection code, in place of any shown before; how long it lasts.
+    pub fn connection_code(&self) -> (String, Duration) {
+        let code: String = random_bytes(freya_protocol::CODE_LENGTH)
+            .iter()
+            .map(|b| freya_protocol::CODE_ALPHABET[usize::from(b & 31)] as char)
+            .collect();
+        *self.connection.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some((code.clone(), Instant::now() + CONNECTION_CODE_LASTS));
+        (code, CONNECTION_CODE_LASTS)
+    }
+
+    /// The proof that this server knows the connection code shown, for the device that sent
+    /// `nonce` and was given `certificate`; none without a code. The code is used up.
+    pub fn prove(&self, nonce: &[u8], certificate: &[u8]) -> Option<Vec<u8>> {
+        let (code, until) = self
+            .connection
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()?;
+        if until <= Instant::now() {
+            return None;
+        }
+        log::info!("a device asked for the connection code's proof; the code is used up");
+        let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, code.as_bytes());
+        let digest = ring::digest::digest(&ring::digest::SHA256, certificate);
+        let message = freya_protocol::connection_message(nonce, digest.as_ref());
+        Some(ring::hmac::sign(&key, &message).as_ref().to_vec())
     }
 
     /// A ticket that opens the password page of `caller`'s user; `local` when they call from
@@ -1050,6 +1089,29 @@ mod tests {
                 .0
                 .contains_key(&format!("user:{kim}@192.168.1.21"))
         );
+    }
+
+    #[test]
+    fn a_connection_code_is_proved_once() {
+        let accounts = Accounts::open(None, None);
+        let (nonce, certificate) = ([7; 32], b"the server's certificate".as_slice());
+        assert_eq!(accounts.prove(&nonce, certificate), None, "no code shown");
+        let (code, lasts) = accounts.connection_code();
+        assert_eq!(lasts, CONNECTION_CODE_LASTS);
+        assert_eq!(
+            freya_protocol::normalize_code(&code).as_deref(),
+            Some(code.as_str())
+        );
+        let proof = accounts.prove(&nonce, certificate).unwrap();
+        let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, code.as_bytes());
+        let digest = ring::digest::digest(&ring::digest::SHA256, certificate);
+        let message = freya_protocol::connection_message(&nonce, digest.as_ref());
+        assert!(ring::hmac::verify(&key, &message, &proof).is_ok());
+        assert_eq!(accounts.prove(&nonce, certificate), None, "used up");
+        // A new one takes the place of the one before.
+        let (first, _) = accounts.connection_code();
+        let (second, _) = accounts.connection_code();
+        assert_ne!(first, second);
     }
 
     #[test]

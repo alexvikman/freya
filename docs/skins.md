@@ -408,7 +408,7 @@ Scrobbling to the user's Last.fm profile. Optional, and off until the user conne
 
 ### `Server`
 
-The server that keeps the library: Freya's own on this computer, or one on another computer on the network, which the user finds or types in and logs in to. The first time, Freya takes the other server's certificate and shows its fingerprint, to compare with what Settings shows on that computer; after, it trusts that certificate only. Logging in and setting the password happen in the user's browser, on the server's own pages, which Freya opens at `http://127.0.0.1:47477`. Optional: without it, a skin always shows this computer's library.
+The server that keeps the library: Freya's own on this computer, or one on another computer on the network, which the user finds or types in and logs in to. The first time, Freya takes the other server's certificate, and the user types the connection code Settings shows on that computer: the server proves it knows the code with that certificate, so another computer answering in its place is found out. After, Freya trusts that certificate only. Logging in and setting the password happen in the user's browser, on the server's own pages, which Freya opens at `http://127.0.0.1:47477`. Optional: without it, a skin always shows this computer's library.
 
 | Property | Type | |
 |---|---|---|
@@ -422,11 +422,15 @@ The server that keeps the library: Freya's own on this computer, or one on anoth
 | `password-waiting`, `password-error` | bool, string | While the page the password is set or changed on is open in the browser; why it could not be opened |
 | `finding`, `found` | bool, [`FoundServer`] | While looking for servers on the network, and those that answered: `name`, `address`, `fingerprint` |
 | `logging-in`, `login-address`, `login-fingerprint`, `login-busy`, `login-waiting`, `login-error` | | While logging in to a server chosen: where it is, its certificate's fingerprint, whether Freya is asking it now, whether its login page is open in the browser, and what went wrong |
+| `login-verified` | bool | Whether the server chosen proved it knows the connection code, or is the one this computer used before: only then can it be logged in to |
+| `connection-code`, `connection-code-until` | string | On the server's computer: the connection code shown for a new device ("K7Q2-M9XD") and until when it works ("20:31"); "" when none is |
 
 | Callback | |
 |---|---|
 | `find()` | Looks for servers on the network |
 | `choose-found(index)`, `choose-address(text)` | Starts logging in to a server found, or to one typed in ("mini.local", "192.168.1.20:47475"): Freya takes its certificate, and `logging-in` turns on |
+| `verify-code(code)` | Checks the connection code typed with the server chosen; `login-verified` turns on when it matches |
+| `show-connection-code()` | On the server's computer: shows a new connection code, in place of any before |
 | `log-in()`, `cancel-login()` | Opens the server's login page in the browser, where a password manager fills it in; once the user logged in there, the library is that server's |
 | `use-this-computer()` | The library is this computer's server's again |
 | `change-password()` | Opens the page the password is set or changed on in the browser |

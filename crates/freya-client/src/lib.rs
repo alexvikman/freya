@@ -141,6 +141,29 @@ pub fn connect_pinned(pin: Pin, store: TokenStore, cache: Option<PathBuf>) -> Ar
     Arc::new(Remote(http))
 }
 
+/// Whether the server `pin` names knows the connection code `typed`, shown on its computer:
+/// that it, and not another computer in its place, gave the certificate pinned. The code is
+/// used up either way.
+pub fn verify_server(pin: &Pin, typed: &str) -> Result<(), String> {
+    let code = freya_protocol::normalize_code(typed)
+        .ok_or("That is not a code: eight letters and digits, like K7Q2-M9XD.")?;
+    let mut nonce = [0; 32];
+    // The system's randomness failing leaves nothing safe to do.
+    ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut nonce)
+        .expect("the system's random numbers");
+    let proof = Http::pinned(pin.clone())
+        .enroll(&nonce)
+        .map_err(|e| e.to_string())?;
+    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, code.as_bytes());
+    let digest = ring::digest::digest(&ring::digest::SHA256, &pin.certificate);
+    let message = freya_protocol::connection_message(&nonce, digest.as_ref());
+    ring::hmac::verify(&key, &message, &proof).map_err(|_| {
+        "The code does not match: it was mistyped, or another computer answered in the server's \
+         place. Show a new code on the server's computer and try again."
+            .to_owned()
+    })
+}
+
 /// Where a server typed in is: "mini.local", "192.168.1.20" or either with ":port", which is
 /// [`freya_protocol::NETWORK_PORT`] when left out.
 pub fn resolve(typed: &str) -> Result<std::net::SocketAddr, String> {
@@ -515,6 +538,34 @@ impl Http {
     pub fn info(&self) -> ApiResult<freya_protocol::ServerFound> {
         let answer = self.send(|http| http.get("/info").call())?;
         serde_json::from_value(json(answer)?).map_err(failed)
+    }
+
+    /// The server's proof that it knows the connection code its computer shows, for `nonce`.
+    pub fn enroll(&self, nonce: &[u8]) -> ApiResult<Vec<u8>> {
+        let nonce: String = nonce.iter().map(|b| format!("{b:02x}")).collect();
+        let (status, body) = self.send_json("/enroll", &serde_json::json!({ "nonce": nonce }))?;
+        if status != 200 {
+            return Err(error(status, &body));
+        }
+        let answer: serde_json::Value = serde_json::from_slice(&body).map_err(failed)?;
+        let proof = answer["proof"].as_str().unwrap_or_default();
+        (0..proof.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(proof.get(i..i + 2)?, 16).ok())
+            .collect::<Option<Vec<u8>>>()
+            .ok_or_else(|| ApiError("the server gave no proof".into()))
+    }
+
+    /// A new connection code for a device to type, shown on this server's computer, and how
+    /// long it lasts; only for an admin.
+    pub fn connection_code(&self) -> ApiResult<(String, Duration)> {
+        let answer = self.send(|http| http.post("/account/connection-code").send_empty())?;
+        let answer = json(answer)?;
+        let code = answer["code"]
+            .as_str()
+            .ok_or_else(|| ApiError("the server gave no code".into()))?;
+        let lasts = Duration::from_secs(answer["lasts"].as_u64().unwrap_or(0));
+        Ok((code.to_owned(), lasts))
     }
 
     /// Takes this device's own token back: it has to log in again.

@@ -180,6 +180,27 @@ computer. The flow is OAuth's authorization code with PKCE, which the phone app 
 | **A3** ✓ | **Tokens that end**: an access token for an hour, signed by the server so it outlasts a restart, renewed with a refresh token that changes each time; one used twice logs the device out (a lost answer may be asked again for two minutes); the client's refresh tokens in the system's keychain on Windows (Credential Manager) and Linux (Secret Service), in a file only the user reads on macOS until Freya is signed with a Developer ID (an ad hoc signature changes with each version, and the keychain would ask for the user's password after every update); devices logged in already renew with the token they have | A stolen token stops working by itself |
 | **A4** ✓ | **Guessing slowed, and roles**: tries are counted before the password is checked, so many at once do not slip past; five wrong for a user from an address, or from an address, are free, twenty for a user from anywhere; then none is tried for 30 seconds, twice as long after each, up to 15 minutes, forgotten a day after (pairing on the server's computer needs no password); admin and listener in the data model, the server allowing a listener only the calls `LISTENER_CALLS` names, reading and playing the library everyone shares, a new call refused until named; plays, favourites, playlists and Last.fm are the owner's until each user has their own, so a listener has none yet; users from before are admins | A listener can play but not change the server; a thousand guesses take hours |
 
+### Hardening the server and its clients (from 2026-10-22)
+
+Three independent reviews (the server's HTTP and TLS, the login, and what the client trusts)
+found no sign of anything malicious in Freya's dependencies; what they found is Freya's own.
+The worst: a process of another user on the same computer can answer on 127.0.0.1:47474 before
+Freya's server does, and be handed the refresh token and the pairing key; and anyone on the
+network can exhaust the server's memory and connections without logging in. Decided with the
+user: a new device proves the server with a one-time code shown on the server's computer,
+which replaces comparing fingerprints, and is done first; changing the password asks whether
+to log the other devices out.
+
+| # | Milestone | Done when |
+|---|---|---|
+| **S6** ✓ | **First contact without blind trust, and least privilege** (first): a one-time code shown on the server's computer proves the certificate a new device was given; TLS 1.3 only; the systemd unit hardened | Another computer answering in the server's place cannot take a login |
+| **S1** | **The same computer**: the local connection over TLS pinned to the certificate in the user's private folder; pairing by challenge and answer, the key never sent, and not changed by a wrong one; the server says so when another user holds its port; "local" meaning a paired device; the password page's ticket kept in the proxy, never in a URL | Another account on the computer cannot pose as the server or learn a secret |
+| **S2** | **The HTTP server under load**: connections capped in all and per address; deadlines for headers and writes, a short keep-alive; body limits per route before reading, 16 KB without a token; connections closed when the network is turned off; events in a bounded queue; discovery answering private addresses only, limited; strict Content-Length | A device on the network cannot make the server stop answering |
+| **S3** | **The files**: /audio and covers serve only regular files within the music folders; accounts and the key never replaced silently; private log; control characters out of log lines | No file outside the music can be read |
+| **S4** | **Logging in and accounts**: the same answer and time whether a name exists; throttling per IPv6 network and bounded; gentler for addresses that logged in before; codes sent to Freya's own address only; changing the password offers to log the other devices out; a listener's own events only | Guessing, locking out and finding names do not work |
+| **S5** | **The client trusts the server less**: a library elsewhere always streamed, never opened by its paths; limits on all a server sends, pictures decoded with limits; the picture cache checked and kept per server; the proxy setting its own security headers; an origin of its own per server; the fingerprint shown computed from the certificate | A hostile server cannot harm the client or draw out a password |
+| **S7** | **Checking**: hostile and random input against the HTTP parser and the forms; `docs/SECURITY.md` with the threat model; a new independent review of all of it | The review finds nothing serious |
+
 ### U7: the hologram (from 2026-10-17)
 
 The advanced visualizer becomes a hologram in the style of Joi in Blade Runner 2049: a woman

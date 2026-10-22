@@ -434,7 +434,14 @@ impl App {
         } = collections;
         configure_library(&mut library, &settings);
         let lastfm = LastFm::new();
-        let server = ServerPanel::new();
+        let mut server = ServerPanel::new();
+        server.set_known(
+            settings
+                .server
+                .as_ref()
+                .and_then(|s| s.pin())
+                .map(|pin| pin.certificate),
+        );
         let mut app = Self {
             player,
             playlist: Playlist::new(),
@@ -792,6 +799,7 @@ impl App {
         }
         self.settings.server = Some(settings::SavedServer::new(&chosen.name, &chosen.pin));
         self.settings.save();
+        self.server.set_known(Some(chosen.pin.certificate.clone()));
         self.show_library_of(library::LibrarySource::Remote {
             pin: chosen.pin,
             name: chosen.name,
@@ -843,6 +851,7 @@ impl App {
 
     pub fn use_this_computer(&mut self) {
         self.settings.server = None;
+        self.server.set_known(None);
         self.settings.save();
         if let Some(source) = super::local_source() {
             self.show_library_of(source);

@@ -119,6 +119,46 @@ pub const DISCOVERY_PORT: u16 = 47476;
 /// network; a server answers with a [`ServerFound`] in JSON.
 pub const DISCOVERY_QUESTION: &[u8] = b"freya-server?";
 
+/// A connection code: what a new device types to know that the server it reached is the one
+/// whose computer shows the code. Crockford's base 32, which leaves out letters that look like
+/// digits, eight of them.
+pub const CODE_ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+pub const CODE_LENGTH: usize = 8;
+
+/// The code `typed` is, its look-alikes read as meant: "k7q2-m9xd" and "K7Q2 M9XD" are
+/// "K7Q2M9XD", an O a 0, an I or L a 1; none when it is not one.
+pub fn normalize_code(typed: &str) -> Option<String> {
+    let code: String = typed
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '-')
+        .map(|c| match c.to_ascii_uppercase() {
+            'O' => '0',
+            'I' | 'L' => '1',
+            c => c,
+        })
+        .collect();
+    let valid = code.len() == CODE_LENGTH && code.bytes().all(|b| CODE_ALPHABET.contains(&b));
+    valid.then_some(code)
+}
+
+/// A code as it is shown: "K7Q2-M9XD".
+pub fn show_code(code: &str) -> String {
+    let (first, last) = code.split_at(code.len() / 2);
+    format!("{first}-{last}")
+}
+
+/// What a server signs with the code, by HMAC-SHA256 keyed with it, to prove it knows it: the
+/// client's nonce and the SHA-256 of the certificate the client was given. Another computer in
+/// its place, with a certificate of its own, cannot.
+pub fn connection_message(nonce: &[u8], certificate_digest: &[u8]) -> Vec<u8> {
+    [
+        b"freya connection code\0".as_slice(),
+        nonce,
+        certificate_digest,
+    ]
+    .concat()
+}
+
 /// A server on the network, as it answers one looking for servers.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct ServerFound {

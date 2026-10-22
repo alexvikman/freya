@@ -1143,6 +1143,13 @@ export global Server {
     in property <bool> login-busy;
     in property <bool> login-waiting;
     in property <string> login-error;
+    /// Whether the server chosen proved it knows the connection code its computer shows, or is
+    /// the one this computer knew already: only then can it be logged in to.
+    in property <bool> login-verified;
+    /// On the server's computer: the connection code shown for a new device, "K7Q2-M9XD", and
+    /// until when it works ("20:31"); "" when none is.
+    in property <string> connection-code;
+    in property <string> connection-code-until;
 
     /// Look for servers on the network.
     callback find();
@@ -1150,6 +1157,11 @@ export global Server {
     /// ("mini.local", "192.168.1.20:47475").
     callback choose-found(int);
     callback choose-address(string);
+    /// Check the connection code typed, which the server's computer shows, with the server
+    /// chosen; `login-verified` turns on when it matches, `login-error` says why not.
+    callback verify-code(string);
+    /// On the server's computer: show a new connection code for a device to type.
+    callback show-connection-code();
     /// Open the server's login page in the browser, where a password manager fills it in;
     /// Freya uses the server once the user logged in there.
     callback log-in();

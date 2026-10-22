@@ -170,6 +170,8 @@ mod platform {
     </dict>
     <key>ProcessType</key>
     <string>Interactive</string>
+    <key>Umask</key>
+    <integer>63</integer>
 {environment}</dict>
 </plist>
 "#
@@ -236,8 +238,24 @@ mod platform {
                 )
             })
             .unwrap_or_default();
+        // What it may do, narrowed by what works in a user's unit without namespaces of its
+        // own: files it makes are the user's alone, and it gains no privileges, maps no memory
+        // both writable and executable, makes no namespaces or set-id files, and calls the
+        // system only as built for it.
+        let hardened = [
+            "UMask=0077",
+            "NoNewPrivileges=yes",
+            "LockPersonality=yes",
+            "MemoryDenyWriteExecute=yes",
+            "RestrictNamespaces=yes",
+            "RestrictRealtime=yes",
+            "RestrictSUIDSGID=yes",
+            "SystemCallArchitectures=native",
+        ]
+        .map(|line| format!("{line}\n"))
+        .concat();
         format!(
-            "[Unit]\nDescription=Freya's music library\n\n[Service]\nExecStart={}\n{environment}Restart=on-failure\n\n[Install]\nWantedBy=default.target\n",
+            "[Unit]\nDescription=Freya's music library\n\n[Service]\nExecStart={}\n{environment}Restart=on-failure\n{hardened}\n[Install]\nWantedBy=default.target\n",
             command.join(" ")
         )
     }
@@ -372,6 +390,7 @@ mod tests {
         });
         assert!(unit.contains(r#"ExecStart="/home/a/Freya \"x\".AppImage" "server""#));
         assert!(unit.contains("Restart=on-failure"));
+        assert!(unit.contains("NoNewPrivileges=yes\n") && unit.contains("UMask=0077\n"));
         assert!(unit.contains(r#"Environment="HOME=/home/a""#));
     }
 }

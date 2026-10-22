@@ -69,7 +69,8 @@ impl Identity {
     pub fn server_config(&self) -> Result<Arc<rustls::ServerConfig>, String> {
         let provider = Arc::new(rustls::crypto::ring::default_provider());
         let config = rustls::ServerConfig::builder_with_provider(provider)
-            .with_safe_default_protocol_versions()
+            // Freya's clients all speak TLS 1.3: nothing older is offered.
+            .with_protocol_versions(&[&rustls::version::TLS13])
             .map_err(|e| e.to_string())?
             .with_no_client_auth()
             .with_single_cert(

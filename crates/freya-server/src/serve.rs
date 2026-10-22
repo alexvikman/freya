@@ -23,11 +23,15 @@
 //!   "expires_in"}` (see [`crate::accounts`]), for `{"grant_type": "authorization_code",
 //!   "code", "code_verifier", "redirect_uri", "device"}`, the code the login page gave (see
 //!   [`crate::pages`]), or for `{"grant_type": "refresh_token", "refresh_token"}`.
+//! - `POST /enroll`: `{"nonce"}`, hex: `{"proof"}`, the HMAC with which the server proves it
+//!   knows the connection code its computer shows (see [`crate::accounts`]). No token.
+//! - `POST /account/connection-code`: a new connection code, `{"code", "lasts"}` (seconds);
+//!   only an admin's.
 //! - `GET /account`: the caller's account and devices; `POST /account/password-page`: a
 //!   ticket for the page the password is changed on, `{"ticket"}`; `POST /account/revoke`:
 //!   `{"device"}`; `POST /account/log-out`: the caller's own token taken back.
 //!
-//! Every request but `/version`, `/pair` and `/token` carries a device's access token, as
+//! Every request but `/version`, `/pair`, `/token` and `/enroll` carries a device's access token, as
 //! `Authorization: Bearer ...`, or is refused. A listener's device is refused what changes the
 //! server: every call but those [`freya_protocol::LISTENER_CALLS`] names, and keeping
 //! pictures. The pages a browser opens, under
@@ -128,6 +132,7 @@ fn answer(served: &Served, request: Request) -> Response {
             ("GET", "/version") => None,
             ("POST", "/pair") => return pair(accounts, &request, local),
             ("POST", "/token") => return token(accounts, &request),
+            ("POST", "/enroll") => return enroll(accounts, served, &request),
             _ => {
                 let token = request
                     .header("authorization")
@@ -425,6 +430,43 @@ fn pair(accounts: &Accounts, request: &Request, local: bool) -> Response {
     }
 }
 
+/// `{"nonce"}`: the proof that this server knows the connection code its computer shows, over
+/// the nonce and the server's certificate.
+fn enroll(accounts: &Accounts, served: &Served, request: &Request) -> Response {
+    #[derive(serde::Deserialize)]
+    struct Asked {
+        nonce: String,
+    }
+    let nonce = serde_json::from_slice::<Asked>(&request.body)
+        .ok()
+        .and_then(|asked| unhex(&asked.nonce))
+        .filter(|nonce| nonce.len() == 32);
+    let Some(nonce) = nonce else {
+        return Response::error(400, "a nonce of 32 bytes, in hex");
+    };
+    let Some(certificate) = &served.certificate else {
+        return Response::error(404, "this server takes no devices elsewhere");
+    };
+    match accounts.prove(&nonce, certificate) {
+        Some(proof) => Response::json(200, &serde_json::json!({ "proof": hex(&proof) })),
+        None => Response::error(
+            404,
+            "no connection code now: show one in Settings on the server's computer",
+        ),
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn unhex(text: &str) -> Option<Vec<u8>> {
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(text.get(i..i + 2)?, 16).ok())
+        .collect()
+}
+
 /// Tokens for a device: given the code the login page sent the browser on with, and the
 /// secret the login's challenge was made from; or given the device's refresh token.
 fn token(accounts: &Accounts, request: &Request) -> Response {
@@ -479,6 +521,16 @@ fn account(
             200,
             &serde_json::json!({ "ticket": accounts.ticket(caller, local) }),
         ),
+        ("POST", "/account/connection-code") => {
+            if caller.role != Role::Admin {
+                return Some(Response::error(403, "only the server's admin may do that"));
+            }
+            let (code, lasts) = accounts.connection_code();
+            Response::json(
+                200,
+                &serde_json::json!({ "code": code, "lasts": lasts.as_secs() }),
+            )
+        }
         ("POST", "/account/log-out") => {
             accounts.revoke(caller, &caller.device);
             Response::json(200, &serde_json::Value::Null)
