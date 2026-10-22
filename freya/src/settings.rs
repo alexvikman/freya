@@ -173,9 +173,10 @@ pub fn pairing_key_path() -> Option<PathBuf> {
     dirs().map(|d| d.data_dir().join("server").join(freya_server::PAIRING_KEY))
 }
 
-/// The tokens servers gave this computer, by their address.
-pub fn tokens_path() -> Option<PathBuf> {
-    dirs().map(|d| d.config_dir().join("servers.json"))
+/// Where this computer keeps the refresh tokens servers gave it, by their address: the
+/// system's keychain where Freya uses one, else a file only the user can read.
+pub fn token_store() -> Option<freya_client::TokenStore> {
+    dirs().map(|d| freya_client::TokenStore::new(d.config_dir().join("servers.json"), true))
 }
 
 /// What this computer is called, for the server's list of devices.

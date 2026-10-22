@@ -35,7 +35,7 @@ enum Done {
 pub struct Chosen {
     pub pin: Pin,
     pub name: String,
-    pub token: String,
+    pub tokens: freya_client::Granted,
 }
 
 pub struct ServerPanel {
@@ -202,7 +202,7 @@ impl ServerPanel {
         }
         while let Ok(heard) = self.heard.1.try_recv() {
             match heard {
-                Heard::LoggedIn(Ok(token)) => {
+                Heard::LoggedIn(Ok(tokens)) => {
                     let Some(pending) = self.login.take() else {
                         continue;
                     };
@@ -210,7 +210,7 @@ impl ServerPanel {
                     return Some(Chosen {
                         pin: pending.pin,
                         name: pending.name,
-                        token,
+                        tokens,
                     });
                 }
                 Heard::LoggedIn(Err(e)) => {

@@ -22,3 +22,10 @@ freya-audio = { path = "../freya-audio" }
 freya-library = { path = "../freya-library" }
 freya-server = { path = "../freya-server" }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
+
+# The system's keychain for the servers' tokens (see src/session.rs).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Credentials"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5.19.0", default-features = false, features = ["async-io", "blocking-api"] }

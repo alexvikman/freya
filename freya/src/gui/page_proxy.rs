@@ -31,7 +31,7 @@ const KEPT_HEADERS: [&str; 6] = [
 /// What happened in the browser.
 pub enum Heard {
     /// Logged in: the token, or why not.
-    LoggedIn(Result<String, String>),
+    LoggedIn(Result<freya_client::Granted, String>),
     PasswordChanged,
 }
 
@@ -143,8 +143,8 @@ fn answer(
         let code = request.query_value("code").unwrap_or_default();
         let device = crate::settings::device_name();
         return match server.redeem(&login, code, &device) {
-            Ok(token) => {
-                tell(Heard::LoggedIn(Ok(token)));
+            Ok(tokens) => {
+                tell(Heard::LoggedIn(Ok(tokens)));
                 let mut sent = Response::bytes(303, "text/plain; charset=utf-8", Vec::new());
                 sent.headers
                     .push(("Location", format!("{PAGES_PATH}/logged-in")));
@@ -246,8 +246,8 @@ mod tests {
         let server = Server::start("127.0.0.1:0", freya_server::handler(served)).unwrap();
         let address = format!("http://{}", server.address());
         let key = std::fs::read_to_string(&pairing).unwrap();
-        let mac =
-            Http::new(&address).with_token(Some(Http::new(&address).pair(&key, "Mac").unwrap()));
+        let mac = Http::new(&address)
+            .with_token(Some(Http::new(&address).pair(&key, "Mac").unwrap().access));
         let user = mac.account().unwrap().unwrap().user;
 
         let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -313,10 +313,10 @@ mod tests {
         let done = browser.get(&back).call().unwrap();
         assert_eq!(done.status(), 303);
         assert_eq!(header(&done, "location"), "/web/logged-in");
-        let Heard::LoggedIn(Ok(token)) = wait() else {
+        let Heard::LoggedIn(Ok(tokens)) = wait() else {
             panic!("not logged in");
         };
-        let pc = Http::new(&address).with_token(Some(token));
+        let pc = Http::new(&address).with_token(Some(tokens.access));
         assert_eq!(pc.account().unwrap().unwrap().devices.len(), 2);
         let logged_in = browser
             .get(&format!("{origin}/web/logged-in"))

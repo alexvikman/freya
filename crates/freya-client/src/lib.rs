@@ -12,6 +12,9 @@ use freya_protocol::{
     API_PATH, AccountInfo, ApiError, ApiResult, PAGES_PATH, Remote, ServiceEvent, Transport,
 };
 
+mod session;
+pub use session::{Bearer, Granted, Session, TokenStore};
+
 /// How long the client waits before it looks for the server again, when the event stream
 /// ended; and how long a stream may last, a little longer than a server keeps one, so one
 /// that stopped saying anything is given up on.
@@ -123,19 +126,17 @@ fn make_agent(
     )
 }
 
-/// What a pinned server's token is kept by among [`Tokens`].
+/// What a pinned server's token is kept by in a [`TokenStore`].
 pub fn token_key(pin: &Pin) -> String {
     format!("https://{}", pin.address)
 }
 
-/// The server `pin` names, on another computer, called as the device `token` was given to;
-/// its pictures kept in `cache`.
-pub fn connect_pinned(
-    pin: Pin,
-    token: Option<String>,
-    cache: Option<PathBuf>,
-) -> Arc<Remote<Http>> {
-    let mut http = Http::pinned(pin).with_token(token);
+/// The server `pin` names, on another computer, called as the device whose refresh token
+/// `store` keeps for it; its pictures kept in `cache`.
+pub fn connect_pinned(pin: Pin, store: TokenStore, cache: Option<PathBuf>) -> Arc<Remote<Http>> {
+    let key = token_key(&pin);
+    let refresh = store.get(&key).unwrap_or_default();
+    let mut http = Http::pinned(pin).with_session(refresh, None, Some((store, key)));
     http.cache = cache.map(PictureCache::new);
     Arc::new(Remote(http))
 }
@@ -246,7 +247,9 @@ pub struct Http {
     /// The server's address, and the API's under it.
     root: String,
     base: String,
-    /// The token this device was given; none before it was.
+    /// The tokens this device was given, renewed as they end; or one token to call with, as
+    /// in tests; none before it was given any.
+    session: Option<Arc<Session>>,
     token: Option<String>,
     /// The server on another computer, over TLS; none for one on this computer.
     pin: Option<Pin>,
@@ -357,6 +360,7 @@ impl Http {
             streaming,
             base: format!("{root}{API_PATH}"),
             root,
+            session: None,
             token: None,
             pin,
             cache: None,
@@ -377,21 +381,66 @@ impl Http {
         (self.url("/audio"), agent)
     }
 
-    /// The token this device calls with.
-    pub fn token(&self) -> Option<&str> {
-        self.token.as_deref()
+    /// What the player reads tracks with: this device's access token, renewed as it ends.
+    pub fn bearer(&self) -> Option<Bearer> {
+        if let Some(session) = &self.session {
+            return Some(session::bearer(session));
+        }
+        let token = self.token.clone()?;
+        Some(Arc::new(move |_| Some(token.clone())))
     }
 
-    /// Calls as the device `token` was given to.
+    /// Calls with the access token `token` only, never renewed.
     pub fn with_token(mut self, token: Option<String>) -> Self {
         self.token = token;
         self
     }
 
+    /// Calls as the device whose refresh token is `refresh`, with `granted`'s access token
+    /// until it ends; each new refresh token kept in `store`, under its key.
+    pub fn with_session(
+        mut self,
+        refresh: String,
+        granted: Option<&Granted>,
+        store: Option<(TokenStore, String)>,
+    ) -> Self {
+        self.session = Some(Arc::new(Session::new(
+            self.agent.clone(),
+            self.url("/token"),
+            refresh,
+            granted,
+            store,
+        )));
+        self
+    }
+
+    /// The access token to call with now.
+    fn access(&self) -> Option<String> {
+        match &self.session {
+            Some(session) => session.access(),
+            None => self.token.clone(),
+        }
+    }
+
     fn authorized<B>(&self, request: ureq::RequestBuilder<B>) -> ureq::RequestBuilder<B> {
-        match &self.token {
+        match self.access() {
             Some(token) => request.header("Authorization", format!("Bearer {token}")),
             None => request,
+        }
+    }
+
+    /// Sends what `send` makes, and once more with a renewed token when the server no longer
+    /// took the one sent.
+    fn send(&self, send: impl Fn(&Self) -> Result<Answer, ureq::Error>) -> ApiResult<Answer> {
+        let sent = self.session.as_ref().and_then(|_| self.access());
+        let answer = send(self).map_err(failed)?;
+        match (&self.session, sent) {
+            (Some(session), Some(sent))
+                if answer.status().as_u16() == 401 && session.renew_after(&sent) =>
+            {
+                send(self).map_err(failed)
+            }
+            _ => Ok(answer),
         }
     }
 
@@ -405,24 +454,24 @@ impl Http {
 
     /// POSTs `body` as JSON to `path`: what the server answered, and its status.
     fn send_json(&self, path: &str, body: &serde_json::Value) -> ApiResult<(u16, Vec<u8>)> {
-        let answer = self
-            .post(path)
-            .header("Content-Type", "application/json")
-            .send(body.to_string())
-            .map_err(failed)?;
+        let answer = self.send(|http| {
+            http.post(path)
+                .header("Content-Type", "application/json")
+                .send(body.to_string())
+        })?;
         read(answer)
     }
 
-    /// A token for this device, named `device`, given the pairing key a client on the
-    /// server's computer reads.
-    pub fn pair(&self, key: &str, device: &str) -> ApiResult<String> {
+    /// Tokens for this device, named `device`, given the pairing key a client on the server's
+    /// computer reads.
+    pub fn pair(&self, key: &str, device: &str) -> ApiResult<Granted> {
         let asked = serde_json::json!({ "key": key, "device": device });
-        token(self.send_json("/pair", &asked)?)
+        Granted::from_answer(self.send_json("/pair", &asked)?)
     }
 
-    /// A token for this device, named `device`, for the code the login page sent `login`'s
+    /// Tokens for this device, named `device`, for the code the login page sent `login`'s
     /// browser back with.
-    pub fn redeem(&self, login: &Login, code: &str, device: &str) -> ApiResult<String> {
+    pub fn redeem(&self, login: &Login, code: &str, device: &str) -> ApiResult<Granted> {
         let asked = serde_json::json!({
             "grant_type": "authorization_code",
             "code": code,
@@ -430,16 +479,7 @@ impl Http {
             "redirect_uri": login.redirect,
             "device": device,
         });
-        match self.send_json("/token", &asked)? {
-            (200, body) => {
-                let answer: serde_json::Value = serde_json::from_slice(&body).map_err(failed)?;
-                answer["access_token"]
-                    .as_str()
-                    .map(str::to_owned)
-                    .ok_or_else(|| ApiError("the server gave no token".into()))
-            }
-            (status, body) => Err(error(status, &body)),
-        }
+        Granted::from_answer(self.send_json("/token", &asked)?)
     }
 
     /// The pages a browser opens on this server.
@@ -452,7 +492,7 @@ impl Http {
 
     /// The account this device is connected to; none when its token is not taken.
     pub fn account(&self) -> ApiResult<Option<AccountInfo>> {
-        let answer = self.get("/account").call().map_err(failed)?;
+        let answer = self.send(|http| http.get("/account").call())?;
         match read(answer)? {
             (200, body) => serde_json::from_slice(&body).map(Some).map_err(failed),
             (401, _) => Ok(None),
@@ -462,10 +502,7 @@ impl Http {
 
     /// Where in [`Self::pages`] the account's user changes their password: a page for a while.
     pub fn password_page(&self) -> ApiResult<String> {
-        let answer = self
-            .post("/account/password-page")
-            .send_empty()
-            .map_err(failed)?;
+        let answer = self.send(|http| http.post("/account/password-page").send_empty())?;
         let ticket = json(answer)?["ticket"]
             .as_str()
             .map(str::to_owned)
@@ -476,13 +513,13 @@ impl Http {
     /// What the server is called, where it takes clients on other computers and its
     /// certificate's fingerprint.
     pub fn info(&self) -> ApiResult<freya_protocol::ServerFound> {
-        let answer = self.get("/info").call().map_err(failed)?;
+        let answer = self.send(|http| http.get("/info").call())?;
         serde_json::from_value(json(answer)?).map_err(failed)
     }
 
     /// Takes this device's own token back: it has to log in again.
     pub fn log_out(&self) -> ApiResult<()> {
-        let answer = self.post("/account/log-out").send_empty().map_err(failed)?;
+        let answer = self.send(|http| http.post("/account/log-out").send_empty())?;
         json(answer).map(drop)
     }
 
@@ -503,16 +540,16 @@ impl Http {
 
     /// Asks the server to stop: one on this computer only.
     pub fn quit(&self) -> ApiResult<()> {
-        let answer = self.post("/quit").send_empty().map_err(failed)?;
+        let answer = self.send(|http| http.post("/quit").send_empty())?;
         json(answer).map(drop)
     }
 
     /// The event stream, opened.
     fn open_events(&self) -> ApiResult<ureq::BodyReader<'static>> {
-        let answer = self
-            .authorized(self.streaming.get(&self.url("/events")))
-            .call()
-            .map_err(failed)?;
+        let answer = self.send(|http| {
+            http.authorized(http.streaming.get(&http.url("/events")))
+                .call()
+        })?;
         if answer.status().as_u16() != 200 {
             let (status, body) = read(answer)?;
             return Err(error(status, &body));
@@ -683,18 +720,6 @@ fn bytes_or_none(answer: Answer) -> ApiResult<Option<Vec<u8>>> {
     }
 }
 
-/// The token in a server's answer to pairing or logging in.
-fn token((status, body): (u16, Vec<u8>)) -> ApiResult<String> {
-    if status != 200 {
-        return Err(error(status, &body));
-    }
-    let answer: serde_json::Value = serde_json::from_slice(&body).map_err(failed)?;
-    answer["token"]
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| ApiError("the server gave no token".into()))
-}
-
 /// The JSON of `answer`.
 fn json(answer: Answer) -> ApiResult<serde_json::Value> {
     match read(answer)? {
@@ -705,11 +730,11 @@ fn json(answer: Answer) -> ApiResult<serde_json::Value> {
 
 impl Transport for Http {
     fn call(&self, method: &str, args: serde_json::Value) -> ApiResult<serde_json::Value> {
-        let answer = self
-            .post(&format!("/call/{method}"))
-            .header("Content-Type", "application/json")
-            .send(args.to_string())
-            .map_err(failed)?;
+        let answer = self.send(|http| {
+            http.post(&format!("/call/{method}"))
+                .header("Content-Type", "application/json")
+                .send(args.to_string())
+        })?;
         json(answer)
     }
 
@@ -720,10 +745,7 @@ impl Transport for Http {
         if let Some(bytes) = self.cache.as_ref().and_then(|cache| cache.get(checksum)) {
             return Ok(Some(bytes));
         }
-        let answer = self
-            .get(&format!("/pictures/{checksum}"))
-            .call()
-            .map_err(failed)?;
+        let answer = self.send(|http| http.get(&format!("/pictures/{checksum}")).call())?;
         let bytes = bytes_or_none(answer)?;
         if let (Some(cache), Some(bytes)) = (&self.cache, &bytes) {
             cache.put(checksum, bytes);
@@ -732,24 +754,25 @@ impl Transport for Http {
     }
 
     fn keep_picture(&self, bytes: &[u8], largest: Option<u32>) -> ApiResult<String> {
-        let mut request = self.post("/pictures");
-        if let Some(largest) = largest {
-            request = request.query("largest", largest.to_string());
-        }
-        let answer = request
-            .header("Content-Type", "application/octet-stream")
-            .send(bytes)
-            .map_err(failed)?;
+        let answer = self.send(|http| {
+            let mut request = http.post("/pictures");
+            if let Some(largest) = largest {
+                request = request.query("largest", largest.to_string());
+            }
+            request
+                .header("Content-Type", "application/octet-stream")
+                .send(bytes)
+        })?;
         serde_json::from_value(json(answer)?).map_err(failed)
     }
 
     fn album_art(&self, track: &Path, largest: u32) -> ApiResult<Option<Vec<u8>>> {
         let asked = serde_json::json!({ "track": track, "largest": largest });
-        let answer = self
-            .post("/album-art")
-            .header("Content-Type", "application/json")
-            .send(asked.to_string())
-            .map_err(failed)?;
+        let answer = self.send(|http| {
+            http.post("/album-art")
+                .header("Content-Type", "application/json")
+                .send(asked.to_string())
+        })?;
         bytes_or_none(answer)
     }
 
@@ -762,6 +785,7 @@ impl Transport for Http {
             streaming: self.streaming.clone(),
             root: self.root.clone(),
             base: self.base.clone(),
+            session: self.session.clone(),
             token: self.token.clone(),
             pin: self.pin.clone(),
             cache: None,
@@ -814,62 +838,70 @@ fn follow_events(http: &Http, mut stream: ureq::BodyReader<'static>, tell: &Send
 
 /// Freya's server on this computer at `address`, connected to as this device, named
 /// `device`: started from `program` when none answers there, and one of another version stopped
-/// first, so an update does not leave the old one running. A client without a token for it, or
-/// with one it no longer takes, pairs with the key the server keeps in `pairing_key`; the token
-/// is kept in `tokens`. Pictures are kept in `cache` when the server is not on this computer.
+/// first, so an update does not leave the old one running. A client without a refresh token
+/// for it, or with one it no longer takes, pairs with the key the server keeps in
+/// `pairing_key`; the refresh token is kept in `store`. Pictures are kept in `cache` when the
+/// server is not on this computer.
 pub fn connect_locally(
     address: &str,
     program: &Path,
     pairing_key: &Path,
-    tokens: &Path,
+    store: &TokenStore,
     device: &str,
     cache: Option<PathBuf>,
 ) -> Result<Arc<Remote<Http>>, String> {
-    let mut kept = Tokens::load(tokens);
-    let mut token = kept.get(address);
-    let pair = || -> Result<String, String> {
+    let pair = || -> Result<Granted, String> {
         let key = std::fs::read_to_string(pairing_key)
             .map_err(|e| format!("could not read the pairing key: {e}"))?;
-        Http::new(address)
+        let granted = Http::new(address)
             .pair(key.trim(), device)
-            .map_err(|e| format!("could not pair with the server: {e}"))
+            .map_err(|e| format!("could not pair with the server: {e}"))?;
+        if !granted.refresh.is_empty() {
+            store.set(address, &granted.refresh);
+        }
+        Ok(granted)
     };
+    let kept = || Some((store.clone(), address.to_owned()));
+    let as_kept = || {
+        let refresh = store.get(address).unwrap_or_default();
+        Http::new(address).with_session(refresh, None, kept())
+    };
+    let mut paired = None;
     match Http::new(address).version() {
         Ok(version) if version == env!("CARGO_PKG_VERSION") => {}
         Ok(version) => {
             log::info!("the server here is version {version}; starting this version's");
-            let quit = Http::new(address).with_token(token.clone()).quit();
-            if quit.is_err() {
+            let stopped = as_kept().quit().is_ok()
+                // A server from before refresh tokens takes the token kept as it is.
+                || Http::new(address).with_token(store.get(address)).quit().is_ok();
+            if !stopped {
                 // It does not take this client's token: paired anew to stop it.
-                token = Some(pair()?);
+                let granted = pair()?;
                 Http::new(address)
-                    .with_token(token.clone())
+                    .with_session(granted.refresh.clone(), Some(&granted), kept())
                     .quit()
                     .map_err(|e| format!("could not stop the server: {e}"))?;
+                paired = Some(granted).filter(|g| !g.refresh.is_empty());
             }
             wait_until_gone(address)?;
             start(address, program)?;
         }
         Err(_) => start(address, program)?,
     }
-    let taken = match &token {
-        Some(_) => Http::new(address)
-            .with_token(token.clone())
-            .account()
-            .map_err(|e| e.to_string())?
-            .is_some(),
-        None => false,
+    let mut http = match &paired {
+        Some(granted) => {
+            Http::new(address).with_session(granted.refresh.clone(), Some(granted), kept())
+        }
+        None => as_kept(),
     };
-    if !taken {
-        token = Some(pair()?);
+    if http.account().map_err(|e| e.to_string())?.is_none() {
+        let granted = pair()?;
+        http = Http::new(address).with_session(granted.refresh.clone(), Some(&granted), kept());
     }
-    if let Some(token) = &token
-        && kept.get(address).as_ref() != Some(token)
-    {
-        kept.set(address, token);
-        kept.save(tokens);
+    if !is_this_computer(address) {
+        http.cache = cache.map(PictureCache::new);
     }
-    Ok(connect(address, token, cache))
+    Ok(Arc::new(Remote(http)))
 }
 
 /// Waits until no server answers at `address`.
@@ -914,44 +946,9 @@ fn start(address: &str, program: &Path) -> Result<(), String> {
     }
 }
 
-/// The tokens this client was given, by the server's address; kept in a file only the user
-/// can read.
-#[derive(Default, serde::Serialize, serde::Deserialize)]
-pub struct Tokens(std::collections::BTreeMap<String, String>);
-
-impl Tokens {
-    pub fn load(file: &Path) -> Self {
-        std::fs::read_to_string(file)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default()
-    }
-
-    pub fn get(&self, address: &str) -> Option<String> {
-        self.0.get(address).cloned()
-    }
-
-    pub fn set(&mut self, address: &str, token: &str) {
-        self.0.insert(address.to_owned(), token.to_owned());
-    }
-
-    pub fn remove(&mut self, address: &str) {
-        self.0.remove(address);
-    }
-
-    pub fn save(&self, file: &Path) {
-        let written = serde_json::to_vec_pretty(self)
-            .map_err(std::io::Error::other)
-            .and_then(|json| write_private(file, &json));
-        if let Err(e) = written {
-            log::warn!("could not keep the server's token: {e}");
-        }
-    }
-}
-
 /// Writes `bytes` to `file` through a new file renamed over it, readable and writable by the
 /// user only.
-fn write_private(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_private(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     if let Some(dir) = file.parent() {
         std::fs::create_dir_all(dir)?;

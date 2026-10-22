@@ -63,14 +63,23 @@ pub struct Media {
 #[derive(Clone)]
 pub struct RemoteSource {
     pub url: String,
-    pub token: Option<String>,
+    /// The access token to read with, when the server asks for one.
+    pub bearer: Option<Bearer>,
     /// Asked each part in at most 20 seconds, its errors answered as they come.
     pub agent: Option<std::sync::Arc<ureq::Agent>>,
 }
 
+/// What the player asks for the access token to read a track with: the one now with `None`,
+/// another after the server refused the one given; none when there is none.
+pub type Bearer = std::sync::Arc<dyn Fn(Option<&str>) -> Option<String> + Send + Sync>;
+
 impl PartialEq for RemoteSource {
     fn eq(&self, other: &Self) -> bool {
-        self.url == other.url && self.token == other.token
+        self.url == other.url
+            && match (&self.bearer, &other.bearer) {
+                (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+                (a, b) => a.is_none() && b.is_none(),
+            }
     }
 }
 

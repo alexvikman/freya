@@ -9,7 +9,13 @@
 //!
 //! Other devices log in in the browser, as OAuth's authorization code with PKCE has it: the
 //! login page gives a code for the password, which only the client that asked for it can trade
-//! for a token, having the secret its challenge was made from. Passwords are set and changed in
+//! for tokens, having the secret its challenge was made from.
+//!
+//! A device calls with an access token, which lasts an hour: its id and when it ends, signed
+//! with the server's own secret, so nothing is kept of it and it outlasts a restart. It renews
+//! it with a refresh token, which changes each time. A refresh token already used, coming
+//! again, was copied: the device's tokens are all taken back, so whoever has them logs in again.
+//! A device connected before refresh tokens renews with the token it has. Passwords are set and changed in
 //! the browser too, on a page a device's ticket opens.
 
 use std::num::NonZeroU32;
@@ -33,6 +39,13 @@ const OWNER: u32 = 1;
 /// How often when a device was last used is kept: no more than this, so calling the server
 /// does not write the accounts every time.
 const USED_EVERY: u64 = 60 * 60;
+/// How long an access token lasts, in seconds.
+pub const ACCESS_LASTS: u64 = 60 * 60;
+/// How long after it was renewed a refresh token still renews: for a client whose answer was
+/// lost on the way, asking again.
+const RENEWED_GRACE: u64 = 2 * 60;
+/// How many used refresh tokens of a device are kept, to know them if they come again.
+const RETIRED_KEPT: usize = 32;
 /// How long a login's code may wait to be traded for a token, and a password page be used.
 const CODE_LASTS: Duration = Duration::from_secs(120);
 const TICKET_LASTS: Duration = Duration::from_secs(15 * 60);
@@ -43,6 +56,9 @@ pub const SHORTEST_PASSWORD: usize = 8;
 struct Kept {
     users: Vec<User>,
     devices: Vec<Device>,
+    /// What access tokens are signed with, hex.
+    #[serde(default)]
+    secret: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -66,14 +82,46 @@ struct Device {
     id: String,
     user: u32,
     name: String,
-    /// The SHA-256 of its token, hex.
+    /// The SHA-256 of its refresh token, hex.
     token: String,
+    /// The refresh token it renewed with last, and when: taken again for a while.
+    #[serde(default)]
+    previous: Option<Renewed>,
+    /// The ones before.
+    #[serde(default)]
+    retired: Vec<String>,
     /// Seconds since 1970.
     created: u64,
     #[serde(default)]
     used: u64,
     #[serde(default)]
     joined: Option<Joined>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct Renewed {
+    token: String,
+    at: u64,
+}
+
+/// What a device is given to call with: an access token for [`ACCESS_LASTS`] seconds, and a
+/// refresh token to renew it with, once.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Granted {
+    pub access: String,
+    pub refresh: String,
+}
+
+impl Granted {
+    /// As OAuth's token endpoint answers.
+    pub fn json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "access_token": self.access,
+            "refresh_token": self.refresh,
+            "token_type": "Bearer",
+            "expires_in": ACCESS_LASTS,
+        })
+    }
 }
 
 /// A login's code, kept until traded for a token or out of date: who logged in, the challenge
@@ -145,6 +193,9 @@ impl Accounts {
                 password: None,
             });
         }
+        if unhex(&kept.secret).is_none_or(|secret| secret.len() < 32) {
+            kept.secret = random_hex(32);
+        }
         let accounts = Self {
             file,
             kept: Mutex::new(kept),
@@ -162,11 +213,22 @@ impl Accounts {
         self.kept.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Who calls with `token`, if anyone; noted as when the device was last used.
+    /// Who calls with the access token `token`, if anyone; noted as when the device was last
+    /// used.
     pub fn caller(&self, token: &str) -> Option<Caller> {
-        let hash = sha256(token.as_bytes());
+        let mut parts = token.split('.');
+        let (Some(id), Some(until), Some(signature), None) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        else {
+            return None;
+        };
         let mut kept = self.kept();
-        let device = kept.devices.iter_mut().find(|d| d.token == hash)?;
+        let key = signing_key(&kept)?;
+        ring::hmac::verify(&key, format!("{id}.{until}").as_bytes(), &unhex(signature)?).ok()?;
+        if until.parse::<u64>().ok()? <= now() {
+            return None;
+        }
+        let device = kept.devices.iter_mut().find(|d| d.id == id)?;
         let caller = Caller {
             user: device.user,
             device: device.id.clone(),
@@ -182,7 +244,7 @@ impl Accounts {
     /// A token for a device named `name` of the owner, given the pairing key; none for
     /// another key. The key is made anew either way. A device of that name paired before is
     /// this computer's too, pairing again: it goes, so the devices do not pile up.
-    pub fn pair(&self, key: &str, name: &str) -> Option<String> {
+    pub fn pair(&self, key: &str, name: &str) -> Option<Granted> {
         let right = {
             let pairing = self.pairing.lock().unwrap_or_else(|e| e.into_inner());
             pairing.as_deref() == Some(sha256(key.as_bytes()).as_str())
@@ -195,7 +257,7 @@ impl Accounts {
         self.kept()
             .devices
             .retain(|d| !(d.joined == Some(Joined::Paired) && d.name == name));
-        Some(self.add_device(OWNER, &name, Joined::Paired))
+        self.add_device(OWNER, &name, Joined::Paired)
     }
 
     /// The user `name` is, given their password; a wrong one holds the answer up.
@@ -248,7 +310,7 @@ impl Accounts {
         verifier: &str,
         redirect: &str,
         device: &str,
-    ) -> Option<String> {
+    ) -> Option<Granted> {
         let grant = {
             let mut grants = self.grants.lock().unwrap_or_else(|e| e.into_inner());
             let hash = sha256(code.as_bytes());
@@ -258,7 +320,64 @@ impl Accounts {
         let fits = grant.until > Instant::now()
             && grant.redirect == redirect
             && challenge(verifier) == grant.challenge;
-        fits.then(|| self.add_device(grant.user, device, Joined::LoggedIn))
+        if fits {
+            self.add_device(grant.user, device, Joined::LoggedIn)
+        } else {
+            None
+        }
+    }
+
+    /// New tokens for the device whose refresh token `token` is, which is used up. One used
+    /// before takes the device's tokens back.
+    pub fn renew(&self, token: &str) -> Option<Granted> {
+        let hash = sha256(token.as_bytes());
+        let now = now();
+        let mut kept = self.kept();
+        if let Some(at) = kept.devices.iter().position(|d| d.token == hash) {
+            let device = &mut kept.devices[at];
+            if let Some(previous) = device.previous.take() {
+                device.retired.push(previous.token);
+            }
+            device.previous = Some(Renewed {
+                token: hash,
+                at: now,
+            });
+            let granted = issue(&mut kept, at);
+            self.save(&kept);
+            return granted;
+        }
+        let renewed = |d: &Device| {
+            d.previous
+                .as_ref()
+                .filter(|p| p.token == hash)
+                .map(|p| p.at)
+        };
+        // Its answer was lost: renewed again, the tokens it never had used up.
+        if let Some(at) = kept
+            .devices
+            .iter()
+            .position(|d| renewed(d).is_some_and(|at| now <= at + RENEWED_GRACE))
+        {
+            let device = &mut kept.devices[at];
+            let lost = std::mem::take(&mut device.token);
+            device.retired.push(lost);
+            let granted = issue(&mut kept, at);
+            self.save(&kept);
+            return granted;
+        }
+        if let Some(at) = kept
+            .devices
+            .iter()
+            .position(|d| d.retired.contains(&hash) || renewed(d).is_some())
+        {
+            let gone = kept.devices.remove(at);
+            log::warn!(
+                "a used refresh token of {} came again, so it was copied: the device is logged out",
+                gone.name
+            );
+            self.save(&kept);
+        }
+        None
     }
 
     /// A ticket that opens the password page of `caller`'s user; `local` when they call from
@@ -370,13 +489,14 @@ impl Accounts {
         revoked
     }
 
-    fn add_device(&self, user: u32, name: &str, joined: Joined) -> String {
-        let token = random_hex(32);
+    fn add_device(&self, user: u32, name: &str, joined: Joined) -> Option<Granted> {
         let device = Device {
             id: random_hex(8),
             user,
             name: device_name(name),
-            token: sha256(token.as_bytes()),
+            token: String::new(),
+            previous: None,
+            retired: Vec::new(),
             created: now(),
             used: now(),
             joined: Some(joined),
@@ -384,8 +504,10 @@ impl Accounts {
         log::info!("a device was connected: {}", device.name);
         let mut kept = self.kept();
         kept.devices.push(device);
+        let at = kept.devices.len() - 1;
+        let granted = issue(&mut kept, at);
         self.save(&kept);
-        token
+        granted
     }
 
     /// Makes a new pairing key and writes it where a client on this computer reads it.
@@ -447,6 +569,30 @@ impl Password {
         )
         .is_ok()
     }
+}
+
+/// New tokens for the `at`th device: an access token, and a refresh token in place of the one
+/// it had.
+fn issue(kept: &mut Kept, at: usize) -> Option<Granted> {
+    let key = signing_key(kept)?;
+    let device = kept.devices.get_mut(at)?;
+    let refresh = random_hex(32);
+    device.token = sha256(refresh.as_bytes());
+    let excess = device.retired.len().saturating_sub(RETIRED_KEPT);
+    device.retired.drain(..excess);
+    let signed = format!("{}.{}", device.id, now() + ACCESS_LASTS);
+    let signature = hex(ring::hmac::sign(&key, signed.as_bytes()).as_ref());
+    Some(Granted {
+        access: format!("{signed}.{signature}"),
+        refresh,
+    })
+}
+
+fn signing_key(kept: &Kept) -> Option<ring::hmac::Key> {
+    Some(ring::hmac::Key::new(
+        ring::hmac::HMAC_SHA256,
+        &unhex(&kept.secret)?,
+    ))
 }
 
 /// Seconds since 1970.
@@ -558,12 +704,18 @@ mod tests {
         let old = accounts.pair(&key, "Mac").unwrap();
         // Pairing again takes the place of the device paired before.
         let key = std::fs::read_to_string(&pairing).unwrap();
-        let token = accounts.pair(&key, "Mac").unwrap();
-        assert_eq!(accounts.caller(&old), None);
-        let mac = accounts.caller(&token).unwrap();
+        let paired = accounts.pair(&key, "Mac").unwrap();
+        assert_eq!(accounts.caller(&old.access), None);
+        let mac = accounts.caller(&paired.access).unwrap();
         assert_eq!(mac.user, OWNER);
         assert_eq!(accounts.caller("not a token"), None);
-        assert!(!std::fs::read_to_string(&file).unwrap().contains(&token));
+        assert_eq!(
+            accounts.caller(&paired.refresh),
+            None,
+            "a refresh token is not called with"
+        );
+        let saved = std::fs::read_to_string(&file).unwrap();
+        assert!(!saved.contains(&paired.refresh) && !saved.contains(&paired.access));
 
         // No password yet: nobody logs in.
         let owner = accounts.info(&mac).user;
@@ -608,8 +760,8 @@ mod tests {
         let code = accounts
             .grant(&owner, "correct horse", &sent, redirect)
             .unwrap();
-        let pc = accounts.redeem(&code, verifier, redirect, "PC").unwrap();
-        let pc = accounts.caller(&pc).unwrap();
+        let pc_tokens = accounts.redeem(&code, verifier, redirect, "PC").unwrap();
+        let pc = accounts.caller(&pc_tokens.access).unwrap();
 
         // Elsewhere, the password now is asked for to change it.
         let ticket = accounts.ticket(&pc, false);
@@ -630,9 +782,55 @@ mod tests {
         let names: Vec<&str> = info.devices.iter().map(|d| d.name.as_str()).collect();
         assert_eq!(names, ["Mac", "PC"]);
         assert!(info.devices[0].this);
+        // Access tokens outlast a restart.
+        assert_eq!(again.caller(&paired.access).as_ref(), Some(&mac));
         assert!(again.revoke(&mac, &pc.device));
-        assert_eq!(again.caller(&token).as_ref(), Some(&mac));
+        assert_eq!(again.caller(&pc_tokens.access), None);
         assert_eq!(again.info(&mac).devices.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn refresh_tokens_change_and_a_copied_one_logs_the_device_out() {
+        let dir = std::env::temp_dir().join(format!("freya-renewing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let pairing = dir.join("pairing.key");
+        let accounts = Accounts::open(None, Some(pairing.clone()));
+        let key = std::fs::read_to_string(&pairing).unwrap();
+        let first = accounts.pair(&key, "Mac").unwrap();
+        let mac = accounts.caller(&first.access).unwrap();
+
+        let second = accounts.renew(&first.refresh).unwrap();
+        assert_ne!(second.refresh, first.refresh);
+        assert_eq!(accounts.caller(&second.access).as_ref(), Some(&mac));
+        // The answer was lost: asked again at once, it renews again.
+        let third = accounts.renew(&first.refresh).unwrap();
+        assert!(
+            accounts.caller(&third.access).is_some(),
+            "not taken for a copy"
+        );
+        let fourth = accounts.renew(&third.refresh).unwrap();
+        assert!(accounts.caller(&fourth.access).is_some());
+
+        // A refresh token used before, coming again, or the one whose answer was lost: copied.
+        // The device is logged out.
+        assert_eq!(accounts.renew(&second.refresh), None);
+        assert_eq!(accounts.caller(&fourth.access), None);
+        assert_eq!(accounts.renew(&fourth.refresh), None);
+
+        // Forged or ended access tokens are not taken.
+        let key = std::fs::read_to_string(&pairing).unwrap();
+        let fresh = accounts.pair(&key, "Mac").unwrap();
+        let (signed, _) = fresh.access.rsplit_once('.').unwrap();
+        assert_eq!(
+            accounts.caller(&format!("{signed}.{}", "00".repeat(32))),
+            None
+        );
+        let id = signed.split('.').next().unwrap();
+        assert_eq!(
+            accounts.caller(&format!("{id}.1.{}", "00".repeat(32))),
+            None
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

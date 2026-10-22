@@ -313,7 +313,7 @@ fn a_track_plays_from_the_server() {
     player.play(freya_audio::Media {
         remote: Some(freya_audio::RemoteSource {
             url: audio_url(&address, &track.path),
-            token: None,
+            bearer: None,
             agent: None,
         }),
         ..freya_audio::Media::from(&track.path)
@@ -398,7 +398,7 @@ fn only_a_device_with_a_token_is_answered() {
 
     // Paired with the key in the file, once.
     let key = std::fs::read_to_string(&pairing_key).unwrap();
-    let token = Http::new(&address).pair(&key, "Mac").unwrap();
+    let token = Http::new(&address).pair(&key, "Mac").unwrap().access;
     assert!(Http::new(&address).pair(&key, "Mac again").is_err());
     let mac = connect(&address, Some(token.clone()), None);
     assert_eq!(mac.stats().unwrap().tracks, 1);
@@ -409,6 +409,32 @@ fn only_a_device_with_a_token_is_answered() {
         .call()
         .unwrap();
     assert_eq!(audio.status().as_u16(), 200);
+
+    // A device with only its refresh token renews, keeping the new one; one whose access token
+    // the server does not take renews and asks again. A refresh token used up, coming again, was
+    // copied: the device is logged out.
+    let store = TokenStore::new(dir.join("servers.json"), false);
+    let key = std::fs::read_to_string(&pairing_key).unwrap();
+    let tablet = Http::new(&address).pair(&key, "Tablet").unwrap();
+    let kept_in = || Some((store.clone(), address.clone()));
+    let renewing =
+        Remote(Http::new(&address).with_session(tablet.refresh.clone(), None, kept_in()));
+    assert_eq!(renewing.stats().unwrap().tracks, 1);
+    let kept = store.get(&address).unwrap();
+    assert_ne!(kept, tablet.refresh);
+    let stale = Granted {
+        access: "not.a.token".into(),
+        refresh: kept.clone(),
+        lasts: Duration::from_secs(3600),
+    };
+    let refused = Remote(Http::new(&address).with_session(kept.clone(), Some(&stale), kept_in()));
+    assert_eq!(refused.stats().unwrap().tracks, 1);
+    assert_ne!(store.get(&address).unwrap(), kept);
+    let copied = Remote(Http::new(&address).with_session(tablet.refresh.clone(), None, None));
+    assert!(copied.stats().is_err());
+    assert!(refused.stats().is_err());
+    store.remove(&address);
+    assert_eq!(store.get(&address), None);
 
     // Another device logs in in the browser once the user has a password, set on the page a
     // ticket opens: without the password now, from the server's own computer.
@@ -465,7 +491,7 @@ fn only_a_device_with_a_token_is_answered() {
         .unwrap();
     let pc = Http::new(&address).redeem(&login, code, "PC").unwrap();
     assert!(Http::new(&address).redeem(&login, code, "PC").is_err());
-    let pc = connect(&address, Some(pc), None);
+    let pc = connect(&address, Some(pc.access), None);
     let devices = pc.0.account().unwrap().unwrap().devices;
     assert_eq!(devices.len(), 2);
     // The Mac takes the PC's token back.
@@ -549,7 +575,7 @@ fn a_server_elsewhere_is_reached_over_tls_with_its_certificate_pinned() {
     player.play(freya_audio::Media {
         remote: Some(freya_audio::RemoteSource {
             url: audio_url_at(&base, &track),
-            token: None,
+            bearer: None,
             agent: Some(Arc::new(agent)),
         }),
         ..freya_audio::Media::from(&track)

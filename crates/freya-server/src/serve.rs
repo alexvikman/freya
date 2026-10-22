@@ -17,16 +17,17 @@
 //! - `GET /certificate`: the server's TLS certificate, in DER, for a client to pin the first
 //!   time it connects.
 //! - `POST /quit`: the server stops; only from this computer.
-//! - `POST /pair`: `{"key", "device"}`, the pairing key a client on this computer read: a token
-//!   for the device. Only from this computer.
-//! - `POST /token`: `{"grant_type": "authorization_code", "code", "code_verifier",
-//!   "redirect_uri", "device"}`: a token for the device, `{"access_token", "token_type"}`, for
-//!   the code the login page gave (see [`crate::pages`]).
+//! - `POST /pair`: `{"key", "device"}`, the pairing key a client on this computer read: tokens
+//!   for the device, as `/token` gives them. Only from this computer.
+//! - `POST /token`: tokens for a device, `{"access_token", "refresh_token", "token_type",
+//!   "expires_in"}` (see [`crate::accounts`]), for `{"grant_type": "authorization_code",
+//!   "code", "code_verifier", "redirect_uri", "device"}`, the code the login page gave (see
+//!   [`crate::pages`]), or for `{"grant_type": "refresh_token", "refresh_token"}`.
 //! - `GET /account`: the caller's account and devices; `POST /account/password-page`: a
 //!   ticket for the page the password is changed on, `{"ticket"}`; `POST /account/revoke`:
 //!   `{"device"}`; `POST /account/log-out`: the caller's own token taken back.
 //!
-//! Every request but `/version`, `/pair` and `/token` carries a device's token, as
+//! Every request but `/version`, `/pair` and `/token` carries a device's access token, as
 //! `Authorization: Bearer ...`, or is refused. The pages a browser opens, under
 //! [`freya_protocol::PAGES_PATH`], have their own rules (see [`crate::pages`]).
 //!
@@ -399,40 +400,40 @@ fn pair(accounts: &Accounts, request: &Request, local: bool) -> Response {
         return Response::error(400, "a key and a device");
     };
     match accounts.pair(pairing.key.trim(), &pairing.device) {
-        Some(token) => Response::json(200, &serde_json::json!({ "token": token })),
+        Some(granted) => Response::json(200, &granted.json()),
         None => Response::error(403, "not the pairing key"),
     }
 }
 
-/// A token for the device, given the code the login page sent the browser on with, and the
-/// secret the login's challenge was made from.
+/// Tokens for a device: given the code the login page sent the browser on with, and the
+/// secret the login's challenge was made from; or given the device's refresh token.
 fn token(accounts: &Accounts, request: &Request) -> Response {
     #[derive(serde::Deserialize)]
-    struct Traded {
-        grant_type: String,
-        code: String,
-        code_verifier: String,
-        redirect_uri: String,
-        device: String,
+    #[serde(tag = "grant_type", rename_all = "snake_case")]
+    enum Traded {
+        AuthorizationCode {
+            code: String,
+            code_verifier: String,
+            redirect_uri: String,
+            device: String,
+        },
+        RefreshToken {
+            refresh_token: String,
+        },
     }
-    let Ok(traded) = serde_json::from_slice::<Traded>(&request.body) else {
-        return Response::error(400, "a code, its verifier, where it was sent and a device");
+    let granted = match serde_json::from_slice::<Traded>(&request.body) {
+        Ok(Traded::AuthorizationCode {
+            code,
+            code_verifier,
+            redirect_uri,
+            device,
+        }) => accounts.redeem(&code, &code_verifier, &redirect_uri, &device),
+        Ok(Traded::RefreshToken { refresh_token }) => accounts.renew(&refresh_token),
+        Err(_) => return Response::error(400, "a code or a refresh token"),
     };
-    if traded.grant_type != "authorization_code" {
-        return Response::error(400, "only codes are traded for tokens");
-    }
-    let token = accounts.redeem(
-        &traded.code,
-        &traded.code_verifier,
-        &traded.redirect_uri,
-        &traded.device,
-    );
-    match token {
-        Some(token) => Response::json(
-            200,
-            &serde_json::json!({ "access_token": token, "token_type": "Bearer" }),
-        ),
-        None => Response::error(400, "the code is wrong, used or out of date"),
+    match granted {
+        Some(granted) => Response::json(200, &granted.json()),
+        None => Response::error(400, "invalid_grant: log in again"),
     }
 }
 

@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use symphonia::core::io::MediaSource;
 
-use crate::source::RemoteSource;
+use crate::source::{Bearer, RemoteSource};
 use crate::stream::Interrupt;
 
 /// How much each request asks for; little in tests, so their small files take many.
@@ -29,8 +29,8 @@ type Fetched = io::Result<(Vec<u8>, u64)>;
 struct Fetcher {
     agent: ureq::Agent,
     url: String,
-    /// "Bearer ...", when the server asks for a token.
-    authorization: Option<String>,
+    /// The access token, when the server asks for one.
+    bearer: Option<Bearer>,
     interrupt: Interrupt,
 }
 
@@ -58,12 +58,16 @@ impl Fetcher {
     }
 
     fn request(&self, start: u64) -> Fetched {
-        let range = format!("bytes={start}-{}", start + CHUNK - 1);
-        let mut request = self.agent.get(&self.url).header("Range", &range);
-        if let Some(authorization) = &self.authorization {
-            request = request.header("Authorization", authorization);
+        let token = self.bearer.as_ref().and_then(|bearer| bearer(None));
+        let mut answer = self.ask(start, token.as_deref())?;
+        // Ended or refused: asked once more with a renewed one.
+        if answer.status().as_u16() == 401
+            && let (Some(bearer), Some(sent)) = (&self.bearer, &token)
+            && let Some(renewed) = bearer(Some(sent))
+            && &renewed != sent
+        {
+            answer = self.ask(start, Some(&renewed))?;
         }
-        let mut answer = request.call().map_err(io::Error::other)?;
         if answer.status().as_u16() != 206 {
             return Err(io::Error::other(format!(
                 "the server answered {} to a range",
@@ -95,6 +99,15 @@ impl Fetcher {
             .map_err(io::Error::other)?;
         Ok((bytes, length))
     }
+
+    fn ask(&self, start: u64, token: Option<&str>) -> io::Result<ureq::http::Response<ureq::Body>> {
+        let range = format!("bytes={start}-{}", start + CHUNK - 1);
+        let mut request = self.agent.get(&self.url).header("Range", &range);
+        if let Some(token) = token {
+            request = request.header("Authorization", format!("Bearer {token}"));
+        }
+        request.call().map_err(io::Error::other)
+    }
 }
 
 pub(crate) struct RemoteFile {
@@ -121,7 +134,7 @@ impl RemoteFile {
         let fetcher = Fetcher {
             agent,
             url: remote.url.clone(),
-            authorization: remote.token.as_ref().map(|token| format!("Bearer {token}")),
+            bearer: remote.bearer.clone(),
             interrupt,
         };
         let (first, len) = fetcher.fetch(0)?;

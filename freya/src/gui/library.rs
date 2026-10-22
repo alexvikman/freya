@@ -796,9 +796,9 @@ impl LibraryPanel {
         };
         let (api, server): (Arc<dyn LibraryApi>, Arc<dyn Server>) = match source {
             LibrarySource::Local { address, program } => {
-                let (Some(pairing_key), Some(tokens)) = (
+                let (Some(pairing_key), Some(store)) = (
                     crate::settings::pairing_key_path(),
-                    crate::settings::tokens_path(),
+                    crate::settings::token_store(),
                 ) else {
                     log::warn!("no library: no folder for Freya's files");
                     return;
@@ -808,7 +808,7 @@ impl LibraryPanel {
                     &address,
                     &program,
                     &pairing_key,
-                    &tokens,
+                    &store,
                     &crate::settings::device_name(),
                     cache,
                 );
@@ -823,12 +823,12 @@ impl LibraryPanel {
                 (Arc::clone(&remote) as _, remote)
             }
             LibrarySource::Remote { pin, .. } => {
-                let tokens = crate::settings::tokens_path();
-                let token = tokens.as_deref().and_then(|file| {
-                    freya_client::Tokens::load(file).get(&freya_client::token_key(&pin))
-                });
+                let Some(store) = crate::settings::token_store() else {
+                    log::warn!("no library: no folder for Freya's files");
+                    return;
+                };
                 let cache = crate::settings::cache_dir().map(|dir| dir.join("pictures"));
-                let remote = freya_client::connect_pinned(pin, token, cache);
+                let remote = freya_client::connect_pinned(pin, store, cache);
                 match remote.0.account() {
                     Ok(Some(_)) => {}
                     Ok(None) => {
@@ -901,7 +901,7 @@ impl LibraryPanel {
         let here = source.here() || path.exists();
         (forced || !here).then(|| freya_audio::RemoteSource {
             url: freya_client::audio_url_at(audio, path),
-            token: remote.0.token().map(str::to_owned),
+            bearer: remote.0.bearer(),
             agent: Some(Arc::clone(agent)),
         })
     }

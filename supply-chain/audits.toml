@@ -361,6 +361,12 @@ criteria = "safe-to-deploy"
 delta = "2.1.1 -> 2.1.3"
 notes = "Default derived, architecture-dependent multiply_mix with wrapping_mul, the bulk hashing loop uses split_first_chunk; optional rand 0.9. No unsafe, no build script."
 
+[[audits.rustls-webpki]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "0.103.15 -> 0.103.16"
+notes = "Security fix (RUSTSEC-2026-0382): a path holding one of eight distrusted emSign public keys, bundled as data/distrusted/*.spki.der by include_bytes!, is rejected with a new CertDistrusted error, for intermediates and trust anchors alike; a test covers cross-signing. No unsafe, I/O or build script."
+
 [[audits.serde]]
 who = "Freya maintainers (AI-assisted review by Claude)"
 criteria = "safe-to-deploy"
@@ -456,6 +462,12 @@ who = "Freya maintainers (AI-assisted review by Claude)"
 criteria = "safe-to-deploy"
 delta = "0.2.100 -> 0.2.129"
 notes = "build.rs hashes its own src/lib.rs and src/tys.rs inside CARGO_MANIFEST_DIR and sets SCHEMA_FILE_HASH; the library becomes no_std with schema and naming helpers. No unsafe, network or process use."
+
+[[audits.webpki-roots]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "1.0.9 -> 1.0.10"
+notes = "Security fix (RUSTSEC-2026-0381): only removes the emSign ECC Root CA - G3 trust anchor, and raises rust-version to 1.71. No code changes."
 
 [[audits.wgpu-core]]
 who = "Freya maintainers (AI-assisted review by Claude)"

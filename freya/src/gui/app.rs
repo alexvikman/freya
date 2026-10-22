@@ -784,10 +784,11 @@ impl App {
     /// Shows the library of the server `chosen`, which the user just logged in to; this
     /// computer keeps its token and certificate.
     fn use_remote_server(&mut self, chosen: server_panel::Chosen) {
-        if let Some(file) = settings::tokens_path() {
-            let mut tokens = freya_client::Tokens::load(&file);
-            tokens.set(&freya_client::token_key(&chosen.pin), &chosen.token);
-            tokens.save(&file);
+        if let Some(store) = settings::token_store() {
+            store.set(
+                &freya_client::token_key(&chosen.pin),
+                &chosen.tokens.refresh,
+            );
         }
         self.settings.server = Some(settings::SavedServer::new(&chosen.name, &chosen.pin));
         self.settings.save();
@@ -834,10 +835,8 @@ impl App {
         let remote = self.library.remote();
         self.server.log_out(remote.as_deref());
         let pin = self.settings.server.as_ref().and_then(|s| s.pin());
-        if let (Some(pin), Some(file)) = (pin, settings::tokens_path()) {
-            let mut tokens = freya_client::Tokens::load(&file);
-            tokens.remove(&freya_client::token_key(&pin));
-            tokens.save(&file);
+        if let (Some(pin), Some(store)) = (pin, settings::token_store()) {
+            store.remove(&freya_client::token_key(&pin));
         }
         self.use_this_computer();
     }
