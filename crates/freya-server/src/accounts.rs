@@ -230,7 +230,10 @@ impl Refused {
 /// Tries of passwords, by what they were tried for: a user's name from an address, a name, or
 /// an address; each with the wrong ones it takes before waiting.
 #[derive(Default)]
-struct Tries(HashMap<String, Tried>);
+struct Tries(HashMap<String, Tried>, Option<Instant>);
+
+/// How often the tries forgotten are swept out of the table.
+const SWEEP_EVERY: Duration = Duration::from_secs(60);
 
 struct Tried {
     wrong: u32,
@@ -252,16 +255,20 @@ impl Tries {
     }
 
     /// Counts a try as wrong until it is known to be right: so tries made at once are all
-    /// counted before any password is checked. Whether it could be: with the table full of
-    /// waits still running, which are never dropped to make room, none is taken.
+    /// counted before any password is checked. Whether every key could be: those there already
+    /// always are, and new ones while there is room, made among tries not waiting; waits still
+    /// running are never dropped to make it.
     fn count(&mut self, keys: &[TriedFor]) -> bool {
         let now = Instant::now();
-        // Tidied only when full: a try costs nothing more otherwise.
-        if self.0.len() >= MAX_TRIED {
+        // Those forgotten go now and then, however full the table is.
+        if self
+            .1
+            .is_none_or(|swept| now.duration_since(swept) >= SWEEP_EVERY)
+        {
             self.0.retain(|_, tried| now < tried.last + TRIES_FORGOTTEN);
+            self.1 = Some(now);
         }
         if self.0.len() >= MAX_TRIED {
-            // Room is made among those not waiting, the oldest first.
             let mut idle: Vec<(Instant, String)> = self
                 .0
                 .iter()
@@ -274,19 +281,21 @@ impl Tries {
                 self.0.remove(&key);
             }
         }
-        let new = keys
-            .iter()
-            .filter(|(key, _)| !self.0.contains_key(key))
-            .count();
-        if self.0.len() + new > MAX_TRIED {
-            return false;
-        }
+        let mut all = true;
         for (key, free) in keys {
+            if !self.0.contains_key(key) && self.0.len() >= MAX_TRIED {
+                all = false;
+                continue;
+            }
             let tried = self.0.entry(key.clone()).or_insert(Tried {
                 wrong: 0,
                 until: now,
                 last: now,
             });
+            // Wrong ones a day ago are forgotten, swept or not.
+            if now >= tried.last + TRIES_FORGOTTEN {
+                tried.wrong = 0;
+            }
             tried.wrong += 1;
             tried.last = now;
             if let Some(over) = tried.wrong.checked_sub(*free) {
@@ -294,7 +303,7 @@ impl Tries {
                 tried.until = now + wait.min(LONGEST_WAIT);
             }
         }
-        true
+        all
     }
 
     /// A try counted was right: the name's are forgotten; the address's not, as someone
@@ -320,6 +329,7 @@ pub struct Accounts {
     grants: Mutex<Vec<Grant>>,
     tickets: Mutex<Vec<Ticket>>,
     tries: Mutex<Tries>,
+    home: Mutex<Tries>,
     proofs: Mutex<Tries>,
     /// The users who logged in from an address, by its network: tries for their name from
     /// elsewhere do not hold them up there.
@@ -362,6 +372,7 @@ impl Accounts {
             grants: Mutex::new(Vec::new()),
             tickets: Mutex::new(Vec::new()),
             tries: Mutex::new(Tries::default()),
+            home: Mutex::new(Tries::default()),
             proofs: Mutex::new(Tries::default()),
             known: Mutex::new(HashSet::new()),
             connection: Mutex::new(None),
@@ -484,10 +495,24 @@ impl Accounts {
             if let Some(wait) = tries.wait(&keys) {
                 return Err(Refused::Wait(wait));
             }
-            // With the table full of waits, only a user where they logged in before is let try:
-            // a guesser filling it locks nobody out of home.
-            if !tries.count(&keys) && !at_home {
-                return Err(Refused::Wait(FIRST_WAIT));
+            if !tries.count(&keys) {
+                // With the table full of waits, a user is let try only where they logged in
+                // before, counted in a table of their own: a guesser filling it locks nobody out
+                // of home, and gains no tries there either.
+                let home = network
+                    .as_ref()
+                    .filter(|_| at_home)
+                    .map(|network| [(format!("{named}@{network}"), FREE_TRIES)]);
+                let Some(home) = home else {
+                    return Err(Refused::Wait(FIRST_WAIT));
+                };
+                let mut at_home = self.home.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(wait) = at_home.wait(&home) {
+                    return Err(Refused::Wait(wait));
+                }
+                if !at_home.count(&home) {
+                    return Err(Refused::Wait(FIRST_WAIT));
+                }
             }
         }
         let right = match &hashed {
@@ -500,6 +525,10 @@ impl Accounts {
         match (id, right) {
             (Some(id), true) => {
                 self.tries
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .right(&keys);
+                self.home
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .right(&keys);
@@ -1329,6 +1358,13 @@ mod tests {
         }
         assert!(!tries.count(&key(MAX_TRIED)));
         assert!(tries.wait(&key(0)).is_some(), "the oldest wait is kept");
+        // One there already is still counted.
+        let before = tries.0[&format!("user:{}", MAX_TRIED - 1)].wrong;
+        assert!(tries.count(&key(MAX_TRIED - 1)));
+        assert_eq!(
+            tries.0[&format!("user:{}", MAX_TRIED - 1)].wrong,
+            before + 1
+        );
         // Tries not waiting make room.
         let mut idle = Tries::default();
         for i in 0..MAX_TRIED {
@@ -1336,6 +1372,19 @@ mod tests {
         }
         assert!(idle.count(&key(MAX_TRIED)));
         assert!(idle.0.len() <= MAX_TRIED / 2 + 1);
+        // Wrong ones a day ago are forgotten, the table swept or not.
+        let mut old = Tries::default();
+        let keys = [("user:kim".to_owned(), FREE_TRIES)];
+        for _ in 0..FREE_TRIES + 3 {
+            old.count(&keys);
+        }
+        // A computer up for less than a day has no instant a day ago: nothing to try there.
+        let last = old.0["user:kim"].last;
+        if let Some(day_ago) = last.checked_sub(TRIES_FORGOTTEN) {
+            old.0.get_mut("user:kim").unwrap().last = day_ago;
+            old.count(&keys);
+            assert_eq!(old.0["user:kim"].wrong, 1);
+        }
     }
 
     #[test]
