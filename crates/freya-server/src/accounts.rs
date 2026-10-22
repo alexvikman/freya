@@ -36,10 +36,12 @@ use serde::{Deserialize, Serialize};
 const ROUNDS: u32 = 600_000;
 /// How long a wrong password holds up the answer, so guessing one takes long.
 const WRONG_PASSWORD_WAIT: Duration = Duration::from_secs(1);
-/// Wrong passwords taken for a user's name, or from an address, before the next has to wait:
-/// first this long, twice as long after each, up to the longest, so a thousand guesses take
-/// days. Forgotten a day after the last.
+/// Wrong passwords taken for a user's name from an address, or from an address, before the
+/// next has to wait: first this long, twice as long after each, up to the longest, so a
+/// thousand guesses take days. For a name from anywhere, more, so a guesser elsewhere does not
+/// hold the user up as soon. Forgotten a day after the last.
 const FREE_TRIES: u32 = 5;
+const FREE_TRIES_FOR_A_NAME: u32 = 20;
 const FIRST_WAIT: Duration = Duration::from_secs(30);
 const LONGEST_WAIT: Duration = Duration::from_secs(15 * 60);
 const TRIES_FORGOTTEN: Duration = Duration::from_secs(24 * 60 * 60);
@@ -80,7 +82,7 @@ struct User {
     role: Role,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Password {
     /// Hex.
     salt: String,
@@ -195,7 +197,8 @@ impl Refused {
     }
 }
 
-/// Wrong passwords, by what they were tried for: a user's name, or an address.
+/// Tries of passwords, by what they were tried for: a user's name from an address, a name, or
+/// an address; each with the wrong ones it takes before waiting.
 #[derive(Default)]
 struct Tries(HashMap<String, Tried>);
 
@@ -205,21 +208,25 @@ struct Tried {
     last: Instant,
 }
 
+type TriedFor = (String, u32);
+
 impl Tries {
     /// How long `keys` wait before another try, at most.
-    fn wait(&self, keys: &[String]) -> Option<Duration> {
+    fn wait(&self, keys: &[TriedFor]) -> Option<Duration> {
         let now = Instant::now();
         keys.iter()
-            .filter_map(|key| self.0.get(key))
+            .filter_map(|(key, _)| self.0.get(key))
             .filter(|tried| tried.until > now)
             .map(|tried| tried.until - now)
             .max()
     }
 
-    fn wrong(&mut self, keys: &[String]) {
+    /// Counts a try as wrong until it is known to be right: so tries made at once are all
+    /// counted before any password is checked.
+    fn count(&mut self, keys: &[TriedFor]) {
         let now = Instant::now();
         self.0.retain(|_, tried| now < tried.last + TRIES_FORGOTTEN);
-        for key in keys {
+        for (key, free) in keys {
             let tried = self.0.entry(key.clone()).or_insert(Tried {
                 wrong: 0,
                 until: now,
@@ -227,15 +234,23 @@ impl Tries {
             });
             tried.wrong += 1;
             tried.last = now;
-            if let Some(over) = tried.wrong.checked_sub(FREE_TRIES) {
+            if let Some(over) = tried.wrong.checked_sub(*free) {
                 let wait = FIRST_WAIT.saturating_mul(1 << over.min(16));
                 tried.until = now + wait.min(LONGEST_WAIT);
             }
         }
     }
 
-    fn forget(&mut self, key: &str) {
-        self.0.remove(key);
+    /// A try counted was right: the name's are forgotten; the address's not, as someone
+    /// else's wrong ones from it still count.
+    fn right(&mut self, keys: &[TriedFor]) {
+        for (key, _) in keys {
+            if key.starts_with("user:") {
+                self.0.remove(key);
+            } else if let Some(tried) = self.0.get_mut(key) {
+                tried.wrong = tried.wrong.saturating_sub(1);
+            }
+        }
     }
 }
 
@@ -348,28 +363,41 @@ impl Accounts {
     /// The user `name` is, given their password, tried from `from`. A wrong one holds the
     /// answer up; after a few, for that name or from that address, none is tried for a while.
     fn check(&self, name: &str, password: &str, from: Option<IpAddr>) -> Result<u32, Refused> {
-        let named = format!("user:{}", name.trim().to_lowercase());
-        let mut keys = vec![named.clone()];
-        keys.extend(from.map(|ip| format!("from:{ip}")));
-        let tries = || self.tries.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(wait) = tries().wait(&keys) {
-            return Err(Refused::Wait(wait));
-        }
-        let user = {
+        let (id, hashed) = {
             let kept = self.kept();
-            kept.users
+            let user = kept
+                .users
                 .iter()
-                .find(|u| u.name.eq_ignore_ascii_case(name.trim()))
-                .and_then(|u| Some((u.id, u.password.as_ref()?.check(password))))
+                .find(|u| u.name.eq_ignore_ascii_case(name.trim()));
+            (user.map(|u| u.id), user.and_then(|u| u.password.clone()))
         };
-        match user {
-            Some((id, true)) => {
-                // The name's tries only: someone else's from the same address still count.
-                tries().forget(&named);
+        // A name only counts when there is such a user, so made-up ones fill nothing.
+        let mut keys: Vec<TriedFor> = Vec::new();
+        if let Some(id) = id {
+            keys.push((format!("user:{id}"), FREE_TRIES_FOR_A_NAME));
+        }
+        if let Some(ip) = from {
+            keys.push((format!("from:{ip}"), FREE_TRIES));
+            if let Some(id) = id {
+                keys.push((format!("user:{id}@{ip}"), FREE_TRIES));
+            }
+        }
+        {
+            let mut tries = self.tries.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(wait) = tries.wait(&keys) {
+                return Err(Refused::Wait(wait));
+            }
+            tries.count(&keys);
+        }
+        match (id, hashed.is_some_and(|hashed| hashed.check(password))) {
+            (Some(id), true) => {
+                self.tries
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .right(&keys);
                 Ok(id)
             }
             _ => {
-                tries().wrong(&keys);
                 std::thread::sleep(WRONG_PASSWORD_WAIT);
                 Err(Refused::Wrong)
             }
@@ -942,7 +970,7 @@ mod tests {
     #[test]
     fn wrong_passwords_wait_longer_and_longer() {
         let accounts = Accounts::open(None, None);
-        accounts
+        let kim = accounts
             .add_user("Kim", Role::Listener, "correct horse")
             .unwrap();
         assert!(
@@ -952,44 +980,76 @@ mod tests {
         );
         let here = Some(IpAddr::from([192, 168, 1, 20]));
         let elsewhere = Some(IpAddr::from([192, 168, 1, 21]));
+        let at = |ip: &str| {
+            [
+                (format!("user:{kim}"), FREE_TRIES_FOR_A_NAME),
+                (format!("from:{ip}"), FREE_TRIES),
+                (format!("user:{kim}@{ip}"), FREE_TRIES),
+            ]
+        };
         let mut tries = accounts.tries.lock().unwrap();
-        let keys = ["user:kim".to_owned(), "from:192.168.1.20".to_owned()];
+        let keys = at("192.168.1.20");
         for _ in 0..FREE_TRIES - 1 {
-            tries.wrong(&keys);
+            tries.count(&keys);
         }
         assert_eq!(tries.wait(&keys), None, "a few are free");
-        tries.wrong(&keys);
+        tries.count(&keys);
         let first = tries.wait(&keys).unwrap();
         assert!(first > FIRST_WAIT - Duration::from_secs(1) && first <= FIRST_WAIT);
-        tries.wrong(&keys);
+        tries.count(&keys);
         assert!(tries.wait(&keys).unwrap() > FIRST_WAIT, "longer each time");
         for _ in 0..20 {
-            tries.wrong(&keys);
+            tries.count(&keys);
         }
         assert!(tries.wait(&keys).unwrap() <= LONGEST_WAIT);
         drop(tries);
 
-        // Waiting, even the right password is not tried; nor from elsewhere, for that name.
+        // Waiting, even the right password is not tried from there.
         let refused = accounts.check("Kim", "correct horse", here);
         assert!(matches!(refused, Err(Refused::Wait(_))));
-        assert!(matches!(
-            accounts.check("Kim", "correct horse", elsewhere),
-            Err(Refused::Wait(_))
-        ));
         assert!(
             refused
                 .unwrap_err()
                 .said()
                 .starts_with("Too many wrong passwords")
         );
-        // Another name from elsewhere is not held up.
-        let owner = accounts.kept().users[0].name.clone();
-        assert_eq!(accounts.check(&owner, "", elsewhere), Err(Refused::Wrong));
-        // Once the wait is over, the right one is taken, and the name's tries forgotten.
+        // Too many for the name from anywhere: elsewhere waits too.
+        assert!(matches!(
+            accounts.check("Kim", "correct horse", elsewhere),
+            Err(Refused::Wait(_))
+        ));
+        // Made-up names count only for the address.
+        let mut tries = accounts.tries.lock().unwrap();
+        tries.0.clear();
+        drop(tries);
+        assert_eq!(
+            accounts.check("nobody", "x", elsewhere),
+            Err(Refused::Wrong)
+        );
+        assert_eq!(accounts.tries.lock().unwrap().0.len(), 1);
+
+        // A few from one address hold the name up there, not elsewhere.
         accounts.tries.lock().unwrap().0.clear();
-        let kim = accounts.check("Kim", "correct horse", here).unwrap();
-        assert_ne!(kim, OWNER);
-        assert!(accounts.tries.lock().unwrap().wait(&keys).is_none());
+        {
+            let mut tries = accounts.tries.lock().unwrap();
+            for _ in 0..FREE_TRIES {
+                tries.count(&at("192.168.1.20"));
+            }
+        }
+        assert!(matches!(
+            accounts.check("Kim", "correct horse", here),
+            Err(Refused::Wait(_))
+        ));
+        assert_eq!(accounts.check("Kim", "correct horse", elsewhere), Ok(kim));
+        // The right one forgets the name's tries from there.
+        assert!(
+            !accounts
+                .tries
+                .lock()
+                .unwrap()
+                .0
+                .contains_key(&format!("user:{kim}@192.168.1.21"))
+        );
     }
 
     #[test]

@@ -499,8 +499,8 @@ fn only_a_device_with_a_token_is_answered() {
     mac.0.revoke(&pc_device).unwrap();
     assert!(pc.stats().is_err());
     assert!(mac.stats().is_ok());
-    // A listener plays, and keeps their own favourites and playlists, but does not change
-    // the server, nor read its settings.
+    // A listener plays the library, but neither changes the server, reads its settings, nor
+    // reads or changes the owner's plays, favourites and playlists.
     accounts
         .add_user("Kim", freya_protocol::Role::Listener, "battery staple")
         .unwrap();
@@ -519,19 +519,26 @@ fn only_a_device_with_a_token_is_answered() {
         .split('&')
         .next()
         .unwrap();
-    let phone = Http::new(&address).redeem(&login, code, "Phone").unwrap();
-    let phone = connect(&address, Some(phone.access), None);
+    let kim = Http::new(&address).redeem(&login, code, "Phone").unwrap();
+    let audio = agent
+        .get(&audio_url(&address, &track))
+        .header("Authorization", format!("Bearer {}", kim.access))
+        .call()
+        .unwrap();
+    assert_eq!(audio.status().as_u16(), 200);
+    let phone = connect(&address, Some(kim.access), None);
     assert_eq!(phone.stats().unwrap().tracks, 1);
+    assert_eq!(phone.all_tracks().unwrap().len(), 1);
     assert!(phone.events().is_ok());
-    let at = std::time::SystemTime::now();
-    phone.set_artist_favorite("Sine", true, at).unwrap();
-    // This server keeps no playlists, but a listener is not refused them.
-    let saved = phone.save_playlist("Kim's", &[]);
-    assert!(!format!("{saved:?}").contains("admin"), "{saved:?}");
     assert_eq!(
         phone.0.account().unwrap().unwrap().role,
         freya_protocol::Role::Listener
     );
+    let at = std::time::SystemTime::now();
+    assert!(phone.set_artist_favorite("Sine", true, at).is_err());
+    assert!(phone.most_played(10).is_err());
+    assert!(phone.playlists().is_err());
+    assert!(phone.save_playlist("Kim's", &[]).is_err());
     let refused = phone.settings().unwrap_err();
     assert!(refused.0.contains("admin"), "{refused:?}");
     assert!(phone.set_settings(&ServerSettings::default()).is_err());

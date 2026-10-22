@@ -225,12 +225,12 @@ with_server_control!(calls {
     trait ServerControl, dispatch_control, SERVER_CONTROL_CALLS
 });
 
-/// What a listener may call: reading the library and playing it, their own plays, favourites,
-/// playlists and Last.fm. Nothing that changes the server or the library everyone shares, nor
-/// its settings, which hold the admin's own keys: a call not named here is the admin's alone,
-/// so one added later is too until it is named.
+/// What a listener may call: reading the library everyone shares, to play it. Plays,
+/// favourites, playlists and Last.fm are kept for one user yet, the owner, so a listener
+/// neither reads nor changes them until each user has their own; nor the server's settings,
+/// which hold the admin's own keys. A call not named here is the admin's alone, so one added
+/// later is too until it is named.
 pub const LISTENER_CALLS: &[&str] = &[
-    // The library, read.
     "stats",
     "artists",
     "artists_by",
@@ -246,15 +246,10 @@ pub const LISTENER_CALLS: &[&str] = &[
     "genre_tracks",
     "all_tracks",
     "recently_added",
-    "recently_played",
-    "most_played",
     "search",
-    "album_plays",
     "album_covers",
     "artist_mbid",
     "artist_summary",
-    "artist_popular",
-    "genre_popular",
     "artist_edit",
     "artist_edits",
     "genre_infos",
@@ -266,30 +261,6 @@ pub const LISTENER_CALLS: &[&str] = &[
     "artist_text",
     "artist_article",
     "is_scanning",
-    // Their own plays, favourites and playlists.
-    "record_play",
-    "save",
-    "set_album_favorite",
-    "album_favorites",
-    "set_artist_favorite",
-    "artist_favorites",
-    "set_playlist_favorite",
-    "playlist_favorites",
-    "playlist_info",
-    "set_playlist_info",
-    "playlist_added",
-    "note_playlist_added",
-    "playlists",
-    "save_playlist",
-    "rename_saved_playlist",
-    "delete_playlist",
-    // Their own Last.fm.
-    "lastfm_status",
-    "lastfm_connect",
-    "lastfm_cancel",
-    "lastfm_disconnect",
-    "lastfm_now_playing",
-    "lastfm_scrobble",
 ];
 
 /// How an argument of a call goes over the network: as its owned form, which the call is lent.
@@ -500,13 +471,22 @@ mod tests {
                 "{call} is not a call"
             );
         }
-        for admins in [
+        let owners = [
             "set_settings",
             "settings",
             "rescan",
             "server_folders",
             "set_artist_edit",
-        ] {
+            // The owner's own, until each user has theirs.
+            "record_play",
+            "most_played",
+            "album_favorites",
+            "set_album_favorite",
+            "playlists",
+            "save_playlist",
+            "lastfm_connect",
+        ];
+        for admins in owners {
             assert!(!LISTENER_CALLS.contains(&admins), "{admins}");
         }
     }
