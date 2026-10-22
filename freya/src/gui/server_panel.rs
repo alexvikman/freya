@@ -53,8 +53,10 @@ pub struct ServerPanel {
     /// computer knew already, by its certificate.
     login_verified: bool,
     known_certificate: Option<Vec<u8>>,
-    /// The connection code shown on this computer, for a new device, and until when.
+    /// The connection code shown on this computer, for a new device, and until when; why
+    /// none could be made.
     connection_code: Option<(String, SystemTime)>,
+    connection_code_error: String,
     /// While the login page or the password page is open in the browser.
     login_waiting: bool,
     password_waiting: bool,
@@ -86,6 +88,7 @@ impl ServerPanel {
             login_verified: false,
             known_certificate: None,
             connection_code: None,
+            connection_code_error: String::new(),
             login_waiting: false,
             password_waiting: false,
             account: None,
@@ -181,14 +184,19 @@ impl ServerPanel {
     /// Shows a new connection code for a device to type, made by the server on this computer.
     pub fn show_connection_code(&mut self, remote: Option<&Remote<Http>>) {
         let Some(remote) = remote else {
+            self.connection_code_error = "Freya is not connected to its server.".into();
             return;
         };
         match remote.0.connection_code() {
             Ok((code, lasts)) => {
                 self.connection_code =
                     Some((freya_protocol::show_code(&code), SystemTime::now() + lasts));
+                self.connection_code_error.clear();
             }
-            Err(e) => log::warn!("could not make a connection code: {e}"),
+            Err(e) => {
+                log::warn!("could not make a connection code: {e}");
+                self.connection_code_error = format!("No code could be made: {e}");
+            }
         }
     }
 
@@ -489,6 +497,7 @@ impl ServerPanel {
                 ),
             ),
             ("connection-code-until", string(code_until)),
+            ("connection-code-error", string(&self.connection_code_error)),
             ("login-error", string(&self.login_error)),
         ]
     }

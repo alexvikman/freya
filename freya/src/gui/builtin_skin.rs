@@ -1103,6 +1103,7 @@ skin_api! {
         Server."login-verified" => set_login_verified, get_login_verified;
         Server."connection-code" => set_connection_code, get_connection_code;
         Server."connection-code-until" => set_connection_code_until, get_connection_code_until;
+        Server."connection-code-error" => set_connection_code_error, get_connection_code_error;
         Server."login-error" => set_login_error, get_login_error;
         Server."browsing" => set_browsing, get_browsing;
         Server."browse-folder" => set_browse_folder, get_browse_folder;

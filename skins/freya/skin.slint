@@ -8055,7 +8055,8 @@ component SettingsView inherits Rectangle {
                 }
                 if !Server.remote && Server.network: SettingsRow {
                     label: "Add a device";
-                    detail: Server.connection-code != ""
+                    detail: Server.connection-code-error != "" ? Server.connection-code-error
+                        : Server.connection-code != ""
                         ? "Type the code on the other device. It works until " + Server.connection-code-until + "."
                         : "A new device proves it reached this computer with a code shown here.";
 

@@ -1150,6 +1150,8 @@ export global Server {
     /// until when it works ("20:31"); "" when none is.
     in property <string> connection-code;
     in property <string> connection-code-until;
+    /// Why no connection code could be shown, after `show-connection-code`; "" otherwise.
+    in property <string> connection-code-error;
 
     /// Look for servers on the network.
     callback find();
