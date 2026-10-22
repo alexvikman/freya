@@ -6,6 +6,8 @@ pub mod autostart;
 pub mod discovery;
 mod folder_watch;
 mod folders;
+#[cfg(test)]
+mod hostile;
 pub mod http;
 mod lastfm;
 #[cfg(target_os = "macos")]

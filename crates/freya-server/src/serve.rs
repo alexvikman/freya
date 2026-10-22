@@ -789,4 +789,39 @@ mod tests {
             LastFmStatus::default()
         )));
     }
+
+    #[test]
+    fn any_range_or_escape_is_read_within_bounds() {
+        let mut state: u64 = 0x0bad_cafe_dead_beef;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let pieces = [
+            "bytes=",
+            "-",
+            ",",
+            "0",
+            "1",
+            "99",
+            "18446744073709551615",
+            " ",
+            "%",
+            "%4",
+            "%41",
+            "x",
+        ];
+        for _ in 0..20_000 {
+            let text: String = (0..next() % 8)
+                .map(|_| pieces[(next() % pieces.len() as u64) as usize])
+                .collect();
+            let length = next() % 2_000;
+            if let Some((from, to)) = byte_range(&text, length) {
+                assert!(from <= to && to < length, "{text}: {from}-{to} of {length}");
+            }
+            let _ = percent_decode(&text);
+        }
+    }
 }

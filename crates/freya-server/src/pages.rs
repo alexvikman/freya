@@ -420,4 +420,29 @@ mod tests {
         );
         assert_eq!(percent_encode("a b&c=✓"), "a%20b%26c%3D%E2%9C%93");
     }
+
+    #[test]
+    fn any_text_survives_a_form_and_a_page() {
+        let mut state: u64 = 0x1234_5678_9abc_def1;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for _ in 0..5_000 {
+            let text: String = (0..next() % 24)
+                .filter_map(|_| char::from_u32((next() % 0x2_0000) as u32))
+                .collect();
+            // Encoded for a form, read back the same.
+            let form = format!("a={}&b=x", percent_encode(&text));
+            assert_eq!(value(&values(&form), "a"), text);
+            // Escaped for a page, nothing in it opens a tag or an attribute.
+            let shown = escape(&text);
+            assert!(!shown.contains(['<', '>', '"', '\'']));
+            // Any query is read without failing, and no callback but Freya's is taken.
+            let _ = values(&text);
+            assert!(!is_callback(&text, 47477) || text == "http://127.0.0.1:47477/callback");
+        }
+    }
 }
