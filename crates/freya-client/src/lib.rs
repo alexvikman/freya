@@ -1,9 +1,10 @@
 //! A library elsewhere, as Freya's client asks of it: over HTTP, from a Freya server.
 
+use std::cell::Cell;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -24,6 +25,44 @@ const STREAM_LASTS: Duration = Duration::from_secs(70);
 const STARTING: Duration = Duration::from_secs(15);
 /// The most the picture cache keeps; beyond it, the pictures used longest ago go.
 const CACHE_LIMIT: u64 = 1024 * 1024 * 1024;
+
+/// The thread the window draws on, which a call to the server holds up while it waits.
+static WINDOW_THREAD: OnceLock<std::thread::ThreadId> = OnceLock::new();
+
+thread_local! {
+    /// Whether a call made on this thread is being timed already.
+    static TIMING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Marks this thread as the one the window draws on: each call to a server made on it is
+/// logged with how long it held the window up.
+pub fn window_draws_on_this_thread() {
+    let _ = WINDOW_THREAD.set(std::thread::current().id());
+}
+
+/// Logs, when dropped, how long a call made on the window's thread held it up.
+struct HeldUp(Option<(String, Instant)>);
+
+impl HeldUp {
+    fn by(what: impl FnOnce() -> String) -> Self {
+        let on_window = WINDOW_THREAD.get() == Some(&std::thread::current().id());
+        let first = on_window && !TIMING.replace(true);
+        Self(first.then(|| (what(), Instant::now())))
+    }
+}
+
+impl Drop for HeldUp {
+    fn drop(&mut self) {
+        if let Some((what, started)) = self.0.take() {
+            TIMING.set(false);
+            log::info!(
+                target: "freya_client::window",
+                "{what} held the window up {:.1} ms",
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+    }
+}
 
 /// The largest answer taken: every track of a large library, as JSON. A server may be hostile,
 /// so what else it sends is taken only as large as it can need: a picture, a page, a token or
@@ -486,6 +525,7 @@ impl Http {
     /// Sends what `send` makes, and once more with a renewed token when the server no longer
     /// took the one sent.
     fn send(&self, send: impl Fn(&Self) -> Result<Answer, ureq::Error>) -> ApiResult<Answer> {
+        let _held = HeldUp::by(|| "a request".into());
         let sent = self.session.as_ref().and_then(|_| self.access());
         let answer = send(self).map_err(failed)?;
         match (&self.session, sent) {
@@ -829,6 +869,7 @@ fn json_at_most(answer: Answer, limit: u64) -> ApiResult<serde_json::Value> {
 
 impl Transport for Http {
     fn call(&self, method: &str, args: serde_json::Value) -> ApiResult<Vec<u8>> {
+        let _held = HeldUp::by(|| method.to_owned());
         let answer = self.send(|http| {
             http.post(&format!("/call/{method}"))
                 .header("Content-Type", "application/json")
@@ -841,6 +882,7 @@ impl Transport for Http {
     }
 
     fn picture(&self, checksum: &str) -> ApiResult<Option<Vec<u8>>> {
+        let _held = HeldUp::by(|| "a picture".into());
         if !freya_protocol::is_checksum(checksum) {
             return Ok(None);
         }
@@ -874,6 +916,7 @@ impl Transport for Http {
     }
 
     fn album_art(&self, track: &Path, largest: u32) -> ApiResult<Option<Vec<u8>>> {
+        let _held = HeldUp::by(|| "album art".into());
         let asked = serde_json::json!({ "track": track, "largest": largest });
         let answer = self.send(|http| {
             http.post("/album-art")

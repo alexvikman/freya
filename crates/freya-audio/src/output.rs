@@ -75,6 +75,11 @@ impl Renderer {
         } else {
             wanted.min(self.consumer.slots() / ch)
         };
+        if !self.shared.paused.load(Ordering::Relaxed) && frames < wanted {
+            self.shared
+                .starved
+                .fetch_add((wanted - frames) as u64, Ordering::Relaxed);
+        }
 
         if frames > 0 {
             let n = frames * ch;

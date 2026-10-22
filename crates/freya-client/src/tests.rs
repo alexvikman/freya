@@ -801,3 +801,270 @@ fn checksum_of(bytes: &[u8]) -> String {
         .map(|b| format!("{b:02x}"))
         .collect()
 }
+
+/// Passes bytes between a client and `target`, each `delay` late on its way, as a network
+/// between two computers would: its address.
+fn delayed(target: std::net::SocketAddr, delay: std::time::Duration) -> std::net::SocketAddr {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let pass = move |mut from: TcpStream, mut to: TcpStream| {
+        let (send, receive) = std::sync::mpsc::channel::<(std::time::Instant, Vec<u8>)>();
+        std::thread::spawn(move || {
+            let mut buffer = vec![0; 64 * 1024];
+            while let Ok(read @ 1..) = from.read(&mut buffer) {
+                let due = std::time::Instant::now() + delay;
+                if send.send((due, buffer[..read].to_vec())).is_err() {
+                    break;
+                }
+            }
+        });
+        std::thread::spawn(move || {
+            for (due, bytes) in receive {
+                std::thread::sleep(due.saturating_duration_since(std::time::Instant::now()));
+                if to.write_all(&bytes).is_err() {
+                    break;
+                }
+            }
+            let _ = to.shutdown(std::net::Shutdown::Write);
+        });
+    };
+    std::thread::spawn(move || {
+        for client in listener.incoming().flatten() {
+            let Ok(server) = TcpStream::connect(target) else {
+                continue;
+            };
+            let _ = client.set_nodelay(true);
+            let _ = server.set_nodelay(true);
+            pass(client.try_clone().unwrap(), server.try_clone().unwrap());
+            pass(server, client);
+        }
+    });
+    address
+}
+
+/// Measures the calls a client makes against a real library over TLS, a network's delay
+/// between: `FREYA_BENCH_LIBRARY` names a copy of a server's folder, `FREYA_BENCH_DELAY_MS`
+/// the delay each way (1 by default).
+/// `FREYA_BENCH_LIBRARY=… cargo test --release -p freya-client measure -- --ignored --nocapture`
+#[test]
+#[ignore = "measures a real library"]
+fn measure_a_real_library() {
+    use std::time::{Duration, Instant};
+    let Some(folder) = std::env::var_os("FREYA_BENCH_LIBRARY").map(PathBuf::from) else {
+        return;
+    };
+    let delay = std::env::var("FREYA_BENCH_DELAY_MS")
+        .ok()
+        .and_then(|d| d.parse().ok())
+        .unwrap_or(1);
+    let pictures = || Some(Pictures::new(folder.join("pictures")));
+    let open = || Library::open(&folder.join("library.sqlite3")).unwrap();
+    let local: Arc<dyn LibraryApi> = Arc::new(LocalLibrary::new(open(), pictures()));
+    let identity = freya_server::tls::Identity::make().unwrap();
+    let served = Served {
+        library: Arc::new(LocalLibrary::new(open(), pictures())),
+        server: None,
+        quit: None,
+        accounts: None,
+        certificate: Some(identity.certificate.clone()),
+        callback_port: freya_protocol::CALLBACK_PORT,
+    };
+    let server = Server::start_tls(
+        "127.0.0.1:0",
+        freya_server::handler(served),
+        identity.server_config().unwrap(),
+    )
+    .unwrap();
+    let address = delayed(server.address(), Duration::from_millis(delay));
+    let cache = std::env::temp_dir().join(format!("freya-bench-{}", std::process::id()));
+    let mut http = Http::pinned(Pin {
+        address,
+        certificate: identity.certificate.clone(),
+    });
+    http.cache = Some(PictureCache::new(cache.clone()));
+    let (audio, agent) = http.audio(freya_audio::REMOTE_TIMEOUT);
+    let agent = Arc::new(agent);
+    let remote: Arc<dyn LibraryApi> = Arc::new(Remote(http));
+
+    let tracks = local.all_tracks().unwrap();
+    let albums = local.all_albums().unwrap();
+    let album = albums.iter().max_by_key(|a| a.tracks).unwrap().clone();
+    let artist = album.artist.clone();
+    println!(
+        "{} tracks, {} albums, {delay} ms each way\n{:<22}{:>10}{:>10}{:>10}{:>11}",
+        tracks.len(),
+        albums.len(),
+        "call",
+        "here ms",
+        "first ms",
+        "again ms",
+        "JSON KB"
+    );
+    let time = |run: &dyn Fn(&dyn LibraryApi) -> usize| {
+        let started = Instant::now();
+        run(&*local);
+        let here = started.elapsed();
+        let started = Instant::now();
+        let bytes = run(&*remote);
+        let first = started.elapsed();
+        let started = Instant::now();
+        run(&*remote);
+        (here, first, started.elapsed(), bytes)
+    };
+    let size = |value: &dyn erased::Sized| value.json_len();
+    macro_rules! measure {
+        ($name:expr, |$api:ident| $call:expr) => {{
+            let (here, first, again, bytes) = time(&|$api: &dyn LibraryApi| size(&$call.unwrap()));
+            println!(
+                "{:<22}{:>10.1}{:>10.1}{:>10.1}{:>11.1}",
+                $name,
+                here.as_secs_f64() * 1000.0,
+                first.as_secs_f64() * 1000.0,
+                again.as_secs_f64() * 1000.0,
+                bytes as f64 / 1024.0
+            );
+        }};
+    }
+    measure!("stats", |api| api.stats());
+    measure!("artists", |api| api.artists());
+    measure!("artists_by", |api| api
+        .artists_by(freya_protocol::ArtistOrder::Name));
+    measure!("all_albums", |api| api.all_albums());
+    measure!("albums_by", |api| api.albums_by(AlbumOrder::Name));
+    measure!("all_tracks", |api| api.all_tracks());
+    measure!("album_covers", |api| api.album_covers());
+    measure!("artist_edits", |api| api.artist_edits());
+    measure!("genres", |api| api.genres());
+    measure!("genre_infos", |api| api.genre_infos());
+    measure!("recently_added", |api| api.recently_added(50));
+    measure!("recently_played", |api| api.recently_played(50));
+    measure!("most_played", |api| api.most_played(50));
+    measure!("search", |api| api.search("the", 50));
+    measure!("album_tracks", |api| api
+        .album_tracks(artist.as_deref(), album.name.as_deref()));
+    measure!("artist_tracks", |api| api.artist_tracks(artist.as_deref()));
+    measure!("artist_summary", |api| api
+        .artist_summary(artist.as_deref(), 3));
+    measure!("album_favorites", |api| api.album_favorites());
+    measure!("artist_favorites", |api| api.artist_favorites());
+
+    // Covers: the first albums of a grid, each its own request.
+    let covers = local.album_covers().unwrap();
+    let checksums: Vec<String> = covers
+        .values()
+        .filter_map(|c| c.cover.clone())
+        .take(60)
+        .collect();
+    let started = Instant::now();
+    let mut bytes = 0;
+    for checksum in &checksums {
+        bytes += remote.picture(checksum).unwrap().map_or(0, |p| p.len());
+    }
+    println!(
+        "{} covers: {:.1} ms, {:.1} KB, from the cache {:.1} ms",
+        checksums.len(),
+        started.elapsed().as_secs_f64() * 1000.0,
+        bytes as f64 / 1024.0,
+        {
+            let started = Instant::now();
+            for checksum in &checksums {
+                remote.picture(checksum).unwrap();
+            }
+            started.elapsed().as_secs_f64() * 1000.0
+        }
+    );
+    let _ = std::fs::remove_dir_all(&cache);
+
+    // Sound: the first of it, after a seek, and between two tracks, for a few files of each
+    // kind, each of another album, so none is read warm.
+    let player = freya_audio::Player::silent(48_000);
+    let media = |track: &freya_protocol::Track, start: Duration| freya_audio::Media {
+        start,
+        remote: Some(freya_audio::RemoteSource {
+            url: audio_url_at(&audio, &track.path),
+            bearer: None,
+            agent: Some(Arc::clone(&agent)),
+        }),
+        ..freya_audio::Media::from(&track.path)
+    };
+    let started = |player: &freya_audio::Player| loop {
+        match player.events().recv_timeout(Duration::from_secs(30)) {
+            Ok(freya_audio::Event::TrackStarted(_)) => break,
+            Ok(_) => {}
+            Err(e) => panic!("no sound: {e}"),
+        }
+    };
+    let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+    println!(
+        "{:<6}{:>12}{:>14}{:>12}",
+        "file", "first ms", "seek silent", "gap ms"
+    );
+    for kind in ["mp3", "flac", "m4a"] {
+        let mut albums_seen = std::collections::HashSet::new();
+        let picked: Vec<_> = tracks
+            .iter()
+            .filter(|t| {
+                t.part.is_none()
+                    && t.duration.is_some_and(|d| d > Duration::from_secs(60))
+                    && t.path
+                        .extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case(kind))
+                    && t.path.exists()
+                    && albums_seen.insert(t.album.clone())
+            })
+            .take(4)
+            .collect();
+        // Read once, so what is measured is the way between client and server, not the disk.
+        for track in &picked {
+            let _ = std::fs::read(&track.path);
+        }
+        for pair in picked.chunks(2) {
+            let [first, second] = pair else { break };
+            let duration = first.duration.unwrap();
+            let asked = Instant::now();
+            player.play(media(first, Duration::ZERO));
+            started(&player);
+            let first_sound = asked.elapsed();
+            std::thread::sleep(Duration::from_millis(500));
+            let before = player.starved();
+            let target = duration.mul_f64(0.7);
+            player.seek(target);
+            let waited = Instant::now();
+            while player.status().position < target + Duration::from_millis(500)
+                && waited.elapsed() < Duration::from_secs(30)
+            {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let seek_silent = player.starved() - before;
+            // The last seconds of one, the next queued after it.
+            player.play(media(first, duration - Duration::from_secs(3)));
+            started(&player);
+            player.set_next(Some(media(second, Duration::ZERO)));
+            let before = player.starved();
+            started(&player);
+            std::thread::sleep(Duration::from_millis(500));
+            let gap = player.starved() - before;
+            println!(
+                "{kind:<6}{:>12.1}{:>14.1}{:>12.1}",
+                ms(first_sound),
+                ms(seek_silent),
+                ms(gap)
+            );
+        }
+    }
+    player.stop();
+}
+
+/// The length of a value as JSON, for the measurements.
+mod erased {
+    pub trait Sized {
+        fn json_len(&self) -> usize;
+    }
+    impl<T: serde::Serialize> Sized for T {
+        fn json_len(&self) -> usize {
+            serde_json::to_vec(self).map_or(0, |v| v.len())
+        }
+    }
+}

@@ -80,6 +80,7 @@ pub struct Options {
 pub fn run(options: Options) -> anyhow::Result<()> {
     let started = Instant::now();
     let _ = app::STARTED.set(started);
+    freya_client::window_draws_on_this_thread();
     let window_events = WindowEvents::default();
     app_icon::set_name();
     select_backend(options.renderer, &window_events)?;

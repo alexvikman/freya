@@ -201,6 +201,60 @@ to log the other devices out.
 | **S5** ✓ | **The client trusts the server less**: a library elsewhere always streamed, never looked for by its paths here; limits on all a server sends (1 MB for small answers and event lines, 32 MB for pictures), pictures decoded within 12,000 pixels and 256 MB; the picture cache taking only bytes whose SHA-256 is their name; the proxy setting its own security headers (no script on a page, so one cannot read what a password manager fills in) and letting a page send the browser only to its own pages or the callback; the fingerprint shown computed from the certificate pinned, and a found server whose certificate is not the one it named refused; at most 32 found; pages opened only over HTTPS, or Freya's own, in plain URL characters. Not done: an origin of its own per server for the login page (Safari does not reach `*.localhost`, and macOS has only 127.0.0.1): a server is logged in to only once its connection code proved it | A hostile server cannot harm the client or draw out a password |
 | **S7** ✓ | **Checking**: hostile and random input against the HTTP parser and the forms; `docs/SECURITY.md` with the threat model; a new independent review of all of it | The review finds nothing serious |
 
+### Speed between server and client (from 2026-10-22)
+
+Measured on the dev library (7,832 tracks, 782 albums) over TLS with a delay each way: every
+call costs a round trip and more, the whole library is 3 MB of JSON each time it is asked
+for, the answer is built through a JSON tree on the server (13 ms of 16), nothing is
+compressed or kept, and covers come one at a time. Worse, the client makes every call on the
+UI thread: startup takes some 20 calls and one per artist, every click four more, search
+eight per keystroke with the whole artist, album and genre lists again, and a scan reloads the
+view every second. The library's SQL is not the slow part.
+
+| At 10 ms each way (Wi-Fi) | Now |
+|---|---|
+| `all_tracks` | 72 ms, 3.0 MB |
+| A call on a connection made | 25 ms; a new connection 47 ms |
+| 60 covers of a grid | 1.4 s, 3.6 MB |
+| A search keystroke | 8 calls on the UI thread |
+| The next track | opened when the last ends, from a 1 MB first part |
+
+Decided with the user: as fast as it can be made. Each step is measured before and after
+with the same rig (`measure_a_real_library`, a delay between client and server), and keeps
+what the hardening made: answers per user and role, nothing compressed that carries a secret.
+
+| # | Milestone | Done when |
+|---|---|---|
+| **P1** ✓ | **Measuring**: the rig for the library's calls, covers, the time to the first sound, seeking and the gap between tracks, at 0, 2 and 10 ms each way; the client logs every call made on the UI thread and how long it waited | Each number below has a before |
+| **P2** | **The server answers at once**: answers serialized straight to bytes; gzip for large answers; readers that do not wait for each other (a pool of SQLite connections), SQLite tuned (statement cache, cache, memory-mapped reads); a whole answer in one write, audio in 64 KB writes, a socket's deadline set only when it changes; connections and the event stream kept open minutes for known devices | `all_tracks` in under a third of the time and bytes |
+| **P3** | **Nothing fetched twice**: the library has a generation, bumped by every change; answers carry it as an ETag and a client that has them gets 304 with no body; the client keeps the answers in memory and the whole-library ones on disk, so it shows the library at once on start and checks it after; favourites and edits kept until they change; a scan's progress reloads the view at most every few seconds | Going back to a view costs one round trip without a body; the library shows before the server answers |
+| **P4** | **Fewer round trips**: several calls in one request; a playlist's tracks in one call; an artist's page, a genre's page and search each one call on the server, search waiting for a pause in typing; no call per artist for its picture | A page is one round trip; a keystroke at most one |
+| **P5** | **The window never waits**: every call to the server made on a worker, its answer applied when it comes, an older one dropped; connecting and renewing tokens off the UI thread too | No call on the UI thread in the log; scrolling stays smooth with 100 ms each way |
+| **P6** | **Pictures**: thumbnails made and kept by the server in the sizes the grid asks for; several fetched at once, the ones in view first; the cover of what plays from what the scan kept instead of read from the file each time | 60 covers at 10 ms each way in under 0.2 s |
+| **P7** | **Sound**: the next track opened and its first part fetched before the current ends, so tracks follow without a gap; a first part small enough to start at once, later ones larger; MP3s sought by estimate first; a part no longer needed given up; the audio connection kept warm | The first sound in two round trips and a little; no gap between tracks at 10 ms each way |
+
+#### Measured before (P1)
+
+`FREYA_BENCH_LIBRARY=<a copy of a server's folder> FREYA_BENCH_DELAY_MS=<ms each way> cargo
+test --release -p freya-client measure -- --ignored --nocapture`; the dev library, 7,832
+tracks, its music on a NAS and read once before, so the disk is not measured. Milliseconds.
+
+| Each way | 0 | 2 | 10 | 40 |
+|---|---|---|---|---|
+| A call, connection made | 0.1–1 | 5.2 | 25 | 88 |
+| The first call, new connection | 2.8 | 12 | 47 | 176 |
+| `all_tracks` (3.0 MB; 16 ms in the server's process) | 40 | 42 | 72 | 141 |
+| `all_albums` (172 KB) | 3.7 | 8.9 | 31 | 101 |
+| 60 covers of the grid (3.4 MB) | 36 | 308 | 1,403 | 4,515 |
+| The first sound (MP3, FLAC, M4A) | 17–24 | 32–39 | 83–128 | 278–372 |
+| Silent after seeking to 70 % | 11–32 | 11–53 | 21–139 | 85–437 |
+| Gap between two tracks (MP3 and FLAC; M4A) | 0; 11 | 0; 11 | 0; 32 | 0–17; 75 |
+
+The window, started against its own server on the same computer (no delay): 475 calls on
+the UI thread in its first 20 seconds, 289 of them `albums` and 168 `artist_mbid`, made
+for the artists' pictures. Each would hold the window up 25 ms at 10 ms each way: 12 seconds
+in all. The client logs each such call, `freya_client::window`.
+
 ### U7: the hologram (from 2026-10-17)
 
 The advanced visualizer becomes a hologram in the style of Joi in Blade Runner 2049: a woman

@@ -31,6 +31,9 @@ pub(crate) struct Shared {
     pub flush: AtomicBool,
     /// Frames played by the callback since the stream started. Never decreases.
     pub consumed: AtomicU64,
+    /// Frames the callback had nothing for while not paused, as gaps, a slow start or the end
+    /// of what was queued. Never decreases.
+    pub starved: AtomicU64,
     pub eq: SharedEq,
     /// Whether the audio callback copies played samples for visualization.
     pub visualize: AtomicBool,
@@ -47,6 +50,7 @@ impl Shared {
             paused: AtomicBool::new(false),
             flush: AtomicBool::new(false),
             consumed: AtomicU64::new(0),
+            starved: AtomicU64::new(0),
             eq: SharedEq::new(),
             visualize: AtomicBool::new(false),
             device_lost: AtomicBool::new(false),

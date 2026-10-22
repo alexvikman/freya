@@ -266,6 +266,16 @@ impl Player {
         self.shared.status()
     }
 
+    /// How long the output has had nothing to play while not paused, all told: the silence
+    /// before a track starts, after a seek, between tracks and after the last. For measuring.
+    pub fn starved(&self) -> Duration {
+        let frames = self
+            .shared
+            .starved
+            .load(std::sync::atomic::Ordering::Relaxed);
+        Duration::from_secs_f64(frames as f64 / f64::from(self.sample_rate))
+    }
+
     pub fn events(&self) -> &Receiver<Event> {
         &self.events
     }
