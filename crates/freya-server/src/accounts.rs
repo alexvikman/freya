@@ -252,20 +252,31 @@ impl Tries {
     }
 
     /// Counts a try as wrong until it is known to be right: so tries made at once are all
-    /// counted before any password is checked.
-    fn count(&mut self, keys: &[TriedFor]) {
+    /// counted before any password is checked. Whether it could be: with the table full of
+    /// waits still running, which are never dropped to make room, none is taken.
+    fn count(&mut self, keys: &[TriedFor]) -> bool {
         let now = Instant::now();
         self.0.retain(|_, tried| now < tried.last + TRIES_FORGOTTEN);
-        if self.0.len() > MAX_TRIED {
-            let mut by_age: Vec<(Instant, String)> = self
+        if self.0.len() >= MAX_TRIED {
+            // Room is made among those not waiting, the oldest first.
+            let mut idle: Vec<(Instant, String)> = self
                 .0
                 .iter()
+                .filter(|(_, tried)| tried.until <= now)
                 .map(|(key, tried)| (tried.last, key.clone()))
                 .collect();
-            by_age.sort();
-            for (_, key) in by_age.into_iter().take(MAX_TRIED / 2) {
+            idle.sort();
+            let excess = self.0.len() - MAX_TRIED / 2;
+            for (_, key) in idle.into_iter().take(excess) {
                 self.0.remove(&key);
             }
+        }
+        let new = keys
+            .iter()
+            .filter(|(key, _)| !self.0.contains_key(key))
+            .count();
+        if self.0.len() + new > MAX_TRIED {
+            return false;
         }
         for (key, free) in keys {
             let tried = self.0.entry(key.clone()).or_insert(Tried {
@@ -280,6 +291,7 @@ impl Tries {
                 tried.until = now + wait.min(LONGEST_WAIT);
             }
         }
+        true
     }
 
     /// A try counted was right: the name's are forgotten; the address's not, as someone
@@ -467,7 +479,9 @@ impl Accounts {
             if let Some(wait) = tries.wait(&keys) {
                 return Err(Refused::Wait(wait));
             }
-            tries.count(&keys);
+            if !tries.count(&keys) {
+                return Err(Refused::Wait(FIRST_WAIT));
+            }
         }
         let right = match &hashed {
             Some(hashed) => hashed.check(password),
@@ -685,8 +699,7 @@ impl Accounts {
         if tries.wait(&key).is_some() {
             return false;
         }
-        tries.count(&key);
-        true
+        tries.count(&key)
     }
 
     /// A ticket that opens the password page of `caller`'s user; `local` when they call from
@@ -1296,6 +1309,25 @@ mod tests {
             accounts.check("Kim", "correct horse", Some(IpAddr::from([10, 0, 0, 9]))),
             Err(Refused::Wait(_))
         ));
+    }
+
+    #[test]
+    fn a_full_table_keeps_its_waits() {
+        let mut tries = Tries::default();
+        let key = |i: usize| [(format!("user:{i}"), 0)];
+        // Full of waits: none is dropped, and no new try is taken.
+        for i in 0..MAX_TRIED {
+            assert!(tries.count(&key(i)));
+        }
+        assert!(!tries.count(&key(MAX_TRIED)));
+        assert!(tries.wait(&key(0)).is_some(), "the oldest wait is kept");
+        // Tries not waiting make room.
+        let mut idle = Tries::default();
+        for i in 0..MAX_TRIED {
+            assert!(idle.count(&[(format!("user:{i}"), FREE_TRIES)]));
+        }
+        assert!(idle.count(&key(MAX_TRIED)));
+        assert!(idle.0.len() <= MAX_TRIED / 2 + 1);
     }
 
     #[test]
