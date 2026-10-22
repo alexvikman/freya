@@ -1088,12 +1088,14 @@ skin_api! {
         Server."has-password" => set_has_password, get_has_password;
         Server."devices" => set_devices, get_devices;
         Server."password-error" => set_password_error, get_password_error;
+        Server."password-waiting" => set_password_waiting, get_password_waiting;
         Server."finding" => set_finding, get_finding;
         Server."found" => set_found, get_found;
         Server."logging-in" => set_logging_in, get_logging_in;
         Server."login-address" => set_login_address, get_login_address;
         Server."login-fingerprint" => set_login_fingerprint, get_login_fingerprint;
         Server."login-busy" => set_login_busy, get_login_busy;
+        Server."login-waiting" => set_login_waiting, get_login_waiting;
         Server."login-error" => set_login_error, get_login_error;
         Server."browsing" => set_browsing, get_browsing;
         Server."browse-folder" => set_browse_folder, get_browse_folder;
@@ -1252,10 +1254,10 @@ skin_api! {
         Server."find" => on_find, invoke_find();
         Server."choose-found" => on_choose_found, invoke_choose_found(index: i32);
         Server."choose-address" => on_choose_address, invoke_choose_address(address: SharedString);
-        Server."log-in" => on_log_in, invoke_log_in(user: SharedString, password: SharedString);
+        Server."log-in" => on_log_in, invoke_log_in();
         Server."cancel-login" => on_cancel_login, invoke_cancel_login();
         Server."use-this-computer" => on_use_this_computer, invoke_use_this_computer();
-        Server."set-password" => on_set_password, invoke_set_password(password: SharedString);
+        Server."change-password" => on_change_password, invoke_change_password();
         Server."revoke" => on_revoke, invoke_revoke(id: SharedString);
         Server."set-network" => on_set_network, invoke_set_network(on: bool);
         Server."set-server-name" => on_set_server_name, invoke_set_server_name(name: SharedString);

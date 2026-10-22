@@ -895,11 +895,7 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
         "choose-address",
         Box::new(|app, args| app.server.choose_address(&text_arg(args, 0))),
     );
-    bind(
-        "Server",
-        "log-in",
-        Box::new(|app, args| app.server.log_in(&text_arg(args, 0), &text_arg(args, 1))),
-    );
+    bind("Server", "log-in", Box::new(|app, _| app.server.log_in()));
     bind(
         "Server",
         "cancel-login",
@@ -912,11 +908,10 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     );
     bind(
         "Server",
-        "set-password",
-        Box::new(|app, args| {
+        "change-password",
+        Box::new(|app, _| {
             let remote = app.library.remote();
-            app.server
-                .set_password(remote.as_deref(), &text_arg(args, 0));
+            app.server.change_password(remote.as_deref());
         }),
     );
     bind(

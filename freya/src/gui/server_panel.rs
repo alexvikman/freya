@@ -1,18 +1,19 @@
 //! The server the library is on, as the user chooses it: this computer's, or one on another
-//! computer that they find on the network or type in, and log in to, its certificate pinned;
-//! and the account this computer is connected to. Asking the network happens on threads, so
-//! the window never waits for it.
+//! computer that they find on the network or type in, and log in to in the browser, its
+//! certificate pinned; and the account this computer is connected to, its password changed in
+//! the browser too. Asking the network happens on threads, so the window never waits for it.
 
 use std::net::SocketAddr;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 
-use freya_client::{Found, Http, Pin};
+use freya_client::{Found, Http, Login, Pin};
 use std::path::{Path, PathBuf};
 
 use freya_protocol::{AccountInfo, FolderListing, Remote, ServerControl, ServerFound};
 use slint_interpreter::{Struct, Value};
 
+use super::page_proxy::{ADDRESS, Heard, PageProxy};
 use super::skin_state::{ModelRows, string};
 
 /// How long Freya listens for servers answering on the network.
@@ -28,7 +29,6 @@ struct Pending {
 enum Done {
     Found(Vec<Found>),
     Certificate(Result<(Pending, String), String>),
-    LoggedIn(Result<(Pin, String, String), String>),
 }
 
 /// A server the user logged in to, for the app to show the library of.
@@ -47,10 +47,17 @@ pub struct ServerPanel {
     login_fingerprint: String,
     login_busy: bool,
     login_error: String,
-    /// The account and the server, as last read.
+    /// While the login page or the password page is open in the browser.
+    login_waiting: bool,
+    password_waiting: bool,
+    /// The account and the server, as last read, and whether they want reading again.
     account: Option<AccountInfo>,
     info: Option<ServerFound>,
+    refresh_wanted: bool,
     password_error: String,
+    /// The server's pages in the browser, once opened, and what happens there.
+    proxy: Option<PageProxy>,
+    heard: (Sender<Heard>, Receiver<Heard>),
     /// While choosing a music folder among the server's: the folder shown and those in it.
     browse: Option<FolderListing>,
     done: (Sender<Done>, Receiver<Done>),
@@ -68,9 +75,14 @@ impl ServerPanel {
             login_fingerprint: String::new(),
             login_busy: false,
             login_error: String::new(),
+            login_waiting: false,
+            password_waiting: false,
             account: None,
             info: None,
+            refresh_wanted: false,
             password_error: String::new(),
+            proxy: None,
+            heard: channel(),
             browse: None,
             done: channel(),
             device_rows: ModelRows::new(),
@@ -126,31 +138,46 @@ impl ServerPanel {
         self.spawn(move || Done::Certificate(certificate(address, name)));
     }
 
-    /// Logs in to the server chosen, as `user` with `password`.
-    pub fn log_in(&mut self, user: &str, password: &str) {
-        let Some(pending) = &self.login else {
+    /// The server's pages in the browser, opened the first time.
+    fn proxy(&mut self) -> Result<&PageProxy, String> {
+        if self.proxy.is_none() {
+            let proxy = PageProxy::start(self.heard.0.clone()).map_err(|e| {
+                format!("Freya could not open the server's pages at {ADDRESS}: {e}")
+            })?;
+            self.proxy = Some(proxy);
+        }
+        self.proxy
+            .as_ref()
+            .ok_or_else(|| "Freya could not open the server's pages.".to_owned())
+    }
+
+    /// Opens the login page of the server chosen in the browser; Freya is logged in once the
+    /// user is there.
+    pub fn log_in(&mut self) {
+        let Some(pin) = self.login.as_ref().map(|pending| pending.pin.clone()) else {
             return;
         };
-        if self.login_busy {
-            return;
-        }
-        let (pin, name) = (pending.pin.clone(), pending.name.clone());
-        let (user, password) = (user.trim().to_owned(), password.to_owned());
-        self.login_busy = true;
         self.login_error.clear();
-        self.spawn(move || {
-            let device = crate::settings::device_name();
-            let logged_in = Http::pinned(pin.clone())
-                .login(&user, &password, &device)
-                .map(|token| (pin, name, token))
-                .map_err(|e| e.to_string());
-            Done::LoggedIn(logged_in)
-        });
+        let page = match self.proxy() {
+            Ok(proxy) => {
+                let login = Login::new(&proxy.callback());
+                let page = format!("{}{}", proxy.origin(), login.page());
+                proxy.log_in(Http::pinned(pin), login);
+                page
+            }
+            Err(e) => {
+                self.login_error = e;
+                return;
+            }
+        };
+        crate::update::open_page(&page);
+        self.login_waiting = true;
     }
 
     pub fn cancel_login(&mut self) {
         self.login = None;
         self.login_busy = false;
+        self.login_waiting = false;
         self.login_error.clear();
     }
 
@@ -171,17 +198,37 @@ impl ServerPanel {
                     self.login_busy = false;
                     self.login_error = e;
                 }
-                Done::LoggedIn(Ok((pin, name, token))) => {
+            }
+        }
+        while let Ok(heard) = self.heard.1.try_recv() {
+            match heard {
+                Heard::LoggedIn(Ok(token)) => {
+                    let Some(pending) = self.login.take() else {
+                        continue;
+                    };
                     self.cancel_login();
-                    return Some(Chosen { pin, name, token });
+                    return Some(Chosen {
+                        pin: pending.pin,
+                        name: pending.name,
+                        token,
+                    });
                 }
-                Done::LoggedIn(Err(e)) => {
-                    self.login_busy = false;
+                Heard::LoggedIn(Err(e)) => {
+                    self.login_waiting = false;
                     self.login_error = e;
+                }
+                Heard::PasswordChanged => {
+                    self.password_waiting = false;
+                    self.refresh_wanted = true;
                 }
             }
         }
         None
+    }
+
+    /// Whether the account wants reading again, as after its password changed.
+    pub fn take_refresh_wanted(&mut self) -> bool {
+        std::mem::take(&mut self.refresh_wanted)
     }
 
     /// Reads the account and the server's own information again.
@@ -195,15 +242,31 @@ impl ServerPanel {
         self.info = remote.0.info().ok();
     }
 
-    pub fn set_password(&mut self, remote: Option<&Remote<Http>>, password: &str) {
+    /// Opens the page the account's password is set or changed on in the browser.
+    pub fn change_password(&mut self, remote: Option<&Remote<Http>>) {
         let Some(remote) = remote else {
             return;
         };
-        match remote.0.set_password(password) {
-            Ok(()) => self.password_error.clear(),
-            Err(e) => self.password_error = e.to_string(),
-        }
-        self.refresh(Some(remote));
+        self.password_error.clear();
+        let page = match remote.0.password_page() {
+            Ok(page) => page,
+            Err(e) => {
+                self.password_error = e.to_string();
+                return;
+            }
+        };
+        let page = match self.proxy() {
+            Ok(proxy) => {
+                proxy.show(remote.0.pages());
+                format!("{}{page}", proxy.origin())
+            }
+            Err(e) => {
+                self.password_error = e;
+                return;
+            }
+        };
+        crate::update::open_page(&page);
+        self.password_waiting = true;
     }
 
     pub fn revoke(&mut self, remote: Option<&Remote<Http>>, device: &str) {
@@ -302,6 +365,7 @@ impl ServerPanel {
                 Value::Bool(account.is_some_and(|a| a.has_password)),
             ),
             ("password-error", string(&self.password_error)),
+            ("password-waiting", Value::Bool(self.password_waiting)),
             ("finding", Value::Bool(self.finding)),
             ("logging-in", Value::Bool(self.login.is_some())),
             (
@@ -315,6 +379,7 @@ impl ServerPanel {
             ),
             ("login-fingerprint", string(&self.login_fingerprint)),
             ("login-busy", Value::Bool(self.login_busy)),
+            ("login-waiting", Value::Bool(self.login_waiting)),
             ("login-error", string(&self.login_error)),
         ]
     }

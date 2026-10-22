@@ -176,7 +176,7 @@ computer. The flow is OAuth's authorization code with PKCE, which the phone app 
 | # | Milestone | Done when |
 |---|---|---|
 | **A1** ✓ | **Settings in tabs**: General (appearance, visualizer), Library (folders, scans, artists), Server (which server, the network, starting at login) and Account (the user, devices, Last.fm) | Each tab fits without searching |
-| **A2** | **Logging in in the browser**: the server's login page, opened by the client on 127.0.0.1:47477; changing the password there too, so the password manager keeps the new one; the login form in the app goes | The password manager fills in the login and Freya is logged in after |
+| **A2** ✓ | **Logging in in the browser**: the server's login page, opened by the client on 127.0.0.1:47477; changing the password there too, so the password manager keeps the new one; the login form in the app goes | The password manager fills in the login and Freya is logged in after |
 | **A3** | **Tokens that end**: an access token for an hour, renewed with a refresh token that changes each time; one used twice locks the device out; the client's tokens in the system's keychain (Keychain, Credential Manager, Secret Service); devices logged in already move over without logging in again | A stolen token stops working by itself |
 | **A4** | **Guessing slowed, and roles**: a growing wait after wrong passwords, per account and per address; admin and listener in the data model, the server checking the role for settings, folders, scans and accounts; the first user is admin | A listener can play but not change the server; a thousand guesses take hours |
 

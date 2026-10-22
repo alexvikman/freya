@@ -1396,6 +1396,9 @@ impl App {
         if let Some(chosen) = self.server.poll() {
             self.use_remote_server(chosen);
         }
+        if self.server.take_refresh_wanted() {
+            self.server.refresh(self.library.remote().as_deref());
+        }
         if self.library.wants_reconnect() {
             self.attach_library();
         }

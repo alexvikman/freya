@@ -6,7 +6,11 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
-use freya_protocol::{API_PATH, AccountInfo, ApiError, ApiResult, Remote, ServiceEvent, Transport};
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use freya_protocol::{
+    API_PATH, AccountInfo, ApiError, ApiResult, PAGES_PATH, Remote, ServiceEvent, Transport,
+};
 
 /// How long the client waits before it looks for the server again, when the event stream
 /// ended; and how long a stream may last, a little longer than a server keeps one, so one
@@ -239,6 +243,8 @@ pub struct Http {
     agent: ureq::Agent,
     /// For the event stream, which stays open.
     streaming: ureq::Agent,
+    /// The server's address, and the API's under it.
+    root: String,
     base: String,
     /// The token this device was given; none before it was.
     token: Option<String>,
@@ -345,10 +351,12 @@ impl Http {
                 .user_agent(concat!("Freya/", env!("CARGO_PKG_VERSION"))),
             pin.as_ref(),
         );
+        let root = address.trim_end_matches('/').to_owned();
         Self {
             agent,
             streaming,
-            base: format!("{}{API_PATH}", address.trim_end_matches('/')),
+            base: format!("{root}{API_PATH}"),
+            root,
             token: None,
             pin,
             cache: None,
@@ -412,10 +420,34 @@ impl Http {
         token(self.send_json("/pair", &asked)?)
     }
 
-    /// A token for this device, named `device`, given the user's password.
-    pub fn login(&self, user: &str, password: &str, device: &str) -> ApiResult<String> {
-        let asked = serde_json::json!({ "user": user, "password": password, "device": device });
-        token(self.send_json("/login", &asked)?)
+    /// A token for this device, named `device`, for the code the login page sent `login`'s
+    /// browser back with.
+    pub fn redeem(&self, login: &Login, code: &str, device: &str) -> ApiResult<String> {
+        let asked = serde_json::json!({
+            "grant_type": "authorization_code",
+            "code": code,
+            "code_verifier": login.verifier,
+            "redirect_uri": login.redirect,
+            "device": device,
+        });
+        match self.send_json("/token", &asked)? {
+            (200, body) => {
+                let answer: serde_json::Value = serde_json::from_slice(&body).map_err(failed)?;
+                answer["access_token"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| ApiError("the server gave no token".into()))
+            }
+            (status, body) => Err(error(status, &body)),
+        }
+    }
+
+    /// The pages a browser opens on this server.
+    pub fn pages(&self) -> Pages {
+        Pages {
+            root: self.root.clone(),
+            pin: self.pin.clone(),
+        }
     }
 
     /// The account this device is connected to; none when its token is not taken.
@@ -428,15 +460,17 @@ impl Http {
         }
     }
 
-    /// Sets the password the account's user logs in with on other devices.
-    pub fn set_password(&self, password: &str) -> ApiResult<()> {
-        match self.send_json(
-            "/account/password",
-            &serde_json::json!({ "password": password }),
-        )? {
-            (200, _) => Ok(()),
-            (status, body) => Err(error(status, &body)),
-        }
+    /// Where in [`Self::pages`] the account's user changes their password: a page for a while.
+    pub fn password_page(&self) -> ApiResult<String> {
+        let answer = self
+            .post("/account/password-page")
+            .send_empty()
+            .map_err(failed)?;
+        let ticket = json(answer)?["ticket"]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| ApiError("the server gave no ticket".into()))?;
+        Ok(format!("{PAGES_PATH}/password?ticket={ticket}"))
     }
 
     /// What the server is called, where it takes clients on other computers and its
@@ -483,6 +517,129 @@ impl Http {
     fn url(&self, path: &str) -> String {
         format!("{}{path}", self.base)
     }
+}
+
+/// Logging in in a browser, as OAuth's authorization code with PKCE has it: the page to open,
+/// which sends the browser on to `redirect` with a code and the state, and the secret only
+/// this client knows, which the code is traded for a token with.
+pub struct Login {
+    pub redirect: String,
+    pub state: String,
+    verifier: String,
+}
+
+impl Login {
+    /// A login that sends the browser back to `redirect`, `http://127.0.0.1:port/...`.
+    pub fn new(redirect: &str) -> Self {
+        let random = || {
+            let mut bytes = [0; 32];
+            // The system's randomness failing leaves nothing safe to do.
+            ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut bytes)
+                .expect("the system's random numbers");
+            URL_SAFE_NO_PAD.encode(bytes)
+        };
+        Self {
+            redirect: redirect.to_owned(),
+            state: random(),
+            verifier: random(),
+        }
+    }
+
+    /// The login page, under a server's address.
+    pub fn page(&self) -> String {
+        let challenge = URL_SAFE_NO_PAD.encode(ring::digest::digest(
+            &ring::digest::SHA256,
+            self.verifier.as_bytes(),
+        ));
+        format!(
+            "{PAGES_PATH}/login?response_type=code&client_id=freya&redirect_uri={}&state={}&code_challenge={challenge}&code_challenge_method=S256",
+            query_escape(&self.redirect),
+            self.state,
+        )
+    }
+}
+
+/// The pages a browser opens on a server, reached as its client reaches it: for the client to
+/// carry a browser's requests to them.
+#[derive(Clone, Debug)]
+pub struct Pages {
+    root: String,
+    pin: Option<Pin>,
+}
+
+/// A page as the server answered it.
+pub struct Page {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+impl Pages {
+    /// The pages of the server `pin` names.
+    pub fn of(pin: Pin) -> Self {
+        Http::pinned(pin).pages()
+    }
+
+    /// Asks for `path`, with its query, by `method`, "GET" or "POST" with `body` of `kind`:
+    /// what the server answered, a redirect as it is.
+    pub fn ask(
+        &self,
+        method: &str,
+        path: &str,
+        kind: Option<&str>,
+        body: Vec<u8>,
+    ) -> ApiResult<Page> {
+        if !path.starts_with(&format!("{PAGES_PATH}/")) {
+            return Err(ApiError("not a page".into()));
+        }
+        let agent = make_agent(
+            ureq::Agent::config_builder()
+                .timeout_connect(Some(Duration::from_secs(10)))
+                .timeout_global(Some(Duration::from_secs(60)))
+                .user_agent(concat!("Freya/", env!("CARGO_PKG_VERSION")))
+                .http_status_as_error(false)
+                .max_redirects(0),
+            self.pin.as_ref(),
+        );
+        let url = format!("{}{path}", self.root);
+        let answer = match method {
+            "GET" => agent.get(&url).call(),
+            "POST" => {
+                let request = agent.post(&url);
+                match kind {
+                    Some(kind) => request.header("Content-Type", kind).send(body),
+                    None => request.send(body),
+                }
+            }
+            _ => return Err(ApiError("pages are only got and posted".into())),
+        }
+        .map_err(failed)?;
+        let headers = answer
+            .headers()
+            .iter()
+            .filter_map(|(name, value)| {
+                Some((name.as_str().to_owned(), value.to_str().ok()?.to_owned()))
+            })
+            .collect();
+        let (status, body) = read(answer)?;
+        Ok(Page {
+            status,
+            headers,
+            body,
+        })
+    }
+}
+
+/// `text` in a URL's query, all but its unreserved characters escaped.
+fn query_escape(text: &str) -> String {
+    text.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
 
 fn failed(e: impl std::fmt::Display) -> ApiError {
@@ -597,6 +754,7 @@ impl Transport for Http {
         let http = Http {
             agent: self.agent.clone(),
             streaming: self.streaming.clone(),
+            root: self.root.clone(),
             base: self.base.clone(),
             token: self.token.clone(),
             pin: self.pin.clone(),

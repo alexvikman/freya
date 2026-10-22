@@ -1723,12 +1723,14 @@ dependencies = [
 name = "freya-client"
 version = "0.2.1"
 dependencies = [
+ "base64",
  "freya-audio",
  "freya-library",
  "freya-protocol",
  "freya-server",
  "image",
  "log",
+ "ring",
  "serde",
  "serde_json",
  "ureq",
@@ -1769,6 +1771,7 @@ dependencies = [
 name = "freya-server"
 version = "0.2.1"
 dependencies = [
+ "base64",
  "ctrlc",
  "directories",
  "env_logger",

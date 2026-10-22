@@ -9,6 +9,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+base64 = "0.23.1"
 # Stopped by Ctrl-C, SIGTERM and SIGHUP alike.
 ctrlc = { version = "3.5.2", features = ["termination"] }
 directories = "6.0.0"

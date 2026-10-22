@@ -7546,8 +7546,6 @@ component ServerForm inherits MenuSurface {
     callback closed();
 
     property <string> typed;
-    property <string> user;
-    property <string> password;
     /// Closed once the library is the server logged in to.
     property <string> address: Server.address;
     changed address => { root.closed(); }
@@ -7648,15 +7646,13 @@ component ServerForm inherits MenuSurface {
                     wrap: word-wrap;
                 }
             }
-            FormField {
-                label: "User";
-                text <=> root.user;
-            }
-            FormField {
-                label: "Password";
-                password: true;
-                text <=> root.password;
-                accepted => { Server.log-in(root.user, root.password); }
+            Text {
+                text: Server.login-waiting
+                    ? "Log in on the page that opened in your browser. Freya uses the library there once you have."
+                    : "You log in in your browser, where your password manager can fill in the user and password.";
+                font-size: 13px;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
             }
             if Server.login-error != "": Text {
                 text: Server.login-error;
@@ -7673,85 +7669,10 @@ component ServerForm inherits MenuSurface {
                 }
                 Rectangle { horizontal-stretch: 1; }
                 TextButton {
-                    text: Server.login-busy ? "Logging In…" : "Log In";
-                    primary: true;
-                    clicked => { Server.log-in(root.user, root.password); }
+                    text: Server.login-waiting ? "Open the Page Again" : "Log In in Browser…";
+                    primary: !Server.login-waiting;
+                    clicked => { Server.log-in(); }
                 }
-            }
-        }
-    }
-}
-
-/// Sets the password the user logs in with on other computers.
-component PasswordForm inherits MenuSurface {
-    callback closed();
-
-    property <string> password;
-    property <string> again;
-    property <string> error;
-
-    function save() {
-        if (root.password != root.again) {
-            root.error = "The passwords are not the same.";
-            return;
-        }
-        Server.set-password(root.password);
-        if (Server.password-error == "") {
-            root.closed();
-        } else {
-            root.error = Server.password-error;
-        }
-    }
-
-    VerticalLayout {
-        padding: 20px;
-        spacing: 14px;
-
-        VerticalLayout {
-            spacing: 4px;
-
-            Text {
-                text: Server.has-password ? "Change the password" : "Set a password";
-                font-size: 17px;
-                font-weight: 600;
-                color: Theme.text;
-            }
-            Text {
-                text: "Other computers log in to this library as " + Server.user + " with it. At least 8 characters.";
-                font-size: 13px;
-                color: Theme.text-secondary;
-                wrap: word-wrap;
-            }
-        }
-        FormField {
-            label: "Password";
-            password: true;
-            text <=> root.password;
-        }
-        FormField {
-            label: "Again";
-            password: true;
-            text <=> root.again;
-            accepted => { root.save(); }
-        }
-        if root.error != "": Text {
-            text: root.error;
-            font-size: 13px;
-            color: Theme.danger;
-            wrap: word-wrap;
-        }
-        HorizontalLayout {
-            spacing: 8px;
-
-            Rectangle { horizontal-stretch: 1; }
-            TextButton {
-                text: "Cancel";
-                clicked => { root.closed(); }
-            }
-            TextButton {
-                text: "Save";
-                primary: true;
-                clicked => { root.save(); }
             }
         }
     }
@@ -7787,9 +7708,8 @@ component SettingsView inherits Rectangle {
     /// Open the dialog for the library's folders, or for the fanart.tv key.
     callback manage-folders();
     callback edit-fanart-key();
-    /// Open the dialog for finding a server, or for the account's password.
+    /// Open the dialog for finding a server.
     callback find-servers();
-    callback set-password();
 
     property <string> server-name;
 
@@ -8182,7 +8102,9 @@ component SettingsView inherits Rectangle {
 
                 SettingsRow {
                     label: "Connected as " + Server.user;
-                    detail: Server.has-password ? "Other computers log in with your password."
+                    detail: Server.password-error != "" ? Server.password-error
+                        : Server.password-waiting ? "Set it on the page that opened in your browser."
+                        : Server.has-password ? "Other computers log in with your password, in the browser."
                         : "Set a password to use this library from other computers.";
 
                     VerticalLayout {
@@ -8190,7 +8112,7 @@ component SettingsView inherits Rectangle {
 
                         TextButton {
                             text: Server.has-password ? "Change Password…" : "Set a Password…";
-                            clicked => { root.set-password(); }
+                            clicked => { Server.change-password(); }
                         }
                     }
                 }
@@ -9311,7 +9233,6 @@ export component FreyaSkin inherits Window {
                                 manage-folders => { root.manage-folders(); }
                                 edit-fanart-key => { fanart-popup.show(); }
                                 find-servers => { server-popup.show(); }
-                                set-password => { password-popup.show(); }
                             }
                             if root.view == "activity": ActivityView {
                                 width: 100%;
@@ -9611,36 +9532,6 @@ export component FreyaSkin inherits Window {
                         Server.cancel-login();
                         server-popup.close();
                     }
-                }
-            }
-        }
-    }
-
-    password-popup := PopupWindow {
-        x: 0;
-        y: 0;
-        width: root.width;
-        height: root.height;
-        close-policy: no-auto-close;
-
-        DialogFocus {
-            key-pressed(event) => {
-                if (event.text == Key.Escape) {
-                    password-popup.close();
-                    return accept;
-                }
-                reject
-            }
-
-            Rectangle {
-                background: #00000059;
-
-                PasswordForm {
-                    width: min(440px, parent.width - 48px);
-                    height: self.preferred-height;
-                    x: (parent.width - self.width) / 2;
-                    y: max(24px, (parent.height - self.preferred-height) / 3);
-                    closed => { password-popup.close(); }
                 }
             }
         }

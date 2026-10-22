@@ -410,17 +410,61 @@ fn only_a_device_with_a_token_is_answered() {
         .unwrap();
     assert_eq!(audio.status().as_u16(), 200);
 
-    // Another device logs in once the user has a password.
+    // Another device logs in in the browser once the user has a password, set on the page a
+    // ticket opens: without the password now, from the server's own computer.
     let user = mac.0.account().unwrap().unwrap().user;
-    assert!(
-        Http::new(&address)
-            .login(&user, "correct horse", "PC")
-            .is_err()
-    );
-    mac.0.set_password("correct horse").unwrap();
-    let pc = Http::new(&address)
-        .login(&user, "correct horse", "PC")
+    let pages = Http::new(&address).pages();
+    let login = Login::new("http://127.0.0.1:47477/callback");
+    assert_eq!(log_in(&pages, &login, &user, "correct horse").status, 401);
+    let page = mac.0.password_page().unwrap();
+    let shown = pages.ask("GET", &page, None, Vec::new()).unwrap();
+    assert_eq!(shown.status, 200);
+    assert!(!String::from_utf8_lossy(&shown.body).contains(r#"name="current""#));
+    let ticket = page.split("ticket=").nth(1).unwrap();
+    let changed = pages
+        .ask(
+            "POST",
+            "/web/password",
+            Some(FORM),
+            format!("ticket={ticket}&password=correct+horse&again=correct+horse").into_bytes(),
+        )
         .unwrap();
+    assert_eq!(changed.status, 200);
+
+    // The page sends the browser back with a code, which only this login trades for a token,
+    // once.
+    let sent = log_in(&pages, &login, &user, "correct horse");
+    assert_eq!(sent.status, 303);
+    let location = &sent
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("location"))
+        .unwrap()
+        .1;
+    assert!(location.starts_with("http://127.0.0.1:47477/callback?code="));
+    assert!(location.ends_with(&format!("&state={}", login.state)));
+    let code = location["http://127.0.0.1:47477/callback?code=".len()..]
+        .split('&')
+        .next()
+        .unwrap();
+    let other = Login::new("http://127.0.0.1:47477/callback");
+    assert!(Http::new(&address).redeem(&other, code, "PC").is_err());
+    let sent = log_in(&pages, &login, &user, "correct horse");
+    let location = &sent
+        .headers
+        .iter()
+        .find(|(n, _)| n == "location")
+        .unwrap()
+        .1;
+    let code = location
+        .split("code=")
+        .nth(1)
+        .unwrap()
+        .split('&')
+        .next()
+        .unwrap();
+    let pc = Http::new(&address).redeem(&login, code, "PC").unwrap();
+    assert!(Http::new(&address).redeem(&login, code, "PC").is_err());
     let pc = connect(&address, Some(pc), None);
     let devices = pc.0.account().unwrap().unwrap().devices;
     assert_eq!(devices.len(), 2);
@@ -432,6 +476,27 @@ fn only_a_device_with_a_token_is_answered() {
     drop(server);
     drop(service);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+const FORM: &str = "application/x-www-form-urlencoded";
+
+/// Sends the login page's form as a browser does: what it was opened with, and what was typed.
+fn log_in(pages: &Pages, login: &Login, user: &str, password: &str) -> Page {
+    let page = login.page();
+    assert_eq!(
+        pages.ask("GET", &page, None, Vec::new()).unwrap().status,
+        200
+    );
+    let opened = page.split_once('?').unwrap().1;
+    let typed = format!("username={user}&password={}", password.replace(' ', "+"));
+    pages
+        .ask(
+            "POST",
+            "/web/login",
+            Some(FORM),
+            format!("{opened}&{typed}").into_bytes(),
+        )
+        .unwrap()
 }
 
 #[test]

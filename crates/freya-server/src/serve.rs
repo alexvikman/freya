@@ -19,12 +19,16 @@
 //! - `POST /quit`: the server stops; only from this computer.
 //! - `POST /pair`: `{"key", "device"}`, the pairing key a client on this computer read: a token
 //!   for the device. Only from this computer.
-//! - `POST /login`: `{"user", "password", "device"}`: a token for the device.
-//! - `GET /account`: the caller's account and devices; `POST /account/password`:
-//!   `{"password"}`; `POST /account/revoke`: `{"device"}`.
+//! - `POST /token`: `{"grant_type": "authorization_code", "code", "code_verifier",
+//!   "redirect_uri", "device"}`: a token for the device, `{"access_token", "token_type"}`, for
+//!   the code the login page gave (see [`crate::pages`]).
+//! - `GET /account`: the caller's account and devices; `POST /account/password-page`: a
+//!   ticket for the page the password is changed on, `{"ticket"}`; `POST /account/revoke`:
+//!   `{"device"}`.
 //!
-//! Every request but `/version`, `/pair` and `/login` carries a device's token, as
-//! `Authorization: Bearer ...`, or is refused.
+//! Every request but `/version`, `/pair` and `/token` carries a device's token, as
+//! `Authorization: Bearer ...`, or is refused. The pages a browser opens, under
+//! [`freya_protocol::PAGES_PATH`], have their own rules (see [`crate::pages`]).
 //!
 //! Only Freya's clients are answered, never a web page: until clients log in, a page in the
 //! user's browser could otherwise call the server on this computer. A request a browser sends
@@ -74,13 +78,7 @@ fn refused(request: &Request) -> Option<&'static str> {
     }
     // Over TLS a browser does not get as far as asking: it does not take the server's own
     // certificate without the user's say.
-    let host = request.header("host").unwrap_or_default();
-    let name = match host.rsplit_once(':') {
-        Some((name, port)) if port.bytes().all(|b| b.is_ascii_digit()) => name,
-        _ => host,
-    };
-    let here = ["127.0.0.1", "localhost", "[::1]"].contains(&name.to_ascii_lowercase().as_str());
-    if !here && !request.secure {
+    if !is_here(request) && !request.secure {
         return Some("only this computer's name is answered");
     }
     let typed = request.header("content-type").is_some_and(|kind| {
@@ -94,7 +92,20 @@ fn refused(request: &Request) -> Option<&'static str> {
     None
 }
 
+/// Whether `request` calls this computer by a name only it has, not one that leads here by DNS.
+pub(crate) fn is_here(request: &Request) -> bool {
+    let host = request.header("host").unwrap_or_default();
+    let name = match host.rsplit_once(':') {
+        Some((name, port)) if port.bytes().all(|b| b.is_ascii_digit()) => name,
+        _ => host,
+    };
+    ["127.0.0.1", "localhost", "[::1]"].contains(&name.to_ascii_lowercase().as_str())
+}
+
 fn answer(served: &Served, request: Request) -> Response {
+    if let Some(page) = crate::pages::answer(served, &request) {
+        return page;
+    }
     if let Some(why) = refused(&request) {
         return Response::error(403, why);
     }
@@ -113,7 +124,7 @@ fn answer(served: &Served, request: Request) -> Response {
         Some(accounts) => match (request.method.as_str(), path) {
             ("GET", "/version") => None,
             ("POST", "/pair") => return pair(accounts, &request, local),
-            ("POST", "/login") => return login(accounts, &request),
+            ("POST", "/token") => return token(accounts, &request),
             _ => {
                 let token = request
                     .header("authorization")
@@ -126,7 +137,7 @@ fn answer(served: &Served, request: Request) -> Response {
         },
     };
     if let (Some(accounts), Some(caller)) = (&served.accounts, &caller)
-        && let Some(answer) = account(accounts, caller, &request, path)
+        && let Some(answer) = account(accounts, caller, &request, path, local)
     {
         return answer;
     }
@@ -306,7 +317,7 @@ fn byte_range(range: &str, length: u64) -> Option<(u64, u64)> {
 
 /// The text `value` stands for, with its `%XX` escapes undone; none when they are not valid,
 /// or not UTF-8.
-fn percent_decode(value: &str) -> Option<String> {
+pub(crate) fn percent_decode(value: &str) -> Option<String> {
     let bytes = value.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -393,34 +404,47 @@ fn pair(accounts: &Accounts, request: &Request, local: bool) -> Response {
     }
 }
 
-/// `{"user", "password", "device"}`: a token for the device, given the user's password.
-fn login(accounts: &Accounts, request: &Request) -> Response {
+/// A token for the device, given the code the login page sent the browser on with, and the
+/// secret the login's challenge was made from.
+fn token(accounts: &Accounts, request: &Request) -> Response {
     #[derive(serde::Deserialize)]
-    struct Login {
-        user: String,
-        password: String,
+    struct Traded {
+        grant_type: String,
+        code: String,
+        code_verifier: String,
+        redirect_uri: String,
         device: String,
     }
-    let Ok(login) = serde_json::from_slice::<Login>(&request.body) else {
-        return Response::error(400, "a user, a password and a device");
+    let Ok(traded) = serde_json::from_slice::<Traded>(&request.body) else {
+        return Response::error(400, "a code, its verifier, where it was sent and a device");
     };
-    match accounts.login(&login.user, &login.password, &login.device) {
-        Some(token) => Response::json(200, &serde_json::json!({ "token": token })),
-        None => Response::error(401, "wrong user or password"),
+    if traded.grant_type != "authorization_code" {
+        return Response::error(400, "only codes are traded for tokens");
+    }
+    let token = accounts.redeem(
+        &traded.code,
+        &traded.code_verifier,
+        &traded.redirect_uri,
+        &traded.device,
+    );
+    match token {
+        Some(token) => Response::json(
+            200,
+            &serde_json::json!({ "access_token": token, "token_type": "Bearer" }),
+        ),
+        None => Response::error(400, "the code is wrong, used or out of date"),
     }
 }
 
-/// The caller's account: what it is, its password, and taking its devices' tokens back.
+/// The caller's account: what it is, the page its password is changed on, and taking its
+/// devices' tokens back.
 fn account(
     accounts: &Accounts,
     caller: &Caller,
     request: &Request,
     path: &str,
+    local: bool,
 ) -> Option<Response> {
-    #[derive(serde::Deserialize)]
-    struct NewPassword {
-        password: String,
-    }
     #[derive(serde::Deserialize)]
     struct Revoked {
         device: String,
@@ -430,15 +454,10 @@ fn account(
             Ok(info) => Response::json(200, &info),
             Err(e) => Response::error(500, e),
         },
-        ("POST", "/account/password") => {
-            match serde_json::from_slice::<NewPassword>(&request.body) {
-                Ok(new) => match accounts.set_password(caller.user, &new.password) {
-                    Ok(()) => Response::json(200, &serde_json::Value::Null),
-                    Err(e) => Response::error(400, e),
-                },
-                Err(e) => Response::error(400, e),
-            }
-        }
+        ("POST", "/account/password-page") => Response::json(
+            200,
+            &serde_json::json!({ "ticket": accounts.ticket(caller, local) }),
+        ),
         ("POST", "/account/revoke") => match serde_json::from_slice::<Revoked>(&request.body) {
             Ok(revoked) if accounts.revoke(caller, &revoked.device) => {
                 Response::json(200, &serde_json::Value::Null)

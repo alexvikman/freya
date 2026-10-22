@@ -408,7 +408,7 @@ Scrobbling to the user's Last.fm profile. Optional, and off until the user conne
 
 ### `Server`
 
-The server that keeps the library: Freya's own on this computer, or one on another computer on the network, which the user finds or types in and logs in to. The first time, Freya takes the other server's certificate and shows its fingerprint, to compare with what Settings shows on that computer; after, it trusts that certificate only. Optional: without it, a skin always shows this computer's library.
+The server that keeps the library: Freya's own on this computer, or one on another computer on the network, which the user finds or types in and logs in to. The first time, Freya takes the other server's certificate and shows its fingerprint, to compare with what Settings shows on that computer; after, it trusts that certificate only. Logging in and setting the password happen in the user's browser, on the server's own pages, which Freya opens at `http://127.0.0.1:47477`. Optional: without it, a skin always shows this computer's library.
 
 | Property | Type | |
 |---|---|---|
@@ -419,17 +419,17 @@ The server that keeps the library: Freya's own on this computer, or one on anoth
 | `server-name`, `network`, `autostart` | string, bool, bool | For the server on this computer: what others find it as, whether they may connect, and whether it starts when the user logs in |
 | `user`, `has-password` | string, bool | The account this computer is connected to, and whether it has a password; only then can other computers log in |
 | `devices` | [`ServerDevice`] | The devices connected to the account: `id`, `name`, `connected` (a date), `this` |
-| `password-error` | string | Why the password was not set |
+| `password-waiting`, `password-error` | bool, string | While the page the password is set or changed on is open in the browser; why it could not be opened |
 | `finding`, `found` | bool, [`FoundServer`] | While looking for servers on the network, and those that answered: `name`, `address`, `fingerprint` |
-| `logging-in`, `login-address`, `login-fingerprint`, `login-busy`, `login-error` | | While logging in to a server chosen: where it is, its certificate's fingerprint, whether Freya is asking it now, and what went wrong |
+| `logging-in`, `login-address`, `login-fingerprint`, `login-busy`, `login-waiting`, `login-error` | | While logging in to a server chosen: where it is, its certificate's fingerprint, whether Freya is asking it now, whether its login page is open in the browser, and what went wrong |
 
 | Callback | |
 |---|---|
 | `find()` | Looks for servers on the network |
 | `choose-found(index)`, `choose-address(text)` | Starts logging in to a server found, or to one typed in ("mini.local", "192.168.1.20:47475"): Freya takes its certificate, and `logging-in` turns on |
-| `log-in(user, password)`, `cancel-login()` | Once logged in, the library is that server's |
+| `log-in()`, `cancel-login()` | Opens the server's login page in the browser, where a password manager fills it in; once the user logged in there, the library is that server's |
 | `use-this-computer()` | The library is this computer's server's again |
-| `set-password(password)` | At least 8 characters |
+| `change-password()` | Opens the page the password is set or changed on in the browser |
 | `revoke(id)` | Takes a device's token back: it has to log in again |
 | `set-network(on)`, `set-server-name(name)`, `set-autostart(on)` | For the server on this computer |
 | `browse-start()`, `browse-into(index)`, `browse-up()`, `browse-add()`, `browse-cancel()` | Choosing a music folder among a server's on another computer: `browsing`, `browse-folder` ("" where to start: the home folder and the drives) and `browse-folders` say what is shown; `browse-add` adds the folder shown to `Library.folders-draft` |

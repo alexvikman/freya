@@ -13,6 +13,7 @@ mod listening;
 mod match_finder;
 mod native_oscilloscope;
 mod native_spectrum;
+mod page_proxy;
 mod picture_finder;
 mod playlists;
 mod radio;

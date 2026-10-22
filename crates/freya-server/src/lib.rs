@@ -10,6 +10,7 @@ pub mod http;
 mod lastfm;
 #[cfg(target_os = "macos")]
 pub mod menu_bar;
+mod pages;
 mod playlists;
 mod scrobbler;
 mod serve;

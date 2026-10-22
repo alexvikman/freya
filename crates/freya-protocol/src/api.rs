@@ -382,6 +382,9 @@ pub fn is_checksum(checksum: &str) -> bool {
 
 /// Where the API is served, under the server's address.
 pub const API_PATH: &str = "/api/v1";
+/// Where the pages a browser opens are served: `/login`, as OAuth's authorization code with
+/// PKCE has it, and `/password?ticket=`.
+pub const PAGES_PATH: &str = "/web";
 
 /// A library elsewhere, called through `T`.
 pub struct Remote<T>(pub T);

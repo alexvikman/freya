@@ -1121,7 +1121,9 @@ export global Server {
     in property <string> user;
     in property <bool> has-password;
     in property <[ServerDevice]> devices;
-    /// What went wrong with the password last.
+    /// While the page the password is set or changed on is open in the browser; what went wrong
+    /// opening it.
+    in property <bool> password-waiting;
     in property <string> password-error;
 
     /// While looking for servers on the network, and those found.
@@ -1129,11 +1131,13 @@ export global Server {
     in property <[FoundServer]> found;
 
     /// While logging in to a server on another computer: shown, its address and certificate's
-    /// fingerprint, whether Freya is asking it now, and what went wrong.
+    /// fingerprint, whether Freya is asking it now, whether its login page is open in the
+    /// browser, and what went wrong.
     in property <bool> logging-in;
     in property <string> login-address;
     in property <string> login-fingerprint;
     in property <bool> login-busy;
+    in property <bool> login-waiting;
     in property <string> login-error;
 
     /// Look for servers on the network.
@@ -1142,11 +1146,14 @@ export global Server {
     /// ("mini.local", "192.168.1.20:47475").
     callback choose-found(int);
     callback choose-address(string);
-    callback log-in(string /* user */, string /* password */);
+    /// Open the server's login page in the browser, where a password manager fills it in;
+    /// Freya uses the server once the user logged in there.
+    callback log-in();
     callback cancel-login();
     /// Use the server on this computer again.
     callback use-this-computer();
-    callback set-password(string);
+    /// Open the page the account's password is set or changed on in the browser.
+    callback change-password();
     /// Take a device's token back: it has to log in again.
     callback revoke(string /* id */);
     callback set-network(bool);

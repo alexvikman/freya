@@ -6,11 +6,19 @@
 //! A client on the server's own computer connects with the pairing key: a secret the server
 //! writes to a file of its own, readable only by the user it runs as, and makes anew once
 //! used, so only a program of that user, on that computer, connects so.
+//!
+//! Other devices log in in the browser, as OAuth's authorization code with PKCE has it: the
+//! login page gives a code for the password, which only the client that asked for it can trade
+//! for a token, having the secret its challenge was made from. Passwords are set and changed in
+//! the browser too, on a page a device's ticket opens.
 
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
+
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
 use freya_protocol::{AccountInfo, DeviceInfo};
 use ring::rand::{SecureRandom, SystemRandom};
@@ -22,6 +30,11 @@ const ROUNDS: u32 = 600_000;
 const WRONG_PASSWORD_WAIT: Duration = Duration::from_secs(1);
 /// The user a server starts with, who owns it.
 const OWNER: u32 = 1;
+/// How long a login's code may wait to be traded for a token, and a password page be used.
+const CODE_LASTS: Duration = Duration::from_secs(120);
+const TICKET_LASTS: Duration = Duration::from_secs(15 * 60);
+/// The fewest characters a password has.
+pub const SHORTEST_PASSWORD: usize = 8;
 
 #[derive(Default, Serialize, Deserialize)]
 struct Kept {
@@ -56,6 +69,35 @@ struct Device {
     created: u64,
 }
 
+/// A login's code, kept until traded for a token or out of date: who logged in, the challenge
+/// the client sent, and where the code was sent.
+struct Grant {
+    /// The SHA-256 of the code, hex.
+    code: String,
+    user: u32,
+    challenge: String,
+    redirect: String,
+    until: Instant,
+}
+
+/// What opens a password page: a device's user, and whether that device is on the server's
+/// own computer, where the user need not know the password to change it.
+struct Ticket {
+    /// The SHA-256 of the ticket, hex.
+    ticket: String,
+    user: u32,
+    local: bool,
+    until: Instant,
+}
+
+/// Whose password page a ticket opens.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PasswordPage {
+    pub user: String,
+    /// Whether the password now has to be given to change it.
+    pub asks_current: bool,
+}
+
 /// A device a token was given to, as a request names it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Caller {
@@ -70,6 +112,8 @@ pub struct Accounts {
     /// The SHA-256 of the pairing key now, hex, and where it is written.
     pairing: Mutex<Option<String>>,
     pairing_file: Option<PathBuf>,
+    grants: Mutex<Vec<Grant>>,
+    tickets: Mutex<Vec<Ticket>>,
 }
 
 impl Accounts {
@@ -99,6 +143,8 @@ impl Accounts {
             kept: Mutex::new(kept),
             pairing: Mutex::new(None),
             pairing_file,
+            grants: Mutex::new(Vec::new()),
+            tickets: Mutex::new(Vec::new()),
         };
         accounts.save(&accounts.kept());
         accounts.new_pairing_key();
@@ -133,8 +179,8 @@ impl Accounts {
         right.then(|| self.add_device(OWNER, name))
     }
 
-    /// A token for a device named `device` of the user `name`, given their password.
-    pub fn login(&self, name: &str, password: &str, device: &str) -> Option<String> {
+    /// The user `name` is, given their password; a wrong one holds the answer up.
+    fn check(&self, name: &str, password: &str) -> Option<u32> {
         let user = {
             let kept = self.kept();
             kept.users
@@ -143,7 +189,7 @@ impl Accounts {
                 .and_then(|u| Some((u.id, u.password.as_ref()?.check(password))))
         };
         match user {
-            Some((id, true)) => Some(self.add_device(id, device)),
+            Some((id, true)) => Some(id),
             _ => {
                 std::thread::sleep(WRONG_PASSWORD_WAIT);
                 None
@@ -151,11 +197,112 @@ impl Accounts {
         }
     }
 
-    /// Sets the password `user` logs in with on other devices.
-    pub fn set_password(&self, user: u32, password: &str) -> Result<(), String> {
-        if password.chars().count() < 8 {
-            return Err("A password needs at least 8 characters".into());
+    /// A code for the user `name`, given their password, to send to `redirect`: the client
+    /// that sent `challenge` trades it for a token with [`Self::redeem`].
+    pub fn grant(
+        &self,
+        name: &str,
+        password: &str,
+        challenge: &str,
+        redirect: &str,
+    ) -> Option<String> {
+        let user = self.check(name, password)?;
+        let code = random_hex(32);
+        let mut grants = self.grants.lock().unwrap_or_else(|e| e.into_inner());
+        grants.retain(|g| g.until > Instant::now());
+        grants.push(Grant {
+            code: sha256(code.as_bytes()),
+            user,
+            challenge: challenge.to_owned(),
+            redirect: redirect.to_owned(),
+            until: Instant::now() + CODE_LASTS,
+        });
+        Some(code)
+    }
+
+    /// A token for a device named `device`, given a code from [`Self::grant`] sent to
+    /// `redirect`, and the secret its challenge was made from. A code is taken once, right or
+    /// wrong.
+    pub fn redeem(
+        &self,
+        code: &str,
+        verifier: &str,
+        redirect: &str,
+        device: &str,
+    ) -> Option<String> {
+        let grant = {
+            let mut grants = self.grants.lock().unwrap_or_else(|e| e.into_inner());
+            let hash = sha256(code.as_bytes());
+            let at = grants.iter().position(|g| g.code == hash)?;
+            grants.swap_remove(at)
+        };
+        let fits = grant.until > Instant::now()
+            && grant.redirect == redirect
+            && challenge(verifier) == grant.challenge;
+        fits.then(|| self.add_device(grant.user, device))
+    }
+
+    /// A ticket that opens the password page of `caller`'s user; `local` when they call from
+    /// the server's own computer.
+    pub fn ticket(&self, caller: &Caller, local: bool) -> String {
+        let ticket = random_hex(32);
+        let mut tickets = self.tickets.lock().unwrap_or_else(|e| e.into_inner());
+        tickets.retain(|t| t.until > Instant::now());
+        tickets.push(Ticket {
+            ticket: sha256(ticket.as_bytes()),
+            user: caller.user,
+            local,
+            until: Instant::now() + TICKET_LASTS,
+        });
+        ticket
+    }
+
+    /// Whose password page `ticket` opens, while it does.
+    pub fn password_page(&self, ticket: &str) -> Option<PasswordPage> {
+        let (user, local) = {
+            let tickets = self.tickets.lock().unwrap_or_else(|e| e.into_inner());
+            let hash = sha256(ticket.as_bytes());
+            let t = tickets
+                .iter()
+                .find(|t| t.ticket == hash && t.until > Instant::now())?;
+            (t.user, t.local)
+        };
+        let kept = self.kept();
+        let user = kept.users.iter().find(|u| u.id == user)?;
+        Some(PasswordPage {
+            user: user.name.clone(),
+            asks_current: !local && user.password.is_some(),
+        })
+    }
+
+    /// Changes the password of the user `ticket` is for to `new`, given the one now when the
+    /// page asks for it; the ticket is used up once it did.
+    pub fn change_password(&self, ticket: &str, current: &str, new: &str) -> Result<(), String> {
+        let page = self
+            .password_page(ticket)
+            .ok_or("This page is out of date. Open it again from Freya's settings.")?;
+        if new.chars().count() < SHORTEST_PASSWORD {
+            return Err(format!(
+                "A password needs at least {SHORTEST_PASSWORD} characters."
+            ));
         }
+        if page.asks_current && self.check(&page.user, current).is_none() {
+            return Err("That is not the password now.".into());
+        }
+        let user = {
+            let mut tickets = self.tickets.lock().unwrap_or_else(|e| e.into_inner());
+            let hash = sha256(ticket.as_bytes());
+            let at = tickets
+                .iter()
+                .position(|t| t.ticket == hash)
+                .ok_or("This page is out of date. Open it again from Freya's settings.")?;
+            tickets.swap_remove(at).user
+        };
+        self.set_password(user, new)
+    }
+
+    /// Sets the password `user` logs in with on other devices.
+    fn set_password(&self, user: u32, password: &str) -> Result<(), String> {
         let mut kept = self.kept();
         let user = kept
             .users
@@ -302,6 +449,15 @@ fn random_hex(count: usize) -> String {
     hex(&random_bytes(count))
 }
 
+/// The challenge a client sends for `verifier`, as PKCE's S256 makes it: its SHA-256, in
+/// base64url without padding.
+pub fn challenge(verifier: &str) -> String {
+    URL_SAFE_NO_PAD.encode(ring::digest::digest(
+        &ring::digest::SHA256,
+        verifier.as_bytes(),
+    ))
+}
+
 fn sha256(bytes: &[u8]) -> String {
     hex(ring::digest::digest(&ring::digest::SHA256, bytes).as_ref())
 }
@@ -373,12 +529,61 @@ mod tests {
 
         // No password yet: nobody logs in.
         let owner = accounts.info(&mac).user;
-        assert_eq!(accounts.login(&owner, "", "PC"), None);
-        assert!(accounts.set_password(OWNER, "short").is_err());
-        accounts.set_password(OWNER, "correct horse").unwrap();
-        assert_eq!(accounts.login(&owner, "wrong horse", "PC"), None);
-        let pc = accounts.login(&owner, "correct horse", "PC").unwrap();
+        let redirect = "http://127.0.0.1:47477/callback";
+        let verifier = "a secret only the client knows, long enough";
+        let sent = challenge(verifier);
+        assert_eq!(accounts.grant(&owner, "", &sent, redirect), None);
+
+        // The Mac, on the server's computer, sets one without giving one now.
+        let ticket = accounts.ticket(&mac, true);
+        assert!(!accounts.password_page(&ticket).unwrap().asks_current);
+        assert!(accounts.change_password(&ticket, "", "short").is_err());
+        accounts
+            .change_password(&ticket, "", "correct horse")
+            .unwrap();
+        assert!(
+            accounts.password_page(&ticket).is_none(),
+            "a ticket is used once"
+        );
+
+        // Logging in: a code for the password, traded once, by the client that asked.
+        assert_eq!(accounts.grant(&owner, "wrong horse", &sent, redirect), None);
+        let code = accounts
+            .grant(&owner, "correct horse", &sent, redirect)
+            .unwrap();
+        assert_eq!(
+            accounts.redeem(&code, "another secret", redirect, "PC"),
+            None
+        );
+        assert_eq!(
+            accounts.redeem(&code, verifier, redirect, "PC"),
+            None,
+            "a code is taken once, right or wrong"
+        );
+        let code = accounts
+            .grant(&owner, "correct horse", &sent, redirect)
+            .unwrap();
+        assert_eq!(
+            accounts.redeem(&code, verifier, "http://127.0.0.1:1/callback", "PC"),
+            None
+        );
+        let code = accounts
+            .grant(&owner, "correct horse", &sent, redirect)
+            .unwrap();
+        let pc = accounts.redeem(&code, verifier, redirect, "PC").unwrap();
         let pc = accounts.caller(&pc).unwrap();
+
+        // Elsewhere, the password now is asked for to change it.
+        let ticket = accounts.ticket(&pc, false);
+        assert!(accounts.password_page(&ticket).unwrap().asks_current);
+        assert!(
+            accounts
+                .change_password(&ticket, "wrong horse", "battery staple")
+                .is_err()
+        );
+        accounts
+            .change_password(&ticket, "correct horse", "battery staple")
+            .unwrap();
 
         // Kept across starts.
         let again = Accounts::open(Some(file.clone()), Some(pairing.clone()));
