@@ -258,3 +258,19 @@ fn checks_once_a_day() {
     assert!(!due(secs(60 * 60), now));
     assert!(due(secs(24 * 60 * 60), now));
 }
+
+#[test]
+fn opens_only_plain_https_pages_and_freyas_own() {
+    assert!(is_openable(
+        "https://www.last.fm/api/auth/?api_key=k&token=t"
+    ));
+    assert!(is_openable(
+        "http://127.0.0.1:47477/web/password?start=ab12"
+    ));
+    assert!(!is_openable("http://example.com/"));
+    assert!(!is_openable("http://127.0.0.1:5555/"));
+    assert!(!is_openable("file:///etc/passwd"));
+    assert!(!is_openable("https://example.com/a b"));
+    assert!(!is_openable("https://example.com/a,b"));
+    assert!(!is_openable("https://example.com/\"--args"));
+}

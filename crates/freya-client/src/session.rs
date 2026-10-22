@@ -12,7 +12,7 @@ use std::time::{Duration, SystemTime};
 
 use freya_protocol::{ApiError, ApiResult};
 
-use crate::{error, failed, read};
+use crate::{error, failed, read_at_most};
 
 /// How long before an access token ends it is renewed.
 const RENEW_BEFORE: Duration = Duration::from_secs(60);
@@ -427,7 +427,7 @@ impl Session {
             .header("Content-Type", "application/json")
             .send(asked.to_string())
             .map_err(failed)
-            .and_then(read)
+            .and_then(|answer| read_at_most(answer, 1024 * 1024))
             .and_then(Granted::from_answer);
         match answer {
             Ok(granted) => {

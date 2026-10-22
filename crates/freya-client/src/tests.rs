@@ -241,12 +241,12 @@ fn a_server_elsewhere_has_its_pictures_kept_here() {
     let dir = std::env::temp_dir().join(format!("freya-client-cache-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let cache = PictureCache::new(dir.join("cache"));
-    let checksum = "a".repeat(64);
+    let checksum = checksum_of(b"picture");
     assert_eq!(cache.get(&checksum), None);
     cache.put(&checksum, b"picture");
     assert_eq!(cache.get(&checksum).as_deref(), Some(&b"picture"[..]));
     // Over the limit, those used longest ago go first.
-    let old = "b".repeat(64);
+    let old = checksum_of(b"older one");
     cache.put(&old, b"older one");
     let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
     std::fs::File::options()
@@ -772,4 +772,32 @@ fn a_program_in_the_local_servers_place_is_given_nothing() {
     ));
     drop(impostor);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_picture_cache_takes_only_what_a_checksum_names() {
+    let dir = std::env::temp_dir().join(format!("freya-picture-cache-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let cache = PictureCache::new(dir.clone());
+    let picture = b"a picture".as_slice();
+    let checksum = checksum_of(picture);
+    // Other bytes under its name are not kept, nor taken from the cache when found there.
+    cache.put(&checksum, b"another picture");
+    assert_eq!(cache.get(&checksum), None);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(&checksum), b"changed since").unwrap();
+    assert_eq!(cache.get(&checksum), None);
+    assert!(!dir.join(&checksum).exists(), "and goes");
+    cache.put(&checksum, picture);
+    assert_eq!(cache.get(&checksum).as_deref(), Some(picture));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The checksum a picture holding `bytes` is kept by.
+fn checksum_of(bytes: &[u8]) -> String {
+    ring::digest::digest(&ring::digest::SHA256, bytes)
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }

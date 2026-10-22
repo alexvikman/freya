@@ -98,7 +98,7 @@ pub(super) fn take_file(api: &dyn LibraryApi, file: &Path, largest: u32) -> Resu
 pub(super) fn preview(api: Option<&dyn LibraryApi>, checksum: Option<&String>) -> Image {
     let small = || {
         let bytes = api?.picture(checksum?).ok()??;
-        let rgb = image::load_from_memory(&bytes)
+        let rgb = crate::gui::decode_picture(&bytes)
             .ok()?
             .thumbnail(800, 800)
             .to_rgb8();

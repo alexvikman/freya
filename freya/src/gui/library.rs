@@ -893,22 +893,35 @@ impl LibraryPanel {
     }
 
     /// Where the server serves the file of the library's track at `path`, when it is to be
-    /// played from there: when the server is on another computer and the file is not here
-    /// too, or always with `FREYA_STREAM` set, to try it on one computer.
+    /// played from there: when the server is on another computer, or always with
+    /// `FREYA_STREAM` set, to try it on one computer. A path a server elsewhere gives is never
+    /// looked for here: it names a file on that computer, and a hostile server could name one
+    /// here, or another computer's share for Windows to log in to. Not connected, such a track
+    /// is played from nowhere.
     pub fn stream_url(&self, path: &Path) -> Option<freya_audio::RemoteSource> {
         let source = self.source.as_ref()?;
-        let remote = self.remote.as_ref()?;
-        let (audio, agent) = self.audio.as_ref()?;
         if freya_audio::is_url(&path.to_string_lossy()) {
             return None;
         }
         let forced = std::env::var_os("FREYA_STREAM").is_some();
-        let here = source.here() || path.exists();
-        (forced || !here).then(|| freya_audio::RemoteSource {
-            url: freya_client::audio_url_at(audio, path),
-            bearer: remote.0.bearer(),
-            agent: Some(Arc::clone(agent)),
-        })
+        let elsewhere = !source.here();
+        if !elsewhere && !forced {
+            return None;
+        }
+        let connected = self.remote.as_ref().zip(self.audio.as_ref());
+        match connected {
+            Some((remote, (audio, agent))) => Some(freya_audio::RemoteSource {
+                url: freya_client::audio_url_at(audio, path),
+                bearer: remote.0.bearer(),
+                agent: Some(Arc::clone(agent)),
+            }),
+            None if elsewhere => Some(freya_audio::RemoteSource {
+                url: String::new(),
+                bearer: None,
+                agent: None,
+            }),
+            None => None,
+        }
     }
 
     /// The server as this client calls it, once connected.
@@ -3571,7 +3584,7 @@ impl LibraryPanel {
                     .album_art(&track, COVER_FULL)
                     .ok()
                     .flatten()
-                    .and_then(|bytes| image::load_from_memory(&bytes).ok());
+                    .and_then(|bytes| crate::gui::decode_picture(&bytes).ok());
                 if let Some(picture) = picture {
                     let rgb = picture.to_rgb8();
                     let buffer = slint::SharedPixelBuffer::clone_from_slice(

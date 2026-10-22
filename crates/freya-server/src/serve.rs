@@ -785,6 +785,8 @@ mod tests {
             "/Users/owner/Music".into()
         ))));
         assert!(!for_listeners(&ServiceEvent::PlaylistsChanged));
-        assert!(!for_listeners(&ServiceEvent::LastFm(LastFmStatus::default())));
+        assert!(!for_listeners(&ServiceEvent::LastFm(
+            LastFmStatus::default()
+        )));
     }
 }

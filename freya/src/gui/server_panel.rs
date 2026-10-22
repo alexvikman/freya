@@ -16,6 +16,10 @@ use slint_interpreter::{Struct, Value};
 use super::page_proxy::{ADDRESS, Heard, PageProxy};
 use super::skin_state::{ModelRows, string};
 
+/// The most servers found that are shown: a device on the network answering for many cannot
+/// fill the list.
+const MOST_FOUND: usize = 32;
+
 /// How long Freya listens for servers answering on the network.
 const FINDING: Duration = Duration::from_millis(1500);
 
@@ -63,6 +67,7 @@ pub struct ServerPanel {
     /// The account and the server, as last read, and whether they want reading again.
     account: Option<AccountInfo>,
     info: Option<ServerFound>,
+    fingerprint: String,
     refresh_wanted: bool,
     password_error: String,
     /// The server's pages in the browser, once opened, and what happens there.
@@ -93,6 +98,7 @@ impl ServerPanel {
             password_waiting: false,
             account: None,
             info: None,
+            fingerprint: String::new(),
             refresh_wanted: false,
             password_error: String::new(),
             proxy: None,
@@ -131,7 +137,8 @@ impl ServerPanel {
     pub fn choose_found(&mut self, index: usize) {
         if let Some(found) = self.found.get(index) {
             let (address, name) = (found.address, found.server.name.clone());
-            self.take_certificate(Ok(address), name);
+            let claimed = found.server.fingerprint.clone();
+            self.take_certificate(Ok(address), name, Some(claimed));
         }
     }
 
@@ -145,17 +152,24 @@ impl ServerPanel {
         self.login_error.clear();
         self.spawn(move || {
             let address = freya_client::resolve(&typed);
-            Done::Certificate(certificate(address, typed))
+            Done::Certificate(certificate(address, typed, None))
         });
     }
 
-    fn take_certificate(&mut self, address: Result<SocketAddr, String>, name: String) {
+    /// Takes the certificate of the server at `address`, which said it has the one of
+    /// `claimed` when it was found.
+    fn take_certificate(
+        &mut self,
+        address: Result<SocketAddr, String>,
+        name: String,
+        claimed: Option<String>,
+    ) {
         if self.login_busy {
             return;
         }
         self.login_busy = true;
         self.login_error.clear();
-        self.spawn(move || Done::Certificate(certificate(address, name)));
+        self.spawn(move || Done::Certificate(certificate(address, name, claimed)));
     }
 
     /// The certificate of the server this computer uses, once it knew it: one that gives the
@@ -251,8 +265,9 @@ impl ServerPanel {
     pub fn poll(&mut self) -> Option<Chosen> {
         while let Ok(done) = self.done.1.try_recv() {
             match done {
-                Done::Found(found) => {
+                Done::Found(mut found) => {
                     self.finding = false;
+                    found.truncate(MOST_FOUND);
                     self.found = found;
                 }
                 Done::Certificate(Ok((pending, fingerprint))) => {
@@ -318,6 +333,13 @@ impl ServerPanel {
         };
         self.account = remote.0.account().ok().flatten();
         self.info = remote.0.info().ok();
+        // The fingerprint shown is the certificate's this computer pinned, not what the server
+        // says of itself.
+        self.fingerprint = remote
+            .0
+            .certificate()
+            .map(freya_server::tls::fingerprint)
+            .unwrap_or_default();
     }
 
     /// Opens the page the account's password is set or changed on in the browser.
@@ -452,10 +474,7 @@ impl ServerPanel {
                         .unwrap_or_default(),
                 ),
             ),
-            (
-                "fingerprint",
-                string(info.map(|i| i.fingerprint.clone()).unwrap_or_default()),
-            ),
+            ("fingerprint", string(&self.fingerprint)),
             (
                 "server-name",
                 string(info.map(|i| i.name.clone()).unwrap_or_default()),
@@ -504,11 +523,18 @@ impl ServerPanel {
 fn certificate(
     address: Result<SocketAddr, String>,
     name: String,
+    claimed: Option<String>,
 ) -> Result<(Pending, String), String> {
     let address = address?;
     let certificate = freya_client::certificate_of(address)
         .map_err(|e| format!("Could not reach the server at {address}: {e}"))?;
     let fingerprint = freya_server::tls::fingerprint(&certificate);
+    if claimed.is_some_and(|claimed| claimed != fingerprint) {
+        return Err(format!(
+            "The computer at {address} gave another certificate than it said when it was found: \
+             another computer may be answering in the server's place."
+        ));
+    }
     let pin = Pin {
         address,
         certificate,

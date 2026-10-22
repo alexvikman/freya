@@ -22,15 +22,18 @@ use freya_server::http::{Request, Response, Server};
 /// Where the browser opens the server's pages.
 pub const ADDRESS: &str = "127.0.0.1:47477";
 
-/// The headers of a page passed on to the browser: where it sends the browser, and what keeps
-/// it safe.
-const KEPT_HEADERS: [&str; 6] = [
-    "Location",
-    "Content-Security-Policy",
-    "X-Frame-Options",
-    "X-Content-Type-Options",
-    "Referrer-Policy",
-    "Cache-Control",
+/// What keeps a page safe, set by the proxy whatever the server sent: no script runs on it,
+/// so a hostile server's page cannot read what a password manager fills in; no other site
+/// frames it; and its forms go to its own origin only.
+const SAFE_HEADERS: [(&str, &str); 5] = [
+    (
+        "Content-Security-Policy",
+        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+    ),
+    ("X-Frame-Options", "DENY"),
+    ("X-Content-Type-Options", "nosniff"),
+    ("Referrer-Policy", "same-origin"),
+    ("Cache-Control", "no-store"),
 ];
 
 /// What happened in the browser.
@@ -259,13 +262,24 @@ fn answer(
         "text/plain; charset=utf-8"
     };
     let mut response = Response::bytes(page.status, kind, page.body);
-    for (name, value) in page.headers {
-        if let Some(kept) = KEPT_HEADERS
+    response.headers.extend(
+        SAFE_HEADERS
             .iter()
-            .find(|kept| kept.eq_ignore_ascii_case(&name))
-        {
-            response.headers.push((kept, value));
-        }
+            .map(|(name, value)| (*name, (*value).to_owned())),
+    );
+    // Where the server sends the browser on: to its own pages, or back to this proxy with a
+    // login's code; nowhere else.
+    let location = page
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("location"))
+        .map(|(_, to)| to.clone())
+        .filter(|to| {
+            to.starts_with(&format!("{PAGES_PATH}/"))
+                || to.starts_with(&format!("{origin}/callback?"))
+        });
+    if let Some(to) = location {
+        response.headers.push(("Location", to));
     }
     response
 }

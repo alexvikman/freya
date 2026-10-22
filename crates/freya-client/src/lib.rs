@@ -25,8 +25,13 @@ const STARTING: Duration = Duration::from_secs(15);
 /// The most the picture cache keeps; beyond it, the pictures used longest ago go.
 const CACHE_LIMIT: u64 = 1024 * 1024 * 1024;
 
-/// The largest answer taken: every track of a large library, as JSON.
+/// The largest answer taken: every track of a large library, as JSON. A server may be hostile,
+/// so what else it sends is taken only as large as it can need: a picture, a page, a token or
+/// an event.
 const MAX_ANSWER: u64 = 512 * 1024 * 1024;
+const MAX_PICTURE: u64 = 32 * 1024 * 1024;
+const MAX_SMALL: u64 = 1024 * 1024;
+const MAX_EVENT: usize = 1024 * 1024;
 
 /// The server at `address`, such as `http://127.0.0.1:47474`: its library, and what it is
 /// asked to do. Its pictures are kept in `cache`, unless it is on this computer.
@@ -209,7 +214,7 @@ pub fn certificate_of(address: std::net::SocketAddr) -> ApiResult<Vec<u8>> {
         address.port()
     );
     let answer = agent.get(&url).call().map_err(failed)?;
-    match read(answer)? {
+    match read_at_most(answer, MAX_SMALL)? {
         (200, certificate) => Ok(certificate),
         (status, body) => Err(error(status, &body)),
     }
@@ -304,6 +309,11 @@ impl PictureCache {
     fn get(&self, checksum: &str) -> Option<Vec<u8>> {
         let file = self.file(checksum);
         let bytes = std::fs::read(&file).ok()?;
+        // Kept as it was: one changed since is not the picture, and goes.
+        if !holds(checksum, &bytes) {
+            let _ = std::fs::remove_file(&file);
+            return None;
+        }
         // Used now: kept longer than those not.
         let _ = std::fs::File::options()
             .append(true)
@@ -313,6 +323,9 @@ impl PictureCache {
     }
 
     fn put(&self, checksum: &str, bytes: &[u8]) {
+        if !holds(checksum, bytes) {
+            return;
+        }
         let file = self.file(checksum);
         let partial = file.with_extension("partial");
         let written = std::fs::create_dir_all(&self.dir)
@@ -322,6 +335,14 @@ impl PictureCache {
             log::debug!("could not keep a picture in the cache: {e}");
         }
     }
+}
+
+/// Whether `bytes` are the picture `checksum` names: their SHA-256. A server elsewhere may
+/// send other bytes under a common cover's name; they are not taken for it.
+fn holds(checksum: &str, bytes: &[u8]) -> bool {
+    let digest = ring::digest::digest(&ring::digest::SHA256, bytes);
+    let hex: String = digest.as_ref().iter().map(|b| format!("{b:02x}")).collect();
+    hex.eq_ignore_ascii_case(checksum)
 }
 
 /// Takes away the pictures in `dir` used longest ago, until it holds at most `limit` bytes.
@@ -404,6 +425,11 @@ impl Http {
         (self.url("/audio"), agent)
     }
 
+    /// The certificate pinned for the server, when it is reached over TLS.
+    pub fn certificate(&self) -> Option<&[u8]> {
+        self.pin.as_ref().map(|pin| pin.certificate.as_slice())
+    }
+
     /// What the player reads tracks with: this device's access token, renewed as it ends.
     pub fn bearer(&self) -> Option<Bearer> {
         if let Some(session) = &self.session {
@@ -482,7 +508,7 @@ impl Http {
                 .header("Content-Type", "application/json")
                 .send(body.to_string())
         })?;
-        read(answer)
+        read_at_most(answer, MAX_SMALL)
     }
 
     /// Tokens for this device, named `device`, given the pairing key a client on the server's
@@ -535,7 +561,7 @@ impl Http {
     /// The account this device is connected to; none when its token is not taken.
     pub fn account(&self) -> ApiResult<Option<AccountInfo>> {
         let answer = self.send(|http| http.get("/account").call())?;
-        match read(answer)? {
+        match read_at_most(answer, MAX_SMALL)? {
             (200, body) => serde_json::from_slice(&body).map(Some).map_err(failed),
             (401, _) => Ok(None),
             (status, body) => Err(error(status, &body)),
@@ -546,7 +572,7 @@ impl Http {
     /// password, `/web/password?ticket=`, for a while: hex, as the server gives it.
     pub fn password_ticket(&self) -> ApiResult<String> {
         let answer = self.send(|http| http.post("/account/password-page").send_empty())?;
-        json(answer)?["ticket"]
+        small_json(answer)?["ticket"]
             .as_str()
             .filter(|ticket| !ticket.is_empty() && ticket.bytes().all(|b| b.is_ascii_hexdigit()))
             .map(str::to_owned)
@@ -557,7 +583,7 @@ impl Http {
     /// certificate's fingerprint.
     pub fn info(&self) -> ApiResult<freya_protocol::ServerFound> {
         let answer = self.send(|http| http.get("/info").call())?;
-        serde_json::from_value(json(answer)?).map_err(failed)
+        serde_json::from_value(small_json(answer)?).map_err(failed)
     }
 
     /// The server's proof that it knows the connection code its computer shows, for `nonce`.
@@ -580,7 +606,7 @@ impl Http {
     /// long it lasts; only for an admin.
     pub fn connection_code(&self) -> ApiResult<(String, Duration)> {
         let answer = self.send(|http| http.post("/account/connection-code").send_empty())?;
-        let answer = json(answer)?;
+        let answer = small_json(answer)?;
         let code = answer["code"]
             .as_str()
             .ok_or_else(|| ApiError("the server gave no code".into()))?;
@@ -591,7 +617,7 @@ impl Http {
     /// Takes this device's own token back: it has to log in again.
     pub fn log_out(&self) -> ApiResult<()> {
         let answer = self.send(|http| http.post("/account/log-out").send_empty())?;
-        json(answer).map(drop)
+        small_json(answer).map(drop)
     }
 
     /// Takes the token of the account's device `device` back.
@@ -605,14 +631,14 @@ impl Http {
     /// The server's version; an error when none answers.
     pub fn version(&self) -> ApiResult<String> {
         let answer = self.get("/version").call().map_err(failed)?;
-        let version = json(answer)?;
+        let version = small_json(answer)?;
         Ok(version["version"].as_str().unwrap_or_default().to_owned())
     }
 
     /// Asks the server to stop: one on this computer only.
     pub fn quit(&self) -> ApiResult<()> {
         let answer = self.send(|http| http.post("/quit").send_empty())?;
-        json(answer).map(drop)
+        small_json(answer).map(drop)
     }
 
     /// The event stream, opened.
@@ -622,7 +648,7 @@ impl Http {
                 .call()
         })?;
         if answer.status().as_u16() != 200 {
-            let (status, body) = read(answer)?;
+            let (status, body) = read_at_most(answer, MAX_SMALL)?;
             return Err(error(status, &body));
         }
         Ok(answer.into_body().into_reader())
@@ -735,7 +761,7 @@ impl Pages {
                 Some((name.as_str().to_owned(), value.to_str().ok()?.to_owned()))
             })
             .collect();
-        let (status, body) = read(answer)?;
+        let (status, body) = read_at_most(answer, MAX_SMALL)?;
         Ok(Page {
             status,
             headers,
@@ -762,13 +788,13 @@ fn failed(e: impl std::fmt::Display) -> ApiError {
 
 type Answer = ureq::http::Response<ureq::Body>;
 
-/// The body of `answer`; what went wrong when it is not one of `wanted`'s statuses.
-fn read(mut answer: Answer) -> ApiResult<(u16, Vec<u8>)> {
+/// The body of `answer`, and its status, when it is at most `limit` bytes.
+pub(crate) fn read_at_most(mut answer: Answer, limit: u64) -> ApiResult<(u16, Vec<u8>)> {
     let status = answer.status().as_u16();
     let body = answer
         .body_mut()
         .with_config()
-        .limit(MAX_ANSWER)
+        .limit(limit)
         .read_to_vec()
         .map_err(failed)?;
     Ok((status, body))
@@ -782,18 +808,27 @@ fn error(status: u16, body: &[u8]) -> ApiError {
     ApiError(said.unwrap_or_else(|| format!("the server answered {status}")))
 }
 
-/// The bytes of `answer`, none when the server has none (404).
+/// The bytes of a picture in `answer`, none when the server has none (404).
 fn bytes_or_none(answer: Answer) -> ApiResult<Option<Vec<u8>>> {
-    match read(answer)? {
+    match read_at_most(answer, MAX_PICTURE)? {
         (200, body) => Ok(Some(body)),
         (404, _) => Ok(None),
         (status, body) => Err(error(status, &body)),
     }
 }
 
-/// The JSON of `answer`.
+/// The JSON of `answer`: a call's, as large as the whole library.
 fn json(answer: Answer) -> ApiResult<serde_json::Value> {
-    match read(answer)? {
+    json_at_most(answer, MAX_ANSWER)
+}
+
+/// The JSON of an answer that is small: about the server, the account, or what it did.
+fn small_json(answer: Answer) -> ApiResult<serde_json::Value> {
+    json_at_most(answer, MAX_SMALL)
+}
+
+fn json_at_most(answer: Answer, limit: u64) -> ApiResult<serde_json::Value> {
+    match read_at_most(answer, limit)? {
         (200, body) => serde_json::from_slice(&body).map_err(failed),
         (status, body) => Err(error(status, &body)),
     }
@@ -818,6 +853,11 @@ impl Transport for Http {
         }
         let answer = self.send(|http| http.get(&format!("/pictures/{checksum}")).call())?;
         let bytes = bytes_or_none(answer)?;
+        if bytes.as_ref().is_some_and(|bytes| !holds(checksum, bytes)) {
+            return Err(ApiError(format!(
+                "the server sent another picture than {checksum}"
+            )));
+        }
         if let (Some(cache), Some(bytes)) = (&self.cache, &bytes) {
             cache.put(checksum, bytes);
         }
@@ -834,7 +874,7 @@ impl Transport for Http {
                 .header("Content-Type", "application/octet-stream")
                 .send(bytes)
         })?;
-        serde_json::from_value(json(answer)?).map_err(failed)
+        serde_json::from_value(small_json(answer)?).map_err(failed)
     }
 
     fn album_art(&self, track: &Path, largest: u32) -> ApiResult<Option<Vec<u8>>> {
@@ -873,14 +913,28 @@ impl Transport for Http {
 /// nobody listens; [`ServiceEvent::Lost`] while it cannot be.
 fn follow_events(http: &Http, mut stream: ureq::BodyReader<'static>, tell: &Sender<ServiceEvent>) {
     loop {
-        for line in std::io::BufReader::new(stream).lines() {
-            let Ok(line) = line else {
-                break;
+        let mut reader = std::io::BufReader::new(stream);
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            // A line is at most `MAX_EVENT` bytes: one longer ends the stream.
+            let read =
+                std::io::Read::take(&mut reader, MAX_EVENT as u64 + 1).read_until(b'\n', &mut line);
+            match read {
+                Ok(0) | Err(_) => break,
+                Ok(_) if line.len() > MAX_EVENT => {
+                    log::warn!("the server sent an event too long to read");
+                    break;
+                }
+                Ok(_) => {}
+            }
+            let Ok(line) = std::str::from_utf8(&line) else {
+                continue;
             };
             if line.trim().is_empty() {
                 continue;
             }
-            match serde_json::from_str(&line) {
+            match serde_json::from_str(line) {
                 Ok(event) => {
                     if tell.send(event).is_err() {
                         return;

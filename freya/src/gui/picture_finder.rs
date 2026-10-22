@@ -198,7 +198,7 @@ fn look(
     let covers = request
         .covers
         .iter()
-        .filter_map(|checksum| image::load_from_memory(&pictures.picture(checksum).ok()??).ok())
+        .filter_map(|checksum| crate::gui::decode_picture(&pictures.picture(checksum).ok()??).ok())
         .take(4)
         .collect();
     if let Some(collage) = artist_image::collage_of(covers, PREVIEW) {
@@ -358,7 +358,7 @@ fn keep(
 
 /// The picture in `bytes`, its size and a small copy of it to show.
 fn preview(bytes: &[u8]) -> Result<(u32, u32, SharedPixelBuffer<Rgba8Pixel>), String> {
-    let picture = image::load_from_memory(bytes).map_err(|e| e.to_string())?;
+    let picture = crate::gui::decode_picture(bytes).map_err(|e| e.to_string())?;
     let (width, height) = (picture.width(), picture.height());
     let small = picture.thumbnail(PREVIEW, PREVIEW).to_rgba8();
     let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(

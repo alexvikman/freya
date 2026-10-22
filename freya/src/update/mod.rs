@@ -300,8 +300,14 @@ pub fn page(name: &str) -> Option<String> {
     })
 }
 
-/// Opens a web page in the user's browser.
+/// Opens a web page in the user's browser: one on the internet over HTTPS, or Freya's own
+/// pages on this computer. Only plain URL characters are passed to the system's opener, so a
+/// URL that came from elsewhere cannot be read by it as anything else.
 pub fn open_page(url: &str) {
+    if !is_openable(url) {
+        log::warn!("did not open a page with an unexpected address");
+        return;
+    }
     let opener = if cfg!(target_os = "macos") {
         "open"
     } else if cfg!(windows) {
@@ -312,6 +318,15 @@ pub fn open_page(url: &str) {
     if let Err(e) = std::process::Command::new(opener).arg(url).spawn() {
         log::warn!("could not open {url}: {e}");
     }
+}
+
+/// Whether `url` may be opened: see [`open_page`].
+fn is_openable(url: &str) -> bool {
+    let ours = format!("http://127.0.0.1:{}/", freya_protocol::CALLBACK_PORT);
+    let plain = url
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"-._~:/?#&=%+@".contains(&b));
+    plain && (url.starts_with("https://") || url.starts_with(&ours))
 }
 
 #[cfg(test)]

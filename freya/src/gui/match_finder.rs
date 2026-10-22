@@ -146,7 +146,7 @@ fn picture(mbid: &str, key: &str) -> Result<Option<SharedPixelBuffer<Rgba8Pixel>
     // fanart.tv keeps a small copy of each picture beside it.
     let small = url.replacen("/fanart/", "/preview/", 1);
     let bytes = artist_image::download(&small).or_else(|_| artist_image::download(url))?;
-    let picture = image::load_from_memory(&bytes)
+    let picture = crate::gui::decode_picture(&bytes)
         .map_err(|e| e.to_string())?
         .resize_to_fill(PICTURE, PICTURE, image::imageops::FilterType::Triangle)
         .to_rgba8();
@@ -275,7 +275,7 @@ impl AlbumFinder {
 /// The cover of the album `group` from the Cover Art Archive, small.
 fn cover(group: &str) -> Result<SharedPixelBuffer<Rgba8Pixel>, String> {
     let bytes = artist_image::download(&format!("{COVER_ART}/{group}/front-250"))?;
-    let cover = image::load_from_memory(&bytes)
+    let cover = crate::gui::decode_picture(&bytes)
         .map_err(|e| e.to_string())?
         .resize_to_fill(PICTURE, PICTURE, image::imageops::FilterType::Triangle)
         .to_rgba8();

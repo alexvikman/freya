@@ -290,6 +290,19 @@ pub fn server_program() -> Option<std::path::PathBuf> {
     Some(exe.with_file_name(format!("freya-server{}", std::env::consts::EXE_SUFFIX)))
 }
 
+/// A picture in `bytes` from a server or the internet, decoded within bounds: no wider or
+/// higher than 12,000 pixels, nor needing more than 256 MB, so a picture made to be small as a
+/// file and huge decoded cannot take the memory.
+pub fn decode_picture(bytes: &[u8]) -> image::ImageResult<image::DynamicImage> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(12_000);
+    limits.max_image_height = Some(12_000);
+    limits.max_alloc = Some(256 * 1024 * 1024);
+    reader.limits(limits);
+    reader.decode()
+}
+
 /// The library of Freya's server on this computer, started from beside this program.
 pub fn local_source() -> Option<library::LibrarySource> {
     let address = freya_server::LOCAL_ADDRESS.parse().ok()?;
