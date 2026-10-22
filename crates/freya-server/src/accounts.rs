@@ -361,6 +361,10 @@ impl Accounts {
             let device = &mut kept.devices[at];
             let lost = std::mem::take(&mut device.token);
             device.retired.push(lost);
+            // Once: asked again, it was copied.
+            if let Some(previous) = device.previous.take() {
+                device.retired.push(previous.token);
+            }
             let granted = issue(&mut kept, at);
             self.save(&kept);
             return granted;
@@ -817,6 +821,14 @@ mod tests {
         assert_eq!(accounts.renew(&second.refresh), None);
         assert_eq!(accounts.caller(&fourth.access), None);
         assert_eq!(accounts.renew(&fourth.refresh), None);
+
+        // A lost answer is asked again once: twice, the token was copied.
+        let key = std::fs::read_to_string(&pairing).unwrap();
+        let paired = accounts.pair(&key, "Tablet").unwrap();
+        let renewed = accounts.renew(&paired.refresh).unwrap();
+        assert!(accounts.renew(&paired.refresh).is_some());
+        assert_eq!(accounts.renew(&paired.refresh), None);
+        assert_eq!(accounts.caller(&renewed.access), None);
 
         // Forged or ended access tokens are not taken.
         let key = std::fs::read_to_string(&pairing).unwrap();
