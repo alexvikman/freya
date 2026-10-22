@@ -230,7 +230,7 @@ what the hardening made: answers per user and role, nothing compressed that carr
 | **P3** ✓ | **Nothing fetched twice**: the library has a generation, bumped by every change; answers carry it as an ETag and a client that has them gets 304 with no body; the client keeps the answers in memory and the whole-library ones on disk, so it shows the library at once on start and checks it after; favourites and edits kept until they change; a scan's progress reloads the view at most every few seconds | Going back to a view costs one round trip without a body; the library shows before the server answers |
 | **P4** ✓ | **Fewer round trips**: several calls in one request; a playlist's tracks in one call; an artist's page, a genre's page and search each one call on the server, search waiting for a pause in typing; no call per artist for its picture | A page is one round trip; a keystroke at most one |
 | **P5** ✓ | **The window never waits**: every call to the server made on a worker, its answer applied when it comes, an older one dropped; connecting and renewing tokens off the UI thread too | No call on the UI thread in the log; scrolling stays smooth with 100 ms each way |
-| **P6** | **Pictures**: thumbnails made and kept by the server in the sizes the grid asks for; several fetched at once, the ones in view first; the cover of what plays from what the scan kept instead of read from the file each time | 60 covers at 10 ms each way in under 0.2 s |
+| **P6** ✓ | **Pictures**: thumbnails made and kept by the server in the sizes the grid asks for; several fetched at once, the ones in view first; the cover of what plays from what the scan kept instead of read from the file each time | 60 covers at 10 ms each way in under 0.2 s |
 | **P7** | **Sound**: the next track opened and its first part fetched before the current ends, so tracks follow without a gap; a first part small enough to start at once, later ones larger; MP3s sought by estimate first; a part no longer needed given up; the audio connection kept warm | The first sound in two round trips and a little; no gap between tracks at 10 ms each way |
 
 #### Measured before (P1)
@@ -308,6 +308,18 @@ being changed. The window against its own server 100 ms away each way, through a
 nothing held it up in its first 30 seconds, where before every call would have, 475 of
 them. What still waits on the window's thread: the user's own changes, a favourite made or
 an artist matched, a round trip each.
+
+#### P6
+
+The server makes a picture small (300 pixels, a JPEG) the first time a grid asks for it and
+keeps it beside the pictures, taken away with them; up to 64 are asked for at once
+(`/pictures/small`). The client makes its covers on four threads, each asking for up to 16
+at once, the ones asked for last first, as those scrolled past are not shown any longer;
+those of a server elsewhere are kept apart, as they cannot be checked against their name.
+60 covers of a grid at 10 ms each way: 1.4–1.7 s and 3.3 MB before, 90 ms and 1.5 MB now; at
+40 ms, 4.5–5.6 s before, 225 ms now. The cover of what plays is the one the scan kept,
+fetched once by its checksum, rather than read from the file, decoded and scaled by the
+server at each track; and the album of the track playing is looked up on a thread.
 
 ### U7: the hologram (from 2026-10-17)
 

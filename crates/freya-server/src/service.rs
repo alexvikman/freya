@@ -500,6 +500,15 @@ impl LibraryPictures for LocalLibrary {
         self.pictures()?.put(bytes).map_err(api_error)
     }
 
+    fn small_picture(&self, checksum: &str) -> ApiResult<Option<Vec<u8>>> {
+        if !freya_protocol::is_checksum(checksum) {
+            return Ok(None);
+        }
+        Ok(self
+            .pictures()?
+            .small(checksum, freya_protocol::SMALL_PICTURE))
+    }
+
     fn take_picture(&self, bytes: &[u8], largest: u32) -> ApiResult<String> {
         self.pictures()?
             .take_bytes(bytes, largest)

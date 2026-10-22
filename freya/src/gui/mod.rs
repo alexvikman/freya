@@ -147,8 +147,8 @@ pub fn run(options: Options) -> anyhow::Result<()> {
         window_events.clone(),
         app::Collections {
             library: library::LibraryPanel::new(
-                source,
-                crate::settings::cache_dir().map(|dir| dir.join("covers")),
+                source.clone(),
+                library::covers_dir(source.as_ref()),
             ),
             stations: radio::Stations::load(crate::settings::stations_path()),
             playlists: playlists::Playlists::new(),

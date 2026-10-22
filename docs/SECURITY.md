@@ -125,7 +125,8 @@ Nobody can wear it out before logging in:
 - only the library's answers compressed, which carry no secret, so the length of a
   compressed answer tells nothing of a token or a key;
 - calls asked at once (`/calls`) only those that read the library, at most 256 and 32 MB
-  of answers, each allowed to a listener or not on its own, as if asked alone;
+  of answers, each allowed to a listener or not on its own, as if asked alone; small
+  pictures at most 64 at once, in one size only, made from pictures already kept;
 - events wait for a listener in a queue of 1,024, past which it is let go;
 - stopping the server, or turning the network off, ends every connection.
 
@@ -160,7 +161,9 @@ Nobody can wear it out before logging in:
   decoded within 12,000 pixels a side and 256 MB.
 - A login's tokens go only with the server that gave them, never to one chosen meanwhile.
 - What answers on this computer's address without the user's certificate is given nothing.
-- The picture cache keeps and gives only bytes whose SHA-256 is their name.
+- The picture cache keeps and gives only bytes whose SHA-256 is their name. The covers a
+  server makes small for a grid cannot be checked so: those of a server elsewhere are kept
+  apart, for that server alone, decoded within the same bounds.
 - The library's large answers of a server elsewhere are kept on disk for that server alone,
   readable by the user alone, and forgotten when the device logs out.
 - The fingerprint shown is the certificate's the client pinned.

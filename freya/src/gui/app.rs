@@ -204,7 +204,7 @@ impl Covers {
     }
 
     /// Reads the cover of the track at `path`: from its file, or from the library `remote`
-    /// keeps it in when it is played from there.
+    /// keeps it in when it is played from there, as its scan kept it when it did.
     fn request(&mut self, path: &Path, remote: Option<Arc<dyn LibraryApi>>) {
         if self.wanted.as_deref() == Some(path) {
             return;
@@ -214,10 +214,8 @@ impl Covers {
         let path = path.to_owned();
         std::thread::spawn(move || {
             let read = match &remote {
-                Some(library) => library
-                    .album_art(&path, COVER_SIZE)
-                    .ok()
-                    .flatten()
+                Some(library) => kept_cover(library.as_ref(), &path)
+                    .or_else(|| library.album_art(&path, COVER_SIZE).ok().flatten())
                     .and_then(|bytes| cover_from(&bytes, COVER_SIZE)),
                 None => read_cover(&path, COVER_SIZE),
             };
@@ -242,6 +240,18 @@ impl Covers {
         }
         latest
     }
+}
+
+/// The cover a scan kept of the album of the track at `path` in `library`, as large as the
+/// scan makes them: the server reads nothing, and a client that had it before has it here.
+fn kept_cover(library: &dyn LibraryApi, path: &Path) -> Option<Vec<u8>> {
+    let track = library.track_at(path, Duration::ZERO).ok()??;
+    let key = freya_library::thumbnails::Thumbnails::key(
+        track.album_artist.as_deref(),
+        track.album.as_deref(),
+    );
+    let checksum = library.album_covers().ok()?.remove(&key)?.cover?;
+    library.picture(&checksum).ok()?
 }
 
 /// Where covers are saved for the system's Now Playing display.
@@ -889,7 +899,7 @@ impl App {
 
     /// Shows the library from `source` in place of the one shown.
     fn show_library_of(&mut self, source: library::LibrarySource) {
-        let covers = settings::cache_dir().map(|dir| dir.join("covers"));
+        let covers = library::covers_dir(Some(&source));
         let mut library = LibraryPanel::new(Some(source), covers);
         configure_library(&mut library, &self.settings);
         self.library = library;

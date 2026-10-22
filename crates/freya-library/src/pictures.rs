@@ -126,13 +126,64 @@ impl Pictures {
             // Gone when empty; kept, and the error ignored, when not.
             let _ = std::fs::remove_dir(folder.path());
         }
+        // And the small ones of those no longer wanted.
+        for file in std::fs::read_dir(self.small_dir())
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let name = file.file_name().to_string_lossy().into_owned();
+            let of = name.split('-').next().unwrap_or_default();
+            if !wanted.contains(of) && std::fs::remove_file(file.path()).is_ok() {
+                removed += 1;
+            }
+        }
         Ok(removed)
     }
 
     pub fn dir(&self) -> &Path {
         &self.dir
     }
+
+    /// The picture `checksum` at most `size` wide or high, as a JPEG: made the first time it
+    /// is asked for and kept beside the pictures, for clients to show in a grid without
+    /// fetching the picture whole. None when the picture is not kept.
+    pub fn small(&self, checksum: &str, size: u32) -> Option<Vec<u8>> {
+        let file = self.small_dir().join(format!("{checksum}-{size}.jpg"));
+        if let Ok(bytes) = std::fs::read(&file) {
+            return Some(bytes);
+        }
+        let picture = crate::decode_picture(&self.read(checksum)?).ok()?;
+        let small = if picture.width() > size || picture.height() > size {
+            picture.thumbnail(size, size)
+        } else {
+            picture
+        };
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, SMALL_QUALITY)
+            .encode_image(&small.to_rgb8())
+            .ok()?;
+        let kept = create_private_dir(&self.small_dir()).and_then(|()| {
+            let partial = file.with_extension("partial");
+            std::fs::write(&partial, &jpeg)?;
+            std::fs::rename(&partial, &file)
+        });
+        if let Err(e) = kept {
+            log::debug!("could not keep a small picture: {e}");
+        }
+        Some(jpeg)
+    }
+
+    /// Where the small pictures are kept: beside the pictures, not among them.
+    fn small_dir(&self) -> PathBuf {
+        let mut name = self.dir.file_name().unwrap_or_default().to_owned();
+        name.push("-small");
+        self.dir.with_file_name(name)
+    }
 }
+
+/// How well a small picture is kept.
+const SMALL_QUALITY: u8 = 85;
 
 /// Creates `dir`, readable only by the user where the system allows: pictures say what music
 /// they have.
@@ -153,6 +204,29 @@ mod tests {
             std::env::temp_dir().join(format!("freya-pictures-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
+    }
+
+    #[test]
+    fn a_small_picture_is_made_once_and_goes_with_its_picture() {
+        let dir = temp_dir("small");
+        let pictures = Pictures::new(dir.join("pictures"));
+        let mut png = Vec::new();
+        image::RgbImage::from_pixel(900, 600, image::Rgb([200, 0, 0]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let kept = pictures.put(&png).unwrap();
+        let small = pictures.small(&kept, 300).unwrap();
+        let shown = image::load_from_memory(&small).unwrap();
+        assert_eq!((shown.width(), shown.height()), (300, 200));
+        // Kept beside the pictures, not among them, and read as it was made.
+        let file = dir.join("pictures-small").join(format!("{kept}-300.jpg"));
+        assert_eq!(std::fs::read(&file).unwrap(), small);
+        assert_eq!(pictures.small(&kept, 300).unwrap(), small);
+        assert_eq!(pictures.small(&"0".repeat(64), 300), None);
+        // A picture no longer wanted takes its small one with it.
+        pictures.keep_only(&HashSet::new()).unwrap();
+        assert!(!file.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

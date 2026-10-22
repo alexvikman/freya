@@ -1144,6 +1144,60 @@ impl Transport for Http {
         Ok(bytes)
     }
 
+    fn small_picture(&self, checksum: &str) -> ApiResult<Option<Vec<u8>>> {
+        if !freya_protocol::is_checksum(checksum) {
+            return Ok(None);
+        }
+        let _held = HeldUp::by(|| "a small picture".into());
+        let size = freya_protocol::SMALL_PICTURE.to_string();
+        let answer = self.send(|http| {
+            http.get(&format!("/pictures/{checksum}"))
+                .query("size", &size)
+                .call()
+        })?;
+        bytes_or_none(answer)
+    }
+
+    fn small_pictures(&self, checksums: &[String]) -> ApiResult<Vec<Option<Vec<u8>>>> {
+        let _held = HeldUp::by(|| format!("{} small pictures", checksums.len()));
+        let asked: Vec<&String> = checksums
+            .iter()
+            .filter(|c| freya_protocol::is_checksum(c))
+            .take(freya_protocol::MOST_SMALL_AT_ONCE)
+            .collect();
+        let body = serde_json::to_vec(&asked).map_err(failed)?;
+        let answer = self.send(|http| {
+            http.post("/pictures/small")
+                .header("Content-Type", "application/json")
+                .send(&body[..])
+        })?;
+        let limit = MAX_PICTURE * freya_protocol::MOST_SMALL_AT_ONCE as u64;
+        let answers = match read_at_most(answer, limit)? {
+            (200, bytes) => {
+                let mut rest = &bytes[..];
+                let mut answers: HashMap<&str, Vec<u8>> = HashMap::new();
+                for checksum in &asked {
+                    let (length, after) = rest
+                        .split_first_chunk::<4>()
+                        .ok_or_else(|| ApiError("the server's pictures were cut short".into()))?;
+                    let (small, after) = after
+                        .split_at_checked(u32::from_be_bytes(*length) as usize)
+                        .ok_or_else(|| ApiError("the server's pictures were cut short".into()))?;
+                    rest = after;
+                    if !small.is_empty() {
+                        answers.insert(checksum.as_str(), small.to_vec());
+                    }
+                }
+                answers
+            }
+            (status, body) => return Err(error(status, &body)),
+        };
+        Ok(checksums
+            .iter()
+            .map(|c| answers.get(c.as_str()).cloned())
+            .collect())
+    }
+
     fn keep_picture(&self, bytes: &[u8], largest: Option<u32>) -> ApiResult<String> {
         let answer = self.send(|http| {
             let mut request = http.post("/pictures");

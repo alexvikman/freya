@@ -227,8 +227,18 @@ fn answer(served: &Served, answers: &Answers, request: Request) -> Response {
                 Some(Ok(Err(e))) => Response::error(500, e),
             }
         }
+        ("POST", "/pictures/small") => small_pictures(library, &request),
         ("GET", path) if path.starts_with("/pictures/") => {
-            match library.picture(&path["/pictures/".len()..]) {
+            let checksum = &path["/pictures/".len()..];
+            // Small, for a grid: made once, and kept.
+            let picture = match request.query_value("size") {
+                None => library.picture(checksum),
+                Some(size) if size == freya_protocol::SMALL_PICTURE.to_string() => {
+                    library.small_picture(checksum)
+                }
+                Some(_) => return Response::error(400, "pictures come whole or small"),
+            };
+            match picture {
                 Ok(Some(bytes)) => Response::bytes(200, "image/jpeg", bytes),
                 Ok(None) => Response::error(404, "no such picture"),
                 Err(e) => Response::error(500, e),
@@ -493,6 +503,33 @@ fn many(
             .push(("Content-Encoding", "gzip".to_owned()));
     }
     response
+}
+
+/// The small pictures `request` asks for at once, a JSON list of their checksums, as
+/// `application/x-freya-pictures`: each as four bytes of length, big-endian, then it; no
+/// bytes for one the library does not keep.
+fn small_pictures(library: &dyn freya_protocol::LibraryApi, request: &Request) -> Response {
+    let checksums: Vec<String> = match serde_json::from_slice(&request.body) {
+        Ok(checksums) => checksums,
+        Err(e) => return Response::error(400, e),
+    };
+    if checksums.len() > freya_protocol::MOST_SMALL_AT_ONCE {
+        return Response::error(413, "too many pictures at once");
+    }
+    let mut out = Vec::new();
+    for checksum in &checksums {
+        let small = library
+            .small_picture(checksum)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let Ok(length) = u32::try_from(small.len()) else {
+            return Response::error(500, "a picture too large to send");
+        };
+        out.extend_from_slice(&length.to_be_bytes());
+        out.extend_from_slice(&small);
+    }
+    Response::bytes(200, "application/x-freya-pictures", out)
 }
 
 /// Whether the client takes answers gzipped.

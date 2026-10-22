@@ -91,6 +91,35 @@ fn pictures_go_both_ways_and_only_the_librarys_music_is_read() {
     assert_eq!((small.width(), small.height()), (100, 67));
     assert_eq!(remote.picture(&"0".repeat(64)).unwrap(), None);
     assert_eq!(remote.picture("../../library.db").unwrap(), None);
+    // Small, as a grid shows it.
+    let mut large = Vec::new();
+    image::RgbImage::from_pixel(1200, 600, image::Rgb([0, 200, 0]))
+        .write_to(
+            &mut std::io::Cursor::new(&mut large),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+    let kept = remote.put_picture(&large).unwrap();
+    let small = remote.small_picture(&kept).unwrap().unwrap();
+    assert_eq!(
+        image::guess_format(&small).unwrap(),
+        image::ImageFormat::Jpeg
+    );
+    let small = image::load_from_memory(&small).unwrap();
+    assert_eq!((small.width(), small.height()), (300, 150));
+    assert_eq!(remote.small_picture(&"0".repeat(64)).unwrap(), None);
+    assert_eq!(remote.small_picture("../../library.db").unwrap(), None);
+    // Several at once, each in its place.
+    let asked = [
+        kept.clone(),
+        "0".repeat(64),
+        "../../library.db".to_owned(),
+        kept.clone(),
+    ];
+    let smalls = remote.small_pictures(&asked).unwrap();
+    assert_eq!(smalls.len(), 4);
+    assert!(smalls[0].is_some() && smalls[3].is_some());
+    assert!(smalls[1].is_none() && smalls[2].is_none());
     // A file outside the library is not read, even one that is there.
     assert_eq!(
         remote.album_art(&dir.join("library.db"), 100).unwrap(),
@@ -1191,6 +1220,25 @@ fn measure_a_real_library() {
         }
     );
     let _ = std::fs::remove_dir_all(&cache);
+    // As the grid has them: small, on four threads, sixteen asked at once.
+    let bytes = std::sync::atomic::AtomicUsize::new(0);
+    let started = Instant::now();
+    std::thread::scope(|threads| {
+        for some in checksums.chunks(16) {
+            let (remote, bytes) = (&remote, &bytes);
+            threads.spawn(move || {
+                for small in remote.small_pictures(some).unwrap().into_iter().flatten() {
+                    bytes.fetch_add(small.len(), std::sync::atomic::Ordering::Relaxed);
+                }
+            });
+        }
+    });
+    println!(
+        "{} covers small, sixteen at once on four threads: {:.1} ms, {:.1} KB",
+        checksums.len(),
+        started.elapsed().as_secs_f64() * 1000.0,
+        bytes.into_inner() as f64 / 1024.0
+    );
 
     // Sound: the first of it, after a seek, and between two tracks, for a few files of each
     // kind, each of another album, so none is read warm.

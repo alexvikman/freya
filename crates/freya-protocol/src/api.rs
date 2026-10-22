@@ -438,6 +438,14 @@ pub trait Transport: Send + Sync {
     /// Keeps the picture in `bytes`, at most `largest` wide or high when given: its checksum.
     fn keep_picture(&self, bytes: &[u8], largest: Option<u32>) -> ApiResult<String>;
     fn album_art(&self, track: &Path, largest: u32) -> ApiResult<Option<Vec<u8>>>;
+    /// The picture kept as `checksum`, small, as [`LibraryPictures::small_picture`].
+    fn small_picture(&self, _checksum: &str) -> ApiResult<Option<Vec<u8>>> {
+        Ok(None)
+    }
+    /// The pictures kept as `checksums`, small, at once.
+    fn small_pictures(&self, checksums: &[String]) -> ApiResult<Vec<Option<Vec<u8>>>> {
+        checksums.iter().map(|c| self.small_picture(c)).collect()
+    }
     /// What happens at the server from now on, as it happens.
     fn events(&self) -> ApiResult<Receiver<ServiceEvent>>;
     /// Asks for the answers to `calls` all at once, as [`LibraryApi::prefetch`].
@@ -468,6 +476,14 @@ impl<T: Transport> LibraryPictures for Remote<T> {
 
     fn album_art(&self, track: &Path, largest: u32) -> ApiResult<Option<Vec<u8>>> {
         self.0.album_art(track, largest)
+    }
+
+    fn small_picture(&self, checksum: &str) -> ApiResult<Option<Vec<u8>>> {
+        self.0.small_picture(checksum)
+    }
+
+    fn small_pictures(&self, checksums: &[String]) -> ApiResult<Vec<Option<Vec<u8>>>> {
+        self.0.small_pictures(checksums)
     }
 }
 
@@ -502,7 +518,21 @@ pub trait LibraryPictures: Send + Sync {
     /// The cover of the album whose track `track` is, at most `largest` wide or high, read
     /// from the music's file or folder.
     fn album_art(&self, track: &Path, largest: u32) -> ApiResult<Option<Vec<u8>>>;
+    /// The picture kept as `checksum` at most [`SMALL_PICTURE`] wide or high, as a JPEG, for
+    /// a grid; none when the library makes none.
+    fn small_picture(&self, _checksum: &str) -> ApiResult<Option<Vec<u8>>> {
+        Ok(None)
+    }
+    /// The pictures kept as `checksums`, small, at once: each as [`Self::small_picture`].
+    fn small_pictures(&self, checksums: &[String]) -> ApiResult<Vec<Option<Vec<u8>>>> {
+        checksums.iter().map(|c| self.small_picture(c)).collect()
+    }
 }
+
+/// How large a small picture is, wide or high: what a grid shows a picture in.
+pub const SMALL_PICTURE: u32 = 300;
+/// The most small pictures asked for at once.
+pub const MOST_SMALL_AT_ONCE: usize = 64;
 
 /// All a client can ask of the library.
 pub trait LibraryApi: LibraryData + LibraryPictures {

@@ -5,9 +5,11 @@
 //! showing thousands of albums only ever decodes the covers on screen; and every artist's and
 //! album's are made ahead, a few at a time, so they are there when scrolled to.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError, channel};
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Condvar, Mutex};
+#[cfg(test)]
 use std::time::Duration;
 
 use crate::artist_image;
@@ -16,14 +18,22 @@ use crate::pictures::Pictures;
 /// Where the pictures thumbnails are made from come from: the picture kept as a checksum.
 pub type PictureSource = std::sync::Arc<dyn Fn(&str) -> Option<Vec<u8>> + Send + Sync>;
 
+/// Where pictures in the grid's size come from, several at once: each kept as a checksum.
+pub type SmallSource = std::sync::Arc<dyn Fn(&[String]) -> Vec<Option<Vec<u8>>> + Send + Sync>;
+
 /// The pictures in `pictures`, as a source of them.
 pub fn source(pictures: Pictures) -> PictureSource {
     std::sync::Arc::new(move |checksum| pictures.read(checksum))
 }
 
+/// How many threads make covers, and artists' pictures: a server elsewhere is asked for
+/// several at once, as each takes a round trip.
+const THREADS: usize = 4;
+/// How many covers a thread asks a library that makes them small for at once.
+const SMALL_AT_ONCE: usize = 16;
 /// The longest side of a thumbnail, in pixels: sharp in a 150-point grid tile on a Retina
 /// screen, about 30 KB as a JPEG.
-pub const SIZE: u32 = 300;
+pub const SIZE: u32 = freya_protocol::SMALL_PICTURE;
 const JPEG_QUALITY: u8 = 85;
 /// The longest side of an artist's picture on their page.
 const LARGE: u32 = 1400;
@@ -80,55 +90,107 @@ pub enum Thumbnail {
     Pending,
 }
 
-/// A thread taking jobs, those the window waits for before those made ahead.
+/// Threads taking jobs: those the window waits for before those made ahead, and of those the
+/// one asked for last first, as what was scrolled past is not shown any longer.
 struct Worker<J> {
-    urgent: Sender<(String, J)>,
-    later: Sender<(String, J)>,
+    jobs: Arc<(Mutex<Jobs<J>>, Condvar)>,
+}
+
+struct Jobs<J> {
+    urgent: Vec<(String, J)>,
+    later: VecDeque<(String, J)>,
+    /// Whether the threads are to stop.
+    closed: bool,
 }
 
 impl<J: Send + 'static> Worker<J> {
-    /// Starts a thread doing each job with `run`, telling `done`.
+    /// Starts `threads` threads doing jobs with `run`, up to `most` at once, telling `done`.
     fn start(
         name: &str,
+        threads: usize,
+        most: usize,
         done: Sender<Done>,
-        mut run: impl FnMut(String, J) -> Done + Send + 'static,
+        run: impl Fn(Vec<(String, J)>) -> Vec<Done> + Send + Sync + 'static,
     ) -> Option<Self> {
-        let (urgent, urgent_jobs) = channel::<(String, J)>();
-        let (later, later_jobs) = channel::<(String, J)>();
-        let started = std::thread::Builder::new()
-            .name(name.into())
-            .spawn(move || {
-                loop {
-                    let job = match urgent_jobs.try_recv() {
-                        Ok(job) => job,
-                        Err(TryRecvError::Disconnected) => break,
-                        Err(TryRecvError::Empty) => match later_jobs.try_recv() {
-                            Ok(job) => job,
-                            Err(_) => match urgent_jobs.recv_timeout(Duration::from_millis(100)) {
-                                Ok(job) => job,
-                                Err(RecvTimeoutError::Timeout) => continue,
-                                Err(RecvTimeoutError::Disconnected) => break,
-                            },
-                        },
-                    };
-                    if done.send(run(job.0, job.1)).is_err() {
-                        break;
+        let jobs = Arc::new((
+            Mutex::new(Jobs {
+                urgent: Vec::new(),
+                later: VecDeque::new(),
+                closed: false,
+            }),
+            Condvar::new(),
+        ));
+        let run = Arc::new(run);
+        let mut started = 0;
+        for _ in 0..threads {
+            let (jobs, run, done) = (Arc::clone(&jobs), Arc::clone(&run), done.clone());
+            let thread = std::thread::Builder::new()
+                .name(name.into())
+                .spawn(move || {
+                    while let Some(next) = next_jobs(&jobs, most) {
+                        for made in run(next) {
+                            if done.send(made).is_err() {
+                                return;
+                            }
+                        }
                     }
-                }
-            });
-        match started {
-            Ok(_) => Some(Self { urgent, later }),
-            Err(e) => {
-                log::warn!("could not start {name}: {e}");
-                None
+                });
+            match thread {
+                Ok(_) => started += 1,
+                Err(e) => log::warn!("could not start {name}: {e}"),
             }
         }
+        (started > 0).then_some(Self { jobs })
+    }
+
+    /// Hands `job` to the threads: one the window waits for, or to make ahead.
+    fn push(&self, key: String, job: J, urgent: bool) {
+        let (jobs, ready) = &*self.jobs;
+        let mut jobs = jobs.lock().unwrap_or_else(|e| e.into_inner());
+        if urgent {
+            jobs.urgent.push((key, job));
+        } else {
+            jobs.later.push_back((key, job));
+        }
+        ready.notify_one();
+    }
+}
+
+impl<J> Drop for Worker<J> {
+    fn drop(&mut self) {
+        let (jobs, ready) = &*self.jobs;
+        jobs.lock().unwrap_or_else(|e| e.into_inner()).closed = true;
+        ready.notify_all();
+    }
+}
+
+/// The next jobs for a thread, up to `most`: the urgent ones asked for last first, then the
+/// oldest of those made ahead; none once the threads are to stop.
+fn next_jobs<J>(jobs: &(Mutex<Jobs<J>>, Condvar), most: usize) -> Option<Vec<(String, J)>> {
+    let (jobs, ready) = jobs;
+    let mut jobs = jobs.lock().unwrap_or_else(|e| e.into_inner());
+    loop {
+        if jobs.closed {
+            return None;
+        }
+        let mut next = Vec::new();
+        while next.len() < most
+            && let Some(job) = jobs.urgent.pop().or_else(|| jobs.later.pop_front())
+        {
+            next.push(job);
+        }
+        if !next.is_empty() {
+            return Some(next);
+        }
+        jobs = ready.wait(jobs).unwrap_or_else(|e| e.into_inner());
     }
 }
 
 pub struct Thumbnails {
     dir: PathBuf,
     pictures: PictureSource,
+    /// The pictures in the grid's size, when the library makes them so.
+    small: Option<SmallSource>,
     /// Albums and artists asked for, with what is known about them.
     known: HashMap<String, Thumbnail>,
     /// The large picture of each artist asked for, by their key, once made.
@@ -155,6 +217,7 @@ impl Thumbnails {
         Self {
             dir,
             pictures,
+            small: None,
             known: HashMap::new(),
             portraits: HashMap::new(),
             queued: HashSet::new(),
@@ -166,6 +229,13 @@ impl Thumbnails {
             finished,
             remade: Vec::new(),
         }
+    }
+
+    /// Takes the pictures in the grid's size from `small`, a library that makes them so: a
+    /// server elsewhere, which sends them rather than the pictures whole.
+    pub fn with_small(mut self, small: SmallSource) -> Self {
+        self.small = Some(small);
+        self
     }
 
     /// Clears a cache of an older layout of what it holds: thumbnails, pictures made for
@@ -435,65 +505,75 @@ impl Thumbnails {
             let (dir, pictures) = (self.dir.clone(), self.pictures.clone());
             self.artists = Worker::start(
                 "freya-artist-pictures",
+                THREADS,
+                1,
                 self.finished_tx.clone(),
-                move |key, work: ArtistWork| {
-                    let (shown, large, remade) = make_artist(&dir, &pictures, &key, work)
-                        .unwrap_or_else(|e| {
-                            log::debug!("no picture for {key}: {e}");
-                            (None, None, false)
-                        });
-                    Done::Shown {
-                        key,
-                        shown,
-                        large,
-                        remade,
-                    }
+                move |jobs: Vec<(String, ArtistWork)>| {
+                    let make = |(key, work): (String, ArtistWork)| {
+                        let (shown, large, remade) = make_artist(&dir, &pictures, &key, work)
+                            .unwrap_or_else(|e| {
+                                log::debug!("no picture for {key}: {e}");
+                                (None, None, false)
+                            });
+                        Done::Shown {
+                            key,
+                            shown,
+                            large,
+                            remade,
+                        }
+                    };
+                    jobs.into_iter().map(make).collect()
                 },
             );
         }
         if let Some(worker) = &self.artists {
-            let queue = if urgent {
-                &worker.urgent
-            } else {
-                &worker.later
-            };
-            if queue.send((key.to_owned(), work)).is_ok() {
-                self.waiting += 1;
-                self.queued.insert(key.to_owned());
-            }
+            worker.push(key.to_owned(), work, urgent);
+            self.waiting += 1;
+            self.queued.insert(key.to_owned());
         }
     }
 
     fn send_picture(&mut self, checksum: &str, urgent: bool) {
         if self.covers.is_none() {
-            let (dir, pictures) = (self.dir.clone(), self.pictures.clone());
+            let (dir, pictures, small) =
+                (self.dir.clone(), self.pictures.clone(), self.small.clone());
+            // From a library that makes them small, several are asked for at once.
+            let most = if small.is_some() { SMALL_AT_ONCE } else { 1 };
             self.covers = Worker::start(
                 "freya-covers",
+                THREADS,
+                most,
                 self.finished_tx.clone(),
-                move |checksum, PictureJob| {
-                    let shown = shrink(&dir, &pictures, &checksum).unwrap_or_else(|e| {
-                        log::debug!("no thumbnail of the picture {checksum}: {e}");
-                        None
-                    });
-                    Done::Shown {
-                        key: checksum,
-                        shown,
-                        large: None,
-                        remade: false,
-                    }
+                move |jobs: Vec<(String, PictureJob)>| {
+                    let checksums: Vec<String> = jobs.into_iter().map(|(key, _)| key).collect();
+                    let mut smalls = small
+                        .as_ref()
+                        .map(|small| small(&checksums))
+                        .unwrap_or_default()
+                        .into_iter();
+                    let make = |checksum: String, small: Option<Vec<u8>>| {
+                        let shown = shrink(&dir, &pictures, small, &checksum).unwrap_or_else(|e| {
+                            log::debug!("no thumbnail of the picture {checksum}: {e}");
+                            None
+                        });
+                        Done::Shown {
+                            key: checksum,
+                            shown,
+                            large: None,
+                            remade: false,
+                        }
+                    };
+                    checksums
+                        .into_iter()
+                        .map(|checksum| make(checksum, smalls.next().flatten()))
+                        .collect()
                 },
             );
         }
         if let Some(worker) = &self.covers {
-            let queue = if urgent {
-                &worker.urgent
-            } else {
-                &worker.later
-            };
-            if queue.send((checksum.to_owned(), PictureJob)).is_ok() {
-                self.waiting += 1;
-                self.queued.insert(checksum.to_owned());
-            }
+            worker.push(checksum.to_owned(), PictureJob, urgent);
+            self.waiting += 1;
+            self.queued.insert(checksum.to_owned());
         }
     }
 
@@ -625,9 +705,27 @@ fn collage_of(
     Ok((Some(file), None, true))
 }
 
-/// The kept picture `checksum` in the grid's size, made from Freya's copy; none when that is
-/// gone.
-fn shrink(dir: &Path, pictures: &PictureSource, checksum: &str) -> Result<Option<PathBuf>, String> {
+/// The kept picture `checksum` in the grid's size: `small`, as the library made it, when it
+/// did; else made from Freya's copy; none when that is gone.
+fn shrink(
+    dir: &Path,
+    pictures: &PictureSource,
+    small: Option<Vec<u8>>,
+    checksum: &str,
+) -> Result<Option<PathBuf>, String> {
+    let name = format!("{checksum}-{SIZE}");
+    if let Some(bytes) = small {
+        // Kept as it came when it is the JPEG it is said to be, of the size; else made again.
+        let picture = crate::decode_picture(&bytes).map_err(|e| e.to_string())?;
+        let jpeg = image::guess_format(&bytes).is_ok_and(|f| f == image::ImageFormat::Jpeg);
+        if jpeg && picture.width() <= SIZE && picture.height() <= SIZE {
+            save_bytes(dir, &name, &bytes)?;
+        } else {
+            let small = picture.thumbnail(SIZE, SIZE);
+            save_jpeg(dir, &name, &small.to_rgb8(), JPEG_QUALITY)?;
+        }
+        return Ok(Some(dir.join(format!("{name}.jpg"))));
+    }
     let Some(bytes) = pictures(checksum) else {
         return Ok(None);
     };
@@ -637,7 +735,6 @@ fn shrink(dir: &Path, pictures: &PictureSource, checksum: &str) -> Result<Option
     } else {
         picture
     };
-    let name = format!("{checksum}-{SIZE}");
     save_jpeg(dir, &name, &small.to_rgb8(), JPEG_QUALITY)?;
     Ok(Some(dir.join(format!("{name}.jpg"))))
 }
@@ -675,6 +772,14 @@ fn save_jpeg(dir: &Path, name: &str, picture: &image::RgbImage, quality: u8) -> 
     std::fs::rename(&partial, dir.join(format!("{name}.jpg"))).map_err(|e| e.to_string())
 }
 
+/// Writes `bytes`, a JPEG, as `name`, as [`save_jpeg`] does.
+fn save_bytes(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
+    create_private_dir(dir).map_err(|e| e.to_string())?;
+    let partial = dir.join(format!("{name}.partial"));
+    std::fs::write(&partial, bytes).map_err(|e| e.to_string())?;
+    std::fs::rename(&partial, dir.join(format!("{name}.jpg"))).map_err(|e| e.to_string())
+}
+
 /// Creates `dir`, readable only by the user where the system allows: covers say what music
 /// they have.
 fn create_private_dir(dir: &Path) -> std::io::Result<()> {
@@ -690,6 +795,36 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
+
+    #[test]
+    fn the_cover_asked_for_last_is_made_first() {
+        let jobs = (
+            Mutex::new(Jobs {
+                urgent: Vec::new(),
+                later: VecDeque::new(),
+                closed: false,
+            }),
+            Condvar::new(),
+        );
+        {
+            let mut queued = jobs.0.lock().unwrap();
+            queued
+                .later
+                .extend([("ahead 1".to_owned(), ()), ("ahead 2".to_owned(), ())]);
+            queued
+                .urgent
+                .extend([("scrolled past".to_owned(), ()), ("shown".to_owned(), ())]);
+        }
+        let first: Vec<String> = next_jobs(&jobs, 3)
+            .unwrap()
+            .into_iter()
+            .map(|j| j.0)
+            .collect();
+        assert_eq!(first, ["shown", "scrolled past", "ahead 1"]);
+        assert_eq!(next_jobs(&jobs, 3).unwrap()[0].0, "ahead 2");
+        jobs.0.lock().unwrap().closed = true;
+        assert!(next_jobs(&jobs, 3).is_none());
+    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("freya-thumbs-{name}-{}", std::process::id()));

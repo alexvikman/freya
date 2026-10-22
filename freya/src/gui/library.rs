@@ -219,6 +219,19 @@ pub enum LibrarySource {
     },
 }
 
+/// Where the thumbnails of `source`'s pictures are kept: a server elsewhere's apart from the
+/// others, as they come from it as it made them.
+pub fn covers_dir(source: Option<&LibrarySource>) -> Option<PathBuf> {
+    let cache = crate::settings::cache_dir()?;
+    Some(match source {
+        Some(LibrarySource::Remote { pin, .. }) => {
+            let server = freya_library::pictures::Pictures::checksum(&pin.certificate);
+            cache.join(format!("covers-{}", &server[..16]))
+        }
+        _ => cache.join("covers"),
+    })
+}
+
 impl LibrarySource {
     /// Whether the library is on this computer.
     fn here(&self) -> bool {
@@ -273,6 +286,8 @@ pub struct LibraryPanel {
     /// The same for the covers and pictures, and whether they are lined up to be made then.
     asking_pictures: Option<std::sync::mpsc::Receiver<()>>,
     prepare_after: bool,
+    /// The same for the album of the track playing.
+    asking_playing: Option<Receiver<()>>,
     /// Whether the row of the track playing is to be shown once the rows are read, and in its
     /// album.
     reveal_playing: Option<bool>,
@@ -704,6 +719,7 @@ impl LibraryPanel {
             found: None,
             asking_pictures: None,
             prepare_after: false,
+            asking_playing: None,
             reveal_playing: None,
             typed: None,
             searched: Instant::now() - TYPING_PAUSE,
@@ -1011,10 +1027,20 @@ impl LibraryPanel {
     fn open(&mut self, api: Arc<dyn LibraryApi>) {
         if let Some(covers) = self.covers_dir.clone() {
             let source = Arc::clone(&api);
-            self.thumbnails = Some(Thumbnails::new(
+            let mut thumbnails = Thumbnails::new(
                 covers,
                 Arc::new(move |checksum| source.picture(checksum).ok().flatten()),
-            ));
+            );
+            // A server makes the covers small, so they are fetched so.
+            if self.remote.is_some() {
+                let source = Arc::clone(&api);
+                thumbnails = thumbnails.with_small(Arc::new(move |checksums| {
+                    source
+                        .small_pictures(checksums)
+                        .unwrap_or_else(|_| vec![None; checksums.len()])
+                }));
+            }
+            self.thumbnails = Some(thumbnails);
         }
         self.finder = PictureFinder::new(Some(Arc::clone(&api)));
         self.db = Some(api);
@@ -1173,6 +1199,10 @@ impl LibraryPanel {
         }
         if answered(&self.asking) {
             self.reload_now();
+        }
+        if answered(&self.asking_playing) {
+            self.asking_playing = None;
+            self.find_playing_album();
         }
         // Made again: what was read of them is old.
         for key in self
@@ -1511,7 +1541,16 @@ impl LibraryPanel {
         if self.playing != track {
             self.playing = track;
             self.find_playing_row();
-            self.find_playing_album();
+            // Its album, from the library: asked of a server on a thread.
+            let asked = self
+                .playing
+                .clone()
+                .map(|(path, start)| ahead("track_at", &(path.as_path(), start)));
+            self.asking_playing =
+                asked.and_then(|call| self.ask_on_thread(move |api| api.prefetch(&[call])));
+            if self.asking_playing.is_none() {
+                self.find_playing_album();
+            }
         }
     }
 
@@ -2786,32 +2825,39 @@ impl LibraryPanel {
     // ----- What the skin shows -----------------------------------------------------------------
 
     /// Reads the rows for the current level or search from the database.
+    /// Asks a server reached over the network for what `ask` asks of it, on a thread of its
+    /// own: told when it was. None for a library asked here and now.
+    fn ask_on_thread(
+        &self,
+        ask: impl FnOnce(&dyn LibraryApi) + Send + 'static,
+    ) -> Option<Receiver<()>> {
+        let api = Arc::clone(self.db.as_ref().filter(|_| self.remote.is_some())?);
+        let (done, answered) = std::sync::mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .name("freya-ask-ahead".into())
+            .spawn(move || {
+                ask(api.as_ref());
+                let _ = done.send(());
+            })
+            .ok()?;
+        Some(answered)
+    }
+
     /// Reads the rows anew. A server is asked for all they need on a thread of its own, the
     /// window not waiting for it, and they are read once its answers come.
     fn reload(&mut self) {
-        if self.remote.is_some()
-            && let Some(db) = &self.db
-        {
-            let calls = self.calls_ahead();
-            let level = self.level().clone();
-            let (list, searching) = (self.album_list, self.searching());
-            let api = Arc::clone(db);
-            let (done, answered) = std::sync::mpsc::sync_channel(1);
-            let asked = std::thread::Builder::new()
-                .name("freya-ask-ahead".into())
-                .spawn(move || {
-                    api.prefetch(&calls);
-                    if !searching {
-                        api.prefetch(&calls_after(api.as_ref(), &level, list));
-                    }
-                    let _ = done.send(());
-                });
-            if asked.is_ok() {
-                self.asking = Some(answered);
-                return;
+        let calls = self.calls_ahead();
+        let level = self.level().clone();
+        let (list, searching) = (self.album_list, self.searching());
+        self.asking = self.ask_on_thread(move |api| {
+            api.prefetch(&calls);
+            if !searching {
+                api.prefetch(&calls_after(api, &level, list));
             }
+        });
+        if self.asking.is_none() {
+            self.reload_now();
         }
-        self.reload_now();
     }
 
     /// Reads the rows anew now, from what was asked ahead.
@@ -3301,23 +3347,10 @@ impl LibraryPanel {
         if !self.pictures_stale || self.asking_pictures.is_some() {
             return;
         }
-        if self.remote.is_some()
-            && let Some(db) = &self.db
-        {
-            let api = Arc::clone(db);
-            let (done, answered) = std::sync::mpsc::sync_channel(1);
-            let asked = std::thread::Builder::new()
-                .name("freya-ask-ahead".into())
-                .spawn(move || {
-                    api.prefetch(&picture_calls());
-                    let _ = done.send(());
-                });
-            if asked.is_ok() {
-                self.asking_pictures = Some(answered);
-                return;
-            }
+        self.asking_pictures = self.ask_on_thread(|api| api.prefetch(&picture_calls()));
+        if self.asking_pictures.is_none() {
+            self.load_pictures_now();
         }
-        self.load_pictures_now();
     }
 
     /// Reads the albums' covers and the artists' pictures now, from what was asked ahead.
@@ -4656,7 +4689,10 @@ mod tests {
         assert!(panel.asking.is_some());
         let answered = |panel: &mut LibraryPanel| {
             let waited = Instant::now();
-            while panel.asking.is_some() || panel.asking_pictures.is_some() {
+            while panel.asking.is_some()
+                || panel.asking_pictures.is_some()
+                || panel.asking_playing.is_some()
+            {
                 assert!(waited.elapsed() < Duration::from_secs(10), "no answer");
                 std::thread::sleep(Duration::from_millis(5));
                 panel.poll();
@@ -4676,6 +4712,7 @@ mod tests {
         // What is done once the rows are read waits for them.
         let playing = dir.join("sine.ogg");
         panel.set_playing(Some((&playing, Duration::ZERO)));
+        answered(&mut panel);
         assert!(panel.open_playing(true));
         answered(&mut panel);
         assert!(panel.playing_row >= 0);
