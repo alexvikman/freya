@@ -3,6 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
+use freya_protocol::FolderListing;
+
 /// The music file at `path` as it is after links: a regular file within one of `folders`, as
 /// they are after links too. None for anything else, such as a link from a music folder to a
 /// file outside them all, which someone who can write in a shared folder might make.
@@ -18,23 +20,74 @@ pub fn music_file(path: &Path, folders: &[PathBuf]) -> Option<PathBuf> {
         .then_some(real)
 }
 
-/// Whether `file`, opened, is the file at `real`: not one put in its place in between.
-pub fn is_same_file(file: &std::fs::File, real: &Path) -> bool {
-    let (Ok(opened), Ok(there)) = (file.metadata(), std::fs::metadata(real)) else {
-        return false;
-    };
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        opened.is_file() && opened.dev() == there.dev() && opened.ino() == there.ino()
+/// The music file at `path`, opened: a regular file within one of `folders`, as the system says
+/// of the file opened itself. So a link swapped in between a check and the opening is caught:
+/// what is served is what was opened, wherever it is.
+pub fn open_music_file(path: &Path, folders: &[PathBuf]) -> Option<std::fs::File> {
+    let file = std::fs::File::open(path).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
     }
-    #[cfg(not(unix))]
-    {
-        opened.is_file() && opened.len() == there.len()
-    }
+    let opened = path_of(&file)?;
+    folders
+        .iter()
+        .filter_map(|folder| std::fs::canonicalize(folder).ok())
+        .any(|folder| opened.starts_with(folder))
+        .then_some(file)
 }
 
-use freya_protocol::FolderListing;
+/// Where the file opened as `file` is, as the system knows it.
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code, reason = "asks the system the path of a file it opened")]
+fn path_of(file: &std::fs::File) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::io::AsRawFd;
+    let mut path = vec![0u8; libc::PATH_MAX as usize];
+    // SAFETY: F_GETPATH writes at most PATH_MAX bytes, NUL-terminated, into the buffer given.
+    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETPATH, path.as_mut_ptr()) } == -1 {
+        return None;
+    }
+    let length = path.iter().position(|b| *b == 0)?;
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(&path[..length])))
+}
+
+#[cfg(target_os = "linux")]
+fn path_of(file: &std::fs::File) -> Option<PathBuf> {
+    use std::os::unix::io::AsRawFd;
+    std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).ok()
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code, reason = "asks the system the path of a file it opened")]
+fn path_of(file: &std::fs::File) -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW, VOLUME_NAME_DOS,
+    };
+    let mut path = vec![0u16; 32_768];
+    // SAFETY: a handle of a file open now, and a buffer of the length given.
+    let length = unsafe {
+        GetFinalPathNameByHandleW(
+            file.as_raw_handle(),
+            path.as_mut_ptr(),
+            path.len() as u32,
+            FILE_NAME_NORMALIZED | VOLUME_NAME_DOS,
+        )
+    } as usize;
+    if length == 0 || length >= path.len() {
+        return None;
+    }
+    Some(PathBuf::from(std::ffi::OsString::from_wide(
+        &path[..length],
+    )))
+}
+
+/// Elsewhere the file opened cannot be told, and nothing is served.
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+fn path_of(_file: &std::fs::File) -> Option<PathBuf> {
+    None
+}
 
 /// The folders in `folder`, by name, hidden ones left out; or, for none, where to start: the
 /// user's home and the drives.

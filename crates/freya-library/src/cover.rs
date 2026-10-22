@@ -107,10 +107,12 @@ fn embedded_cover(track: &Path) -> Option<Vec<u8>> {
         .map(|p| p.data().to_vec())
 }
 
-/// An image next to the track, or else in an artwork subfolder such as "Covers".
+/// An image next to the track, or else in an artwork subfolder such as "Covers": within the
+/// track's folder, after links, so one leading out of it reads nothing elsewhere.
 fn folder_cover(track: &Path) -> Option<Vec<u8>> {
     let dir = track.parent()?;
-    image_in(dir).or_else(|| {
+    let within = dir.canonicalize().ok()?;
+    image_in(dir, &within).or_else(|| {
         std::fs::read_dir(dir)
             .ok()?
             .flatten()
@@ -122,12 +124,13 @@ fn folder_cover(track: &Path) -> Option<Vec<u8>> {
                         ARTWORK_FOLDERS.contains(&name.to_ascii_lowercase().as_str())
                     })
             })
-            .find_map(|folder| image_in(&folder))
+            .find_map(|folder| image_in(&folder, &within))
     })
 }
 
-/// In `dir`: an image with a usual cover name, or else the folder's only image.
-fn image_in(dir: &Path) -> Option<Vec<u8>> {
+/// In `dir`: an image with a usual cover name, or else the folder's only image; read only when
+/// it is within `within`, after links.
+fn image_in(dir: &Path, within: &Path) -> Option<Vec<u8>> {
     let images: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
         .ok()?
         .flatten()
@@ -152,7 +155,11 @@ fn image_in(dir: &Path) -> Option<Vec<u8>> {
         (None, [only]) => only,
         _ => return None,
     };
-    std::fs::read(chosen).ok()
+    let real = chosen.canonicalize().ok()?;
+    if !real.starts_with(within) || !std::fs::metadata(&real).ok()?.is_file() {
+        return None;
+    }
+    std::fs::read(real).ok()
 }
 
 /// A color for an album's page, from its cover's pixels (RGB, 3 bytes each): its most

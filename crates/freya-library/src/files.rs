@@ -91,10 +91,21 @@ fn collect_matching(
     entering: &mut dyn FnMut(&Path),
 ) -> Walked {
     let mut walked = Walked::default();
+    // Links are followed only within what is walked: one out of the music, put in a folder
+    // others can write to, does not bring the rest of the computer into the library.
+    let roots: Vec<PathBuf> = paths.iter().filter_map(|p| p.canonicalize().ok()).collect();
     for path in paths {
         if path.is_dir() {
             let mut files = Vec::new();
-            walk(path, want, cancel, entering, &mut files, &mut walked);
+            walk(
+                path,
+                want,
+                &roots,
+                cancel,
+                entering,
+                &mut files,
+                &mut walked,
+            );
             files.sort();
             walked.files.extend(files);
         } else {
@@ -125,6 +136,7 @@ struct Read {
 fn walk(
     root: &Path,
     want: &Want,
+    roots: &[PathBuf],
     cancel: &AtomicBool,
     entering: &mut dyn FnMut(&Path),
     files: &mut Vec<PathBuf>,
@@ -152,7 +164,10 @@ fn walk(
                         let Some(folder) = level.get(next.fetch_add(1, Ordering::Relaxed)) else {
                             break;
                         };
-                        if send.send((folder, read_folder(folder, want))).is_err() {
+                        if send
+                            .send((folder, read_folder(folder, want, roots)))
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -175,8 +190,9 @@ fn walk(
     }
 }
 
-/// Reads `folder`: what `want` asks for in it, and the folders in it.
-fn read_folder(folder: &Folder, want: &Want) -> Read {
+/// Reads `folder`: what `want` asks for in it, and the folders in it; a link only to what is
+/// within `roots`.
+fn read_folder(folder: &Folder, want: &Want, roots: &[PathBuf]) -> Read {
     let mut read = Read::default();
     let Ok(entries) = std::fs::read_dir(&folder.path) else {
         return read;
@@ -193,6 +209,14 @@ fn read_folder(folder: &Folder, want: &Want) -> Read {
             continue;
         };
         let linked = kind.is_symlink();
+        if linked {
+            let within = path
+                .canonicalize()
+                .is_ok_and(|real| roots.iter().any(|root| real.starts_with(root)));
+            if !within {
+                continue;
+            }
+        }
         if (linked && path.is_dir()) || kind.is_dir() {
             let real = if linked {
                 let Ok(real) = path.canonicalize() else {
@@ -294,7 +318,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_walk_follows_links_but_not_back_up_and_stamps_what_it_finds() {
+    fn a_walk_follows_links_within_the_music_but_not_back_up_and_stamps_what_it_finds() {
         let dir = std::env::temp_dir().join(format!("freya-walk-links-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let (music, elsewhere) = (dir.join("music"), dir.join("elsewhere"));
@@ -310,6 +334,8 @@ mod tests {
         std::fs::write(elsewhere.join("4.ogg"), b"four").unwrap();
         std::os::unix::fs::symlink(&music, music.join("b/up")).unwrap();
         std::os::unix::fs::symlink(&elsewhere, music.join("linked")).unwrap();
+        std::os::unix::fs::symlink(elsewhere.join("4.ogg"), music.join("a/5.ogg")).unwrap();
+        std::os::unix::fs::symlink(music.join("a/1.mp3"), music.join("b/6.mp3")).unwrap();
 
         let mut entered = 0;
         let walked = walk_library(
@@ -321,12 +347,13 @@ mod tests {
             walked.files,
             [
                 music.join("a/1.mp3"),
+                music.join("b/6.mp3"),
                 music.join("b/deep/2.flac"),
-                music.join("linked/4.ogg"),
-            ]
+            ],
+            "links out of the music are not followed"
         );
         assert_eq!(walked.images, [music.join("b/deep/cover.jpg")]);
-        assert_eq!(entered, 5, "music, a, b, deep, linked; not up again");
+        assert_eq!(entered, 4, "music, a, b, deep; not up again, nor out");
         assert_eq!(walked.stamps.len(), 4);
         assert_eq!(walked.stamps[&music.join("b/deep/2.flac")].size, 3);
         let _ = std::fs::remove_dir_all(&dir);

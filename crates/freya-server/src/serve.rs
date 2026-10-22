@@ -250,8 +250,11 @@ fn answer(served: &Served, request: Request) -> Response {
                 Ok(asked) => asked,
                 Err(e) => return Response::error(400, e),
             };
-            // Only a file within the music's folders, after links, as for `/audio`.
-            if !is_music_file(served, &asked.track) {
+            // Only a track of the library, before its path is touched at all, and a file within
+            // the music's folders, after links, as for `/audio`.
+            if !library.knows_file(&asked.track).unwrap_or(false)
+                || !is_music_file(served, &asked.track)
+            {
                 return Response::error(404, "no cover");
             }
             match library.album_art(&asked.track, asked.largest.min(LARGEST_COVER)) {
@@ -360,17 +363,12 @@ fn audio(served: &Served, request: &Request) -> Response {
         .as_ref()
         .and_then(|server| server.settings().ok())
         .map(|settings| settings.library_folders);
-    let real = match folders {
-        Some(folders) => match crate::folders::music_file(&path, &folders) {
-            Some(real) => real,
-            None => return Response::error(404, "no such track"),
-        },
-        None => path.clone(),
+    let opened = match folders {
+        Some(folders) => crate::folders::open_music_file(&path, &folders),
+        None => std::fs::File::open(&path).ok(),
     };
-    let mut file = match std::fs::File::open(&real) {
-        Ok(file) if crate::folders::is_same_file(&file, &real) => file,
-        Ok(_) => return Response::error(404, "no such track"),
-        Err(e) => return Response::error(404, e),
+    let Some(mut file) = opened else {
+        return Response::error(404, "no such track");
     };
     let length = match file.metadata() {
         Ok(metadata) => metadata.len(),
