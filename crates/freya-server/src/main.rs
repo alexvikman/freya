@@ -1,9 +1,14 @@
+// A window app in release builds on Windows, so starting at login opens no console; it logs
+// to its folder.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 //! `freya-server`: the library as a service for Freya's clients, on this computer.
 //!
 //! `freya-server [--address HOST:PORT] [--data FOLDER]`, or `--version`. It keeps its library, pictures,
 //! settings and log in its own folder, the first time taking in what Freya kept in its folder
 //! before the server was its own. It runs until stopped: Ctrl-C, SIGTERM, or `POST /quit` from
-//! this computer.
+//! this computer. One that finds another on its address ends at once, and without failing, so
+//! what starts it at login does not start it again and again.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -54,6 +59,15 @@ fn main() {
 }
 
 fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> Result<(), String> {
+    // Before the library is opened: two servers never share it.
+    match std::net::TcpListener::bind(address) {
+        Ok(free) => drop(free),
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            log::info!("another server answers on {address}; this one is not needed");
+            return Ok(());
+        }
+        Err(e) => return Err(format!("could not listen on {address}: {e}")),
+    }
     let settings_file = data.join("settings.toml");
     let scrobbles = data.join("lastfm");
     if let Some(freya) = freya {

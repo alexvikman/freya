@@ -284,7 +284,7 @@ fn select_backend(requested: Option<String>, events: &WindowEvents) -> anyhow::R
 }
 
 /// Freya's server, beside this program.
-fn server_program() -> Option<std::path::PathBuf> {
+pub fn server_program() -> Option<std::path::PathBuf> {
     let exe = std::env::current_exe().ok()?;
     Some(exe.with_file_name(format!("freya-server{}", std::env::consts::EXE_SUFFIX)))
 }

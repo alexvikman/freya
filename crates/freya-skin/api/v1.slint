@@ -1112,6 +1112,9 @@ export global Server {
     in property <string> fingerprint;
     in property <string> server-name;
     in property <bool> network: true;
+    /// Whether the server on this computer starts when the user logs in, so it runs without
+    /// Freya open.
+    in property <bool> autostart;
 
     /// The account this device is connected to: its user, whether they set a password (only then
     /// can they log in on other devices), and the devices connected to it.
@@ -1148,6 +1151,7 @@ export global Server {
     callback revoke(string /* id */);
     callback set-network(bool);
     callback set-server-name(string);
+    callback set-autostart(bool);
 
     /// While choosing a music folder among the server's, from another computer: the folder
     /// shown ("" where to start: the home folder and the drives) and the folders in it.

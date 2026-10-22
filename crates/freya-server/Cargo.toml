@@ -31,4 +31,5 @@ toml = "1.1.8"
 
 [target.'cfg(windows)'.dependencies]
 # Last.fm's session in the Credential Manager (see src/scrobbler/session.rs).
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Credentials"] }
+# And starting the server at login, in the Run key (see src/autostart.rs).
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Credentials", "Win32_System_Registry"] }

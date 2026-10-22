@@ -987,6 +987,15 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
         "browse-cancel",
         Box::new(|app, _| app.server.stop_browsing()),
     );
+    bind(
+        "Server",
+        "set-autostart",
+        Box::new(|app, args| {
+            if let Some(Value::Bool(on)) = args.first() {
+                app.set_start_server_at_login(*on);
+            }
+        }),
+    );
     bind("LastFm", "connect", Box::new(|app, _| app.lastfm.connect()));
     bind("LastFm", "cancel", Box::new(|app, _| app.lastfm.cancel()));
     bind(

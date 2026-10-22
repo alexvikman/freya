@@ -1083,6 +1083,7 @@ skin_api! {
         Server."fingerprint" => set_fingerprint, get_fingerprint;
         Server."server-name" => set_server_name, get_server_name;
         Server."network" => set_network, get_network;
+        Server."autostart" => set_autostart, get_autostart;
         Server."user" => set_user, get_user;
         Server."has-password" => set_has_password, get_has_password;
         Server."devices" => set_devices, get_devices;
@@ -1258,6 +1259,7 @@ skin_api! {
         Server."revoke" => on_revoke, invoke_revoke(id: SharedString);
         Server."set-network" => on_set_network, invoke_set_network(on: bool);
         Server."set-server-name" => on_set_server_name, invoke_set_server_name(name: SharedString);
+        Server."set-autostart" => on_set_autostart, invoke_set_autostart(on: bool);
         Server."browse-start" => on_browse_start, invoke_browse_start();
         Server."browse-into" => on_browse_into, invoke_browse_into(index: i32);
         Server."browse-up" => on_browse_up, invoke_browse_up();

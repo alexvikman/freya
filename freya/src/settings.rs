@@ -73,6 +73,9 @@ pub struct Settings {
     pub scan_at_start: bool,
     /// The server on another computer the library is on; none for this computer's.
     pub server: Option<SavedServer>,
+    /// Whether this computer's server starts when the user logs in; none until decided, when
+    /// a release build makes it so.
+    pub start_server_at_login: Option<bool>,
 }
 
 /// A server on another computer, as this client pinned it when it logged in.
@@ -140,6 +143,7 @@ impl Default for Settings {
             scan_every_hours: 24,
             scan_at_start: false,
             server: None,
+            start_server_at_login: None,
             damaged: false,
         }
     }

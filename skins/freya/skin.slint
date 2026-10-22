@@ -7992,6 +7992,21 @@ component SettingsView inherits Rectangle {
                     }
                 }
             }
+            if !Server.remote: SettingsRow {
+                label: "Start the server when you log in";
+                detail: Server.autostart ? "It keeps the library up to date, and other computers can use it, while Freya is closed."
+                    : "It runs while Freya is open.";
+
+                VerticalLayout {
+                    alignment: center;
+
+                    Toggle {
+                        label: "Start the server when you log in";
+                        checked: Server.autostart;
+                        toggled => { Server.set-autostart(!Server.autostart); }
+                    }
+                }
+            }
             if !Server.remote && Server.network: SettingsRow {
                 label: "Name on the network";
 

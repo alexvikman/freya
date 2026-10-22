@@ -487,6 +487,10 @@ impl App {
         };
         app.watch_skin();
         app.attach_library();
+        // Only this computer's server: with the library elsewhere, it is not needed.
+        if app.settings.server.is_none() {
+            app.keep_server_starting();
+        }
         app
     }
 
@@ -791,6 +795,36 @@ impl App {
             pin: chosen.pin,
             name: chosen.name,
         });
+    }
+
+    /// Whether this computer's server starts when the user logs in. Release builds make it so
+    /// the first time; a development build's server is only started when asked.
+    pub fn set_start_server_at_login(&mut self, on: bool) {
+        let Some(program) = super::server_program() else {
+            return;
+        };
+        let done = if on {
+            freya_server::autostart::install(&freya_server::autostart::Launch::of(&program))
+        } else {
+            freya_server::autostart::uninstall()
+        };
+        match done {
+            Ok(()) => self.settings.start_server_at_login = Some(on),
+            Err(e) => log::warn!("could not change how the server starts: {e}"),
+        }
+    }
+
+    /// Keeps the server starting at login as the user decided, pointing at this Freya's
+    /// server, which moves with an update; and decides it the first time.
+    fn keep_server_starting(&mut self) {
+        let wanted = match self.settings.start_server_at_login {
+            Some(wanted) => wanted,
+            None if cfg!(debug_assertions) => return,
+            None => true,
+        };
+        if wanted {
+            self.set_start_server_at_login(true);
+        }
     }
 
     /// Shows the library of the server on this computer again.
@@ -1665,6 +1699,10 @@ impl App {
             (
                 "network",
                 Value::Bool(self.library.server_settings().is_none_or(|s| s.network)),
+            ),
+            (
+                "autostart",
+                Value::Bool(self.settings.start_server_at_login == Some(true)),
             ),
         ];
         server.extend(self.server.values());

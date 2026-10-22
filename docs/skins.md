@@ -416,7 +416,7 @@ The server that keeps the library: Freya's own on this computer, or one on anoth
 | `state` | string | "connecting", "connected", "unreachable" (Freya tries again by itself) or "log-in" (the server no longer takes this computer: log in again) |
 | `error` | string | Why it is unreachable, or must be logged in to |
 | `fingerprint` | string | The server's certificate's fingerprint |
-| `server-name`, `network` | string, bool | For the server on this computer: what others find it as, and whether they may connect |
+| `server-name`, `network`, `autostart` | string, bool, bool | For the server on this computer: what others find it as, whether they may connect, and whether it starts when the user logs in |
 | `user`, `has-password` | string, bool | The account this computer is connected to, and whether it has a password; only then can other computers log in |
 | `devices` | [`ServerDevice`] | The devices connected to the account: `id`, `name`, `connected` (a date), `this` |
 | `password-error` | string | Why the password was not set |
@@ -431,7 +431,7 @@ The server that keeps the library: Freya's own on this computer, or one on anoth
 | `use-this-computer()` | The library is this computer's server's again |
 | `set-password(password)` | At least 8 characters |
 | `revoke(id)` | Takes a device's token back: it has to log in again |
-| `set-network(on)`, `set-server-name(name)` | For the server on this computer |
+| `set-network(on)`, `set-server-name(name)`, `set-autostart(on)` | For the server on this computer |
 | `browse-start()`, `browse-into(index)`, `browse-up()`, `browse-add()`, `browse-cancel()` | Choosing a music folder among a server's on another computer: `browsing`, `browse-folder` ("" where to start: the home folder and the drives) and `browse-folders` say what is shown; `browse-add` adds the folder shown to `Library.folders-draft` |
 
 ### `Updates`
