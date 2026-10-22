@@ -435,6 +435,7 @@ fn reason(status: u16) -> &'static str {
         411 => "Length Required",
         413 => "Content Too Large",
         416 => "Range Not Satisfiable",
+        429 => "Too Many Requests",
         431 => "Request Header Fields Too Large",
         _ => "Internal Server Error",
     }

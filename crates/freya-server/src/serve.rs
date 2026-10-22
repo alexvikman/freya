@@ -28,7 +28,9 @@
 //!   `{"device"}`; `POST /account/log-out`: the caller's own token taken back.
 //!
 //! Every request but `/version`, `/pair` and `/token` carries a device's access token, as
-//! `Authorization: Bearer ...`, or is refused. The pages a browser opens, under
+//! `Authorization: Bearer ...`, or is refused. A listener's device is refused what changes the
+//! server: every call but those [`freya_protocol::LISTENER_CALLS`] names, and keeping
+//! pictures. The pages a browser opens, under
 //! [`freya_protocol::PAGES_PATH`], have their own rules (see [`crate::pages`]).
 //!
 //! Only Freya's clients are answered, never a web page: until clients log in, a page in the
@@ -41,8 +43,8 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
 use freya_protocol::{
-    API_PATH, LibraryApi, NETWORK_PORT, Server, ServerFound, ServiceEvent, dispatch_control,
-    dispatch_data,
+    API_PATH, LISTENER_CALLS, LibraryApi, NETWORK_PORT, Role, Server, ServerFound, ServiceEvent,
+    dispatch_control, dispatch_data,
 };
 
 use crate::accounts::{Accounts, Caller};
@@ -137,6 +139,12 @@ fn answer(served: &Served, request: Request) -> Response {
             }
         },
     };
+    if let Some(caller) = &caller
+        && caller.role == Role::Listener
+        && !listener_may(&request, path)
+    {
+        return Response::error(403, "only the server's admin may do that");
+    }
     if let (Some(accounts), Some(caller)) = (&served.accounts, &caller)
         && let Some(answer) = account(accounts, caller, &request, path, local)
     {
@@ -241,6 +249,18 @@ fn answer(served: &Served, request: Request) -> Response {
             _ => Response::error(403, "the server is not stopped from here"),
         },
         _ => Response::error(404, "no such page"),
+    }
+}
+
+/// Whether a listener may ask `request`: what reads the library and plays it, and the calls
+/// [`LISTENER_CALLS`] names; not keeping pictures, which only editing the library does.
+fn listener_may(request: &Request, path: &str) -> bool {
+    match (request.method.as_str(), path) {
+        ("POST", "/pictures") => false,
+        ("POST", call) if call.starts_with("/call/") => {
+            LISTENER_CALLS.contains(&&call["/call/".len()..])
+        }
+        _ => true,
     }
 }
 

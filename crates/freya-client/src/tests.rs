@@ -375,7 +375,7 @@ fn only_a_device_with_a_token_is_answered() {
         library: service.api(),
         server: Some(Arc::clone(&service) as _),
         quit: None,
-        accounts: Some(accounts),
+        accounts: Some(Arc::clone(&accounts)),
         certificate: None,
     };
     let server = Server::start("127.0.0.1:0", freya_server::handler(served)).unwrap();
@@ -499,6 +499,51 @@ fn only_a_device_with_a_token_is_answered() {
     mac.0.revoke(&pc_device).unwrap();
     assert!(pc.stats().is_err());
     assert!(mac.stats().is_ok());
+    // A listener plays, and keeps their own favourites and playlists, but does not change
+    // the server, nor read its settings.
+    accounts
+        .add_user("Kim", freya_protocol::Role::Listener, "battery staple")
+        .unwrap();
+    let login = Login::new("http://127.0.0.1:47477/callback");
+    let sent = log_in(&pages, &login, "Kim", "battery staple");
+    let location = &sent
+        .headers
+        .iter()
+        .find(|(n, _)| n == "location")
+        .unwrap()
+        .1;
+    let code = location
+        .split("code=")
+        .nth(1)
+        .unwrap()
+        .split('&')
+        .next()
+        .unwrap();
+    let phone = Http::new(&address).redeem(&login, code, "Phone").unwrap();
+    let phone = connect(&address, Some(phone.access), None);
+    assert_eq!(phone.stats().unwrap().tracks, 1);
+    assert!(phone.events().is_ok());
+    let at = std::time::SystemTime::now();
+    phone.set_artist_favorite("Sine", true, at).unwrap();
+    // This server keeps no playlists, but a listener is not refused them.
+    let saved = phone.save_playlist("Kim's", &[]);
+    assert!(!format!("{saved:?}").contains("admin"), "{saved:?}");
+    assert_eq!(
+        phone.0.account().unwrap().unwrap().role,
+        freya_protocol::Role::Listener
+    );
+    let refused = phone.settings().unwrap_err();
+    assert!(refused.0.contains("admin"), "{refused:?}");
+    assert!(phone.set_settings(&ServerSettings::default()).is_err());
+    assert!(phone.rescan().is_err());
+    assert!(phone.server_folders(None).is_err());
+    assert!(
+        phone
+            .set_artist_edit("Sine", &ArtistEdit::default())
+            .is_err()
+    );
+    assert!(phone.put_picture(b"not a picture").is_err());
+
     // And logs itself out.
     mac.0.log_out().unwrap();
     assert!(mac.stats().is_err());

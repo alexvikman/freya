@@ -18,6 +18,8 @@
 //! A device connected before refresh tokens renews with the token it has. Passwords are set and changed in
 //! the browser too, on a page a device's ticket opens.
 
+use std::collections::HashMap;
+use std::net::IpAddr;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -26,7 +28,7 @@ use std::time::{Duration, Instant, SystemTime};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
-use freya_protocol::{AccountInfo, DeviceInfo, Joined};
+use freya_protocol::{AccountInfo, DeviceInfo, Joined, Role};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +36,13 @@ use serde::{Deserialize, Serialize};
 const ROUNDS: u32 = 600_000;
 /// How long a wrong password holds up the answer, so guessing one takes long.
 const WRONG_PASSWORD_WAIT: Duration = Duration::from_secs(1);
+/// Wrong passwords taken for a user's name, or from an address, before the next has to wait:
+/// first this long, twice as long after each, up to the longest, so a thousand guesses take
+/// days. Forgotten a day after the last.
+const FREE_TRIES: u32 = 5;
+const FIRST_WAIT: Duration = Duration::from_secs(30);
+const LONGEST_WAIT: Duration = Duration::from_secs(15 * 60);
+const TRIES_FORGOTTEN: Duration = Duration::from_secs(24 * 60 * 60);
 /// The user a server starts with, who owns it.
 const OWNER: u32 = 1;
 /// How often when a device was last used is kept: no more than this, so calling the server
@@ -66,6 +75,9 @@ struct User {
     id: u32,
     name: String,
     password: Option<Password>,
+    /// Admin for a user from before roles: the owner, the only one there was.
+    #[serde(default)]
+    role: Role,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -158,6 +170,73 @@ pub struct PasswordPage {
 pub struct Caller {
     pub user: u32,
     pub device: String,
+    pub role: Role,
+}
+
+/// Why a password was not taken.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refused {
+    Wrong,
+    /// Too many wrong ones: none is tried for this long.
+    Wait(Duration),
+}
+
+impl Refused {
+    /// What a page says of it.
+    pub fn said(&self) -> String {
+        match self {
+            Self::Wrong => "Wrong user or password.".into(),
+            Self::Wait(wait) => {
+                let minutes = wait.as_secs().div_ceil(60);
+                let unit = if minutes == 1 { "minute" } else { "minutes" };
+                format!("Too many wrong passwords. Try again in {minutes} {unit}.")
+            }
+        }
+    }
+}
+
+/// Wrong passwords, by what they were tried for: a user's name, or an address.
+#[derive(Default)]
+struct Tries(HashMap<String, Tried>);
+
+struct Tried {
+    wrong: u32,
+    until: Instant,
+    last: Instant,
+}
+
+impl Tries {
+    /// How long `keys` wait before another try, at most.
+    fn wait(&self, keys: &[String]) -> Option<Duration> {
+        let now = Instant::now();
+        keys.iter()
+            .filter_map(|key| self.0.get(key))
+            .filter(|tried| tried.until > now)
+            .map(|tried| tried.until - now)
+            .max()
+    }
+
+    fn wrong(&mut self, keys: &[String]) {
+        let now = Instant::now();
+        self.0.retain(|_, tried| now < tried.last + TRIES_FORGOTTEN);
+        for key in keys {
+            let tried = self.0.entry(key.clone()).or_insert(Tried {
+                wrong: 0,
+                until: now,
+                last: now,
+            });
+            tried.wrong += 1;
+            tried.last = now;
+            if let Some(over) = tried.wrong.checked_sub(FREE_TRIES) {
+                let wait = FIRST_WAIT.saturating_mul(1 << over.min(16));
+                tried.until = now + wait.min(LONGEST_WAIT);
+            }
+        }
+    }
+
+    fn forget(&mut self, key: &str) {
+        self.0.remove(key);
+    }
 }
 
 pub struct Accounts {
@@ -169,6 +248,7 @@ pub struct Accounts {
     pairing_file: Option<PathBuf>,
     grants: Mutex<Vec<Grant>>,
     tickets: Mutex<Vec<Ticket>>,
+    tries: Mutex<Tries>,
 }
 
 impl Accounts {
@@ -191,6 +271,7 @@ impl Accounts {
                 id: OWNER,
                 name: owner_name(),
                 password: None,
+                role: Role::Admin,
             });
         }
         if unhex(&kept.secret).is_none_or(|secret| secret.len() < 32) {
@@ -203,6 +284,7 @@ impl Accounts {
             pairing_file,
             grants: Mutex::new(Vec::new()),
             tickets: Mutex::new(Vec::new()),
+            tries: Mutex::new(Tries::default()),
         };
         accounts.save(&accounts.kept());
         accounts.new_pairing_key();
@@ -229,16 +311,19 @@ impl Accounts {
             return None;
         }
         let device = kept.devices.iter_mut().find(|d| d.id == id)?;
+        let user = device.user;
         let caller = Caller {
-            user: device.user,
+            user,
             device: device.id.clone(),
+            role: Role::Admin,
         };
         let now = now();
         if now >= device.used + USED_EVERY {
             device.used = now;
             self.save(&kept);
         }
-        Some(caller)
+        let role = kept.users.iter().find(|u| u.id == user)?.role;
+        Some(Caller { role, ..caller })
     }
 
     /// A token for a device named `name` of the owner, given the pairing key; none for
@@ -260,22 +345,58 @@ impl Accounts {
         self.add_device(OWNER, &name, Joined::Paired)
     }
 
-    /// The user `name` is, given their password; a wrong one holds the answer up.
-    fn check(&self, name: &str, password: &str) -> Option<u32> {
+    /// The user `name` is, given their password, tried from `from`. A wrong one holds the
+    /// answer up; after a few, for that name or from that address, none is tried for a while.
+    fn check(&self, name: &str, password: &str, from: Option<IpAddr>) -> Result<u32, Refused> {
+        let named = format!("user:{}", name.trim().to_lowercase());
+        let mut keys = vec![named.clone()];
+        keys.extend(from.map(|ip| format!("from:{ip}")));
+        let tries = || self.tries.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(wait) = tries().wait(&keys) {
+            return Err(Refused::Wait(wait));
+        }
         let user = {
             let kept = self.kept();
             kept.users
                 .iter()
-                .find(|u| u.name.eq_ignore_ascii_case(name))
+                .find(|u| u.name.eq_ignore_ascii_case(name.trim()))
                 .and_then(|u| Some((u.id, u.password.as_ref()?.check(password))))
         };
         match user {
-            Some((id, true)) => Some(id),
+            Some((id, true)) => {
+                // The name's tries only: someone else's from the same address still count.
+                tries().forget(&named);
+                Ok(id)
+            }
             _ => {
+                tries().wrong(&keys);
                 std::thread::sleep(WRONG_PASSWORD_WAIT);
-                None
+                Err(Refused::Wrong)
             }
         }
+    }
+
+    /// A user named `name` with the role `role`, and the password they start with: their id.
+    pub fn add_user(&self, name: &str, role: Role, password: &str) -> Result<u32, String> {
+        let name = name.trim();
+        if password.chars().count() < SHORTEST_PASSWORD {
+            return Err(format!(
+                "A password needs at least {SHORTEST_PASSWORD} characters."
+            ));
+        }
+        let mut kept = self.kept();
+        if name.is_empty() || kept.users.iter().any(|u| u.name.eq_ignore_ascii_case(name)) {
+            return Err(format!("There is a user named {name} already."));
+        }
+        let id = kept.users.iter().map(|u| u.id).max().unwrap_or(0) + 1;
+        kept.users.push(User {
+            id,
+            name: name.to_owned(),
+            password: Some(Password::new(password)),
+            role,
+        });
+        self.save(&kept);
+        Ok(id)
     }
 
     /// A code for the user `name`, given their password, to send to `redirect`: the client
@@ -286,8 +407,9 @@ impl Accounts {
         password: &str,
         challenge: &str,
         redirect: &str,
-    ) -> Option<String> {
-        let user = self.check(name, password)?;
+        from: Option<IpAddr>,
+    ) -> Result<String, Refused> {
+        let user = self.check(name, password, from)?;
         let code = random_hex(32);
         let mut grants = self.grants.lock().unwrap_or_else(|e| e.into_inner());
         grants.retain(|g| g.until > Instant::now());
@@ -298,7 +420,7 @@ impl Accounts {
             redirect: redirect.to_owned(),
             until: Instant::now() + CODE_LASTS,
         });
-        Some(code)
+        Ok(code)
     }
 
     /// A token for a device named `device`, given a code from [`Self::grant`] sent to
@@ -419,7 +541,13 @@ impl Accounts {
 
     /// Changes the password of the user `ticket` is for to `new`, given the one now when the
     /// page asks for it; the ticket is used up once it did.
-    pub fn change_password(&self, ticket: &str, current: &str, new: &str) -> Result<(), String> {
+    pub fn change_password(
+        &self,
+        ticket: &str,
+        current: &str,
+        new: &str,
+        from: Option<IpAddr>,
+    ) -> Result<(), String> {
         let page = self
             .password_page(ticket)
             .ok_or("This page is out of date. Open it again from Freya's settings.")?;
@@ -428,8 +556,12 @@ impl Accounts {
                 "A password needs at least {SHORTEST_PASSWORD} characters."
             ));
         }
-        if page.asks_current && self.check(&page.user, current).is_none() {
-            return Err("That is not the password now.".into());
+        if page.asks_current {
+            match self.check(&page.user, current, from) {
+                Ok(_) => {}
+                Err(Refused::Wrong) => return Err("That is not the password now.".into()),
+                Err(waiting) => return Err(waiting.said()),
+            }
         }
         let user = {
             let mut tickets = self.tickets.lock().unwrap_or_else(|e| e.into_inner());
@@ -462,6 +594,7 @@ impl Accounts {
         let user = kept.users.iter().find(|u| u.id == caller.user);
         AccountInfo {
             user: user.map(|u| u.name.clone()).unwrap_or_default(),
+            role: user.map(|u| u.role).unwrap_or_default(),
             has_password: user.is_some_and(|u| u.password.is_some()),
             devices: kept
                 .devices
@@ -726,14 +859,18 @@ mod tests {
         let redirect = "http://127.0.0.1:47477/callback";
         let verifier = "a secret only the client knows, long enough";
         let sent = challenge(verifier);
-        assert_eq!(accounts.grant(&owner, "", &sent, redirect), None);
+        assert_eq!(accounts.grant(&owner, "", &sent, redirect, None).ok(), None);
 
         // The Mac, on the server's computer, sets one without giving one now.
         let ticket = accounts.ticket(&mac, true);
         assert!(!accounts.password_page(&ticket).unwrap().asks_current);
-        assert!(accounts.change_password(&ticket, "", "short").is_err());
+        assert!(
+            accounts
+                .change_password(&ticket, "", "short", None)
+                .is_err()
+        );
         accounts
-            .change_password(&ticket, "", "correct horse")
+            .change_password(&ticket, "", "correct horse", None)
             .unwrap();
         assert!(
             accounts.password_page(&ticket).is_none(),
@@ -741,9 +878,15 @@ mod tests {
         );
 
         // Logging in: a code for the password, traded once, by the client that asked.
-        assert_eq!(accounts.grant(&owner, "wrong horse", &sent, redirect), None);
+        assert_eq!(
+            accounts
+                .grant(&owner, "wrong horse", &sent, redirect, None)
+                .ok(),
+            None
+        );
         let code = accounts
-            .grant(&owner, "correct horse", &sent, redirect)
+            .grant(&owner, "correct horse", &sent, redirect, None)
+            .ok()
             .unwrap();
         assert_eq!(
             accounts.redeem(&code, "another secret", redirect, "PC"),
@@ -755,14 +898,16 @@ mod tests {
             "a code is taken once, right or wrong"
         );
         let code = accounts
-            .grant(&owner, "correct horse", &sent, redirect)
+            .grant(&owner, "correct horse", &sent, redirect, None)
+            .ok()
             .unwrap();
         assert_eq!(
             accounts.redeem(&code, verifier, "http://127.0.0.1:1/callback", "PC"),
             None
         );
         let code = accounts
-            .grant(&owner, "correct horse", &sent, redirect)
+            .grant(&owner, "correct horse", &sent, redirect, None)
+            .ok()
             .unwrap();
         let pc_tokens = accounts.redeem(&code, verifier, redirect, "PC").unwrap();
         let pc = accounts.caller(&pc_tokens.access).unwrap();
@@ -772,11 +917,11 @@ mod tests {
         assert!(accounts.password_page(&ticket).unwrap().asks_current);
         assert!(
             accounts
-                .change_password(&ticket, "wrong horse", "battery staple")
+                .change_password(&ticket, "wrong horse", "battery staple", None)
                 .is_err()
         );
         accounts
-            .change_password(&ticket, "correct horse", "battery staple")
+            .change_password(&ticket, "correct horse", "battery staple", None)
             .unwrap();
 
         // Kept across starts.
@@ -792,6 +937,76 @@ mod tests {
         assert_eq!(again.caller(&pc_tokens.access), None);
         assert_eq!(again.info(&mac).devices.len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wrong_passwords_wait_longer_and_longer() {
+        let accounts = Accounts::open(None, None);
+        accounts
+            .add_user("Kim", Role::Listener, "correct horse")
+            .unwrap();
+        assert!(
+            accounts
+                .add_user("kim", Role::Listener, "battery staple")
+                .is_err()
+        );
+        let here = Some(IpAddr::from([192, 168, 1, 20]));
+        let elsewhere = Some(IpAddr::from([192, 168, 1, 21]));
+        let mut tries = accounts.tries.lock().unwrap();
+        let keys = ["user:kim".to_owned(), "from:192.168.1.20".to_owned()];
+        for _ in 0..FREE_TRIES - 1 {
+            tries.wrong(&keys);
+        }
+        assert_eq!(tries.wait(&keys), None, "a few are free");
+        tries.wrong(&keys);
+        let first = tries.wait(&keys).unwrap();
+        assert!(first > FIRST_WAIT - Duration::from_secs(1) && first <= FIRST_WAIT);
+        tries.wrong(&keys);
+        assert!(tries.wait(&keys).unwrap() > FIRST_WAIT, "longer each time");
+        for _ in 0..20 {
+            tries.wrong(&keys);
+        }
+        assert!(tries.wait(&keys).unwrap() <= LONGEST_WAIT);
+        drop(tries);
+
+        // Waiting, even the right password is not tried; nor from elsewhere, for that name.
+        let refused = accounts.check("Kim", "correct horse", here);
+        assert!(matches!(refused, Err(Refused::Wait(_))));
+        assert!(matches!(
+            accounts.check("Kim", "correct horse", elsewhere),
+            Err(Refused::Wait(_))
+        ));
+        assert!(
+            refused
+                .unwrap_err()
+                .said()
+                .starts_with("Too many wrong passwords")
+        );
+        // Another name from elsewhere is not held up.
+        let owner = accounts.kept().users[0].name.clone();
+        assert_eq!(accounts.check(&owner, "", elsewhere), Err(Refused::Wrong));
+        // Once the wait is over, the right one is taken, and the name's tries forgotten.
+        accounts.tries.lock().unwrap().0.clear();
+        let kim = accounts.check("Kim", "correct horse", here).unwrap();
+        assert_ne!(kim, OWNER);
+        assert!(accounts.tries.lock().unwrap().wait(&keys).is_none());
+    }
+
+    #[test]
+    fn a_listener_logs_in_as_a_listener() {
+        let accounts = Accounts::open(None, None);
+        accounts
+            .add_user("Kim", Role::Listener, "correct horse")
+            .unwrap();
+        let redirect = "http://127.0.0.1:47477/callback";
+        let verifier = "a secret only the client knows, long enough";
+        let code = accounts
+            .grant("Kim", "correct horse", &challenge(verifier), redirect, None)
+            .unwrap();
+        let tokens = accounts.redeem(&code, verifier, redirect, "Phone").unwrap();
+        let kim = accounts.caller(&tokens.access).unwrap();
+        assert_eq!(kim.role, Role::Listener);
+        assert_eq!(accounts.info(&kim).role, Role::Listener);
     }
 
     #[test]

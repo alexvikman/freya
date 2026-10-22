@@ -130,10 +130,23 @@ pub struct ServerFound {
     pub version: String,
 }
 
+/// What a user may do: an admin keeps the server, its settings, scans and the library everyone
+/// shares; a listener plays it, with their own plays, favourites, playlists and Last.fm (see
+/// [`crate::LISTENER_CALLS`]).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum Role {
+    #[default]
+    Admin,
+    Listener,
+}
+
 /// What a user sees of their account.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct AccountInfo {
     pub user: String,
+    #[serde(default)]
+    pub role: Role,
     /// Whether they can log in on other devices.
     pub has_password: bool,
     pub devices: Vec<DeviceInfo>,

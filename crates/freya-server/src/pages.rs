@@ -17,7 +17,7 @@
 
 use freya_protocol::PAGES_PATH;
 
-use crate::accounts::{Accounts, SHORTEST_PASSWORD};
+use crate::accounts::{Accounts, Refused, SHORTEST_PASSWORD};
 use crate::http::{Request, Response};
 use crate::serve::{Served, found, is_here, percent_decode};
 
@@ -62,7 +62,7 @@ pub fn answer(served: &Served, request: &Request) -> Option<Response> {
         ("POST", "/login") => {
             let values = values(&String::from_utf8_lossy(&request.body));
             match Login::asked(&values) {
-                Ok(login) => logged_in(accounts, &server, &login, &values),
+                Ok(login) => logged_in(accounts, &server, &login, &values, request),
                 Err(why) => message(400, "Freya Cannot Log In Here", why),
             }
         }
@@ -89,7 +89,8 @@ pub fn answer(served: &Served, request: &Request) -> Option<Response> {
                     "The passwords are not the same.",
                 )
             } else {
-                match accounts.change_password(ticket, value(&values, "current"), new) {
+                let from = request.peer.map(|peer| peer.ip());
+                match accounts.change_password(ticket, value(&values, "current"), new, from) {
                     Ok(()) => message(
                         200,
                         "The Password Is Changed",
@@ -142,12 +143,13 @@ impl Login {
 }
 
 /// The browser sent on to the client with a code, given the user's password; the form again
-/// when it is wrong.
+/// when it is wrong, or when too many were.
 fn logged_in(
     accounts: &Accounts,
     server: &str,
     login: &Login,
     values: &[(String, String)],
+    request: &Request,
 ) -> Response {
     let user = value(values, "username").trim();
     let granted = accounts.grant(
@@ -155,9 +157,19 @@ fn logged_in(
         value(values, "password"),
         &login.challenge,
         &login.redirect,
+        request.peer.map(|peer| peer.ip()),
     );
-    let Some(code) = granted else {
-        return login_page(401, server, login, user, "Wrong user or password.");
+    let code = match granted {
+        Ok(code) => code,
+        Err(refused @ Refused::Wrong) => {
+            return login_page(401, server, login, user, &refused.said());
+        }
+        Err(refused @ Refused::Wait(wait)) => {
+            let mut page = login_page(429, server, login, user, &refused.said());
+            page.headers
+                .push(("Retry-After", wait.as_secs().max(1).to_string()));
+            return page;
+        }
     };
     let joined = if login.redirect.contains('?') {
         '&'
