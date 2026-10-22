@@ -21,8 +21,8 @@
 //! with the server's own secret, so nothing is kept of it and it outlasts a restart. It renews
 //! it with a refresh token, which changes each time. A refresh token already used, coming
 //! again, was copied: the device's tokens are all taken back, so whoever has them logs in again.
-//! The one renewed last is taken once more, however long after, for a client whose answer was
-//! lost; its successor, which that client never had, is used up then. A device connected before
+//! The one renewed last is taken once more, within a day, for a client whose answer was lost;
+//! its successor, which that client never had, is used up then. A device connected before
 //! refresh tokens renews with the token it has.
 //!
 //! A new device first knows the server by a connection code, shown on the server's computer:
@@ -75,6 +75,9 @@ const CONNECTION_CODE_LASTS: Duration = Duration::from_secs(10 * 60);
 const PROOFS_FREE: u32 = 10;
 /// How long a wrong pairing proof holds up the answer.
 const WRONG_PAIRING_WAIT: Duration = Duration::from_millis(100);
+/// How long after it was renewed a refresh token renews once more, for a client whose answer
+/// was lost: a computer that slept the night through still does, one asking a day later not.
+const RENEWED_GRACE: u64 = 24 * 60 * 60;
 /// How long an access token lasts, in seconds.
 pub const ACCESS_LASTS: u64 = 60 * 60;
 /// How many used refresh tokens of a device are kept, to know them if they come again.
@@ -483,12 +486,18 @@ impl Accounts {
             .zip(network.as_ref())
             .is_some_and(|(id, network)| known(id, network));
         let keys: Vec<TriedFor> = if at_home {
-            // Where the user logged in before, only the tries for their name from this very
-            // address count: neither a guesser elsewhere nor one beside them on the network
-            // holds them up.
-            from.iter()
+            // Where the user logged in before, only the tries for their name there count: from
+            // this very address, and from its network, more of them, so a guesser elsewhere
+            // never holds them up, one beside them only after many, and one moving from
+            // address to address within the network gains nothing.
+            let mut keys: Vec<TriedFor> = from
+                .iter()
                 .map(|ip| (format!("{named}@{ip}"), FREE_TRIES))
-                .collect()
+                .collect();
+            if let Some(network) = &network {
+                keys.push((format!("{named}@{network}"), FREE_TRIES_FOR_A_NAME));
+            }
+            keys
         } else {
             let mut keys = vec![(named.clone(), FREE_TRIES_FOR_A_NAME)];
             if let Some(network) = &network {
@@ -669,8 +678,15 @@ impl Accounts {
         }
         let renewed = |d: &Device| d.previous.as_ref().is_some_and(|p| p.token == hash);
         // Its answer was lost, by a computer that slept or a network that dropped it: renewed
-        // again, once, however long after, as the tokens it never had were not used either.
-        if let Some(at) = kept.devices.iter().position(renewed) {
+        // again, once, within a day, as the tokens it never had were not used either. Later,
+        // it is taken for a copy.
+        let lost = |d: &Device| {
+            renewed(d)
+                && d.previous
+                    .as_ref()
+                    .is_some_and(|p| now <= p.at + RENEWED_GRACE)
+        };
+        if let Some(at) = kept.devices.iter().position(lost) {
             let device = &mut kept.devices[at];
             let lost = std::mem::take(&mut device.token);
             device.retired.push(lost);
@@ -682,7 +698,11 @@ impl Accounts {
             self.save(&kept);
             return granted;
         }
-        if let Some(at) = kept.devices.iter().position(|d| d.retired.contains(&hash)) {
+        if let Some(at) = kept
+            .devices
+            .iter()
+            .position(|d| d.retired.contains(&hash) || renewed(d))
+        {
             let gone = kept.devices.remove(at);
             log::warn!(
                 "a used refresh token of {} came again, so it was copied: the device is logged out",
