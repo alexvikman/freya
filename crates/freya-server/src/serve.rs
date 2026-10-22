@@ -415,6 +415,13 @@ fn kept_answer(
     }
 }
 
+/// The most answered at once, all told: those asked beyond are refused, to be asked again, so
+/// the same large answer asked for many times does not fill the server's memory.
+#[cfg(not(test))]
+const MOST_ANSWERED_AT_ONCE: usize = 32 * 1024 * 1024;
+#[cfg(test)]
+const MOST_ANSWERED_AT_ONCE: usize = 1024;
+
 /// The answers to the calls `request` asks for at once, each a call of [`CACHED_CALLS`], its
 /// arguments as JSON text, and the tag of the answer the client has, if any: as
 /// `application/x-freya-answers`, each its status (two bytes), its tag (two bytes of length,
@@ -435,7 +442,9 @@ fn many(
     }
     let mut out = Vec::new();
     for (method, args, tag) in &asked {
-        let answered = if !CACHED_CALLS.contains(&method.as_str()) {
+        let answered = if out.len() >= MOST_ANSWERED_AT_ONCE {
+            Err((413, "too much asked at once: ask the rest again".to_owned()))
+        } else if !CACHED_CALLS.contains(&method.as_str()) {
             Err((404, format!("no such call to ask at once: {method}")))
         } else if listener && !LISTENER_CALLS.contains(&method.as_str()) {
             Err((403, "only the server's admin may do that".to_owned()))
@@ -453,10 +462,16 @@ fn many(
                 Cow::Owned(serde_json::json!({ "error": why }).to_string().into_bytes()),
             ),
         };
+        // A tag is 34 bytes, and an answer far less than 4 GB: one that is not is not sent.
+        let (Ok(tag_length), Ok(json_length)) =
+            (u16::try_from(tag.len()), u32::try_from(json.len()))
+        else {
+            return Response::error(500, "an answer too large to send");
+        };
         out.extend_from_slice(&status.to_be_bytes());
-        out.extend_from_slice(&(tag.len() as u16).to_be_bytes());
+        out.extend_from_slice(&tag_length.to_be_bytes());
         out.extend_from_slice(tag.as_bytes());
-        out.extend_from_slice(&(json.len() as u32).to_be_bytes());
+        out.extend_from_slice(&json_length.to_be_bytes());
         out.extend_from_slice(&json);
     }
     let compressed = out.len() >= COMPRESSED_FROM && takes_gzip(request);
@@ -842,6 +857,38 @@ mod tests {
                 .collect(),
             body: body.to_vec(),
         }
+    }
+
+    #[test]
+    fn what_is_answered_at_once_is_bounded() {
+        let library =
+            crate::LocalLibrary::new(freya_library::Library::open_in_memory().unwrap(), None);
+        let asked: Vec<(&str, &str, Option<&str>)> = vec![("stats", "null", None); 100];
+        let request = Request {
+            path: format!("{API_PATH}/calls"),
+            ..request(&[], &serde_json::to_vec(&asked).unwrap())
+        };
+        let crate::http::Body::Bytes(bytes) =
+            many(&library, &Answers::default(), &request, false).body
+        else {
+            panic!("not bytes");
+        };
+        let mut statuses = Vec::new();
+        let mut rest = &bytes[..];
+        while !rest.is_empty() {
+            let status = u16::from_be_bytes([rest[0], rest[1]]);
+            let tag = usize::from(u16::from_be_bytes([rest[2], rest[3]]));
+            let at = 4 + tag;
+            let json = u32::from_be_bytes(rest[at..at + 4].try_into().unwrap()) as usize;
+            rest = &rest[at + 4 + json..];
+            statuses.push(status);
+        }
+        // Each is answered, the first fully, those beyond the bound refused.
+        assert_eq!(statuses.len(), 100);
+        assert_eq!(statuses[0], 200);
+        assert_eq!(statuses[99], 413);
+        // The bound, the last answer over it, and a short refusal for each beyond.
+        assert!(bytes.len() < MOST_ANSWERED_AT_ONCE + 100 * 128, "{}", bytes.len());
     }
 
     #[test]
