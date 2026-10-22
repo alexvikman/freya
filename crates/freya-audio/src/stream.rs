@@ -63,34 +63,36 @@ pub fn is_url(path: &str) -> bool {
     lower.starts_with("http://") || lower.starts_with("https://")
 }
 
-/// Whether `ip` is on this computer or its network: a loopback, private, link-local, shared
-/// (carrier-grade NAT), multicast or unspecified address, or an IPv6 one standing for one.
+/// Whether `ip` may be on this computer or its network: any IPv4 address but a public one, and
+/// any IPv6 address outside global unicast, or one standing for a near IPv4 address (6to4,
+/// Teredo, NAT64).
 pub fn is_near(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
-            let [first, second, ..] = ip.octets();
+            let [first, second, third, _] = ip.octets();
             first == 0
+                || first >= 224
                 || ip.is_loopback()
                 || ip.is_private()
                 || ip.is_link_local()
-                || ip.is_broadcast()
-                || ip.is_multicast()
                 || (first == 100 && second & 0xc0 == 64)
+                || (first == 192 && second == 0 && third == 0)
+                || (first == 198 && second & 0xfe == 18)
         }
-        IpAddr::V6(ip) => {
-            // An IPv4 address in IPv6: mapped, compatible, or behind NAT64's prefix.
-            let nat64 = ip.segments()[..6] == [0x64, 0xff9b, 0, 0, 0, 0];
-            let within = ip
-                .to_ipv4()
-                .or_else(|| nat64.then(|| Ipv4Addr::from_bits(ip.to_bits() as u32)));
-            ip.is_loopback()
-                || ip.is_unspecified()
-                || ip.is_unique_local()
-                || ip.is_unicast_link_local()
-                || ip.is_multicast()
-                || ip.segments()[0] & 0xffc0 == 0xfec0
-                || within.is_some_and(|ip| is_near(IpAddr::V4(ip)))
-        }
+        IpAddr::V6(ip) => match ip.segments() {
+            // IPv4 in IPv6, and NAT64's well-known prefix.
+            [0, 0, 0, 0, 0, 0 | 0xffff, ..] | [0x64, 0xff9b, 0, 0, 0, 0, ..] => {
+                is_near(IpAddr::V4(Ipv4Addr::from_bits(ip.to_bits() as u32)))
+            }
+            // 6to4: the IPv4 address after its prefix.
+            [0x2002, high, low, ..] => is_near(IpAddr::V4(Ipv4Addr::from_bits(
+                u32::from(high) << 16 | u32::from(low),
+            ))),
+            // Teredo, the rest of 2001::/23 kept for special use, and documentation's.
+            [0x2001, second, ..] if second < 0x200 || second == 0xdb8 => true,
+            [0x3fff, second, ..] if second < 0x1000 => true,
+            [first, ..] => first & 0xe000 != 0x2000,
+        },
     }
 }
 
@@ -610,6 +612,11 @@ mod tests {
         assert!(is_url("https://ice1.somafm.com/groovesalad-128-mp3"));
         assert!(is_url("HTTP://example.com"));
         assert!(!is_url("/music/http.mp3"));
+        let station = StationInfo {
+            content_type: Some("audio/aacp; charset=x".into()),
+            ..Default::default()
+        };
+        assert_eq!(station.extension_hint(), Some("aac"));
     }
 
     #[test]
@@ -634,22 +641,26 @@ mod tests {
             "::ffff:192.168.1.1",
             "::127.0.0.1",
             "64:ff9b::a00:1",
+            "64:ff9b:1::1",
+            "2002:c0a8:101::1",
+            "2001::1",
+            "2001:db8::1",
+            "192.0.0.1",
+            "198.18.0.1",
+            "240.0.0.1",
         ] {
             assert!(is_near(near.parse().unwrap()), "{near}");
         }
         for far in [
             "8.8.8.8",
             "100.128.0.1",
-            "2001:db8::1",
+            "2a00:1450::1",
+            "2001:4860::8888",
             "::ffff:8.8.8.8",
             "64:ff9b::808:808",
+            "2002:808:808::1",
         ] {
             assert!(!is_near(far.parse().unwrap()), "{far}");
         }
-        let station = StationInfo {
-            content_type: Some("audio/aacp; charset=x".into()),
-            ..Default::default()
-        };
-        assert_eq!(station.extension_hint(), Some("aac"));
     }
 }
