@@ -1,23 +1,46 @@
 //! A small HTTP/1.1 server, over TLS or not: each connection on a thread of its own, its
-//! requests read with `httparse`, answered by a handler. Enough for Freya's clients: requests with a body of a
-//! known length, answers of a known length or streamed in chunks, and connections kept open
-//! between requests.
+//! requests read with `httparse`, answered by a handler. Enough for Freya's clients: requests
+//! with a body of a known length, answers of a known length or streamed in chunks, and
+//! connections kept open between requests.
+//!
+//! What a client may hold is bounded, so nobody can wear the server out without logging in:
+//! connections in all and from one address, how long a request's head and body may take to
+//! arrive and an answer to be taken, how long a connection may wait for its next request, and
+//! how large a body may be, decided from the request's head before any of it is read, and read
+//! only as it comes.
 
+use std::collections::HashMap;
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// The longest request line and headers taken.
 const MAX_HEAD: usize = 16 * 1024;
-/// The largest body taken: a picture from a camera fits.
-const MAX_BODY: usize = 64 * 1024 * 1024;
+/// The largest body taken from anyone: a picture from a camera fits. A server says what it
+/// takes of each request, below this; one that says nothing takes [`DEFAULT_BODY`].
+pub const MAX_BODY: usize = 64 * 1024 * 1024;
+pub const DEFAULT_BODY: usize = 1024 * 1024;
 /// The most headers a request may have.
 const MAX_HEADERS: usize = 64;
-/// How long a connection may say nothing before it is closed.
-const IDLE: Duration = Duration::from_secs(120);
+/// How long a connection may wait for its next request, and a request's head take to arrive
+/// once it began; its body may take that and a second for each [`BODY_RATE`] bytes. An answer
+/// not taken in [`WRITE_TIME`] ends the connection.
+#[cfg(not(test))]
+const IDLE: Duration = Duration::from_secs(15);
+#[cfg(test)]
+const IDLE: Duration = Duration::from_secs(2);
+#[cfg(not(test))]
+const HEAD_TIME: Duration = Duration::from_secs(10);
+#[cfg(test)]
+const HEAD_TIME: Duration = Duration::from_secs(1);
+const BODY_RATE: usize = 32 * 1024;
+const WRITE_TIME: Duration = Duration::from_secs(30);
+/// The most connections served at once, and from one address.
+const MAX_CONNECTIONS: usize = 128;
+const MAX_FROM_ONE: usize = 16;
 
 /// A request, as the handler sees it.
 #[derive(Debug)]
@@ -115,17 +138,72 @@ impl Response {
 
 pub type Handler = Arc<dyn Fn(Request) -> Response + Send + Sync>;
 
-/// Serves `handler` until dropped.
+/// How large a request's body may be, decided from its head, before any of it is read: by what
+/// it asks, and who asks it.
+pub type BodyLimit = Arc<dyn Fn(&Request) -> usize + Send + Sync>;
+
+/// Serves `handler` until dropped, which ends every connection too.
 pub struct Server {
     address: SocketAddr,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    live: Arc<Live>,
+}
+
+/// The connections served now, to count them and to end them.
+#[derive(Default)]
+struct Live {
+    connections: Mutex<HashMap<u64, (IpAddr, TcpStream)>>,
+    next: AtomicU64,
+}
+
+impl Live {
+    fn connections(&self) -> std::sync::MutexGuard<'_, HashMap<u64, (IpAddr, TcpStream)>> {
+        self.connections.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// `stream` counted among those served, unless there are too many, in all or from its
+    /// address.
+    fn admit(self: &Arc<Self>, stream: &TcpStream) -> Option<Admitted> {
+        let ip = stream.peer_addr().ok()?.ip();
+        let kept = stream.try_clone().ok()?;
+        let mut connections = self.connections();
+        let from_it = connections.values().filter(|(from, _)| *from == ip).count();
+        if connections.len() >= MAX_CONNECTIONS || from_it >= MAX_FROM_ONE {
+            return None;
+        }
+        let id = self.next.fetch_add(1, Ordering::Relaxed);
+        connections.insert(id, (ip, kept));
+        Some(Admitted {
+            live: Arc::clone(self),
+            id,
+        })
+    }
+
+    /// Ends every connection.
+    fn end_all(&self) {
+        for (_, (_, stream)) in self.connections().drain() {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
+    }
+}
+
+/// A connection counted among those served, until it ends.
+struct Admitted {
+    live: Arc<Live>,
+    id: u64,
+}
+
+impl Drop for Admitted {
+    fn drop(&mut self) {
+        self.live.connections().remove(&self.id);
+    }
 }
 
 impl Server {
     /// Listens on `address`; port 0 takes any free one.
     pub fn start(address: impl ToSocketAddrs, handler: Handler) -> io::Result<Self> {
-        Self::listen(address, handler, None)
+        Self::serve(address, handler, None, Arc::new(|_| DEFAULT_BODY))
     }
 
     /// Listens on `address` over TLS as `tls` says.
@@ -134,18 +212,22 @@ impl Server {
         handler: Handler,
         tls: Arc<rustls::ServerConfig>,
     ) -> io::Result<Self> {
-        Self::listen(address, handler, Some(tls))
+        Self::serve(address, handler, Some(tls), Arc::new(|_| DEFAULT_BODY))
     }
 
-    fn listen(
+    /// Listens on `address`, over TLS when `tls` is given, taking bodies as `body_limit` says.
+    pub fn serve(
         address: impl ToSocketAddrs,
         handler: Handler,
         tls: Option<Arc<rustls::ServerConfig>>,
+        body_limit: BodyLimit,
     ) -> io::Result<Self> {
         let listener = TcpListener::bind(address)?;
         let address = listener.local_addr()?;
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = Arc::clone(&stop);
+        let live = Arc::new(Live::default());
+        let serving = Arc::clone(&live);
         let thread = std::thread::Builder::new()
             .name("freya-http".into())
             .spawn(move || {
@@ -153,16 +235,28 @@ impl Server {
                     if stopped.load(Ordering::Relaxed) {
                         break;
                     }
-                    let Ok(stream) = stream else {
+                    let stream = match stream {
+                        Ok(stream) => stream,
+                        Err(e) => {
+                            // Out of files, say: waits, rather than spinning.
+                            log::debug!("could not take a connection: {e}");
+                            std::thread::sleep(Duration::from_millis(100));
+                            continue;
+                        }
+                    };
+                    let Some(admitted) = serving.admit(&stream) else {
+                        log::debug!("too many connections: one was closed");
                         continue;
                     };
                     let handler = Arc::clone(&handler);
+                    let body_limit = Arc::clone(&body_limit);
                     let tls = tls.clone();
                     let started = std::thread::Builder::new()
                         .name("freya-http-connection".into())
                         .spawn(move || {
+                            let _admitted = admitted;
                             let served = Connection::new(stream, tls)
-                                .and_then(|connection| connection.serve(&*handler));
+                                .and_then(|connection| connection.serve(&*handler, &*body_limit));
                             if let Err(e) = served {
                                 log::debug!("a connection ended: {e}");
                             }
@@ -176,6 +270,7 @@ impl Server {
             address,
             stop,
             thread: Some(thread),
+            live,
         })
     }
 
@@ -187,11 +282,20 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        // Wakes the listener, which looks at `stop` before answering.
-        let _ = TcpStream::connect_timeout(&self.address, Duration::from_secs(1));
+        // Wakes the listener, which looks at `stop` before answering: through this computer
+        // when it listens on every address, which Windows does not connect to.
+        let mut wake = self.address;
+        if wake.ip().is_unspecified() {
+            wake.set_ip(match wake.ip() {
+                IpAddr::V4(_) => IpAddr::from([127, 0, 0, 1]),
+                IpAddr::V6(_) => IpAddr::from(std::net::Ipv6Addr::LOCALHOST),
+            });
+        }
+        let _ = TcpStream::connect_timeout(&wake, Duration::from_secs(1));
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+        self.live.end_all();
     }
 }
 
@@ -214,7 +318,8 @@ struct Refused(u16, &'static str);
 
 impl Connection {
     fn new(tcp: TcpStream, tls: Option<Arc<rustls::ServerConfig>>) -> io::Result<Self> {
-        let _ = tcp.set_read_timeout(Some(IDLE));
+        tcp.set_read_timeout(Some(HEAD_TIME))?;
+        tcp.set_write_timeout(Some(WRITE_TIME))?;
         let _ = tcp.set_nodelay(true);
         let stream: Box<dyn Duplex> = match &tls {
             Some(config) => {
@@ -232,9 +337,13 @@ impl Connection {
         })
     }
 
-    fn serve(mut self, handler: &(dyn Fn(Request) -> Response + Send + Sync)) -> io::Result<()> {
+    fn serve(
+        mut self,
+        handler: &(dyn Fn(Request) -> Response + Send + Sync),
+        body_limit: &(dyn Fn(&Request) -> usize + Send + Sync),
+    ) -> io::Result<()> {
         loop {
-            let request = match self.read_request() {
+            let (request, old) = match self.read_request(body_limit) {
                 Ok(Some(request)) => request,
                 Ok(None) => return Ok(()),
                 Err(Ok(Refused(status, why))) => {
@@ -244,9 +353,11 @@ impl Connection {
                 }
                 Err(Err(e)) => return Err(e),
             };
-            let close = request
-                .header("connection")
-                .is_some_and(|c| c.eq_ignore_ascii_case("close"));
+            // HTTP/1.0 is not kept open, nor what asks to be closed.
+            let close = old
+                || request
+                    .header("connection")
+                    .is_some_and(|c| c.eq_ignore_ascii_case("close"));
             let response = handler(request);
             // A streamed answer ends with the connection.
             let keep = !close && !matches!(response.body, Body::Stream(_));
@@ -257,14 +368,21 @@ impl Connection {
         }
     }
 
-    /// The next request; none when the client closed the connection between requests.
-    fn read_request(&mut self) -> Result<Option<Request>, Result<Refused, io::Error>> {
+    /// The next request, and whether it is HTTP/1.0; none when the client closed the connection
+    /// between requests, or waited too long for its next one.
+    fn read_request(
+        &mut self,
+        body_limit: &(dyn Fn(&Request) -> usize + Send + Sync),
+    ) -> Result<Option<(Request, bool)>, Result<Refused, io::Error>> {
         let mut buffer = std::mem::take(&mut self.pending);
-        let (head, request) = loop {
+        // Waiting for the next request at most `IDLE`; once it began, its head in `HEAD_TIME`.
+        let mut began = (!buffer.is_empty()).then(Instant::now);
+        let (head, request, old) = loop {
             let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
             let mut parsed = httparse::Request::new(&mut headers);
             match parsed.parse(&buffer) {
                 Ok(httparse::Status::Complete(length)) => {
+                    let old = parsed.version == Some(0);
                     let request = Request {
                         peer: self.tcp.peer_addr().ok(),
                         secure: self.secure,
@@ -292,6 +410,7 @@ impl Connection {
                             query: query.to_owned(),
                             ..request
                         },
+                        old,
                     );
                 }
                 Ok(httparse::Status::Partial) if buffer.len() < MAX_HEAD => {}
@@ -300,8 +419,21 @@ impl Connection {
                 }
                 Err(_) => return Err(Ok(Refused(400, "the request could not be read"))),
             }
+            let wait = match began {
+                None => IDLE,
+                Some(began) => HEAD_TIME.saturating_sub(began.elapsed()),
+            };
+            if wait.is_zero() {
+                return Err(Err(io::ErrorKind::TimedOut.into()));
+            }
+            self.tcp.set_read_timeout(Some(wait)).map_err(Err)?;
             let mut more = [0; 4096];
-            let read = self.stream.read(&mut more).map_err(Err)?;
+            let read = match self.stream.read(&mut more) {
+                Ok(read) => read,
+                // Waited too long for the next request: closed, as between requests.
+                Err(e) if began.is_none() && is_timeout(&e) => return Ok(None),
+                Err(e) => return Err(Err(e)),
+            };
             if read == 0 {
                 return if buffer.is_empty() {
                     Ok(None)
@@ -309,33 +441,40 @@ impl Connection {
                     Err(Err(io::ErrorKind::UnexpectedEof.into()))
                 };
             }
+            began.get_or_insert_with(Instant::now);
             buffer.extend_from_slice(&more[..read]);
         };
         let mut request = request;
         if request.header("transfer-encoding").is_some() {
             return Err(Ok(Refused(411, "a request's body must have a length")));
         }
-        let length = match request.header("content-length") {
-            None => 0,
-            Some(length) => length
-                .trim()
-                .parse::<usize>()
-                .map_err(|_| Ok(Refused(400, "the request's length could not be read")))?,
-        };
-        if length > MAX_BODY {
+        let length = content_length(&request).map_err(Ok)?;
+        if length > body_limit(&request).min(MAX_BODY) {
             return Err(Ok(Refused(413, "the request is too large")));
         }
         let mut body = buffer.split_off(head);
         if body.len() > length {
             self.pending = body.split_off(length);
         }
-        if body.len() < length {
-            let have = body.len();
-            body.resize(length, 0);
-            self.stream.read_exact(&mut body[have..]).map_err(Err)?;
+        // Read as it comes, never set aside ahead of it, at least `BODY_RATE` bytes a second.
+        let deadline =
+            Instant::now() + HEAD_TIME + Duration::from_secs((length / BODY_RATE) as u64);
+        let mut more = [0; 16 * 1024];
+        while body.len() < length {
+            let wait = deadline.saturating_duration_since(Instant::now());
+            if wait.is_zero() {
+                return Err(Err(io::ErrorKind::TimedOut.into()));
+            }
+            self.tcp.set_read_timeout(Some(wait)).map_err(Err)?;
+            let want = (length - body.len()).min(more.len());
+            let read = self.stream.read(&mut more[..want]).map_err(Err)?;
+            if read == 0 {
+                return Err(Err(io::ErrorKind::UnexpectedEof.into()));
+            }
+            body.extend_from_slice(&more[..read]);
         }
         request.body = body;
-        Ok(Some(request))
+        Ok(Some((request, old)))
     }
 
     /// Closes the connection gently after a request that was not read whole: what the client
@@ -421,6 +560,34 @@ impl Write for Chunked<'_> {
     }
 }
 
+/// A request's length, as its one `Content-Length` says it in digits: 0 without one.
+fn content_length(request: &Request) -> Result<usize, Refused> {
+    let mut said = request
+        .headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+        .map(|(_, value)| value.trim());
+    let Some(length) = said.next() else {
+        return Ok(0);
+    };
+    if said.next().is_some() {
+        return Err(Refused(400, "a request has one length"));
+    }
+    if length.is_empty() || length.len() > 18 || !length.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(Refused(400, "the request's length could not be read"));
+    }
+    length
+        .parse()
+        .map_err(|_| Refused(400, "the request's length could not be read"))
+}
+
+fn is_timeout(e: &io::Error) -> bool {
+    matches!(
+        e.kind(),
+        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+    )
+}
+
 fn reason(status: u16) -> &'static str {
     match status {
         200 => "OK",
@@ -435,6 +602,7 @@ fn reason(status: u16) -> &'static str {
         411 => "Length Required",
         413 => "Content Too Large",
         416 => "Range Not Satisfiable",
+        408 => "Request Timeout",
         429 => "Too Many Requests",
         431 => "Request Header Fields Too Large",
         _ => "Internal Server Error",
@@ -506,6 +674,97 @@ mod tests {
         );
         assert!(long.starts_with("HTTP/1.1 431"), "{long}");
         assert!(exchange(&server, b"NOT HTTP\r\n\r\n").starts_with("HTTP/1.1 400"));
+        // Bodies over the default, and lengths said twice, or not in digits.
+        let large = exchange(
+            &server,
+            format!(
+                "POST / HTTP/1.1\r\nContent-Length: {}\r\n\r\n",
+                DEFAULT_BODY + 1
+            )
+            .as_bytes(),
+        );
+        assert!(large.starts_with("HTTP/1.1 413"), "{large}");
+        let twice = exchange(
+            &server,
+            b"POST / HTTP/1.1\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nab",
+        );
+        assert!(twice.starts_with("HTTP/1.1 400"), "{twice}");
+        let signed = exchange(&server, b"POST / HTTP/1.1\r\nContent-Length: +1\r\n\r\na");
+        assert!(signed.starts_with("HTTP/1.1 400"), "{signed}");
+        // HTTP/1.0 is closed after its answer.
+        let old = exchange(&server, b"GET / HTTP/1.0\r\n\r\n");
+        assert!(old.contains("Connection: close"), "{old}");
+    }
+
+    #[test]
+    fn takes_bodies_as_the_server_says() {
+        let server = Server::serve(
+            "127.0.0.1:0",
+            Arc::new(|request: Request| {
+                Response::bytes(200, "text/plain", request.body.len().to_string().into())
+            }),
+            None,
+            Arc::new(|request: &Request| if request.path == "/large" { 100 } else { 10 }),
+        )
+        .unwrap();
+        let small = exchange(
+            &server,
+            b"POST /small HTTP/1.1\r\nContent-Length: 11\r\n\r\n",
+        );
+        assert!(small.starts_with("HTTP/1.1 413"), "{small}");
+        let large = exchange(
+            &server,
+            format!(
+                "POST /large HTTP/1.1\r\nContent-Length: 50\r\n\r\n{}",
+                "a".repeat(50)
+            )
+            .as_bytes(),
+        );
+        assert!(large.ends_with("50"), "{large}");
+    }
+
+    #[test]
+    fn a_slow_or_quiet_client_is_let_go() {
+        let server = echo();
+        // Its head never ends: let go after HEAD_TIME.
+        let mut slow = TcpStream::connect(server.address()).unwrap();
+        slow.write_all(b"GET / HTTP/1.1\r\n").unwrap();
+        let started = Instant::now();
+        let mut answer = String::new();
+        let _ = slow.read_to_string(&mut answer);
+        assert!(started.elapsed() < HEAD_TIME + Duration::from_secs(2));
+        // Nothing said: let go after IDLE.
+        let mut quiet = TcpStream::connect(server.address()).unwrap();
+        let started = Instant::now();
+        let _ = quiet.read_to_string(&mut answer);
+        assert!(started.elapsed() < IDLE + Duration::from_secs(2));
+    }
+
+    #[test]
+    fn connections_are_counted_and_ended_with_the_server() {
+        let server = echo();
+        let mut held: Vec<TcpStream> = (0..MAX_FROM_ONE)
+            .map(|_| TcpStream::connect(server.address()).unwrap())
+            .collect();
+        // Admitted, in time.
+        std::thread::sleep(Duration::from_millis(200));
+        let mut over = TcpStream::connect(server.address()).unwrap();
+        over.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        let mut answer = Vec::new();
+        assert_eq!(
+            over.read_to_end(&mut answer).ok(),
+            Some(0),
+            "closed at once"
+        );
+        held[0]
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        drop(server);
+        assert_eq!(
+            held[0].read_to_end(&mut answer).ok(),
+            Some(0),
+            "ended with it"
+        );
     }
 
     #[test]

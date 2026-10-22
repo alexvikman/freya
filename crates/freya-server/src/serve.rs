@@ -53,7 +53,7 @@ use freya_protocol::{
 };
 
 use crate::accounts::{Accounts, Caller};
-use crate::http::{Handler, Request, Response};
+use crate::http::{BodyLimit, Handler, MAX_BODY, Request, Response};
 
 /// How long the event stream says nothing before it sends an empty line, to find a client
 /// that is gone; and how long it lasts before it ends, so a client following it notices a
@@ -77,6 +77,38 @@ pub struct Served {
 /// Answers requests to the API as `served` says.
 pub fn handler(served: Served) -> Handler {
     Arc::new(move |request| answer(&served, request))
+}
+
+/// The largest cover asked for, wide or high: more makes the server work for nothing.
+const LARGEST_COVER: u32 = 2048;
+
+/// How large a request's body may be, as `served` takes them: a picture's for an admin keeping
+/// one, a call's for a device with a token, and a form's or a little JSON's for anyone else, so
+/// nobody wears the server out before logging in.
+pub fn body_limit(served: Served) -> BodyLimit {
+    const SMALL: usize = 16 * 1024;
+    const CALL: usize = 8 * 1024 * 1024;
+    Arc::new(move |request| {
+        let caller = match &served.accounts {
+            Some(accounts) => {
+                let token = request
+                    .header("authorization")
+                    .and_then(|value| value.strip_prefix("Bearer "));
+                match token.and_then(|token| accounts.caller(token.trim())) {
+                    Some(caller) => Some(caller),
+                    None => return SMALL,
+                }
+            }
+            // Anyone is let in, as in tests.
+            None => None,
+        };
+        let path = request.path.strip_prefix(API_PATH).unwrap_or_default();
+        let admin = caller.as_ref().is_none_or(|c| c.role == Role::Admin);
+        match (request.method.as_str(), path) {
+            ("POST", "/pictures") if admin => MAX_BODY,
+            _ => CALL,
+        }
+    })
 }
 
 /// Why `request` is refused, if it is: see the module's documentation.
@@ -207,7 +239,7 @@ fn answer(served: &Served, request: Request) -> Response {
                 Ok(asked) => asked,
                 Err(e) => return Response::error(400, e),
             };
-            match library.album_art(&asked.track, asked.largest) {
+            match library.album_art(&asked.track, asked.largest.min(LARGEST_COVER)) {
                 Ok(Some(bytes)) => Response::bytes(200, "image/jpeg", bytes),
                 Ok(None) => Response::error(404, "no cover"),
                 Err(e) => Response::error(500, e),
@@ -395,7 +427,8 @@ pub fn found(served: &Served) -> ServerFound {
         .filter(|name| !name.trim().is_empty())
         .unwrap_or_else(computer_name);
     ServerFound {
-        name,
+        // Short, so an answer stays small.
+        name: name.chars().take(64).collect(),
         port: NETWORK_PORT,
         fingerprint: served
             .certificate
@@ -406,8 +439,13 @@ pub fn found(served: &Served) -> ServerFound {
     }
 }
 
-/// What this computer is called.
+/// What this computer is called: asked once.
 fn computer_name() -> String {
+    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NAME.get_or_init(ask_computer_name).clone()
+}
+
+fn ask_computer_name() -> String {
     let named = std::env::var("COMPUTERNAME").ok().or_else(|| {
         let out = std::process::Command::new("hostname").output().ok()?;
         Some(String::from_utf8_lossy(&out.stdout).trim().to_owned())
@@ -625,5 +663,48 @@ mod tests {
         // A name that leads here by DNS.
         assert!(refused(&request(&[("Host", "evil.example:47474"), json], b"null")).is_some());
         assert!(refused(&request(&[json], b"null")).is_some());
+    }
+
+    #[test]
+    fn bodies_are_as_large_as_the_caller_may_send() {
+        let accounts = Arc::new(Accounts::open(None, None));
+        let served = Served {
+            library: Arc::new(crate::LocalLibrary::new(
+                freya_library::Library::open_in_memory().unwrap(),
+                None,
+            )),
+            server: None,
+            quit: None,
+            accounts: Some(Arc::clone(&accounts)),
+            certificate: None,
+        };
+        let limit = body_limit(served);
+        let mut asked = request(&[], b"");
+        // Without a token, or with a made-up one: a little.
+        assert_eq!(limit(&asked), 16 * 1024);
+        asked
+            .headers
+            .push(("Authorization".into(), "Bearer made.up.token".into()));
+        assert_eq!(limit(&asked), 16 * 1024);
+        // A listener's call, but no picture; an admin's picture.
+        accounts
+            .add_user("Kim", Role::Listener, "correct horse")
+            .unwrap();
+        let verifier = "a secret only the client knows, long enough";
+        let redirect = "http://127.0.0.1:47477/callback";
+        let code = accounts
+            .grant(
+                "Kim",
+                "correct horse",
+                &crate::accounts::challenge(verifier),
+                redirect,
+                None,
+            )
+            .unwrap();
+        let kim = accounts.redeem(&code, verifier, redirect, "Phone").unwrap();
+        asked.headers[0].1 = format!("Bearer {}", kim.access);
+        assert_eq!(limit(&asked), 8 * 1024 * 1024);
+        asked.path = format!("{API_PATH}/pictures");
+        assert_eq!(limit(&asked), 8 * 1024 * 1024);
     }
 }

@@ -25,7 +25,9 @@ use freya_server::discovery::Discovery;
 use freya_server::http::Server;
 use freya_server::take_in::{Folders, take_in};
 use freya_server::tls::Identity;
-use freya_server::{LOCAL_ADDRESS, PAIRING_KEY, Served, Service, ServiceConfig, handler, settings};
+use freya_server::{
+    LOCAL_ADDRESS, PAIRING_KEY, Served, Service, ServiceConfig, body_limit, handler, settings,
+};
 
 fn main() {
     let mut address = LOCAL_ADDRESS.to_owned();
@@ -144,8 +146,13 @@ fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> 
         certificate: Some(identity.certificate.clone()),
     };
     // TLS on this computer too, with the certificate the client here pins from this folder.
-    let server = Server::start_tls(address, handler(served.clone()), identity.server_config()?)
-        .map_err(|e| format!("could not listen on {address}: {e}"))?;
+    let server = Server::serve(
+        address,
+        handler(served.clone()),
+        Some(identity.server_config()?),
+        body_limit(served.clone()),
+    )
+    .map_err(|e| format!("could not listen on {address}: {e}"))?;
     let network = Network::follow(served, Arc::clone(&service), identity);
     log::info!(
         "Freya's server {} serves {} on {}",
@@ -256,7 +263,12 @@ fn listen(served: &Served, identity: &Identity) -> Option<(Server, Option<Discov
             return None;
         }
     };
-    let server = match Server::start_tls(("0.0.0.0", NETWORK_PORT), handler(served.clone()), tls) {
+    let server = match Server::serve(
+        ("0.0.0.0", NETWORK_PORT),
+        handler(served.clone()),
+        Some(tls),
+        body_limit(served.clone()),
+    ) {
         Ok(server) => server,
         Err(e) => {
             log::warn!("could not take clients on other computers: {e}");

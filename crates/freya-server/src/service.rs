@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
@@ -323,7 +323,7 @@ impl Service {
 
 impl ServerEvents for Service {
     fn events(&self) -> ApiResult<Receiver<ServiceEvent>> {
-        let (tell, events) = channel();
+        let (tell, events) = sync_channel(EVENTS_WAITING);
         // Told under the state's lock, so nothing it does is missed in between.
         let state = lock(&self.shared.state);
         let mut listeners = lock(&self.shared.listeners);
@@ -460,19 +460,23 @@ impl LibraryPictures for LocalLibrary {
     }
 }
 
-/// Tells every listener of `event`; those gone are forgotten.
+/// How many events wait for a listener before it is let go: one that stopped reading them
+/// does not keep them all.
+const EVENTS_WAITING: usize = 1024;
+
+/// Tells every listener of `event`; those gone, or that let too many wait, are forgotten.
 fn tell_all(listeners: &Mutex<Listeners>, event: ServiceEvent) {
     let mut listeners = lock(listeners);
     listeners.told += 1;
     listeners
         .senders
-        .retain(|listener| listener.send(event.clone()).is_ok());
+        .retain(|listener| listener.try_send(event.clone()).is_ok());
 }
 
 /// Who is told what happens, and how many events were told so far.
 #[derive(Default)]
 struct Listeners {
-    senders: Vec<Sender<ServiceEvent>>,
+    senders: Vec<SyncSender<ServiceEvent>>,
     told: u64,
 }
 
