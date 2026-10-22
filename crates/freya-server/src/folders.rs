@@ -24,7 +24,19 @@ pub fn music_file(path: &Path, folders: &[PathBuf]) -> Option<PathBuf> {
 /// of the file opened itself. So a link swapped in between a check and the opening is caught:
 /// what is served is what was opened, wherever it is.
 pub fn open_music_file(path: &Path, folders: &[PathBuf]) -> Option<std::fs::File> {
-    let file = std::fs::File::open(path).ok()?;
+    // A regular file before it is opened, and opened without waiting: a FIFO put in its place
+    // would otherwise hold the opening for ever.
+    if !std::fs::metadata(path).ok()?.is_file() {
+        return None;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path).ok()?;
     if !file.metadata().ok()?.is_file() {
         return None;
     }
@@ -154,6 +166,55 @@ mod tests {
         assert_eq!(listing.folders, [dir.join("A"), dir.join("b")]);
         assert_eq!(listing.parent.as_deref(), dir.parent());
         assert!(super::listing(None).folder.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn only_regular_files_within_the_music_are_the_musics() {
+        let dir = std::env::temp_dir().join(format!("freya-music-file-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let music = dir.join("music");
+        std::fs::create_dir_all(music.join("album")).unwrap();
+        let track = music.join("album/track.flac");
+        std::fs::write(&track, b"music").unwrap();
+        let secret = dir.join("accounts.json");
+        std::fs::write(&secret, b"secret").unwrap();
+        // A link from the music to a file outside it, and one within it.
+        let out = music.join("album/out.flac");
+        std::os::unix::fs::symlink(&secret, &out).unwrap();
+        let within = music.join("within.flac");
+        std::os::unix::fs::symlink(&track, &within).unwrap();
+        let folders = [music.clone()];
+        assert!(music_file(&track, &folders).is_some());
+        assert!(music_file(&within, &folders).is_some());
+        assert_eq!(music_file(&out, &folders), None);
+        assert_eq!(music_file(&secret, &folders), None);
+        assert_eq!(
+            music_file(&music.join("album"), &folders),
+            None,
+            "not a file"
+        );
+        assert_eq!(
+            music_file(&music.join("album/../../accounts.json"), &folders),
+            None
+        );
+        // Opened, the file itself is asked where it is.
+        assert!(open_music_file(&track, &folders).is_some());
+        assert!(open_music_file(&within, &folders).is_some());
+        assert!(
+            open_music_file(&out, &folders).is_none(),
+            "opened, it is outside"
+        );
+        assert!(open_music_file(&secret, &folders).is_none());
+        // A FIFO in the music is not opened, and holds nothing up.
+        let fifo = music.join("album/fifo.flac");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        assert!(open_music_file(&fifo, &folders).is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

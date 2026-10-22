@@ -256,7 +256,7 @@ fn password_page(
 {current}
 <label>New password<input name="password" type="password" autocomplete="new-password" minlength="{SHORTEST_PASSWORD}" required{focus}></label>
 <label>Again<input name="again" type="password" autocomplete="new-password" minlength="{SHORTEST_PASSWORD}" required></label>
-<label class="choice"><input name="others" type="checkbox" value="out"> Log out my other devices: they log in again with the new password</label>
+<label class="choice"><input name="others" type="checkbox" value="out" checked> Log out my other devices: they log in again with the new password</label>
 {error}<button>Save</button>
 </form>"#,
         user = escape(&page.user),

@@ -21,7 +21,9 @@
 //! with the server's own secret, so nothing is kept of it and it outlasts a restart. It renews
 //! it with a refresh token, which changes each time. A refresh token already used, coming
 //! again, was copied: the device's tokens are all taken back, so whoever has them logs in again.
-//! A device connected before refresh tokens renews with the token it has.
+//! The one renewed last is taken once more, however long after, for a client whose answer was
+//! lost; its successor, which that client never had, is used up then. A device connected before
+//! refresh tokens renews with the token it has.
 //!
 //! A new device first knows the server by a connection code, shown on the server's computer:
 //! the server proves it knows the code with an HMAC, keyed by the code stretched with PBKDF2
@@ -61,6 +63,8 @@ const TRIES_FORGOTTEN: Duration = Duration::from_secs(24 * 60 * 60);
 /// made-up names and addresses cannot fill the memory.
 const MAX_TRIED: usize = 100_000;
 const MAX_KNOWN: usize = 1_000;
+/// How much of a name typed counts.
+const MAX_NAME: usize = 128;
 /// The user a server starts with, who owns it.
 const OWNER: u32 = 1;
 /// How often when a device was last used is kept: no more than this, so calling the server
@@ -73,9 +77,6 @@ const PROOFS_FREE: u32 = 10;
 const WRONG_PAIRING_WAIT: Duration = Duration::from_millis(100);
 /// How long an access token lasts, in seconds.
 pub const ACCESS_LASTS: u64 = 60 * 60;
-/// How long after it was renewed a refresh token still renews: for a client whose answer was
-/// lost on the way, asking again.
-const RENEWED_GRACE: u64 = 2 * 60;
 /// How many used refresh tokens of a device are kept, to know them if they come again.
 const RETIRED_KEPT: usize = 32;
 /// How long a login's code may wait to be traded for a token, and a password page be used.
@@ -170,8 +171,7 @@ struct Grant {
     until: Instant,
 }
 
-/// What opens a password page: a device's user, and whether that device is on the server's
-/// own computer, where the user need not know the password to change it.
+/// What opens a password page: a device's user, for a while.
 struct Ticket {
     /// The SHA-256 of the ticket, hex.
     ticket: String,
@@ -464,7 +464,8 @@ impl Accounts {
     /// Whether the name is a user's does not show: a made-up one is counted and waited for as
     /// a user's, and a password is checked against a hash of nothing for it, as long.
     fn check(&self, name: &str, password: &str, from: Option<IpAddr>) -> Result<u32, Refused> {
-        let typed = name.trim().to_lowercase();
+        // A name is counted by its first characters, so a long one fills nothing.
+        let typed: String = name.trim().to_lowercase().chars().take(MAX_NAME).collect();
         let (id, hashed) = {
             let kept = self.kept();
             let user = kept.users.iter().find(|u| u.name.to_lowercase() == typed);
@@ -478,18 +479,24 @@ impl Accounts {
                 .contains(&(id, network.clone()))
         };
         let named = format!("user:{typed}");
-        let mut keys: Vec<TriedFor> = Vec::new();
         let at_home = id
             .zip(network.as_ref())
             .is_some_and(|(id, network)| known(id, network));
-        // From where the user logged in before, tries from elsewhere do not hold them up.
-        if !at_home {
-            keys.push((named.clone(), FREE_TRIES_FOR_A_NAME));
-        }
-        if let Some(network) = &network {
-            keys.push((format!("from:{network}"), FREE_TRIES));
-            keys.push((format!("{named}@{network}"), FREE_TRIES));
-        }
+        let keys: Vec<TriedFor> = if at_home {
+            // Where the user logged in before, only the tries for their name from this very
+            // address count: neither a guesser elsewhere nor one beside them on the network
+            // holds them up.
+            from.iter()
+                .map(|ip| (format!("{named}@{ip}"), FREE_TRIES))
+                .collect()
+        } else {
+            let mut keys = vec![(named.clone(), FREE_TRIES_FOR_A_NAME)];
+            if let Some(network) = &network {
+                keys.push((format!("from:{network}"), FREE_TRIES));
+                keys.push((format!("{named}@{network}"), FREE_TRIES));
+            }
+            keys
+        };
         {
             let mut tries = self.tries.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(wait) = tries.wait(&keys) {
@@ -499,18 +506,14 @@ impl Accounts {
                 // With the table full of waits, a user is let try only where they logged in
                 // before, counted in a table of their own: a guesser filling it locks nobody out
                 // of home, and gains no tries there either.
-                let home = network
-                    .as_ref()
-                    .filter(|_| at_home)
-                    .map(|network| [(format!("{named}@{network}"), FREE_TRIES)]);
-                let Some(home) = home else {
+                if !at_home {
                     return Err(Refused::Wait(FIRST_WAIT));
-                };
-                let mut at_home = self.home.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(wait) = at_home.wait(&home) {
+                }
+                let mut home = self.home.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(wait) = home.wait(&keys) {
                     return Err(Refused::Wait(wait));
                 }
-                if !at_home.count(&home) {
+                if !home.count(&keys) {
                     return Err(Refused::Wait(FIRST_WAIT));
                 }
             }
@@ -534,8 +537,10 @@ impl Accounts {
                     .right(&keys);
                 if let Some(network) = network {
                     let mut known = self.known.lock().unwrap_or_else(|e| e.into_inner());
-                    if known.len() >= MAX_KNOWN {
-                        known.clear();
+                    if known.len() >= MAX_KNOWN
+                        && let Some(any) = known.iter().next().cloned()
+                    {
+                        known.remove(&any);
                     }
                     known.insert((id, network));
                 }
@@ -549,7 +554,9 @@ impl Accounts {
     }
 
     /// Forgets the password of the user the server started with, in the accounts kept in
-    /// `file`, while no server holds them: their name. They set one anew without it.
+    /// `file`, while no server holds them: their name. They set one anew without it, on the
+    /// server's computer. The devices that logged in with it are logged out: one of them may be
+    /// whoever learned it.
     pub fn forget_owner_password(file: &Path) -> Result<String, String> {
         let text = std::fs::read_to_string(file).map_err(|e| e.to_string())?;
         let mut kept: Kept = serde_json::from_str(&text).map_err(|e| e.to_string())?;
@@ -560,6 +567,8 @@ impl Accounts {
             .ok_or("no owner in the accounts")?;
         owner.password = None;
         let name = owner.name.clone();
+        kept.devices
+            .retain(|d| d.user != OWNER || d.joined == Some(Joined::Paired));
         let json = serde_json::to_vec_pretty(&kept).map_err(|e| e.to_string())?;
         write_private(file, &json).map_err(|e| e.to_string())?;
         Ok(name)
@@ -658,18 +667,10 @@ impl Accounts {
             self.save(&kept);
             return granted;
         }
-        let renewed = |d: &Device| {
-            d.previous
-                .as_ref()
-                .filter(|p| p.token == hash)
-                .map(|p| p.at)
-        };
-        // Its answer was lost: renewed again, the tokens it never had used up.
-        if let Some(at) = kept
-            .devices
-            .iter()
-            .position(|d| renewed(d).is_some_and(|at| now <= at + RENEWED_GRACE))
-        {
+        let renewed = |d: &Device| d.previous.as_ref().is_some_and(|p| p.token == hash);
+        // Its answer was lost, by a computer that slept or a network that dropped it: renewed
+        // again, once, however long after, as the tokens it never had were not used either.
+        if let Some(at) = kept.devices.iter().position(renewed) {
             let device = &mut kept.devices[at];
             let lost = std::mem::take(&mut device.token);
             device.retired.push(lost);
@@ -681,11 +682,7 @@ impl Accounts {
             self.save(&kept);
             return granted;
         }
-        if let Some(at) = kept
-            .devices
-            .iter()
-            .position(|d| d.retired.contains(&hash) || renewed(d).is_some())
-        {
+        if let Some(at) = kept.devices.iter().position(|d| d.retired.contains(&hash)) {
             let gone = kept.devices.remove(at);
             log::warn!(
                 "a used refresh token of {} came again, so it was copied: the device is logged out",
@@ -730,8 +727,9 @@ impl Accounts {
         let Some(from) = from else {
             return true;
         };
-        // Counted apart from logins, by network, so asking for proofs fills nothing logins need.
-        let key = [(format!("proof:{}", network(from)), PROOFS_FREE)];
+        // Counted apart from logins, by address, so asking for proofs fills nothing logins need,
+        // nor holds up another on the same network.
+        let key = [(format!("proof:{from}"), PROOFS_FREE)];
         let mut tries = self.proofs.lock().unwrap_or_else(|e| e.into_inner());
         if tries.wait(&key).is_some() {
             return false;
@@ -989,6 +987,8 @@ fn network(ip: IpAddr) -> String {
         IpAddr::V4(ip) => ip.to_string(),
         IpAddr::V6(ip) => match ip.to_ipv4_mapped() {
             Some(ip) => ip.to_string(),
+            // Every link-local address is in fe80::/64: those count one by one.
+            None if ip.is_unicast_link_local() => ip.to_string(),
             None => {
                 let s = ip.segments();
                 format!("{:x}:{:x}:{:x}:{:x}::/64", s[0], s[1], s[2], s[3])
@@ -1346,6 +1346,45 @@ mod tests {
             accounts.check("Kim", "correct horse", Some(IpAddr::from([10, 0, 0, 9]))),
             Err(Refused::Wait(_))
         ));
+    }
+
+    #[test]
+    fn forgetting_the_password_logs_out_who_logged_in_with_it() {
+        let dir = std::env::temp_dir().join(format!("freya-forget-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (file, pairing) = (dir.join("accounts.json"), dir.join("pairing.key"));
+        let accounts = Accounts::open(Some(file.clone()), Some(pairing.clone()));
+        let mac = pair(&accounts, &pairing, "Mac").unwrap();
+        let ticket = accounts.ticket(&accounts.caller(&mac.access).unwrap());
+        accounts
+            .change_password(&ticket, "", "correct horse", None, false)
+            .unwrap();
+        let owner = accounts.info(&accounts.caller(&mac.access).unwrap()).user;
+        let redirect = "http://127.0.0.1:47477/callback";
+        let verifier = "a secret only the client knows, long enough";
+        let code = accounts
+            .grant(
+                &owner,
+                "correct horse",
+                &challenge(verifier),
+                redirect,
+                None,
+            )
+            .unwrap();
+        accounts.redeem(&code, verifier, redirect, "PC").unwrap();
+        drop(accounts);
+        Accounts::forget_owner_password(&file).unwrap();
+        let again = Accounts::open(Some(file), Some(pairing));
+        let mac = again.caller(&mac.access).unwrap();
+        let info = again.info(&mac);
+        assert!(!info.has_password);
+        let names: Vec<&str> = info.devices.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["Mac"],
+            "the PC logged in with it, and is logged out"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
