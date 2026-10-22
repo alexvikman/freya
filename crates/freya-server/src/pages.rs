@@ -5,7 +5,8 @@
 //!   and `code_challenge_method=S256`: a form for the user and their password. `POST /login`
 //!   sends the browser on to `redirect_uri` with a code and the state, which the client that
 //!   asked trades for a token at the API's `/token`. Only a client on the browser's own
-//!   computer is sent to: `redirect_uri` is `http://127.0.0.1` or `http://[::1]`.
+//!   computer is sent to: `redirect_uri` is `http://127.0.0.1:port/callback` or
+//!   `http://[::1]:port/callback`.
 //! - `GET /logged-in`: where the client sends the browser once it has its token.
 //! - `GET /password?ticket=`: a form for a new password, and the one now unless the ticket is
 //!   of a device on the server's computer. `POST /password` changes it.
@@ -315,17 +316,22 @@ button {{ font: inherit; font-weight: 600; padding: 10px; border: 0; border-radi
     )
 }
 
-/// Whether `uri` leads to this computer by its address: `http://127.0.0.1:port/...` or
-/// `http://[::1]:port/...`.
+/// Whether `uri` is a client's callback on this computer, by its address:
+/// `http://127.0.0.1:port/callback` or `http://[::1]:port/callback`, and nothing more.
 fn is_loopback(uri: &str) -> bool {
     let Some(rest) = uri.strip_prefix("http://") else {
         return false;
     };
-    let authority = rest.split(['/', '?']).next().unwrap_or_default();
+    let Some((authority, "callback")) = rest.split_once('/') else {
+        return false;
+    };
     let Some((host, port)) = authority.rsplit_once(':') else {
         return false;
     };
-    ["127.0.0.1", "[::1]"].contains(&host) && port.parse::<u16>().is_ok() && !uri.contains('#')
+    ["127.0.0.1", "[::1]"].contains(&host)
+        && !port.is_empty()
+        && port.bytes().all(|b| b.is_ascii_digit())
+        && port.parse::<u16>().is_ok()
 }
 
 /// The pairs of a query or form: `a=1&b=x+y`, its `+` spaces and its escapes undone.
@@ -380,7 +386,13 @@ mod tests {
     #[test]
     fn sends_back_to_this_computer_only() {
         assert!(is_loopback("http://127.0.0.1:47477/callback"));
-        assert!(is_loopback("http://[::1]:5000/"));
+        assert!(is_loopback("http://[::1]:5000/callback"));
+        assert!(!is_loopback("http://127.0.0.1:47477/elsewhere"));
+        assert!(!is_loopback("http://127.0.0.1:47477/callback?x=1"));
+        assert!(!is_loopback(
+            "http://127.0.0.1:47477/callback\r\nSet-Cookie: x=1"
+        ));
+        assert!(!is_loopback("http://127.0.0.1:+80/callback"));
         assert!(!is_loopback("https://127.0.0.1:47477/callback"));
         assert!(!is_loopback("http://127.0.0.1.evil.example:80/"));
         assert!(!is_loopback("http://evil.example@127.0.0.1:80/"));

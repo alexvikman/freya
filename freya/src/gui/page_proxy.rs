@@ -120,19 +120,26 @@ fn answer(
         return text(403, "Open this page from Freya.");
     }
     if (request.method.as_str(), request.path.as_str()) == ("GET", "/callback") {
-        let waiting = showing().login.take();
+        // Taken only by the login's own state, so another page cannot end it.
+        let waiting = {
+            let mut showing = showing();
+            match &showing.login {
+                None => None,
+                Some((_, login)) if request.query_value("state") != Some(login.state.as_str()) => {
+                    return text(
+                        400,
+                        "This is not the login Freya asked for. Start again from its settings.",
+                    );
+                }
+                Some(_) => showing.login.take(),
+            }
+        };
         let Some((server, login)) = waiting else {
             return text(
                 404,
                 "Freya is not logging in now. Start again from its settings.",
             );
         };
-        if request.query_value("state") != Some(login.state.as_str()) {
-            return text(
-                400,
-                "This is not the login Freya asked for. Start again from its settings.",
-            );
-        }
         let code = request.query_value("code").unwrap_or_default();
         let device = crate::settings::device_name();
         return match server.redeem(&login, code, &device) {
@@ -297,6 +304,12 @@ mod tests {
         assert_eq!(sent.status(), 303);
         let back = header(&sent, "location").to_owned();
         assert!(back.starts_with(&format!("{origin}/callback?code=")));
+        // Another page sending the browser back with another state ends nothing.
+        let forged = browser
+            .get(&format!("{origin}/callback?code=x&state=forged"))
+            .call()
+            .unwrap();
+        assert_eq!(forged.status(), 400);
         let done = browser.get(&back).call().unwrap();
         assert_eq!(done.status(), 303);
         assert_eq!(header(&done, "location"), "/web/logged-in");

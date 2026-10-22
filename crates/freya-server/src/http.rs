@@ -363,6 +363,12 @@ impl Connection {
             if keep { "keep-alive" } else { "close" },
         );
         for (name, value) in &response.headers {
+            // A value with a line break in it would end the head early, and add headers of its
+            // own: one is not written.
+            if value.contains(['\r', '\n']) {
+                log::warn!("a {name} header with a line break in it was not sent");
+                continue;
+            }
             head.push_str(&format!("{name}: {value}\r\n"));
         }
         match response.body {
