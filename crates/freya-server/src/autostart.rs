@@ -36,6 +36,7 @@ impl Launch {
 }
 
 /// What the server is called where the system keeps what starts at login.
+#[cfg(target_os = "macos")]
 const LABEL: &str = "io.github.alexvikman.freya.server";
 
 /// Whether the server starts when the user logs in.

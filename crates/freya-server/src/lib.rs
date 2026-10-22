@@ -8,6 +8,8 @@ mod folder_watch;
 mod folders;
 pub mod http;
 mod lastfm;
+#[cfg(target_os = "macos")]
+pub mod menu_bar;
 mod playlists;
 mod scrobbler;
 mod serve;

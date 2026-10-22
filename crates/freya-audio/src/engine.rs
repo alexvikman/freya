@@ -53,6 +53,8 @@ struct Current {
     info: Arc<TrackInfo>,
 }
 
+// Lives only until it is matched, so a large command costs nothing worth a box.
+#[allow(clippy::large_enum_variant)]
 enum Wake {
     Command(Command),
     Timeout,

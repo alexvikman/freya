@@ -8,7 +8,8 @@
 //! settings and log in its own folder, the first time taking in what Freya kept in its folder
 //! before the server was its own. It runs until stopped: Ctrl-C, SIGTERM, or `POST /quit` from
 //! this computer. One that finds another on its address ends at once, and without failing, so
-//! what starts it at login does not start it again and again.
+//! what starts it at login does not start it again and again. On macOS it shows an icon in the
+//! menu bar, to open Freya, show the log, or stop it.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -94,6 +95,8 @@ fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> 
         config,
     )?);
     let (stop, stopped) = channel();
+    #[cfg(target_os = "macos")]
+    let menu_stop = stop.clone();
     let quit = {
         let stop = stop.clone();
         Arc::new(move || {
@@ -124,11 +127,30 @@ fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> 
         data.display(),
         server.address()
     );
-    let _ = stopped.recv();
-    log::info!("stopping");
-    drop(network);
-    drop(server);
-    drop(service);
+    let close = move || {
+        let _ = stopped.recv();
+        log::info!("stopping");
+        drop(network);
+        drop(server);
+        drop(service);
+    };
+    // AppKit runs on the main thread until the process ends, so stopping is another thread's.
+    #[cfg(target_os = "macos")]
+    {
+        let closing = std::thread::spawn(move || {
+            close();
+            std::process::exit(0)
+        });
+        let actions = freya_server::menu_bar::Actions {
+            stop: menu_stop,
+            log: data.join("server.log"),
+        };
+        if freya_server::menu_bar::run(actions).is_none() {
+            let _ = closing.join();
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    close();
     Ok(())
 }
 
