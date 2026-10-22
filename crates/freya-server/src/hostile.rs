@@ -12,7 +12,7 @@ use freya_protocol::{API_PATH, PAGES_PATH};
 
 use crate::accounts::Accounts;
 use crate::http::{Request, Response, Server};
-use crate::{LocalLibrary, Served, body_limit, handler};
+use crate::{LocalLibrary, Served, admit, handler};
 
 /// A small random number generator, the same each run: xorshift.
 struct Random(u64);
@@ -192,7 +192,7 @@ fn let_in(request: &Request, response: &Response) -> bool {
 fn strangers_are_answered_and_let_in_nowhere() {
     let (served, _accounts) = served();
     let answer = handler(served.clone());
-    let limit = body_limit(served);
+    let limit = admit(served);
     let mut random = Random(0x9e37_79b9_7f4a_7c15);
     for _ in 0..20_000 {
         let request = stranger(&mut random);

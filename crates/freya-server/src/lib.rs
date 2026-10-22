@@ -22,7 +22,7 @@ pub mod take_in;
 pub mod tls;
 
 pub use lastfm::lastfm;
-pub use serve::{Served, body_limit, found, handler};
+pub use serve::{Served, admit, found, handler};
 pub use service::{LocalLibrary, Service, ServiceConfig};
 
 /// Where a server on this computer listens.

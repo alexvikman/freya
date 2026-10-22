@@ -53,7 +53,7 @@ use freya_protocol::{
 };
 
 use crate::accounts::{Accounts, Caller};
-use crate::http::{BodyLimit, Handler, MAX_BODY, Request, Response};
+use crate::http::{Admission, Admit, Handler, MAX_BODY, Request, Response};
 
 /// How long the event stream says nothing before it sends an empty line, to find a client
 /// that is gone; and how long it lasts before it ends, so a client following it notices a
@@ -85,13 +85,18 @@ pub fn handler(served: Served) -> Handler {
 /// The largest cover asked for, wide or high: more makes the server work for nothing.
 const LARGEST_COVER: u32 = 2048;
 
-/// How large a request's body may be, as `served` takes them: a picture's for an admin keeping
-/// one, a call's for a device with a token, and a form's or a little JSON's for anyone else, so
-/// nobody wears the server out before logging in.
-pub fn body_limit(served: Served) -> BodyLimit {
+/// How `served` admits a request, from its head: a body of a picture's size for an admin
+/// keeping one, a call's for a device with a token, and a form's or a little JSON's for anyone
+/// else, so nobody wears the server out before logging in; and a device with a token as one
+/// the server knows, whose connection strangers' do not crowd out.
+pub fn admit(served: Served) -> Admit {
     const SMALL: usize = 16 * 1024;
     const CALL: usize = 8 * 1024 * 1024;
     Arc::new(move |request| {
+        let stranger = Admission {
+            body: SMALL,
+            known: false,
+        };
         let caller = match &served.accounts {
             Some(accounts) => {
                 let token = request
@@ -99,7 +104,7 @@ pub fn body_limit(served: Served) -> BodyLimit {
                     .and_then(|value| value.strip_prefix("Bearer "));
                 match token.and_then(|token| accounts.caller(token.trim())) {
                     Some(caller) => Some(caller),
-                    None => return SMALL,
+                    None => return stranger,
                 }
             }
             // Anyone is let in, as in tests.
@@ -107,9 +112,12 @@ pub fn body_limit(served: Served) -> BodyLimit {
         };
         let path = request.path.strip_prefix(API_PATH).unwrap_or_default();
         let admin = caller.as_ref().is_none_or(|c| c.role == Role::Admin);
-        match (request.method.as_str(), path) {
-            ("POST", "/pictures") if admin => MAX_BODY,
-            _ => CALL,
+        Admission {
+            body: match (request.method.as_str(), path) {
+                ("POST", "/pictures") if admin => MAX_BODY,
+                _ => CALL,
+            },
+            known: caller.is_some(),
         }
     })
 }
@@ -740,14 +748,14 @@ mod tests {
             certificate: None,
             callback_port: freya_protocol::CALLBACK_PORT,
         };
-        let limit = body_limit(served);
+        let limit = admit(served);
         let mut asked = request(&[], b"");
         // Without a token, or with a made-up one: a little.
-        assert_eq!(limit(&asked), 16 * 1024);
+        assert_eq!(limit(&asked).body, 16 * 1024);
         asked
             .headers
             .push(("Authorization".into(), "Bearer made.up.token".into()));
-        assert_eq!(limit(&asked), 16 * 1024);
+        assert_eq!(limit(&asked).body, 16 * 1024);
         // A listener's call, but no picture; an admin's picture.
         accounts
             .add_user("Kim", Role::Listener, "correct horse")
@@ -765,9 +773,9 @@ mod tests {
             .unwrap();
         let kim = accounts.redeem(&code, verifier, redirect, "Phone").unwrap();
         asked.headers[0].1 = format!("Bearer {}", kim.access);
-        assert_eq!(limit(&asked), 8 * 1024 * 1024);
+        assert_eq!(limit(&asked).body, 8 * 1024 * 1024);
         asked.path = format!("{API_PATH}/pictures");
-        assert_eq!(limit(&asked), 8 * 1024 * 1024);
+        assert_eq!(limit(&asked).body, 8 * 1024 * 1024);
     }
 
     #[test]

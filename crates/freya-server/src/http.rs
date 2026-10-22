@@ -4,10 +4,12 @@
 //! connections kept open between requests.
 //!
 //! What a client may hold is bounded, so nobody can wear the server out without logging in:
-//! connections in all and from one address, how long a request's head and body may take to
-//! arrive and an answer to be taken, how long a connection may wait for its next request, and
-//! how large a body may be, decided from the request's head before any of it is read, and read
-//! only as it comes.
+//! connections of strangers in all and from one address, how long a request's head and body
+//! may take to arrive and an answer to be taken, in all and inside TLS too, how long a
+//! connection may wait for its next request, and how large a body may be, decided from the
+//! request's head before any of it is read, and read only as it comes. A connection that sent a
+//! request of a device the server knows no longer counts among strangers', so they cannot
+//! crowd it out.
 
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
@@ -38,9 +40,12 @@ const HEAD_TIME: Duration = Duration::from_secs(10);
 const HEAD_TIME: Duration = Duration::from_secs(1);
 const BODY_RATE: usize = 32 * 1024;
 const WRITE_TIME: Duration = Duration::from_secs(30);
-/// The most connections served at once, and from one address.
+/// The most connections of strangers served at once, and from one address; and of all.
 const MAX_CONNECTIONS: usize = 128;
 const MAX_FROM_ONE: usize = 16;
+const MAX_ALL: usize = 512;
+/// How long a streamed answer may take to be taken: longer than the events stream lasts.
+const STREAM_TIME: Duration = Duration::from_secs(90);
 
 /// A request, as the handler sees it.
 #[derive(Debug)]
@@ -138,9 +143,16 @@ impl Response {
 
 pub type Handler = Arc<dyn Fn(Request) -> Response + Send + Sync>;
 
-/// How large a request's body may be, decided from its head, before any of it is read: by what
-/// it asks, and who asks it.
-pub type BodyLimit = Arc<dyn Fn(&Request) -> usize + Send + Sync>;
+/// What a request may bring, decided from its head before any of its body is read: how large a
+/// body, and whether it comes from a device the server knows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Admission {
+    pub body: usize,
+    pub known: bool,
+}
+
+/// How a server admits requests: see [`Admission`].
+pub type Admit = Arc<dyn Fn(&Request) -> Admission + Send + Sync>;
 
 /// Serves `handler` until dropped, which ends every connection too.
 pub struct Server {
@@ -153,27 +165,46 @@ pub struct Server {
 /// The connections served now, to count them and to end them.
 #[derive(Default)]
 struct Live {
-    connections: Mutex<HashMap<u64, (IpAddr, TcpStream)>>,
+    connections: Mutex<HashMap<u64, Served>>,
     next: AtomicU64,
 }
 
+/// A connection served: where from, its stream to end it, and whether it is a known device's.
+struct Served {
+    from: IpAddr,
+    stream: TcpStream,
+    known: bool,
+}
+
 impl Live {
-    fn connections(&self) -> std::sync::MutexGuard<'_, HashMap<u64, (IpAddr, TcpStream)>> {
+    fn connections(&self) -> std::sync::MutexGuard<'_, HashMap<u64, Served>> {
         self.connections.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// `stream` counted among those served, unless there are too many, in all or from its
-    /// address.
+    /// `stream` counted among those served, unless strangers' are too many, in all or from its
+    /// address, or all are.
     fn admit(self: &Arc<Self>, stream: &TcpStream) -> Option<Admitted> {
         let ip = stream.peer_addr().ok()?.ip();
         let kept = stream.try_clone().ok()?;
         let mut connections = self.connections();
-        let from_it = connections.values().filter(|(from, _)| *from == ip).count();
-        if connections.len() >= MAX_CONNECTIONS || from_it >= MAX_FROM_ONE {
+        let (all, from_it) = connections
+            .values()
+            .filter(|c| !c.known)
+            .fold((0, 0), |(all, from_it), c| {
+                (all + 1, from_it + usize::from(c.from == ip))
+            });
+        if all >= MAX_CONNECTIONS || from_it >= MAX_FROM_ONE || connections.len() >= MAX_ALL {
             return None;
         }
         let id = self.next.fetch_add(1, Ordering::Relaxed);
-        connections.insert(id, (ip, kept));
+        connections.insert(
+            id,
+            Served {
+                from: ip,
+                stream: kept,
+                known: false,
+            },
+        );
         Some(Admitted {
             live: Arc::clone(self),
             id,
@@ -182,8 +213,8 @@ impl Live {
 
     /// Ends every connection.
     fn end_all(&self) {
-        for (_, (_, stream)) in self.connections().drain() {
-            let _ = stream.shutdown(std::net::Shutdown::Both);
+        for (_, served) in self.connections().drain() {
+            let _ = served.stream.shutdown(std::net::Shutdown::Both);
         }
     }
 }
@@ -192,6 +223,15 @@ impl Live {
 struct Admitted {
     live: Arc<Live>,
     id: u64,
+}
+
+impl Admitted {
+    /// The connection sent a request of a device the server knows.
+    fn know(&self) {
+        if let Some(served) = self.live.connections().get_mut(&self.id) {
+            served.known = true;
+        }
+    }
 }
 
 impl Drop for Admitted {
@@ -203,7 +243,7 @@ impl Drop for Admitted {
 impl Server {
     /// Listens on `address`; port 0 takes any free one.
     pub fn start(address: impl ToSocketAddrs, handler: Handler) -> io::Result<Self> {
-        Self::serve(address, handler, None, Arc::new(|_| DEFAULT_BODY))
+        Self::serve(address, handler, None, stranger())
     }
 
     /// Listens on `address` over TLS as `tls` says.
@@ -212,17 +252,26 @@ impl Server {
         handler: Handler,
         tls: Arc<rustls::ServerConfig>,
     ) -> io::Result<Self> {
-        Self::serve(address, handler, Some(tls), Arc::new(|_| DEFAULT_BODY))
+        Self::serve(address, handler, Some(tls), stranger())
     }
 
-    /// Listens on `address`, over TLS when `tls` is given, taking bodies as `body_limit` says.
+    /// Listens on `address`, over TLS when `tls` is given, admitting requests as `admit` says.
     pub fn serve(
         address: impl ToSocketAddrs,
         handler: Handler,
         tls: Option<Arc<rustls::ServerConfig>>,
-        body_limit: BodyLimit,
+        admit: Admit,
     ) -> io::Result<Self> {
-        let listener = TcpListener::bind(address)?;
+        Self::serve_on(TcpListener::bind(address)?, handler, tls, admit)
+    }
+
+    /// Serves on `listener`, bound already, as [`Self::serve`] does.
+    pub fn serve_on(
+        listener: TcpListener,
+        handler: Handler,
+        tls: Option<Arc<rustls::ServerConfig>>,
+        admit: Admit,
+    ) -> io::Result<Self> {
         let address = listener.local_addr()?;
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = Arc::clone(&stop);
@@ -249,14 +298,14 @@ impl Server {
                         continue;
                     };
                     let handler = Arc::clone(&handler);
-                    let body_limit = Arc::clone(&body_limit);
+                    let admit = Arc::clone(&admit);
                     let tls = tls.clone();
                     let started = std::thread::Builder::new()
                         .name("freya-http-connection".into())
                         .spawn(move || {
-                            let _admitted = admitted;
-                            let served = Connection::new(stream, tls)
-                                .and_then(|connection| connection.serve(&*handler, &*body_limit));
+                            let served = Connection::new(stream, tls).and_then(|connection| {
+                                connection.serve(&*handler, &*admit, &admitted)
+                            });
                             if let Err(e) = served {
                                 log::debug!("a connection ended: {e}");
                             }
@@ -299,18 +348,75 @@ impl Drop for Server {
     }
 }
 
+/// A request admitted as a stranger's, with a body of up to [`DEFAULT_BODY`].
+fn stranger() -> Admit {
+    Arc::new(|_| Admission {
+        body: DEFAULT_BODY,
+        known: false,
+    })
+}
+
 /// What a connection is read from and written to: the TCP stream, or TLS over it.
 trait Duplex: Read + Write + Send {}
 
 impl<T: Read + Write + Send> Duplex for T {}
 
+/// When what is read now, and what is written now, must be done by.
+#[derive(Clone, Copy)]
+struct Deadlines {
+    read: Instant,
+    write: Instant,
+}
+
+/// The TCP stream under a connection, each read and write of it within the deadline set for
+/// what is read or written: so a client sending or taking a byte now and then, inside TLS
+/// too, where one read waits for a whole record, is let go when its time is up.
+struct Timed {
+    tcp: Arc<TcpStream>,
+    deadlines: Arc<Mutex<Deadlines>>,
+}
+
+impl Timed {
+    fn left(&self, of: impl Fn(&Deadlines) -> Instant) -> io::Result<Duration> {
+        let deadlines = *self.deadlines.lock().unwrap_or_else(|e| e.into_inner());
+        let left = of(&deadlines).saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        Ok(left)
+    }
+}
+
+impl Read for Timed {
+    fn read(&mut self, into: &mut [u8]) -> io::Result<usize> {
+        self.tcp.set_read_timeout(Some(self.left(|d| d.read)?))?;
+        (&*self.tcp).read(into)
+    }
+}
+
+impl Write for Timed {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.tcp.set_write_timeout(Some(self.left(|d| d.write)?))?;
+        (&*self.tcp).write(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        (&*self.tcp).flush()
+    }
+}
+
 struct Connection {
     stream: Box<dyn Duplex>,
-    /// The TCP stream itself, for who is at the other end and closing it.
-    tcp: TcpStream,
+    /// The TCP stream itself, for closing it, and who is at its other end.
+    tcp: Arc<TcpStream>,
+    peer: Option<SocketAddr>,
+    deadlines: Arc<Mutex<Deadlines>>,
     secure: bool,
     /// Read beyond the last request: the start of the next one.
     pending: Vec<u8>,
+    /// Whether a request was read on it yet: the first, after TLS's handshake, is waited for
+    /// as long as a request's head.
+    served: bool,
 }
 
 /// Why a request could not be read: the status to answer, and why.
@@ -318,32 +424,59 @@ struct Refused(u16, &'static str);
 
 impl Connection {
     fn new(tcp: TcpStream, tls: Option<Arc<rustls::ServerConfig>>) -> io::Result<Self> {
-        tcp.set_read_timeout(Some(HEAD_TIME))?;
-        tcp.set_write_timeout(Some(WRITE_TIME))?;
         let _ = tcp.set_nodelay(true);
+        let peer = tcp.peer_addr().ok();
+        let tcp = Arc::new(tcp);
+        let now = Instant::now();
+        let deadlines = Arc::new(Mutex::new(Deadlines {
+            read: now + HEAD_TIME,
+            write: now + WRITE_TIME,
+        }));
+        let timed = Timed {
+            tcp: Arc::clone(&tcp),
+            deadlines: Arc::clone(&deadlines),
+        };
         let stream: Box<dyn Duplex> = match &tls {
             Some(config) => {
                 let session =
                     rustls::ServerConnection::new(Arc::clone(config)).map_err(io::Error::other)?;
-                Box::new(rustls::StreamOwned::new(session, tcp.try_clone()?))
+                Box::new(rustls::StreamOwned::new(session, timed))
             }
-            None => Box::new(tcp.try_clone()?),
+            None => Box::new(timed),
         };
         Ok(Self {
             stream,
             tcp,
+            peer,
+            deadlines,
             secure: tls.is_some(),
             pending: Vec::new(),
+            served: false,
         })
+    }
+
+    fn read_by(&self, at: Instant) {
+        self.deadlines
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .read = at;
+    }
+
+    fn write_by(&self, at: Instant) {
+        self.deadlines
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .write = at;
     }
 
     fn serve(
         mut self,
         handler: &(dyn Fn(Request) -> Response + Send + Sync),
-        body_limit: &(dyn Fn(&Request) -> usize + Send + Sync),
+        admit: &(dyn Fn(&Request) -> Admission + Send + Sync),
+        admitted: &Admitted,
     ) -> io::Result<()> {
         loop {
-            let (request, old) = match self.read_request(body_limit) {
+            let (request, old) = match self.read_request(admit, admitted) {
                 Ok(Some(request)) => request,
                 Ok(None) => return Ok(()),
                 Err(Ok(Refused(status, why))) => {
@@ -372,11 +505,22 @@ impl Connection {
     /// between requests, or waited too long for its next one.
     fn read_request(
         &mut self,
-        body_limit: &(dyn Fn(&Request) -> usize + Send + Sync),
+        admit: &(dyn Fn(&Request) -> Admission + Send + Sync),
+        admitted: &Admitted,
     ) -> Result<Option<(Request, bool)>, Result<Refused, io::Error>> {
         let mut buffer = std::mem::take(&mut self.pending);
-        // Waiting for the next request at most `IDLE`; once it began, its head in `HEAD_TIME`.
+        // Waiting for the next request at most `IDLE`; once it began, its head in `HEAD_TIME`;
+        // the first, with TLS's handshake before it, in `HEAD_TIME` from the start.
         let mut began = (!buffer.is_empty()).then(Instant::now);
+        let waited = if self.served {
+            Instant::now() + IDLE
+        } else {
+            self.deadlines
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .read
+        };
+        self.served = true;
         let (head, request, old) = loop {
             let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
             let mut parsed = httparse::Request::new(&mut headers);
@@ -384,7 +528,7 @@ impl Connection {
                 Ok(httparse::Status::Complete(length)) => {
                     let old = parsed.version == Some(0);
                     let request = Request {
-                        peer: self.tcp.peer_addr().ok(),
+                        peer: self.peer,
                         secure: self.secure,
                         method: parsed.method.unwrap_or_default().to_owned(),
                         path: String::new(),
@@ -419,14 +563,10 @@ impl Connection {
                 }
                 Err(_) => return Err(Ok(Refused(400, "the request could not be read"))),
             }
-            let wait = match began {
-                None => IDLE,
-                Some(began) => HEAD_TIME.saturating_sub(began.elapsed()),
-            };
-            if wait.is_zero() {
-                return Err(Err(io::ErrorKind::TimedOut.into()));
-            }
-            self.tcp.set_read_timeout(Some(wait)).map_err(Err)?;
+            self.read_by(match began {
+                None => waited,
+                Some(began) => began + HEAD_TIME,
+            });
             let mut more = [0; 4096];
             let read = match self.stream.read(&mut more) {
                 Ok(read) => read,
@@ -449,7 +589,11 @@ impl Connection {
             return Err(Ok(Refused(411, "a request's body must have a length")));
         }
         let length = content_length(&request).map_err(Ok)?;
-        if length > body_limit(&request).min(MAX_BODY) {
+        let admission = admit(&request);
+        if admission.known {
+            admitted.know();
+        }
+        if length > admission.body.min(MAX_BODY) {
             return Err(Ok(Refused(413, "the request is too large")));
         }
         let mut body = buffer.split_off(head);
@@ -457,15 +601,9 @@ impl Connection {
             self.pending = body.split_off(length);
         }
         // Read as it comes, never set aside ahead of it, at least `BODY_RATE` bytes a second.
-        let deadline =
-            Instant::now() + HEAD_TIME + Duration::from_secs((length / BODY_RATE) as u64);
+        self.read_by(Instant::now() + HEAD_TIME + Duration::from_secs((length / BODY_RATE) as u64));
         let mut more = [0; 16 * 1024];
         while body.len() < length {
-            let wait = deadline.saturating_duration_since(Instant::now());
-            if wait.is_zero() {
-                return Err(Err(io::ErrorKind::TimedOut.into()));
-            }
-            self.tcp.set_read_timeout(Some(wait)).map_err(Err)?;
             let want = (length - body.len()).min(more.len());
             let read = self.stream.read(&mut more[..want]).map_err(Err)?;
             if read == 0 {
@@ -486,7 +624,7 @@ impl Connection {
         let mut dropped = [0; 4096];
         let mut left = MAX_HEAD * 4;
         while left > 0 {
-            match self.tcp.read(&mut dropped) {
+            match (&*self.tcp).read(&mut dropped) {
                 Ok(0) | Err(_) => break,
                 Ok(read) => left = left.saturating_sub(read),
             }
@@ -510,6 +648,16 @@ impl Connection {
             }
             head.push_str(&format!("{name}: {value}\r\n"));
         }
+        // Taken in `WRITE_TIME`, and a second more for each `BODY_RATE` bytes.
+        let lasts = |length: u64| WRITE_TIME + Duration::from_secs(length / BODY_RATE as u64);
+        self.write_by(
+            Instant::now()
+                + match &response.body {
+                    Body::Bytes(bytes) => lasts(bytes.len() as u64),
+                    Body::Read(length, _) => lasts(*length),
+                    Body::Stream(_) => STREAM_TIME,
+                },
+        );
         match response.body {
             Body::Bytes(bytes) => {
                 head.push_str(&format!("Content-Length: {}\r\n\r\n", bytes.len()));
@@ -704,7 +852,10 @@ mod tests {
                 Response::bytes(200, "text/plain", request.body.len().to_string().into())
             }),
             None,
-            Arc::new(|request: &Request| if request.path == "/large" { 100 } else { 10 }),
+            Arc::new(|request: &Request| Admission {
+                body: if request.path == "/large" { 100 } else { 10 },
+                known: false,
+            }),
         )
         .unwrap();
         let small = exchange(
@@ -787,5 +938,58 @@ mod tests {
             answer.ends_with("3\r\none\r\n3\r\ntwo\r\n0\r\n\r\n"),
             "{answer}"
         );
+    }
+
+    #[test]
+    fn a_byte_now_and_then_inside_tls_is_let_go() {
+        let identity = crate::tls::Identity::make().unwrap();
+        let server = Server::start_tls(
+            "127.0.0.1:0",
+            Arc::new(|_| Response::bytes(200, "text/plain", Vec::new())),
+            identity.server_config().unwrap(),
+        )
+        .unwrap();
+        // A TLS record that never ends, a byte at a time, well within each read's wait.
+        let mut slow = TcpStream::connect(server.address()).unwrap();
+        slow.set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let started = Instant::now();
+        let mut closed = false;
+        let record = [0x16, 0x03, 0x01, 0x40, 0x00];
+        for byte in record.iter().cycle().take(200) {
+            if slow.write_all(&[*byte]).is_err() {
+                closed = true;
+                break;
+            }
+            let mut answer = [0; 64];
+            if matches!(slow.read(&mut answer), Ok(0)) {
+                closed = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        assert!(closed, "still held");
+        assert!(started.elapsed() < HEAD_TIME + Duration::from_secs(3));
+    }
+
+    #[test]
+    fn a_known_device_is_not_crowded_out_by_strangers() {
+        let live = Arc::new(Live::default());
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let accept = || {
+            let _client = TcpStream::connect(address).unwrap();
+            listener.accept().unwrap().0
+        };
+        let mut held: Vec<Admitted> = (0..MAX_FROM_ONE)
+            .map(|_| live.admit(&accept()).unwrap())
+            .collect();
+        assert!(live.admit(&accept()).is_none(), "strangers are full");
+        held[0].know();
+        assert!(
+            live.admit(&accept()).is_some(),
+            "a known one does not count"
+        );
+        held.clear();
     }
 }

@@ -222,8 +222,15 @@ mod platform {
 
     /// The unit: started at login, and again only when it fails.
     pub fn unit(launch: &Launch) -> String {
-        // Quoted as systemd reads ExecStart: within double quotes, \ and " escaped.
-        let quote = |arg: &str| format!("\"{}\"", arg.replace('\\', "\\\\").replace('"', "\\\""));
+        // Quoted as systemd reads ExecStart: within double quotes, \ and " escaped, and % as
+        // %%, which systemd would otherwise take for one of its own names.
+        let quote = |arg: &str| {
+            let escaped = arg
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('%', "%%");
+            format!("\"{escaped}\"")
+        };
         let command: Vec<String> = std::iter::once(launch.program.to_string_lossy().into_owned())
             .chain(launch.args.iter().cloned())
             .map(|arg| quote(&arg))
@@ -243,7 +250,10 @@ mod platform {
         // both writable and executable, makes no namespaces or set-id files, and calls the
         // system only as built for it.
         let hardened = [
+            // Another program holding its port at login is waited out, not given up on.
+            "RestartSec=10",
             "UMask=0077",
+            "SystemCallFilter=@system-service",
             "NoNewPrivileges=yes",
             "LockPersonality=yes",
             "MemoryDenyWriteExecute=yes",
@@ -255,7 +265,7 @@ mod platform {
         .map(|line| format!("{line}\n"))
         .concat();
         format!(
-            "[Unit]\nDescription=Freya's music library\n\n[Service]\nExecStart={}\n{environment}Restart=on-failure\n{hardened}\n[Install]\nWantedBy=default.target\n",
+            "[Unit]\nDescription=Freya's music library\nStartLimitIntervalSec=0\n\n[Service]\nExecStart={}\n{environment}Restart=on-failure\n{hardened}\n[Install]\nWantedBy=default.target\n",
             command.join(" ")
         )
     }
@@ -391,6 +401,8 @@ mod tests {
         assert!(unit.contains(r#"ExecStart="/home/a/Freya \"x\".AppImage" "server""#));
         assert!(unit.contains("Restart=on-failure"));
         assert!(unit.contains("NoNewPrivileges=yes\n") && unit.contains("UMask=0077\n"));
+        assert!(unit.contains("SystemCallFilter=@system-service\n"));
+        assert!(unit.contains("StartLimitIntervalSec=0\n") && unit.contains("RestartSec=10\n"));
         assert!(unit.contains(r#"Environment="HOME=/home/a""#));
     }
 }

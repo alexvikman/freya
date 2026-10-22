@@ -26,10 +26,11 @@ use freya_server::http::Server;
 use freya_server::take_in::{Folders, take_in};
 use freya_server::tls::Identity;
 use freya_server::{
-    LOCAL_ADDRESS, PAIRING_KEY, Served, Service, ServiceConfig, body_limit, handler, settings,
+    LOCAL_ADDRESS, PAIRING_KEY, Served, Service, ServiceConfig, admit, handler, settings,
 };
 
 fn main() {
+    more_open_files();
     let mut address = LOCAL_ADDRESS.to_owned();
     let mut data = None;
     let mut forget_password = false;
@@ -81,8 +82,10 @@ fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> 
     // this certificate is this user's, and this one is not needed; another program holding the
     // address, of another user perhaps, is said so, and fails, so what starts the server tries
     // again later.
-    match std::net::TcpListener::bind(address) {
-        Ok(free) => drop(free),
+    // Held from here on, so no other server of the user takes it while this one opens the
+    // library.
+    let listener = match std::net::TcpListener::bind(address) {
+        Ok(listener) => listener,
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
             let ours = address
                 .parse()
@@ -96,7 +99,7 @@ fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> 
             ));
         }
         Err(e) => return Err(format!("could not listen on {address}: {e}")),
-    }
+    };
     Accounts::readable(&data.join("accounts.json"))?;
     let settings_file = data.join("settings.toml");
     let scrobbles = data.join("lastfm");
@@ -148,11 +151,11 @@ fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> 
         callback_port: freya_protocol::CALLBACK_PORT,
     };
     // TLS on this computer too, with the certificate the client here pins from this folder.
-    let server = Server::serve(
-        address,
+    let server = Server::serve_on(
+        listener,
         handler(served.clone()),
         Some(identity.server_config()?),
-        body_limit(served.clone()),
+        admit(served.clone()),
     )
     .map_err(|e| format!("could not listen on {address}: {e}"))?;
     let network = Network::follow(served, Arc::clone(&service), identity);
@@ -188,6 +191,36 @@ fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> 
     close();
     Ok(())
 }
+
+/// Raises how many files the server may hold open to as many as the system lets it: started by
+/// launchd or from Freya on macOS it may hold 256, which connections, the library and the
+/// music would use up.
+#[cfg(unix)]
+#[allow(
+    unsafe_code,
+    reason = "asks the system how many files may be open, and for more"
+)]
+fn more_open_files() {
+    // SAFETY: a limit read into, and given, a struct of the right kind.
+    unsafe {
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) != 0 {
+            return;
+        }
+        // macOS takes no more than OPEN_MAX, whatever the hard limit says.
+        let wanted = limit.rlim_max.min(10_240);
+        if limit.rlim_cur < wanted {
+            limit.rlim_cur = wanted;
+            libc::setrlimit(libc::RLIMIT_NOFILE, &limit);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn more_open_files() {}
 
 /// Forgets the owner's password in `data`, while no server answers at `address`: the code to
 /// end with.
@@ -269,7 +302,7 @@ fn listen(served: &Served, identity: &Identity) -> Option<(Server, Option<Discov
         ("0.0.0.0", NETWORK_PORT),
         handler(served.clone()),
         Some(tls),
-        body_limit(served.clone()),
+        admit(served.clone()),
     ) {
         Ok(server) => server,
         Err(e) => {

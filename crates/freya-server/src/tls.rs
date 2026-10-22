@@ -130,7 +130,12 @@ pub fn answers_as(address: std::net::SocketAddr, certificate: &[u8]) -> bool {
         let mut socket = std::net::TcpStream::connect_timeout(&address, wait)?;
         socket.set_read_timeout(Some(wait))?;
         socket.set_write_timeout(Some(wait))?;
+        // In all, not a read at a time: one sending a byte now and then is not waited for.
+        let started = std::time::Instant::now();
         while connection.is_handshaking() {
+            if started.elapsed() > wait * 2 {
+                return Ok(false);
+            }
             connection.complete_io(&mut socket)?;
         }
         Ok(true)
