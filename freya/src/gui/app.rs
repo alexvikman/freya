@@ -828,6 +828,20 @@ impl App {
     }
 
     /// Shows the library of the server on this computer again.
+    /// Logs this computer out of the server elsewhere the library is on: the server takes its
+    /// token back, this computer forgets it, and the library is this computer's again.
+    pub fn log_out(&mut self) {
+        let remote = self.library.remote();
+        self.server.log_out(remote.as_deref());
+        let pin = self.settings.server.as_ref().and_then(|s| s.pin());
+        if let (Some(pin), Some(file)) = (pin, settings::tokens_path()) {
+            let mut tokens = freya_client::Tokens::load(&file);
+            tokens.remove(&freya_client::token_key(&pin));
+            tokens.save(&file);
+        }
+        self.use_this_computer();
+    }
+
     pub fn use_this_computer(&mut self) {
         self.settings.server = None;
         self.settings.save();

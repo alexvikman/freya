@@ -157,6 +157,22 @@ pub struct DeviceInfo {
     pub id: String,
     pub name: String,
     pub created: std::time::SystemTime,
+    /// When it last called the server, to the hour; none when not since it was kept.
+    #[serde(default)]
+    pub used: Option<std::time::SystemTime>,
+    /// How it was connected; none for a device from before it was kept.
+    #[serde(default)]
+    pub joined: Option<Joined>,
     /// The device asking.
     pub this: bool,
+}
+
+/// How a device was connected to its user.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum Joined {
+    /// With the pairing key, on the server's own computer.
+    Paired,
+    /// By logging in, in the browser.
+    LoggedIn,
 }

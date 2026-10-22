@@ -473,6 +473,9 @@ fn only_a_device_with_a_token_is_answered() {
     mac.0.revoke(&pc_device).unwrap();
     assert!(pc.stats().is_err());
     assert!(mac.stats().is_ok());
+    // And logs itself out.
+    mac.0.log_out().unwrap();
+    assert!(mac.stats().is_err());
     drop(server);
     drop(service);
     let _ = std::fs::remove_dir_all(&dir);

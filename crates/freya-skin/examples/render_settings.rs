@@ -31,6 +31,11 @@ fn main() {
                 ("id".to_owned(), s(id)),
                 ("name".to_owned(), s(name)),
                 ("connected".to_owned(), s("2026-10-20")),
+                ("used".to_owned(), s("2026-10-22")),
+                (
+                    "joined".to_owned(),
+                    s(if this { "paired" } else { "logged-in" }),
+                ),
                 ("this".to_owned(), Value::Bool(this)),
             ]))
         };

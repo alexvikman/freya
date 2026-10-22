@@ -269,6 +269,17 @@ impl ServerPanel {
         self.password_waiting = true;
     }
 
+    /// Takes this computer's token on `remote` back.
+    pub fn log_out(&mut self, remote: Option<&Remote<Http>>) {
+        if let Some(remote) = remote
+            && let Err(e) = remote.0.log_out()
+        {
+            log::warn!("could not take this computer's token back: {e}");
+        }
+        self.account = None;
+        self.info = None;
+    }
+
     pub fn revoke(&mut self, remote: Option<&Remote<Http>>, device: &str) {
         let Some(remote) = remote else {
             return;
@@ -402,13 +413,25 @@ fn certificate(
 }
 
 fn device_row(device: &freya_protocol::DeviceInfo) -> Value {
-    let connected = jiff::Timestamp::try_from(device.created)
-        .map(|at| at.to_zoned(jiff::tz::TimeZone::system()).date().to_string())
-        .unwrap_or_default();
+    let date = |at: std::time::SystemTime| {
+        jiff::Timestamp::try_from(at)
+            .map(|at| at.to_zoned(jiff::tz::TimeZone::system()).date().to_string())
+            .unwrap_or_default()
+    };
+    let joined = match device.joined {
+        Some(freya_protocol::Joined::Paired) => "paired",
+        Some(freya_protocol::Joined::LoggedIn) => "logged-in",
+        None => "",
+    };
     Value::Struct(Struct::from_iter([
         ("id".to_owned(), string(&device.id)),
         ("name".to_owned(), string(&device.name)),
-        ("connected".to_owned(), string(connected)),
+        ("connected".to_owned(), string(date(device.created))),
+        (
+            "used".to_owned(),
+            string(device.used.map(date).unwrap_or_default()),
+        ),
+        ("joined".to_owned(), string(joined)),
         ("this".to_owned(), Value::Bool(device.this)),
     ]))
 }

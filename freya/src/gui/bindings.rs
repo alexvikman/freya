@@ -914,6 +914,7 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
             app.server.change_password(remote.as_deref());
         }),
     );
+    bind("Server", "log-out", Box::new(|app, _| app.log_out()));
     bind(
         "Server",
         "revoke",

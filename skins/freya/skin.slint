@@ -8110,15 +8110,26 @@ component SettingsView inherits Rectangle {
                     VerticalLayout {
                         alignment: center;
 
-                        TextButton {
-                            text: Server.has-password ? "Change Password…" : "Set a Password…";
-                            clicked => { Server.change-password(); }
+                        HorizontalLayout {
+                            spacing: 8px;
+
+                            TextButton {
+                                text: Server.has-password ? "Change Password…" : "Set a Password…";
+                                clicked => { Server.change-password(); }
+                            }
+                            if Server.remote: TextButton {
+                                text: "Log Out";
+                                clicked => { Server.log-out(); }
+                            }
                         }
                     }
                 }
                 for device in Server.devices: SettingsRow {
                     label: device.name + (device.this ? " (this computer)" : "");
-                    detail: "Connected " + device.connected;
+                    detail: (device.joined == "paired" ? "Paired on the server's computer " + device.connected
+                        : device.joined == "logged-in" ? "Logged in in the browser " + device.connected
+                        : "Connected " + device.connected)
+                        + (device.used != "" ? " · last used " + device.used : "");
 
                     if !device.this: VerticalLayout {
                         alignment: center;

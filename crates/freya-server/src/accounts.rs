@@ -20,7 +20,7 @@ use std::time::{Duration, Instant, SystemTime};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
-use freya_protocol::{AccountInfo, DeviceInfo};
+use freya_protocol::{AccountInfo, DeviceInfo, Joined};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 
@@ -30,6 +30,9 @@ const ROUNDS: u32 = 600_000;
 const WRONG_PASSWORD_WAIT: Duration = Duration::from_secs(1);
 /// The user a server starts with, who owns it.
 const OWNER: u32 = 1;
+/// How often when a device was last used is kept: no more than this, so calling the server
+/// does not write the accounts every time.
+const USED_EVERY: u64 = 60 * 60;
 /// How long a login's code may wait to be traded for a token, and a password page be used.
 const CODE_LASTS: Duration = Duration::from_secs(120);
 const TICKET_LASTS: Duration = Duration::from_secs(15 * 60);
@@ -67,6 +70,10 @@ struct Device {
     token: String,
     /// Seconds since 1970.
     created: u64,
+    #[serde(default)]
+    used: u64,
+    #[serde(default)]
+    joined: Option<Joined>,
 }
 
 /// A login's code, kept until traded for a token or out of date: who logged in, the challenge
@@ -155,28 +162,40 @@ impl Accounts {
         self.kept.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Who calls with `token`, if anyone.
+    /// Who calls with `token`, if anyone; noted as when the device was last used.
     pub fn caller(&self, token: &str) -> Option<Caller> {
         let hash = sha256(token.as_bytes());
-        self.kept()
-            .devices
-            .iter()
-            .find(|d| d.token == hash)
-            .map(|d| Caller {
-                user: d.user,
-                device: d.id.clone(),
-            })
+        let mut kept = self.kept();
+        let device = kept.devices.iter_mut().find(|d| d.token == hash)?;
+        let caller = Caller {
+            user: device.user,
+            device: device.id.clone(),
+        };
+        let now = now();
+        if now >= device.used + USED_EVERY {
+            device.used = now;
+            self.save(&kept);
+        }
+        Some(caller)
     }
 
     /// A token for a device named `name` of the owner, given the pairing key; none for
-    /// another key. The key is made anew either way.
+    /// another key. The key is made anew either way. A device of that name paired before is
+    /// this computer's too, pairing again: it goes, so the devices do not pile up.
     pub fn pair(&self, key: &str, name: &str) -> Option<String> {
         let right = {
             let pairing = self.pairing.lock().unwrap_or_else(|e| e.into_inner());
             pairing.as_deref() == Some(sha256(key.as_bytes()).as_str())
         };
         self.new_pairing_key();
-        right.then(|| self.add_device(OWNER, name))
+        if !right {
+            return None;
+        }
+        let name = device_name(name);
+        self.kept()
+            .devices
+            .retain(|d| !(d.joined == Some(Joined::Paired) && d.name == name));
+        Some(self.add_device(OWNER, &name, Joined::Paired))
     }
 
     /// The user `name` is, given their password; a wrong one holds the answer up.
@@ -239,7 +258,7 @@ impl Accounts {
         let fits = grant.until > Instant::now()
             && grant.redirect == redirect
             && challenge(verifier) == grant.challenge;
-        fits.then(|| self.add_device(grant.user, device))
+        fits.then(|| self.add_device(grant.user, device, Joined::LoggedIn))
     }
 
     /// A ticket that opens the password page of `caller`'s user; `local` when they call from
@@ -329,6 +348,9 @@ impl Accounts {
                     id: d.id.clone(),
                     name: d.name.clone(),
                     created: SystemTime::UNIX_EPOCH + Duration::from_secs(d.created),
+                    used: (d.used > 0)
+                        .then(|| SystemTime::UNIX_EPOCH + Duration::from_secs(d.used)),
+                    joined: d.joined,
                     this: d.id == caller.device,
                 })
                 .collect(),
@@ -348,16 +370,16 @@ impl Accounts {
         revoked
     }
 
-    fn add_device(&self, user: u32, name: &str) -> String {
+    fn add_device(&self, user: u32, name: &str, joined: Joined) -> String {
         let token = random_hex(32);
         let device = Device {
             id: random_hex(8),
             user,
-            name: name.chars().take(100).collect(),
+            name: device_name(name),
             token: sha256(token.as_bytes()),
-            created: SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .map_or(0, |d| d.as_secs()),
+            created: now(),
+            used: now(),
+            joined: Some(joined),
         };
         log::info!("a device was connected: {}", device.name);
         let mut kept = self.kept();
@@ -425,6 +447,18 @@ impl Password {
         )
         .is_ok()
     }
+}
+
+/// Seconds since 1970.
+fn now() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// A device's name as kept: its first 100 characters.
+fn device_name(name: &str) -> String {
+    name.chars().take(100).collect()
 }
 
 /// The name of the user the server runs as, for its owner.
@@ -521,7 +555,11 @@ mod tests {
         assert_eq!(accounts.pair("wrong", "Mac"), None);
         assert_eq!(accounts.pair(&key, "Mac"), None, "a key is used once");
         let key = std::fs::read_to_string(&pairing).unwrap();
+        let old = accounts.pair(&key, "Mac").unwrap();
+        // Pairing again takes the place of the device paired before.
+        let key = std::fs::read_to_string(&pairing).unwrap();
         let token = accounts.pair(&key, "Mac").unwrap();
+        assert_eq!(accounts.caller(&old), None);
         let mac = accounts.caller(&token).unwrap();
         assert_eq!(mac.user, OWNER);
         assert_eq!(accounts.caller("not a token"), None);

@@ -262,6 +262,8 @@ impl Convert for ServerDevice {
             id: field(&s, "id"),
             name: field(&s, "name"),
             connected: field(&s, "connected"),
+            used: field(&s, "used"),
+            joined: field(&s, "joined"),
             this: field(&s, "this"),
         })
     }
@@ -271,6 +273,8 @@ impl Convert for ServerDevice {
             ("id", self.id.to_value()),
             ("name", self.name.to_value()),
             ("connected", self.connected.to_value()),
+            ("used", self.used.to_value()),
+            ("joined", self.joined.to_value()),
             ("this", self.this.to_value()),
         ])
     }
@@ -1259,6 +1263,7 @@ skin_api! {
         Server."use-this-computer" => on_use_this_computer, invoke_use_this_computer();
         Server."change-password" => on_change_password, invoke_change_password();
         Server."revoke" => on_revoke, invoke_revoke(id: SharedString);
+        Server."log-out" => on_log_out, invoke_log_out();
         Server."set-network" => on_set_network, invoke_set_network(on: bool);
         Server."set-server-name" => on_set_server_name, invoke_set_server_name(name: SharedString);
         Server."set-autostart" => on_set_autostart, invoke_set_autostart(on: bool);

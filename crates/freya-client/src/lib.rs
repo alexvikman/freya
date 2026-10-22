@@ -480,6 +480,12 @@ impl Http {
         serde_json::from_value(json(answer)?).map_err(failed)
     }
 
+    /// Takes this device's own token back: it has to log in again.
+    pub fn log_out(&self) -> ApiResult<()> {
+        let answer = self.post("/account/log-out").send_empty().map_err(failed)?;
+        json(answer).map(drop)
+    }
+
     /// Takes the token of the account's device `device` back.
     pub fn revoke(&self, device: &str) -> ApiResult<()> {
         match self.send_json("/account/revoke", &serde_json::json!({ "device": device }))? {
@@ -927,6 +933,10 @@ impl Tokens {
 
     pub fn set(&mut self, address: &str, token: &str) {
         self.0.insert(address.to_owned(), token.to_owned());
+    }
+
+    pub fn remove(&mut self, address: &str) {
+        self.0.remove(address);
     }
 
     pub fn save(&self, file: &Path) {

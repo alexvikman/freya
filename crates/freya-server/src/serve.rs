@@ -24,7 +24,7 @@
 //!   the code the login page gave (see [`crate::pages`]).
 //! - `GET /account`: the caller's account and devices; `POST /account/password-page`: a
 //!   ticket for the page the password is changed on, `{"ticket"}`; `POST /account/revoke`:
-//!   `{"device"}`.
+//!   `{"device"}`; `POST /account/log-out`: the caller's own token taken back.
 //!
 //! Every request but `/version`, `/pair` and `/token` carries a device's token, as
 //! `Authorization: Bearer ...`, or is refused. The pages a browser opens, under
@@ -458,6 +458,10 @@ fn account(
             200,
             &serde_json::json!({ "ticket": accounts.ticket(caller, local) }),
         ),
+        ("POST", "/account/log-out") => {
+            accounts.revoke(caller, &caller.device);
+            Response::json(200, &serde_json::Value::Null)
+        }
         ("POST", "/account/revoke") => match serde_json::from_slice::<Revoked>(&request.body) {
             Ok(revoked) if accounts.revoke(caller, &revoked.device) => {
                 Response::json(200, &serde_json::Value::Null)
