@@ -62,16 +62,21 @@ files, and with them Freya's.
   with a code that lasts two minutes and is taken once; only the client that sent the challenge
   trades it, with the secret it was made from, for tokens.
 - **Passwords**: PBKDF2-HMAC-SHA256, 600,000 rounds, salted. A wrong one holds the answer up a
-  second. Tries are counted before a password is checked, per user from a network, per network
-  (IPv6 by its /64), and per user from anywhere (20): five are free, then none is tried for
-  30 seconds, twice as long after each, up to 15 minutes, forgotten a day after. A user is not
-  held up where they logged in before. Whether a name exists does not show: a made-up one is
-  counted, waited for and checked against a hash of nothing, as long.
-- **The password** is changed on the server's page, opened with a start that works once; the
-  browser that came with it is given an HttpOnly, SameSite=Strict cookie, which alone opens the
-  page after. A password once set is asked for to change it; changing it may log the other
-  devices out. One forgotten is forgotten on the server's computer with the server stopped:
-  `freya-server --forget-password`.
+  second. Tries are counted before a password is checked: per user from a network, per network
+  (IPv6 by its /64, link-local addresses one by one), and per user from anywhere (20). Five are
+  free, then none is tried for 30 seconds, twice as long after each, up to 15 minutes,
+  forgotten a day after. Where a user logged in before, only their own tries there count, from
+  their address and their network (20), so a guesser elsewhere never holds them up. A name
+  counts by its first 128 characters, and whether it exists does not show: a made-up one is
+  counted, waited for and checked against a hash of nothing, as long. The table of tries keeps
+  running waits, and with no room takes no new try, but a user's at home.
+- **The password** is changed on the server's page, opened with a start that works once, through
+  a file only the user can read, so the start is in no command line; the browser that came
+  with it is given an HttpOnly, SameSite=Strict cookie, which alone opens the page after. A
+  password once set is asked for to change it; changing it logs the other devices out unless
+  the user unticks it. One forgotten is forgotten on the server's computer with the server
+  stopped, `freya-server --forget-password`, which logs out the devices that logged in with it.
+  The login page is opened through such a file too, its state in no command line.
 - **The pages** run no script, cannot be framed, and take a form only from their own origin;
   the proxy sets these itself, whatever a server sends.
 
@@ -82,12 +87,14 @@ files, and with them Freya's.
   logged out or revoked is refused at once, as each call looks it up.
 - **Refresh tokens** renew them, once: each renewal gives a new one. One used before, coming
   again, was copied, and the device is logged out. A renewal whose answer was lost may be asked
-  again once, for two minutes.
+  again once, within a day, so a computer that slept through it is not logged out.
 - **On the client**: refresh tokens are kept in Windows' Credential Manager and Linux's Secret
   Service, else in a file only the user reads (0600); on macOS in that file until Freya is
   signed with a Developer ID, as an ad hoc signature changes with each version and the
   Keychain would ask for the user's password after every update. Access tokens live in memory.
-  Renewals are one at a time, ahead of the end by the clock, and again after a 401.
+  Renewals are one at a time, ahead of the end by the clock, and again after a 401. A token's
+  lifetime is taken as a day at most, whatever a server says. A token kept in the file when the
+  keychain could not take it removes the keychain's old one.
 
 ## Roles
 
@@ -95,16 +102,21 @@ An **admin** keeps the server. A **listener** may only make the calls
 `freya_protocol::LISTENER_CALLS` names: reading and playing the library everyone shares. A call
 not named there is refused, so one added later is too until named. Plays, favourites,
 playlists and Last.fm are the owner's until each user has their own, so a listener has none,
-and hears only how the shared library goes, not where its folders are. Only a paired admin
-stops the server.
+and hears only how the shared library goes, not the folders a scan looks in. A listener does
+see the tracks' paths, which `/audio` is asked by, and with them where the music is. Only a
+paired admin stops the server.
 
 ## The server under load
 
 Nobody can wear it out before logging in:
 
-- at most 128 connections, 16 from one address;
-- a request's head within 10 seconds, its body at 32 KB a second at least, an answer taken
-  within 30, and 15 seconds' wait for the next request;
+- at most 128 connections of strangers, 16 from one address, on each of its two listeners: a
+  connection that sent a request with a valid token is a known device's, and strangers' do
+  not crowd it out; 512 in all;
+- the TLS handshake and a request's head within 10 seconds, its body at 32 KB a second at
+  least, an answer taken within 30 seconds and a second more for each 32 KB, each in all,
+  inside TLS too, and 15 seconds' wait for the next request;
+- as many open files as the system allows, not the 256 macOS gives an agent;
 - bodies as large as the route and caller allow, decided before any of it is read: 16 KB
   without a valid token, 8 MB for a call, 64 MB for an admin's picture; read as they come;
 - one `Content-Length`, in digits, and no chunked requests;
@@ -113,12 +125,18 @@ Nobody can wear it out before logging in:
 
 ## Files
 
-- `/audio` and covers serve only regular files within the music's folders, after links: a link
-  put in a shared music folder, pointing at the server's key, is not followed out.
+- `/audio` serves only a regular file within the music's folders, as the system says of the
+  file opened itself (`F_GETPATH`, `/proc/self/fd`, `GetFinalPathNameByHandleW`), so a link
+  swapped in between a check and the opening is caught; it is opened without waiting, so a
+  FIFO holds nothing up. A cover is read only for a track of the library, and its image only
+  within the track's folder, after links.
+- A scan follows no link out of the folders it walks, so one put in a shared music folder does
+  not bring the rest of the computer into the library.
 - The server's folder holds `accounts.json`, `pairing.key`, `tls-key.pk8`,
   `tls-certificate.der` and `server.log`, all 0600, written as new files and renamed into place.
   Started at login, the server makes files for the user alone (launchd's `Umask`, systemd's
-  `UMask=0077`); on Linux its unit gains no privileges and is narrowed by seccomp.
+  `UMask=0077`); on Linux its unit gains no privileges, and seccomp lets it make only a
+  service's system calls; it retries every ten seconds, never giving up.
 - Accounts, the certificate or the key that cannot be read stop the server rather than being
   made anew, which would lose the users or break every device's pin.
 - No secret is logged; names lose control characters before they are.
@@ -126,10 +144,14 @@ Nobody can wear it out before logging in:
 ## A client and a server it may not trust
 
 - A library on another computer is always streamed through its server: a path it names is
-  never looked for on the client, where it could name a local file or a Windows share.
+  never looked for on the client, where it could name a local file or a Windows share. Up Next
+  is restored only for the library it was saved from, and emptied when another is chosen.
+- A stream a server elsewhere names is not played when it is on this computer or its network.
 - What a server sends is bounded: 1 MB for small answers and each event line, 32 MB for a
-  picture, 512 MB for the library's calls; pictures are decoded within 12,000 pixels a side
-  and 256 MB.
+  picture, 512 MB for the library's calls, read straight into their types; every picture is
+  decoded within 12,000 pixels a side and 256 MB.
+- A login's tokens go only with the server that gave them, never to one chosen meanwhile.
+- What answers on this computer's address without the user's certificate is given nothing.
 - The picture cache keeps and gives only bytes whose SHA-256 is their name.
 - The fingerprint shown is the certificate's the client pinned.
 - Only HTTPS pages, and Freya's own, are opened, in plain URL characters.
@@ -142,6 +164,10 @@ Nobody can wear it out before logging in:
   password manager may offer one server's saved password on another's page. A server is
   logged in to only once its connection code proved it, and its pages run no script, but a
   user who chooses to fill in the password there gives it to that server.
+- **A server elsewhere's settings**, its fanart.tv key among them, are kept in the client's own
+  settings file while it is shown, for the settings page; an admin's device only.
+- **A host name on the network**, `printer.example` resolving to a private address, is not
+  caught when a server elsewhere names a stream there: only addresses and local names are.
 - **A server reached from the internet** has not been the goal so far: discovery and the
   connection code assume a home network, and the server's own certificate is not one browsers
   trust.
@@ -156,7 +182,7 @@ Nobody can wear it out before logging in:
 - Every commit and release is scanned for secrets with gitleaks; dependencies are checked with
   cargo-deny and cargo-vet (see [DEPENDENCIES.md](DEPENDENCIES.md)).
 - The milestones were each reviewed by an automatic security review of the commits, and the
-  whole by independent reviews: the server's HTTP and TLS, the login and tokens, and what the
-  client trusts.
+  whole twice by independent reviews: the server's HTTP and TLS, the login and tokens, and what
+  the client trusts.
 
 Found something? Write to the maintainers privately, not in a public issue.
