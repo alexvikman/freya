@@ -239,13 +239,17 @@ fn answer(served: &Served, request: Request) -> Response {
                 Ok(asked) => asked,
                 Err(e) => return Response::error(400, e),
             };
+            // Only a file within the music's folders, after links, as for `/audio`.
+            if !is_music_file(served, &asked.track) {
+                return Response::error(404, "no cover");
+            }
             match library.album_art(&asked.track, asked.largest.min(LARGEST_COVER)) {
                 Ok(Some(bytes)) => Response::bytes(200, "image/jpeg", bytes),
                 Ok(None) => Response::error(404, "no cover"),
                 Err(e) => Response::error(500, e),
             }
         }
-        ("GET", "/audio") => audio(library, &request),
+        ("GET", "/audio") => audio(served, &request),
         ("GET", "/events") => {
             let Some(server) = &served.server else {
                 return Response::error(404, "no events here");
@@ -308,8 +312,22 @@ fn listener_may(request: &Request, path: &str) -> bool {
     }
 }
 
+/// Whether `path` is a regular file within the music's folders, after links; anything for a
+/// server without settings, as in tests.
+fn is_music_file(served: &Served, path: &std::path::Path) -> bool {
+    match served
+        .server
+        .as_ref()
+        .and_then(|server| server.settings().ok())
+    {
+        Some(settings) => crate::folders::music_file(path, &settings.library_folders).is_some(),
+        None => true,
+    }
+}
+
 /// The file of the library's track `?path=`, whole or the part `Range` asks for.
-fn audio(library: &dyn LibraryApi, request: &Request) -> Response {
+fn audio(served: &Served, request: &Request) -> Response {
+    let library = served.library.as_ref();
     let Some(path) = request
         .query_value("path")
         .and_then(percent_decode)
@@ -322,8 +340,23 @@ fn audio(library: &dyn LibraryApi, request: &Request) -> Response {
         Ok(false) => return Response::error(404, "no such track"),
         Err(e) => return Response::error(500, e),
     }
-    let mut file = match std::fs::File::open(&path) {
-        Ok(file) => file,
+    // Only a file within the music's folders, after links; a server without settings, as in
+    // tests, has none to look in.
+    let folders = served
+        .server
+        .as_ref()
+        .and_then(|server| server.settings().ok())
+        .map(|settings| settings.library_folders);
+    let real = match folders {
+        Some(folders) => match crate::folders::music_file(&path, &folders) {
+            Some(real) => real,
+            None => return Response::error(404, "no such track"),
+        },
+        None => path.clone(),
+    };
+    let mut file = match std::fs::File::open(&real) {
+        Ok(file) if crate::folders::is_same_file(&file, &real) => file,
+        Ok(_) => return Response::error(404, "no such track"),
         Err(e) => return Response::error(404, e),
     };
     let length = match file.metadata() {

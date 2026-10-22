@@ -32,14 +32,28 @@ pub struct Identity {
 }
 
 impl Identity {
-    /// The identity kept in `dir`, made there the first time.
+    /// The identity kept in `dir`, made there the first time: when neither file is there. One
+    /// there that cannot be read is said so, not made anew, which would break every device's
+    /// pin and teach its user to trust a certificate that changed.
     pub fn load_or_make(dir: &Path) -> Result<Self, String> {
         let (certificate, key) = (dir.join(CERTIFICATE_FILE), dir.join(KEY_FILE));
-        if let (Ok(cert), Ok(key)) = (std::fs::read(&certificate), std::fs::read(&key)) {
-            return Ok(Self {
-                certificate: cert,
-                key,
-            });
+        match (std::fs::read(&certificate), std::fs::read(&key)) {
+            (Ok(cert), Ok(key)) => {
+                return Ok(Self {
+                    certificate: cert,
+                    key,
+                });
+            }
+            (Err(a), Err(b))
+                if a.kind() == std::io::ErrorKind::NotFound
+                    && b.kind() == std::io::ErrorKind::NotFound => {}
+            _ => {
+                return Err(format!(
+                    "the server's certificate or key in {} cannot be read; with both moved away, \
+                     it makes new ones, which every device then proves anew",
+                    dir.display()
+                ));
+            }
         }
         let identity = Self::make()?;
         write_private(&key, &identity.key).map_err(|e| e.to_string())?;
@@ -298,6 +312,25 @@ fn der(tag: u8, content: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_identity_is_not_made_anew_over_one_unreadable() {
+        let dir = std::env::temp_dir().join(format!("freya-identity-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let made = Identity::load_or_make(&dir).unwrap();
+        assert_eq!(
+            Identity::load_or_make(&dir).unwrap().certificate,
+            made.certificate
+        );
+        std::fs::remove_file(dir.join(KEY_FILE)).unwrap();
+        assert!(Identity::load_or_make(&dir).is_err(), "one of two is gone");
+        assert_eq!(
+            std::fs::read(dir.join(CERTIFICATE_FILE)).unwrap(),
+            made.certificate
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn encodes_lengths_as_der_does() {

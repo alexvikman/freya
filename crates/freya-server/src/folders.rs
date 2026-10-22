@@ -1,6 +1,38 @@
-//! The server's folders, for a client on another computer to choose the music's folders from.
+//! The server's folders, for a client on another computer to choose the music's folders from;
+//! and whether a file is the music's at all.
 
 use std::path::{Path, PathBuf};
+
+/// The music file at `path` as it is after links: a regular file within one of `folders`, as
+/// they are after links too. None for anything else, such as a link from a music folder to a
+/// file outside them all, which someone who can write in a shared folder might make.
+pub fn music_file(path: &Path, folders: &[PathBuf]) -> Option<PathBuf> {
+    let real = std::fs::canonicalize(path).ok()?;
+    if !std::fs::metadata(&real).ok()?.is_file() {
+        return None;
+    }
+    folders
+        .iter()
+        .filter_map(|folder| std::fs::canonicalize(folder).ok())
+        .any(|folder| real.starts_with(folder))
+        .then_some(real)
+}
+
+/// Whether `file`, opened, is the file at `real`: not one put in its place in between.
+pub fn is_same_file(file: &std::fs::File, real: &Path) -> bool {
+    let (Ok(opened), Ok(there)) = (file.metadata(), std::fs::metadata(real)) else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        opened.is_file() && opened.dev() == there.dev() && opened.ino() == there.ino()
+    }
+    #[cfg(not(unix))]
+    {
+        opened.is_file() && opened.len() == there.len()
+    }
+}
 
 use freya_protocol::FolderListing;
 

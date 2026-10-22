@@ -97,6 +97,7 @@ fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> 
         }
         Err(e) => return Err(format!("could not listen on {address}: {e}")),
     }
+    Accounts::readable(&data.join("accounts.json"))?;
     let settings_file = data.join("settings.toml");
     let scrobbles = data.join("lastfm");
     if let Some(freya) = freya {
@@ -290,8 +291,21 @@ fn listen(served: &Served, identity: &Identity) -> Option<(Server, Option<Discov
 fn start_log(file: &Path) {
     let env = env_logger::Env::default().default_filter_or("info");
     let mut builder = env_logger::Builder::from_env(env);
-    match std::fs::File::create(file) {
+    // The user's alone, as the rest of the server's folder.
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    match options.open(file) {
         Ok(file) => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+            }
             builder.target(env_logger::Target::Pipe(Box::new(file)));
         }
         Err(e) => eprintln!("freya-server: could not log to {}: {e}", file.display()),

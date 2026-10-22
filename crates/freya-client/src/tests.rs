@@ -361,6 +361,7 @@ fn only_a_device_with_a_token_is_answered() {
     let config = ServiceConfig {
         settings: ServerSettings {
             watch_folders: false,
+            library_folders: vec![dir.join("music")],
             ..ServerSettings::default()
         },
         ..ServiceConfig::default()

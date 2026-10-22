@@ -333,6 +333,21 @@ impl Accounts {
         accounts
     }
 
+    /// Whether the accounts in `file` can be read, when there are any: a server does not
+    /// start without them, rather than start anew and lose its users, devices and secret.
+    pub fn readable(file: &Path) -> Result<(), String> {
+        match std::fs::read_to_string(file) {
+            Ok(text) => serde_json::from_str::<Kept>(&text).map(drop).map_err(|e| {
+                format!(
+                    "the accounts in {} cannot be read ({e}); the server does not start without them",
+                    file.display()
+                )
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("the accounts in {} cannot be read: {e}", file.display())),
+        }
+    }
+
     fn kept(&self) -> MutexGuard<'_, Kept> {
         self.kept.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -457,7 +472,8 @@ impl Accounts {
 
     /// A user named `name` with the role `role`, and the password they start with: their id.
     pub fn add_user(&self, name: &str, role: Role, password: &str) -> Result<u32, String> {
-        let name = name.trim();
+        let name: String = name.trim().chars().filter(|c| !c.is_control()).collect();
+        let name = name.as_str();
         if password.chars().count() < SHORTEST_PASSWORD {
             return Err(format!(
                 "A password needs at least {SHORTEST_PASSWORD} characters."
@@ -862,9 +878,10 @@ fn now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-/// A device's name as kept: its first 100 characters.
+/// A device's name as kept: its first 100 characters, without control characters, which
+/// would forge lines in the log.
 fn device_name(name: &str) -> String {
-    name.chars().take(100).collect()
+    name.chars().filter(|c| !c.is_control()).take(100).collect()
 }
 
 /// The name of the user the server runs as, for its owner.
@@ -921,8 +938,13 @@ pub fn write_private(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
     }
     let partial = file.with_extension("partial");
+    // A new file, never one already there, nor through a link put there in its place.
+    match std::fs::remove_file(&partial) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -1200,6 +1222,29 @@ mod tests {
             assert!(accounts.may_ask_proof(from));
         }
         assert!(!accounts.may_ask_proof(from));
+    }
+
+    #[test]
+    fn unreadable_accounts_are_not_started_anew() {
+        let dir = std::env::temp_dir().join(format!("freya-accounts-read-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("accounts.json");
+        assert!(Accounts::readable(&file).is_ok(), "none yet");
+        std::fs::write(&file, b"{ damaged").unwrap();
+        assert!(Accounts::readable(&file).is_err());
+        // Written anew, never through a link put where it writes first.
+        #[cfg(unix)]
+        {
+            let elsewhere = dir.join("elsewhere");
+            std::fs::write(&elsewhere, b"untouched").unwrap();
+            std::os::unix::fs::symlink(&elsewhere, dir.join("accounts.partial")).unwrap();
+            write_private(&file, b"{}").unwrap();
+            assert_eq!(std::fs::read(&elsewhere).unwrap(), b"untouched");
+            assert_eq!(std::fs::read(&file).unwrap(), b"{}");
+        }
+        assert_eq!(device_name("PC\nforged line"), "PCforged line");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
