@@ -92,7 +92,8 @@ fn served() -> (Served, Arc<Accounts>) {
 /// A request a stranger might send: to a route that is there, or near one, with headers and a
 /// body made up, many of them wrong.
 fn stranger(random: &mut Random) -> Request {
-    const ROUTES: [&str; 16] = [
+    const ROUTES: [&str; 17] = [
+        "/calls",
         "/call/stats",
         "/call/set_settings",
         "/call/",

@@ -5,6 +5,7 @@
 //! [`freya_library::search`]); the more tracks, the higher among equals.
 
 use std::cmp::Reverse;
+use std::time::Instant;
 
 use freya_library::Entry;
 use freya_library::search::{Rank, fold, rank};
@@ -261,6 +262,12 @@ impl LibraryPanel {
 
     /// A few of the best matches of `text`, for under the search field.
     pub fn suggest(&mut self, text: &str) {
+        if self.suggested.elapsed() < self.typing_pause() {
+            self.typed_suggest = Some(text.to_owned());
+            return;
+        }
+        self.typed_suggest = None;
+        self.suggested = Instant::now();
         let found = self.find(text, SUGGESTED, SUGGESTED);
         // Each kind's in turn, by how well they match: the best of all first.
         let mut ranked: Vec<(Rank, usize, Item)> = Vec::new();
@@ -361,6 +368,24 @@ impl LibraryPanel {
             .collect();
         if before != self.found_playlists && *self.level() == Level::Playlists {
             self.stale = true;
+        }
+        // What each playlist's picture is made from, asked for at once.
+        if let Some(db) = &self.db {
+            let mut each = Vec::new();
+            for (name, entries, _) in playlists {
+                if self
+                    .playlist_sources
+                    .contains_key(&Self::playlist_key(name))
+                {
+                    continue;
+                }
+                each.push(("playlist_info", freya_protocol::args(&(name,))));
+                for entry in &entries[..entries.len().min(40)] {
+                    let start = entry.part.map_or(std::time::Duration::ZERO, |p| p.start);
+                    each.push(("track_at", freya_protocol::args(&(&entry.path, start))));
+                }
+            }
+            db.prefetch(&each);
         }
         for (name, entries, _) in playlists {
             let key = Self::playlist_key(name);

@@ -237,6 +237,47 @@ fn the_server_is_told_what_to_do_and_tells_what_happens() {
 }
 
 #[test]
+fn calls_asked_at_once_are_answered_by_the_calls_that_follow() {
+    let (server, remote, local, dir) = served("at-once");
+    let track = local.all_tracks().unwrap()[0].clone();
+    remote.prefetch(&[
+        ("stats", freya_protocol::args(&())),
+        // Asked twice, it answers twice.
+        ("stats", freya_protocol::args(&())),
+        ("all_tracks", freya_protocol::args(&())),
+        (
+            "album_tracks",
+            freya_protocol::args(&(None::<&str>, Some("Sines"))),
+        ),
+        (
+            "track_at",
+            freya_protocol::args(&(&track.path, std::time::Duration::ZERO)),
+        ),
+        // Not one to ask at once, and not a call: neither keeps the others from coming.
+        (
+            "set_artist_edit",
+            freya_protocol::args(&("Freya", ArtistEdit::default())),
+        ),
+        ("no_such_call", freya_protocol::args(&())),
+    ]);
+    // With the server gone, they are answered as they were.
+    drop(server);
+    assert_eq!(remote.stats().unwrap(), local.stats().unwrap());
+    assert_eq!(remote.stats().unwrap(), local.stats().unwrap());
+    assert!(remote.stats().is_err());
+    assert_eq!(remote.all_tracks().unwrap(), local.all_tracks().unwrap());
+    assert_eq!(
+        remote
+            .track_at(&track.path, std::time::Duration::ZERO)
+            .unwrap(),
+        Some(track)
+    );
+    assert!(remote.album_tracks(None, Some("Sines")).is_ok());
+    assert!(remote.artist_edits().is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn answers_kept_are_never_out_of_date() {
     let dir = std::env::temp_dir().join(format!("freya-client-kept-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -606,6 +647,11 @@ fn only_a_device_with_a_token_is_answered() {
     );
     let at = std::time::SystemTime::now();
     assert!(phone.set_artist_favorite("Sine", true, at).is_err());
+    // Asked at once with what it may ask, it is still refused what it may not.
+    phone.prefetch(&[
+        ("most_played", freya_protocol::args(&(10usize,))),
+        ("stats", freya_protocol::args(&())),
+    ]);
     assert!(phone.most_played(10).is_err());
     assert!(phone.playlists().is_err());
     assert!(phone.save_playlist("Kim's", &[]).is_err());
@@ -1023,6 +1069,77 @@ fn measure_a_real_library() {
         .artist_summary(artist.as_deref(), 3));
     measure!("album_favorites", |api| api.album_favorites());
     measure!("artist_favorites", |api| api.artist_favorites());
+
+    // A page: an artist's, as the window reads it, one call after another or asked at once;
+    // and a playlist's 200 tracks, looked up.
+    let name = artist.clone().unwrap_or_default();
+    let page = |remote: &dyn LibraryApi| {
+        let artist = Some(name.as_str());
+        remote.albums(artist).unwrap();
+        remote.artist_summary(artist, 3).unwrap();
+        remote.artist_popular(artist, 10).unwrap();
+        remote.artist_mbid(artist).unwrap();
+        remote.searched_artist_id(&name).unwrap();
+        remote.artist_article(&name).unwrap();
+        remote.artist_text(&name).unwrap();
+    };
+    let artist_page_calls = || {
+        let artist = Some(name.as_str());
+        vec![
+            ("albums", freya_protocol::args(&(artist,))),
+            ("artist_summary", freya_protocol::args(&(artist, 3usize))),
+            ("artist_popular", freya_protocol::args(&(artist, 10usize))),
+            ("artist_mbid", freya_protocol::args(&(artist,))),
+            (
+                "searched_artist_id",
+                freya_protocol::args(&(name.as_str(),)),
+            ),
+            ("artist_article", freya_protocol::args(&(name.as_str(),))),
+            ("artist_text", freya_protocol::args(&(name.as_str(),))),
+        ]
+    };
+    let started = Instant::now();
+    page(&*remote);
+    let one_by_one = started.elapsed();
+    let started = Instant::now();
+    remote.prefetch(&artist_page_calls());
+    page(&*remote);
+    println!(
+        "an artist's page: {:.1} ms a call at a time, {:.1} ms asked at once",
+        one_by_one.as_secs_f64() * 1000.0,
+        started.elapsed().as_secs_f64() * 1000.0
+    );
+    let listed: Vec<_> = tracks
+        .iter()
+        .step_by(tracks.len() / 200)
+        .take(200)
+        .collect();
+    let started = Instant::now();
+    for track in &listed {
+        remote.track_at(&track.path, Duration::ZERO).unwrap();
+    }
+    let one_by_one = started.elapsed();
+    let started = Instant::now();
+    let each: Vec<_> = listed
+        .iter()
+        .map(|t| {
+            (
+                "track_at",
+                freya_protocol::args(&(&t.path, Duration::from_millis(1))),
+            )
+        })
+        .collect();
+    remote.prefetch(&each);
+    for track in &listed {
+        remote
+            .track_at(&track.path, Duration::from_millis(1))
+            .unwrap();
+    }
+    println!(
+        "a playlist's 200 tracks: {:.1} ms a call at a time, {:.1} ms asked at once",
+        one_by_one.as_secs_f64() * 1000.0,
+        started.elapsed().as_secs_f64() * 1000.0
+    );
 
     // A small call while another client asks for the whole library, again and again.
     let busy = Arc::new(std::sync::atomic::AtomicBool::new(true));

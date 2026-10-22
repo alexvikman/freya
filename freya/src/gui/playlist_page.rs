@@ -274,6 +274,12 @@ impl LibraryPanel {
         let Some(db) = &self.db else {
             return HashMap::new();
         };
+        let at = |entry: &Entry| entry.part.map_or(Duration::ZERO, |p| p.start);
+        let each: Vec<_> = entries
+            .iter()
+            .map(|entry| ("track_at", freya_protocol::args(&(&entry.path, at(entry)))))
+            .collect();
+        db.prefetch(&each);
         let mut known = HashMap::new();
         for entry in entries {
             if known.contains_key(&entry.path) {

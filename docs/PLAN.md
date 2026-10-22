@@ -228,7 +228,7 @@ what the hardening made: answers per user and role, nothing compressed that carr
 | **P1** ✓ | **Measuring**: the rig for the library's calls, covers, the time to the first sound, seeking and the gap between tracks, at 0, 2 and 10 ms each way; the client logs every call made on the UI thread and how long it waited | Each number below has a before |
 | **P2** ✓ | **The server answers at once**: answers serialized straight to bytes; gzip for large answers; readers that do not wait for each other (a pool of SQLite connections), SQLite tuned (statement cache, cache, memory-mapped reads); a whole answer in one write, audio in 64 KB writes, a socket's deadline set only when it changes; connections and the event stream kept open minutes for known devices | `all_tracks` in under a third of the time and bytes |
 | **P3** ✓ | **Nothing fetched twice**: the library has a generation, bumped by every change; answers carry it as an ETag and a client that has them gets 304 with no body; the client keeps the answers in memory and the whole-library ones on disk, so it shows the library at once on start and checks it after; favourites and edits kept until they change; a scan's progress reloads the view at most every few seconds | Going back to a view costs one round trip without a body; the library shows before the server answers |
-| **P4** | **Fewer round trips**: several calls in one request; a playlist's tracks in one call; an artist's page, a genre's page and search each one call on the server, search waiting for a pause in typing; no call per artist for its picture | A page is one round trip; a keystroke at most one |
+| **P4** ✓ | **Fewer round trips**: several calls in one request; a playlist's tracks in one call; an artist's page, a genre's page and search each one call on the server, search waiting for a pause in typing; no call per artist for its picture | A page is one round trip; a keystroke at most one |
 | **P5** | **The window never waits**: every call to the server made on a worker, its answer applied when it comes, an older one dropped; connecting and renewing tokens off the UI thread too | No call on the UI thread in the log; scrolling stays smooth with 100 ms each way |
 | **P6** | **Pictures**: thumbnails made and kept by the server in the sizes the grid asks for; several fetched at once, the ones in view first; the cover of what plays from what the scan kept instead of read from the file each time | 60 covers at 10 ms each way in under 0.2 s |
 | **P7** | **Sound**: the next track opened and its first part fetched before the current ends, so tracks follow without a gap; a first part small enough to start at once, later ones larger; MP3s sought by estimate first; a part no longer needed given up; the audio connection kept warm | The first sound in two round trips and a little; no gap between tracks at 10 ms each way |
@@ -282,6 +282,18 @@ logging out forgets them, on disk too. `all_tracks` asked again at 10 ms each wa
 scan reads rows and pictures anew every 3 s rather than every second. Not done here: the
 library shown before the server answers, which needs the calls off the window's thread
 (P5).
+
+#### P4
+
+`/calls` answers many reading calls in one request, each from what the server keeps, with
+no body for those the client has; the client asks with `prefetch` before a view, a page, a
+playlist's pictures or its tracks are read, and each call that follows is answered from it
+once, within two seconds, also without the server's events. At 10 ms each way an artist's
+page went from 161–184 ms to 23–26 ms, a playlist's 200 tracks from 4.5–5.0 s to 24 ms. The
+artists' pictures are made from one `all_albums`, not `albums` an artist. Search and
+suggestions against a server elsewhere wait for a pause of 150 ms in the typing, a key after
+a pause answered at once. The window, started against its own server: 475 calls in its first
+20 seconds before, now 10 that reach the server, two of them six calls each.
 
 ### U7: the hologram (from 2026-10-17)
 

@@ -345,11 +345,15 @@ pub struct Http {
 /// too, between runs, so a client started again is told it has it rather than sent it.
 const KEPT_LIMIT: usize = 128 * 1024 * 1024;
 const KEPT_ON_DISK_FROM: usize = 16 * 1024;
+/// How long an answer asked for with others at once is taken as current, once, by the call
+/// that follows, without the server's telling of changes.
+const FRESH_FOR: Duration = Duration::from_secs(2);
 
 /// Answers to the calls that only read the library ([`freya_protocol::CACHED_CALLS`]), each
 /// with the server's tag for it. One is given again without asking while the server tells
-/// this client of every change and none came since it was asked; else it is asked for with
-/// its tag, and the server answers with no more than that when it is the same.
+/// this client of every change and none came since it was asked, or, asked for with others
+/// at once, once within [`FRESH_FOR`]; else it is asked for with its tag, and the server
+/// answers with no more than that when it is the same.
 #[derive(Default)]
 struct Kept {
     answers: HashMap<(String, Vec<u8>), KeptAnswer>,
@@ -366,15 +370,32 @@ struct Kept {
 struct KeptAnswer {
     tag: String,
     json: Vec<u8>,
-    /// Whether it is the server's answer still, as far as this client was told.
+    /// Whether it is the server's answer still, as far as this client was told, and when the
+    /// server last said it was.
     current: bool,
+    fetched: Instant,
+    /// How many times it was asked for with others at once, for as many calls that follow to
+    /// take.
+    lent: u32,
 }
 
 impl Kept {
-    /// The answer to `call`, when it is known to be current.
-    fn current(&self, call: &(String, Vec<u8>)) -> Option<Vec<u8>> {
-        let kept = self.answers.get(call)?;
-        (self.told && kept.current).then(|| kept.json.clone())
+    /// The answer to `call`, when it is known to be current: as the server tells, or asked
+    /// for at once just now, which only the first call takes.
+    fn current(&mut self, call: &(String, Vec<u8>)) -> Option<Vec<u8>> {
+        let told = self.told;
+        let kept = self.answers.get_mut(call)?;
+        let lent = kept.lent > 0 && kept.fetched.elapsed() < FRESH_FOR;
+        kept.lent = kept.lent.saturating_sub(1);
+        (kept.current && (told || lent)).then(|| kept.json.clone())
+    }
+
+    /// Notes that the answer to `call` was asked for at once with others, `times`, for as
+    /// many calls that follow.
+    fn lend(&mut self, call: &(String, Vec<u8>), times: u32) {
+        if let Some(kept) = self.answers.get_mut(call) {
+            kept.lent += times;
+        }
     }
 
     /// The tag of the answer kept for `call`, from memory, or from disk into memory.
@@ -413,7 +434,10 @@ impl Kept {
     fn confirmed(&mut self, call: &(String, Vec<u8>), asked: u64) -> Option<Vec<u8>> {
         let current = self.changes == asked;
         let kept = self.answers.get_mut(call)?;
-        kept.current |= current;
+        if current {
+            kept.current = true;
+            kept.fetched = Instant::now();
+        }
         Some(kept.json.clone())
     }
 
@@ -449,7 +473,17 @@ impl Kept {
             self.bytes = self.answers.iter().map(|(c, k)| size(c, &k.json)).sum();
         }
         self.bytes += size(&call, &json);
-        self.answers.insert(call, KeptAnswer { tag, json, current });
+        let fetched = Instant::now();
+        self.answers.insert(
+            call,
+            KeptAnswer {
+                tag,
+                json,
+                current,
+                fetched,
+                lent: 0,
+            },
+        );
     }
 
     fn file(&self, call: &(String, Vec<u8>)) -> Option<PathBuf> {
@@ -995,6 +1029,22 @@ pub(crate) fn read_at_most(mut answer: Answer, limit: u64) -> ApiResult<(u16, Ve
     Ok((status, body))
 }
 
+/// The first of the answers to calls asked at once in `bytes`, as the server frames them:
+/// its status, tag and JSON, and what follows it.
+fn next_answer(bytes: &[u8]) -> Option<(u16, &str, &[u8], &[u8])> {
+    let (status, bytes) = bytes.split_first_chunk::<2>()?;
+    let (tag_length, bytes) = bytes.split_first_chunk::<2>()?;
+    let (tag, bytes) = bytes.split_at_checked(usize::from(u16::from_be_bytes(*tag_length)))?;
+    let (json_length, bytes) = bytes.split_first_chunk::<4>()?;
+    let (json, rest) = bytes.split_at_checked(u32::from_be_bytes(*json_length) as usize)?;
+    Some((
+        u16::from_be_bytes(*status),
+        std::str::from_utf8(tag).ok()?,
+        json,
+        rest,
+    ))
+}
+
 /// What the server said went wrong in `body`, answered with `status`.
 fn error(status: u16, body: &[u8]) -> ApiError {
     let said = serde_json::from_slice::<serde_json::Value>(body)
@@ -1026,7 +1076,6 @@ fn json_at_most(answer: Answer, limit: u64) -> ApiResult<serde_json::Value> {
 
 impl Transport for Http {
     fn call(&self, method: &str, args: Vec<u8>) -> ApiResult<Vec<u8>> {
-        let _held = HeldUp::by(|| method.to_owned());
         let send = |tag: Option<&str>| {
             self.send(|http| {
                 let mut request = http
@@ -1039,6 +1088,7 @@ impl Transport for Http {
             })
         };
         if !freya_protocol::CACHED_CALLS.contains(&method) {
+            let _held = HeldUp::by(|| method.to_owned());
             let answered = send(None).and_then(|answer| read_at_most(answer, MAX_ANSWER));
             // Whatever it did, it may have changed the library.
             self.kept_answers().changed();
@@ -1055,6 +1105,7 @@ impl Transport for Http {
             }
             (kept.changes, kept.tag(&call))
         };
+        let _held = HeldUp::by(|| method.to_owned());
         let answer = send(tag.as_deref())?;
         let tagged = answer
             .headers()
@@ -1118,6 +1169,84 @@ impl Transport for Http {
                 .send(asked.to_string())
         })?;
         bytes_or_none(answer)
+    }
+
+    fn prefetch(&self, calls: &[(&str, Vec<u8>)]) {
+        let (asked, wanted) = {
+            let mut kept = self.kept_answers();
+            // Each call once, for as many as ask it.
+            let mut wanted: Vec<(String, Vec<u8>, Option<String>)> = Vec::new();
+            let mut times: HashMap<(String, Vec<u8>), u32> = HashMap::new();
+            for (method, args) in calls {
+                let call = ((*method).to_owned(), args.clone());
+                let told = kept.told && kept.answers.get(&call).is_some_and(|k| k.current);
+                if told || wanted.len() == freya_protocol::MOST_AT_ONCE {
+                    continue;
+                }
+                let asked = times.entry(call.clone()).or_default();
+                *asked += 1;
+                if *asked == 1 {
+                    let tag = kept.tag(&call);
+                    wanted.push((call.0, call.1, tag));
+                }
+            }
+            (kept.changes, (wanted, times))
+        };
+        let (wanted, times) = wanted;
+        if wanted.is_empty() {
+            return;
+        }
+        let _held = HeldUp::by(|| format!("{}-calls-at-once", wanted.len()));
+        let body: Vec<(&str, std::borrow::Cow<'_, str>, Option<&str>)> = wanted
+            .iter()
+            .map(|(method, args, tag)| {
+                (
+                    method.as_str(),
+                    String::from_utf8_lossy(args),
+                    tag.as_deref(),
+                )
+            })
+            .collect();
+        let Ok(body) = serde_json::to_vec(&body) else {
+            return;
+        };
+        let answered = self
+            .send(|http| {
+                http.post("/calls")
+                    .header("Content-Type", "application/json")
+                    .send(&body[..])
+            })
+            .and_then(|answer| read_at_most(answer, MAX_ANSWER));
+        let answers = match answered {
+            Ok((200, answers)) => answers,
+            Ok((status, body)) => {
+                log::debug!("calls asked at once: {}", error(status, &body));
+                return;
+            }
+            Err(e) => {
+                log::debug!("calls asked at once: {e}");
+                return;
+            }
+        };
+        let mut kept = self.kept_answers();
+        let mut rest = &answers[..];
+        for (method, args, _) in wanted {
+            let Some((status, tag, json, after)) = next_answer(rest) else {
+                log::debug!("the answers to calls asked at once could not be read");
+                return;
+            };
+            rest = after;
+            let call = (method, args);
+            match status {
+                200 => kept.keep(call.clone(), tag.to_owned(), json.to_vec(), asked),
+                304 => {
+                    kept.confirmed(&call, asked);
+                }
+                // Asked again by the call itself, which says why.
+                _ => continue,
+            }
+            kept.lend(&call, times.get(&call).copied().unwrap_or(1));
+        }
     }
 
     fn events(&self) -> ApiResult<Receiver<ServiceEvent>> {

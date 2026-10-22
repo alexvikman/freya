@@ -43,6 +43,7 @@
 //! for a page carries an `Origin`; one through a name that leads to this computer by DNS, a
 //! `Host` other than this computer's; and a form, a body of another type. Each is refused.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
@@ -203,6 +204,10 @@ fn answer(served: &Served, answers: &Answers, request: Request) -> Response {
     }
     let library = served.library.as_ref();
     match (request.method.as_str(), path) {
+        ("POST", "/calls") => {
+            let listener = caller.as_ref().is_some_and(|c| c.role == Role::Listener);
+            many(library, answers, &request, listener)
+        }
         ("POST", path) if path.starts_with("/call/") => {
             let method = &path["/call/".len()..];
             let args = &request.body;
@@ -334,6 +339,8 @@ fn answer(served: &Served, answers: &Answers, request: Request) -> Response {
 fn listener_may(request: &Request, path: &str) -> bool {
     match (request.method.as_str(), path) {
         ("POST", "/pictures") => false,
+        // Each call asked at once is allowed or not on its own.
+        ("POST", "/calls") => true,
         ("POST", call) if call.starts_with("/call/") => {
             LISTENER_CALLS.contains(&&call["/call/".len()..])
         }
@@ -363,19 +370,9 @@ fn kept(
     request: &Request,
     method: &str,
 ) -> Response {
-    let args = &request.body;
-    let generation = library.generation();
-    let answer = match generation.and_then(|generation| answers.get(generation, method, args)) {
-        Some(answer) => answer,
-        None => match dispatch_data(library, method, args) {
-            None => return Response::error(404, format!("no such call: {method}")),
-            Some(Err(e)) => return Response::error(400, e),
-            Some(Ok(Err(e))) => return Response::error(500, e),
-            Some(Ok(Ok(json))) => match generation {
-                Some(generation) => answers.keep(generation, method, args, json),
-                None => Arc::new(Answer::new(json)),
-            },
-        },
+    let answer = match kept_answer(library, answers, method, &request.body) {
+        Ok(answer) => answer,
+        Err((status, why)) => return Response::error(status, why),
     };
     let mut response = if request.header("if-none-match") == Some(answer.tag.as_str()) {
         Response::bytes(304, "application/json", Vec::new())
@@ -392,6 +389,94 @@ fn kept(
         Response::bytes(200, "application/json", answer.json.clone())
     };
     response.headers.push(("ETag", answer.tag.clone()));
+    response
+}
+
+/// The answer to `method` with `args`, a call that only reads the library: kept for the
+/// library's generation, or made and kept; else the status to answer, and why.
+fn kept_answer(
+    library: &dyn freya_protocol::LibraryApi,
+    answers: &Answers,
+    method: &str,
+    args: &[u8],
+) -> Result<Arc<Answer>, (u16, String)> {
+    let generation = library.generation();
+    if let Some(answer) = generation.and_then(|generation| answers.get(generation, method, args)) {
+        return Ok(answer);
+    }
+    match dispatch_data(library, method, args) {
+        None => Err((404, format!("no such call: {method}"))),
+        Some(Err(e)) => Err((400, e.to_string())),
+        Some(Ok(Err(e))) => Err((500, e.to_string())),
+        Some(Ok(Ok(json))) => Ok(match generation {
+            Some(generation) => answers.keep(generation, method, args, json),
+            None => Arc::new(Answer::new(json)),
+        }),
+    }
+}
+
+/// The answers to the calls `request` asks for at once, each a call of [`CACHED_CALLS`], its
+/// arguments as JSON text, and the tag of the answer the client has, if any: as
+/// `application/x-freya-answers`, each its status (two bytes), its tag (two bytes of length,
+/// then it), and its JSON (four bytes of length, then it), all big-endian; the JSON is left
+/// out when the client has it. A listener is answered only the calls it may make.
+fn many(
+    library: &dyn freya_protocol::LibraryApi,
+    answers: &Answers,
+    request: &Request,
+    listener: bool,
+) -> Response {
+    let asked: Vec<(String, String, Option<String>)> = match serde_json::from_slice(&request.body) {
+        Ok(asked) => asked,
+        Err(e) => return Response::error(400, e),
+    };
+    if asked.len() > freya_protocol::MOST_AT_ONCE {
+        return Response::error(413, "too many calls at once");
+    }
+    let mut out = Vec::new();
+    for (method, args, tag) in &asked {
+        let answered = if !CACHED_CALLS.contains(&method.as_str()) {
+            Err((404, format!("no such call to ask at once: {method}")))
+        } else if listener && !LISTENER_CALLS.contains(&method.as_str()) {
+            Err((403, "only the server's admin may do that".to_owned()))
+        } else {
+            kept_answer(library, answers, method, args.as_bytes())
+        };
+        let (status, tag, json): (u16, &str, Cow<'_, [u8]>) = match &answered {
+            Ok(answer) if tag.as_deref() == Some(answer.tag.as_str()) => {
+                (304, &answer.tag, Cow::Borrowed(&[]))
+            }
+            Ok(answer) => (200, &answer.tag, Cow::Borrowed(&answer.json)),
+            Err((status, why)) => (
+                *status,
+                "",
+                Cow::Owned(serde_json::json!({ "error": why }).to_string().into_bytes()),
+            ),
+        };
+        out.extend_from_slice(&status.to_be_bytes());
+        out.extend_from_slice(&(tag.len() as u16).to_be_bytes());
+        out.extend_from_slice(tag.as_bytes());
+        out.extend_from_slice(&(json.len() as u32).to_be_bytes());
+        out.extend_from_slice(&json);
+    }
+    let compressed = out.len() >= COMPRESSED_FROM && takes_gzip(request);
+    let mut response = Response::bytes(
+        200,
+        "application/x-freya-answers",
+        if compressed {
+            Answer::new(out)
+                .gzipped()
+                .map(<[u8]>::to_vec)
+                .unwrap_or_default()
+        } else {
+            out
+        },
+    );
+    if compressed {
+        response
+            .headers
+            .push(("Content-Encoding", "gzip".to_owned()));
+    }
     response
 }
 

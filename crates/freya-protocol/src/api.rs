@@ -440,7 +440,12 @@ pub trait Transport: Send + Sync {
     fn album_art(&self, track: &Path, largest: u32) -> ApiResult<Option<Vec<u8>>>;
     /// What happens at the server from now on, as it happens.
     fn events(&self) -> ApiResult<Receiver<ServiceEvent>>;
+    /// Asks for the answers to `calls` all at once, as [`LibraryApi::prefetch`].
+    fn prefetch(&self, _calls: &[(&str, Vec<u8>)]) {}
 }
+
+/// The most calls asked for at once.
+pub const MOST_AT_ONCE: usize = 256;
 
 impl<T: Transport> ServerEvents for Remote<T> {
     fn events(&self) -> ApiResult<Receiver<ServiceEvent>> {
@@ -506,9 +511,24 @@ pub trait LibraryApi: LibraryData + LibraryPictures {
     fn generation(&self) -> Option<u64> {
         None
     }
+
+    /// Asks for the answers to `calls` of [`CACHED_CALLS`], each a call's name and its
+    /// arguments as [`args`] makes them, all at once, so the calls made next are answered
+    /// without asking. A library in this process has them at hand already.
+    fn prefetch(&self, _calls: &[(&str, Vec<u8>)]) {}
 }
 
-impl<T: Transport> LibraryApi for Remote<T> {}
+impl<T: Transport> LibraryApi for Remote<T> {
+    fn prefetch(&self, calls: &[(&str, Vec<u8>)]) {
+        self.0.prefetch(calls);
+    }
+}
+
+/// A call's arguments, a tuple of them, as they go over the network: what [`Remote`] sends for
+/// the call made with them.
+pub fn args(args: &impl serde::Serialize) -> Vec<u8> {
+    serde_json::to_vec(args).unwrap_or_default()
+}
 
 /// What happens at the server, as it happens.
 pub trait ServerEvents: Send + Sync {

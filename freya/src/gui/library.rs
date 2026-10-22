@@ -40,6 +40,9 @@ pub use search_page::{Opened, SearchFilter};
 /// Search results are cut off here; nobody scrolls through more, and building rows for the
 /// whole library on every keystroke would be wasted work.
 const SEARCH_LIMIT: usize = 1_000;
+/// How long typing pauses before what was typed fast is searched for: each key is not a
+/// round trip to the server.
+const TYPING_PAUSE: Duration = Duration::from_millis(150);
 /// While a scan runs, the rows, covers and pictures are read anew at most this often.
 const RELOAD_INTERVAL: Duration = Duration::from_secs(3);
 /// Decoded covers kept: about 270 KB each, 70 MB in all. Those on screen, at most about 90 full
@@ -258,6 +261,13 @@ pub struct LibraryPanel {
     opened: Vec<Level>,
     /// Search text; when not empty, search results are shown instead of `level`.
     query: String,
+    /// Text typed while searching or suggesting, waiting for a pause in the typing, and when
+    /// each was last done: a key pressed after a pause is answered at once, those typed fast
+    /// after it once the typing pauses.
+    typed: Option<String>,
+    searched: Instant,
+    typed_suggest: Option<String>,
+    suggested: Instant,
     items: Vec<Item>,
     rows: ModelRows,
     title: String,
@@ -277,6 +287,9 @@ pub struct LibraryPanel {
     /// Each album's cover as the last scan made it, by the album's key; and each artist's
     /// pictures, square and wide, as kept, by the artist.
     made_covers: HashMap<String, freya_protocol::AlbumCover>,
+    /// Each artist's albums, as the library lists them, read with the covers: in one call,
+    /// not one an artist.
+    artist_albums: HashMap<Option<String>, Vec<Album>>,
     portraits: HashMap<String, String>,
     backdrops: HashMap<String, String>,
     recent_covers: RecentCovers,
@@ -670,6 +683,10 @@ impl LibraryPanel {
             covers_dir: covers,
             opened: vec![Level::Artists],
             query: String::new(),
+            typed: None,
+            searched: Instant::now() - TYPING_PAUSE,
+            typed_suggest: None,
+            suggested: Instant::now() - TYPING_PAUSE,
             items: Vec::new(),
             rows: ModelRows::new(),
             title: String::new(),
@@ -690,6 +707,7 @@ impl LibraryPanel {
             covers_shown: (0, 0),
             covers_missed: false,
             made_covers: HashMap::new(),
+            artist_albums: HashMap::new(),
             portraits: HashMap::new(),
             backdrops: HashMap::new(),
             recent_covers: RecentCovers::default(),
@@ -1147,6 +1165,7 @@ impl LibraryPanel {
 
     /// Handles scan progress and covers made. Returns true when the rows changed.
     pub fn poll(&mut self) -> bool {
+        self.take_typed();
         // Made again: what was read of them is old.
         for key in self
             .thumbnails
@@ -1377,10 +1396,41 @@ impl LibraryPanel {
     pub fn search(&mut self, text: &str) {
         if text.trim() == self.query.trim() {
             self.query = text.to_owned();
+            self.typed = None;
             return;
         }
+        if self.searched.elapsed() < self.typing_pause() {
+            self.typed = Some(text.to_owned());
+            return;
+        }
+        self.typed = None;
+        self.searched = Instant::now();
         self.query = text.to_owned();
         self.reload();
+    }
+
+    /// What was typed fast, searched and suggested for once the typing paused.
+    fn take_typed(&mut self) {
+        if self.searched.elapsed() >= self.typing_pause()
+            && let Some(text) = self.typed.take()
+        {
+            self.search(&text);
+        }
+        if self.suggested.elapsed() >= self.typing_pause()
+            && let Some(text) = self.typed_suggest.take()
+        {
+            self.suggest(&text);
+        }
+    }
+
+    /// How long typing pauses before what was typed fast is searched for: for a library on
+    /// another computer, [`TYPING_PAUSE`]; on this one, each key is answered at once.
+    fn typing_pause(&self) -> Duration {
+        if self.elsewhere() {
+            TYPING_PAUSE
+        } else {
+            Duration::ZERO
+        }
     }
 
     /// Starts browsing a section, from its own list.
@@ -2712,6 +2762,7 @@ impl LibraryPanel {
         if std::mem::take(&mut self.stale) {
             self.stats = None;
         }
+        self.ask_ahead();
         self.load_pictures();
         self.reloaded = Instant::now();
         let Some(db) = &self.db else {
@@ -2751,6 +2802,14 @@ impl LibraryPanel {
                 log::warn!("library: {e}");
                 self.items.clear();
             }
+        }
+        // The genres' covers, shown with them.
+        if *self.level() == Level::Genres && !self.searching() {
+            let genres = self.items.iter().filter_map(|item| match item {
+                Item::Genre(genre) => Some(ahead("genre_albums", &(genre.name.as_deref(),))),
+                _ => None,
+            });
+            db.prefetch(&genres.collect::<Vec<_>>());
         }
         if self.stats.is_none() {
             self.stats = Some(db.stats().map(|s| stats_text(&s)).unwrap_or_default());
@@ -2875,6 +2934,81 @@ impl LibraryPanel {
             .collect()
     }
 
+    /// Asks for what [`Self::reload`] reads next all at once: one round trip to a server
+    /// elsewhere, not one a call.
+    fn ask_ahead(&self) {
+        let Some(db) = &self.db else {
+            return;
+        };
+        let mut calls = vec![
+            ahead("artist_edits", &()),
+            ahead("album_favorites", &()),
+            ahead("artist_favorites", &()),
+            ahead("playlist_favorites", &()),
+            ahead("stats", &()),
+        ];
+        if self.pictures_stale {
+            calls.extend([
+                ahead("album_covers", &()),
+                ahead("genre_infos", &()),
+                ahead("artist_pictures", &(PictureKind::Portrait,)),
+                ahead("artist_pictures", &(PictureKind::Backdrop,)),
+                ahead("all_albums", &()),
+            ]);
+        }
+        if self.searching() {
+            calls.extend([
+                ahead("search", &(self.query.as_str(), SEARCH_LIMIT)),
+                ahead("artists", &()),
+                ahead("all_albums", &()),
+                ahead("genres", &()),
+            ]);
+            db.prefetch(&calls);
+            return;
+        }
+        match self.level() {
+            Level::Artists => calls.push(ahead("artists_by", &(self.artist_order,))),
+            Level::Albums => calls.push(ahead("albums_by", &(self.albums_order,))),
+            Level::Songs => calls.push(ahead("all_tracks", &())),
+            Level::Genres => calls.push(ahead("genres", &())),
+            Level::Playlists => {}
+            Level::RecentlyAdded => calls.push(ahead("recently_added", &(RECENT,))),
+            Level::RecentlyPlayed => calls.push(ahead("recently_played", &(RECENT,))),
+            Level::MostPlayed => calls.push(ahead("most_played", &(RECENT,))),
+            Level::ArtistAlbums { artist } => {
+                let artist = artist.as_deref();
+                calls.extend([
+                    ahead("albums", &(artist,)),
+                    ahead("artist_summary", &(artist, 3usize)),
+                    ahead("artist_popular", &(artist, POPULAR_MORE)),
+                    ahead("artist_mbid", &(artist,)),
+                ]);
+                if let Some(name) = artist {
+                    calls.extend([
+                        ahead("searched_artist_id", &(name,)),
+                        ahead("artist_article", &(name,)),
+                        ahead("artist_text", &(name,)),
+                    ]);
+                }
+            }
+            Level::GenreAlbums { genre } => {
+                calls.push(ahead("genre_albums", &(genre.as_deref(),)));
+                if let Some(name) = genre {
+                    calls.extend([
+                        ahead("genre_tracks", &(Some(name.as_str()),)),
+                        ahead("genre_popular", &(name.as_str(), POPULAR_MORE)),
+                        ahead("genre_article", &(name.as_str(),)),
+                    ]);
+                }
+            }
+            Level::AlbumTracks { artist, album } => calls.extend([
+                ahead("album_tracks", &(artist.as_deref(), album.as_deref())),
+                ahead("album_plays", &(artist.as_deref(), album.as_deref())),
+            ]),
+        }
+        db.prefetch(&calls);
+    }
+
     fn load(&self, db: &dyn LibraryApi) -> freya_protocol::ApiResult<Vec<Item>> {
         if self.searching() {
             let tracks = db.search(&self.query, SEARCH_LIMIT)?;
@@ -2909,6 +3043,16 @@ impl LibraryPanel {
                 if !self.album_list {
                     return Ok(albums(list));
                 }
+                let each: Vec<_> = list
+                    .iter()
+                    .map(|album| {
+                        ahead(
+                            "album_tracks",
+                            &(album.artist.as_deref(), album.name.as_deref()),
+                        )
+                    })
+                    .collect();
+                db.prefetch(&each);
                 let mut items = Vec::new();
                 for album in list {
                     let tracks = db.album_tracks(album.artist.as_deref(), album.name.as_deref())?;
@@ -3103,6 +3247,14 @@ impl LibraryPanel {
         let Some(db) = &self.db else {
             return;
         };
+        db.prefetch(&[
+            ahead("album_covers", &()),
+            ahead("genre_infos", &()),
+            ahead("artist_pictures", &(PictureKind::Portrait,)),
+            ahead("artist_pictures", &(PictureKind::Backdrop,)),
+            ahead("all_albums", &()),
+            ahead("artists", &()),
+        ]);
         let covers = db.album_covers().unwrap_or_else(|e| {
             log::warn!("could not read the albums' covers: {e}");
             HashMap::new()
@@ -3117,6 +3269,7 @@ impl LibraryPanel {
             }
         }
         self.made_covers = covers;
+        self.artist_albums = artist_albums(db.all_albums().unwrap_or_default());
         let read = |kind| {
             db.artist_pictures(kind).unwrap_or_else(|e| {
                 log::warn!("could not read the artists' pictures: {e}");
@@ -3172,11 +3325,19 @@ impl LibraryPanel {
 
     /// What is kept of the artist `name`'s picture: theirs, and their albums' covers.
     fn artist_source(&self, name: Option<&str>) -> ArtistSource {
-        let covers = self
-            .db
-            .as_ref()
-            .and_then(|db| db.albums(name).ok())
-            .unwrap_or_default()
+        let read;
+        let albums = match self.artist_albums.get(&name.map(str::to_owned)) {
+            Some(albums) => albums,
+            None => {
+                read = self
+                    .db
+                    .as_ref()
+                    .and_then(|db| db.albums(name).ok())
+                    .unwrap_or_default();
+                &read
+            }
+        };
+        let covers = albums
             .iter()
             .filter_map(|album| self.made_covers.get(&cover_key(album))?.cover.clone())
             .collect();
@@ -3796,6 +3957,34 @@ fn long_time(total: Duration) -> String {
 /// A playlist entry for a library track, with its tags already known.
 pub fn entry(track: &Track) -> Entry {
     Entry::with_tags(&track.path, track.part, &track.tags())
+}
+
+/// A call to ask for ahead, with its arguments, as [`LibraryApi::prefetch`] takes it.
+fn ahead(method: &'static str, args: &impl serde::Serialize) -> (&'static str, Vec<u8>) {
+    (method, freya_protocol::args(args))
+}
+
+/// `albums` by their artist, each artist's in the order the library lists them: those with a
+/// year by it, then by name, as `albums(artist)` has them.
+fn artist_albums(albums: Vec<Album>) -> HashMap<Option<String>, Vec<Album>> {
+    let mut by_artist: HashMap<Option<String>, Vec<Album>> = HashMap::new();
+    for album in albums {
+        by_artist
+            .entry(album.artist.clone())
+            .or_default()
+            .push(album);
+    }
+    for albums in by_artist.values_mut() {
+        albums.sort_by_cached_key(|album| {
+            (
+                album.name.is_none(),
+                album.year.is_none(),
+                album.year,
+                album.name.as_deref().map(str::to_ascii_lowercase),
+            )
+        });
+    }
+    by_artist
 }
 
 /// One `LibraryRow`. `album_artist` is set while an album's tracks are shown: track numbers
