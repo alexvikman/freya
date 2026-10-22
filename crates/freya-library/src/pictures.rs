@@ -28,7 +28,7 @@ impl Pictures {
 
     /// The picture in `bytes`, at most `largest` wide or high, kept among these: its checksum.
     pub fn take_bytes(&self, bytes: &[u8], largest: u32) -> Result<String, String> {
-        let picture = image::load_from_memory(bytes).map_err(|e| e.to_string())?;
+        let picture = crate::decode_picture(bytes).map_err(|e| e.to_string())?;
         let picture = if picture.width() > largest || picture.height() > largest {
             picture.resize(largest, largest, image::imageops::FilterType::Lanczos3)
         } else {

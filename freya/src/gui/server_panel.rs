@@ -249,11 +249,14 @@ impl ServerPanel {
                 return;
             }
         };
-        crate::update::open_page(&page);
+        crate::update::open_page_privately(&page);
         self.login_waiting = true;
     }
 
     pub fn cancel_login(&mut self) {
+        if let Some(proxy) = &self.proxy {
+            proxy.cancel_login();
+        }
         self.login = None;
         self.login_verified = false;
         self.login_busy = false;
@@ -295,11 +298,16 @@ impl ServerPanel {
         }
         while let Ok(heard) = self.heard.1.try_recv() {
             match heard {
-                Heard::LoggedIn(Ok(tokens)) => {
+                Heard::LoggedIn(Ok((pin, tokens))) => {
                     let Some(pending) = self.login.take() else {
                         continue;
                     };
                     self.cancel_login();
+                    // The tokens are the server's that gave them, and go to no other chosen since.
+                    if pin.as_ref() != Some(&pending.pin) {
+                        log::warn!("a login came back for another server than the one chosen");
+                        continue;
+                    }
                     return Some(Chosen {
                         pin: pending.pin,
                         name: pending.name,
@@ -362,7 +370,7 @@ impl ServerPanel {
                 return;
             }
         };
-        crate::update::open_page(&page);
+        crate::update::open_page_privately(&page);
         self.password_waiting = true;
     }
 

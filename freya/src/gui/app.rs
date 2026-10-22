@@ -510,6 +510,11 @@ impl App {
         let Some(path) = settings::playlist_path().filter(|p| p.exists()) else {
             return;
         };
+        // Up Next of another library names its tracks: not opened here, nor looked for.
+        if self.settings.queue_from != self.library_from() {
+            log::info!("Up Next was of another library: not restored");
+            return;
+        }
         match playlist_file::load(&path) {
             Ok(entries) => {
                 self.playlist.insert(None, entries);
@@ -800,6 +805,7 @@ impl App {
         self.settings.server = Some(settings::SavedServer::new(&chosen.name, &chosen.pin));
         self.settings.save();
         self.server.set_known(Some(chosen.pin.certificate.clone()));
+        self.leave_queue();
         self.show_library_of(library::LibrarySource::Remote {
             pin: chosen.pin,
             name: chosen.name,
@@ -852,10 +858,24 @@ impl App {
     pub fn use_this_computer(&mut self) {
         self.settings.server = None;
         self.server.set_known(None);
+        self.leave_queue();
         self.settings.save();
         if let Some(source) = super::local_source() {
             self.show_library_of(source);
         }
+    }
+
+    /// Whose library is shown: the certificate of the server elsewhere, in hex, or none for this
+    /// computer's.
+    fn library_from(&self) -> Option<String> {
+        self.settings.server.as_ref().map(|s| s.certificate.clone())
+    }
+
+    /// Empties Up Next, as another library is shown: what it holds names the other one's
+    /// tracks, which are not looked for in this one.
+    fn leave_queue(&mut self) {
+        self.edit(Playlist::clear);
+        self.settings.queue_from = self.library_from();
     }
 
     /// Shows the library from `source` in place of the one shown.
@@ -1880,6 +1900,7 @@ impl App {
             .path()
             .map(Path::to_owned)
             .or_else(|| self.unloaded_skin.clone());
+        self.settings.queue_from = self.library_from();
         self.settings.save();
         self.library.save();
         if let Some(path) = settings::playlist_path() {

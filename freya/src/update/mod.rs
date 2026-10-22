@@ -308,6 +308,42 @@ pub fn open_page(url: &str) {
         log::warn!("did not open a page with an unexpected address");
         return;
     }
+    open_with_system(std::ffi::OsStr::new(url));
+}
+
+/// Opens a page of Freya's own whose address holds a secret, the login's state or the start of
+/// the password page: through a file only the user can read, which sends the browser on, so
+/// the address is in no program's command line, where other users of the computer could read
+/// it. The file goes again a minute later.
+pub fn open_page_privately(url: &str) {
+    if !is_openable(url) {
+        log::warn!("did not open a page with an unexpected address");
+        return;
+    }
+    let Some(dir) = crate::settings::cache_dir() else {
+        log::warn!("no folder to open a page through");
+        return;
+    };
+    let file = dir.join("open-page.html");
+    let address = url.replace('&', "&amp;");
+    let page = format!(
+        "<!doctype html><meta charset=\"utf-8\"><meta http-equiv=\"refresh\" content=\"0;url={address}\"><title>Freya</title><a href=\"{address}\">Continue</a>\n"
+    );
+    if let Err(e) = write_private(&file, page.as_bytes()) {
+        log::warn!("could not open a page: {e}");
+        return;
+    }
+    open_with_system(file.as_os_str());
+    let _ = std::thread::Builder::new()
+        .name("freya-opened-page".into())
+        .spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+            let _ = std::fs::remove_file(file);
+        });
+}
+
+/// Hands `what`, a page's address or a file, to the system to open.
+fn open_with_system(what: &std::ffi::OsStr) {
     let opener = if cfg!(target_os = "macos") {
         "open"
     } else if cfg!(windows) {
@@ -315,9 +351,29 @@ pub fn open_page(url: &str) {
     } else {
         "xdg-open"
     };
-    if let Err(e) = std::process::Command::new(opener).arg(url).spawn() {
-        log::warn!("could not open {url}: {e}");
+    if let Err(e) = std::process::Command::new(opener).arg(what).spawn() {
+        log::warn!("could not open a page: {e}");
     }
+}
+
+/// Writes `bytes` to `file`, a new file the user alone can read.
+fn write_private(file: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    match std::fs::remove_file(file) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(file)?.write_all(bytes)
 }
 
 /// Whether `url` may be opened: see [`open_page`].

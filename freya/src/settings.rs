@@ -76,6 +76,9 @@ pub struct Settings {
     /// Whether this computer's server starts when the user logs in; none until decided, when
     /// a release build makes it so.
     pub start_server_at_login: Option<bool>,
+    /// Whose library Up Next was saved from: the certificate of the server elsewhere, in hex,
+    /// or none for this computer's. Restored only for the same.
+    pub queue_from: Option<String>,
 }
 
 /// A server on another computer, as this client pinned it when it logged in.
@@ -144,6 +147,7 @@ impl Default for Settings {
             scan_at_start: false,
             server: None,
             start_server_at_login: None,
+            queue_from: None,
             damaged: false,
         }
     }

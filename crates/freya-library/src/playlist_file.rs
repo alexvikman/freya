@@ -54,15 +54,22 @@ pub fn fetch(url: &str) -> Result<Vec<Entry>, String> {
     } else {
         parse_m3u(&text, Path::new(""))
     };
-    // Relative entries mean nothing without the files next to the playlist.
+    // Relative entries mean nothing without the files next to the playlist; nor is anything but
+    // a stream on the web taken from a playlist from there, such as a path on a Windows share.
     let entries: Vec<Entry> = entries
         .into_iter()
-        .filter(|e| e.path.to_string_lossy().contains("://"))
+        .filter(|e| is_web(&e.path.to_string_lossy()))
         .collect();
     if entries.is_empty() {
         return Err("the playlist lists no streams".into());
     }
     Ok(entries)
+}
+
+/// Whether `path` is an address on the web: `http://` or `https://`.
+fn is_web(path: &str) -> bool {
+    let lower = path.get(..8).unwrap_or(path).to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
 }
 
 fn is_pls(text: &str) -> bool {

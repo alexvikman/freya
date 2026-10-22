@@ -36,7 +36,7 @@ pub fn read_cover(track: &Path, max_size: u32) -> Option<Cover> {
 
 /// The cover in the picture `bytes`, at most `max_size` wide or high.
 pub fn cover_from(bytes: &[u8], max_size: u32) -> Option<Cover> {
-    let image = image::load_from_memory(bytes).ok()?;
+    let image = crate::decode_picture(bytes).ok()?;
     let image = if image.width() > max_size || image.height() > max_size {
         image.thumbnail(max_size, max_size)
     } else {
@@ -65,7 +65,7 @@ pub fn album_art(track: &Path) -> Option<(Vec<u8>, [u8; 3])> {
 /// or high, to show whole: read from the music's file or folder.
 pub fn album_art_large(track: &Path, largest: u32) -> Option<image::DynamicImage> {
     let bytes = embedded_cover(track).or_else(|| folder_cover(track))?;
-    let image = image::load_from_memory(&bytes).ok()?;
+    let image = crate::decode_picture(&bytes).ok()?;
     Some(if image.width() > largest || image.height() > largest {
         image.resize(largest, largest, image::imageops::FilterType::Lanczos3)
     } else {
@@ -76,7 +76,7 @@ pub fn album_art_large(track: &Path, largest: u32) -> Option<image::DynamicImage
 /// An album's cover from the picture `bytes`, as Freya keeps it: at most [`ALBUM_ART`] wide
 /// or high, as a JPEG, and a color from it for the album's page.
 pub fn album_art_from(bytes: &[u8]) -> Option<(Vec<u8>, [u8; 3])> {
-    let image = image::load_from_memory(bytes).ok()?;
+    let image = crate::decode_picture(bytes).ok()?;
     let image = if image.width() > ALBUM_ART || image.height() > ALBUM_ART {
         image.resize(ALBUM_ART, ALBUM_ART, image::imageops::FilterType::Lanczos3)
     } else {

@@ -248,7 +248,12 @@ impl Thumbnails {
         source: &ArtistSource,
     ) -> (Option<Thumbnail>, Option<ArtistWork>) {
         let covers = source.covers.clone();
-        match &source.picture {
+        // A checksum is a file's name here: anything else a server sent is not one.
+        match source
+            .picture
+            .as_ref()
+            .filter(|c| freya_protocol::is_checksum(c))
+        {
             Some(checksum) => {
                 let (shown, large) = portrait_files(&self.dir, checksum);
                 if shown.exists() && large.exists() {
@@ -283,7 +288,7 @@ impl Thumbnails {
         if let Some(known) = self.known.get(&known_key) {
             return known.clone();
         }
-        let state = match picture {
+        let state = match picture.filter(|c| freya_protocol::is_checksum(c)) {
             None => Thumbnail::None,
             Some(checksum) => {
                 let file = self.file(&format!("{checksum}-wide"));
@@ -329,6 +334,10 @@ impl Thumbnails {
     /// The kept picture `checksum`, an album's cover, in the grid's size: made from Freya's own
     /// copy when missing, never from the music's files.
     pub fn get_picture(&mut self, checksum: &str) -> Thumbnail {
+        // A checksum is a file's name here: anything else a server sent is not one.
+        if !freya_protocol::is_checksum(checksum) {
+            return Thumbnail::None;
+        }
         if let Some(known) = self.known.get(checksum) {
             return known.clone();
         }
@@ -562,7 +571,7 @@ fn from_kept(dir: &Path, pictures: &PictureSource, checksum: &str) -> Result<Opt
     let Some(bytes) = pictures(checksum) else {
         return Ok(None);
     };
-    let picture = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+    let picture = crate::decode_picture(&bytes).map_err(|e| e.to_string())?;
     let (shown, large) = save_portrait(dir, checksum, &picture)?;
     Ok(Some((Some(shown), Some(large), true)))
 }
@@ -606,7 +615,7 @@ fn collage_of(
     }
     let images: Vec<image::DynamicImage> = covers
         .iter()
-        .filter_map(|checksum| image::load_from_memory(&pictures(checksum)?).ok())
+        .filter_map(|checksum| crate::decode_picture(&pictures(checksum)?).ok())
         .take(4)
         .collect();
     let Some(collage) = artist_image::collage_of(images, SIZE) else {
@@ -622,7 +631,7 @@ fn shrink(dir: &Path, pictures: &PictureSource, checksum: &str) -> Result<Option
     let Some(bytes) = pictures(checksum) else {
         return Ok(None);
     };
-    let picture = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+    let picture = crate::decode_picture(&bytes).map_err(|e| e.to_string())?;
     let small = if picture.width() > SIZE || picture.height() > SIZE {
         picture.thumbnail(SIZE, SIZE)
     } else {
@@ -639,7 +648,7 @@ fn make_backdrop(dir: &Path, pictures: &PictureSource, checksum: &str) -> Result
     let Some(bytes) = pictures(checksum) else {
         return Ok(false);
     };
-    let picture = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+    let picture = crate::decode_picture(&bytes).map_err(|e| e.to_string())?;
     let picture = if picture.width() > BACKDROP || picture.height() > BACKDROP {
         picture.resize(BACKDROP, BACKDROP, image::imageops::FilterType::Lanczos3)
     } else {
@@ -893,8 +902,11 @@ mod tests {
         // A new run finds it made; a picture Freya does not have has none.
         let mut again = super::tests::thumbnails(&cache);
         assert_eq!(again.get_picture(&checksum), Thumbnail::Ready(file));
-        assert_eq!(again.get_picture("gone"), Thumbnail::Pending);
+        let gone = "0".repeat(64);
+        assert_eq!(again.get_picture(&gone), Thumbnail::Pending);
         wait(&mut again);
-        assert_eq!(again.get_picture("gone"), Thumbnail::None);
+        assert_eq!(again.get_picture(&gone), Thumbnail::None);
+        // Nor has a name that is not a checksum, which is never looked for.
+        assert_eq!(again.get_picture("../../secret"), Thumbnail::None);
     }
 }

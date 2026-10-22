@@ -430,6 +430,11 @@ impl Http {
         self.pin.as_ref().map(|pin| pin.certificate.as_slice())
     }
 
+    /// The server pinned, when it is reached over TLS.
+    pub fn pin(&self) -> Option<&Pin> {
+        self.pin.as_ref()
+    }
+
     /// What the player reads tracks with: this device's access token, renewed as it ends.
     pub fn bearer(&self) -> Option<Bearer> {
         if let Some(session) = &self.session {
@@ -527,13 +532,6 @@ impl Http {
             "proof": hex(proof.as_ref()),
             "device": device,
         });
-        Granted::from_answer(self.send_json("/pair", &asked)?)
-    }
-
-    /// A token for this device from a server from before pairing by proof, which took the key
-    /// itself: only to stop such a server, after an update, as a new one makes a key of its own.
-    fn pair_sending_the_key(&self, key: &str, device: &str) -> ApiResult<Granted> {
-        let asked = serde_json::json!({ "key": key.trim(), "device": device });
         Granted::from_answer(self.send_json("/pair", &asked)?)
     }
 
@@ -817,11 +815,6 @@ fn bytes_or_none(answer: Answer) -> ApiResult<Option<Vec<u8>>> {
     }
 }
 
-/// The JSON of `answer`: a call's, as large as the whole library.
-fn json(answer: Answer) -> ApiResult<serde_json::Value> {
-    json_at_most(answer, MAX_ANSWER)
-}
-
 /// The JSON of an answer that is small: about the server, the account, or what it did.
 fn small_json(answer: Answer) -> ApiResult<serde_json::Value> {
     json_at_most(answer, MAX_SMALL)
@@ -835,13 +828,16 @@ fn json_at_most(answer: Answer, limit: u64) -> ApiResult<serde_json::Value> {
 }
 
 impl Transport for Http {
-    fn call(&self, method: &str, args: serde_json::Value) -> ApiResult<serde_json::Value> {
+    fn call(&self, method: &str, args: serde_json::Value) -> ApiResult<Vec<u8>> {
         let answer = self.send(|http| {
             http.post(&format!("/call/{method}"))
                 .header("Content-Type", "application/json")
                 .send(args.to_string())
         })?;
-        json(answer)
+        match read_at_most(answer, MAX_ANSWER)? {
+            (200, body) => Ok(body),
+            (status, body) => Err(error(status, &body)),
+        }
     }
 
     fn picture(&self, checksum: &str) -> ApiResult<Option<Vec<u8>>> {
@@ -1002,14 +998,11 @@ pub fn connect_locally(
     if !answers(address) {
         start(address, program, certificate)?;
     }
-    let mut pin = match pinned() {
-        Ok(pin) if Http::pinned(pin.clone()).version().is_ok() => pin,
-        _ => {
-            stop_unpinned(address, pairing_key, device)?;
-            start(address, program, certificate)?;
-            pinned()?
-        }
-    };
+    // What answers there without this user's certificate is someone else's, given nothing.
+    let mut pin = pinned()?;
+    if Http::pinned(pin.clone()).version().is_err() {
+        return Err(foreign(address));
+    }
     let mut paired = None;
     let version = Http::pinned(pin.clone())
         .version()
@@ -1053,34 +1046,6 @@ fn foreign(address: std::net::SocketAddr) -> String {
 /// Whether anything takes connections at `address`.
 fn answers(address: std::net::SocketAddr) -> bool {
     std::net::TcpStream::connect_timeout(&address, Duration::from_secs(1)).is_ok()
-}
-
-/// Stops what answers at `address` without this user's certificate, when it is a Freya server
-/// from before the server here was reached over TLS: paired with the key itself, as it takes
-/// it, to stop it. Nothing else is given it: the key is useless once a new server makes its
-/// own. Anything else answering there is someone else's.
-fn stop_unpinned(
-    address: std::net::SocketAddr,
-    pairing_key: &Path,
-    device: &str,
-) -> Result<(), String> {
-    let plain = Http::new(&format!("http://{address}"));
-    if plain.version().is_err() {
-        return Err(foreign(address));
-    }
-    log::info!("the server here is from before TLS on this computer; stopping it");
-    // One from before accounts stops without a token.
-    if plain.quit().is_err() {
-        let key = std::fs::read_to_string(pairing_key).map_err(|_| foreign(address))?;
-        let granted = plain
-            .pair_sending_the_key(&key, device)
-            .map_err(|_| foreign(address))?;
-        plain
-            .with_token(Some(granted.access))
-            .quit()
-            .map_err(|_| foreign(address))?;
-    }
-    wait_until_gone(address)
 }
 
 /// Waits until nothing answers at `address`.

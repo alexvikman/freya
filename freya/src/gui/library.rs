@@ -216,6 +216,39 @@ pub enum LibrarySource {
     },
 }
 
+/// Whether the web address `url` is on this computer or its network: `localhost`, or an
+/// address that is a loopback, private, link-local or unspecified one.
+fn is_near(url: &str) -> bool {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let host = match host.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or_default(),
+        None => host.rsplit_once(':').map_or(host, |(name, _)| name),
+    };
+    let host = host.to_ascii_lowercase();
+    if host == "localhost" || host.ends_with(".localhost") || host.ends_with(".local") {
+        return true;
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => {
+            ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified()
+        }
+        Ok(std::net::IpAddr::V6(ip)) => {
+            ip.is_loopback()
+                || ip.is_unique_local()
+                || ip.is_unicast_link_local()
+                || ip.is_unspecified()
+                || ip
+                    .to_ipv4_mapped()
+                    .is_some_and(|ip| ip.is_loopback() || ip.is_private() || ip.is_link_local())
+        }
+        Err(_) => false,
+    }
+}
+
 impl LibrarySource {
     /// Whether the library is on this computer.
     fn here(&self) -> bool {
@@ -900,11 +933,19 @@ impl LibraryPanel {
     /// is played from nowhere.
     pub fn stream_url(&self, path: &Path) -> Option<freya_audio::RemoteSource> {
         let source = self.source.as_ref()?;
+        let elsewhere = !source.here();
+        let nowhere = || freya_audio::RemoteSource {
+            url: String::new(),
+            bearer: None,
+            agent: None,
+        };
         if freya_audio::is_url(&path.to_string_lossy()) {
-            return None;
+            // A stream a server elsewhere names is played from the web, but not one on this
+            // computer or its network, which a hostile server could have Freya ask.
+            let near = elsewhere && is_near(&path.to_string_lossy());
+            return near.then(nowhere);
         }
         let forced = std::env::var_os("FREYA_STREAM").is_some();
-        let elsewhere = !source.here();
         if !elsewhere && !forced {
             return None;
         }
@@ -915,11 +956,7 @@ impl LibraryPanel {
                 bearer: remote.0.bearer(),
                 agent: Some(Arc::clone(agent)),
             }),
-            None if elsewhere => Some(freya_audio::RemoteSource {
-                url: String::new(),
-                bearer: None,
-                agent: None,
-            }),
+            None if elsewhere => Some(nowhere()),
             None => None,
         }
     }
@@ -4065,6 +4102,30 @@ mod tests {
             db,
             pictures.map(Pictures::new),
         ))
+    }
+
+    #[test]
+    fn a_server_elsewhere_cannot_have_this_network_asked() {
+        for near in [
+            "http://127.0.0.1:8080/x",
+            "http://192.168.1.1/admin",
+            "https://10.0.0.5/",
+            "http://[::1]/",
+            "http://[fe80::1]:80/",
+            "http://localhost/",
+            "http://printer.local/",
+            "http://user@172.16.0.1/",
+            "http://0.0.0.0/",
+        ] {
+            assert!(is_near(near), "{near}");
+        }
+        for far in [
+            "https://radio.example/stream",
+            "http://8.8.8.8/",
+            "http://[2001:db8::1]/",
+        ] {
+            assert!(!is_near(far), "{far}");
+        }
     }
 
     #[test]

@@ -208,7 +208,7 @@ macro_rules! calls {
                 fn $name(&self, $($arg: $ty),*) -> ApiResult<$ret> {
                     let args = serde_json::to_value(($($arg,)*)).map_err(wire_error)?;
                     let answer = self.0.call(stringify!($name), args)?;
-                    serde_json::from_value(answer).map_err(wire_error)
+                    serde_json::from_slice(&answer).map_err(wire_error)
                 }
             )*
         }
@@ -381,7 +381,9 @@ fn wire_error(e: impl std::fmt::Display) -> ApiError {
 
 /// What carries a call to a library elsewhere and brings back its answer.
 pub trait Transport: Send + Sync {
-    fn call(&self, method: &str, args: serde_json::Value) -> ApiResult<serde_json::Value>;
+    /// The answer to the call of `method` with `args`, as JSON, read into its own type by the
+    /// caller: never into a tree of values, many times its size.
+    fn call(&self, method: &str, args: serde_json::Value) -> ApiResult<Vec<u8>>;
     /// The picture kept as `checksum`.
     fn picture(&self, checksum: &str) -> ApiResult<Option<Vec<u8>>>;
     /// Keeps the picture in `bytes`, at most `largest` wide or high when given: its checksum.

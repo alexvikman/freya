@@ -50,7 +50,11 @@ impl Granted {
         Ok(Self {
             access: text("access_token")?,
             refresh: text("refresh_token")?,
-            lasts: Duration::from_secs(answer["expires_in"].as_u64().unwrap_or(0)),
+            // A day at most, whatever a server says: a time past what a clock holds would end
+            // Freya.
+            lasts: Duration::from_secs(
+                answer["expires_in"].as_u64().unwrap_or(0).min(24 * 60 * 60),
+            ),
         })
     }
 }
@@ -89,9 +93,14 @@ impl TokenStore {
     }
 
     pub fn set(&self, key: &str, token: &str) {
-        if self.keychain && keychain::set(key, token) {
-            self.forget_in_file(key);
-            return;
+        if self.keychain {
+            if keychain::set(key, token) {
+                self.forget_in_file(key);
+                return;
+            }
+            // Kept in the file instead: the keychain's, now out of date, goes, or it would be
+            // read first once the keychain could be again, and taken for a copy.
+            keychain::remove(key);
         }
         let mut tokens = Tokens::load(&self.file);
         if tokens.get(key).as_deref() != Some(token) {

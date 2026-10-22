@@ -38,8 +38,8 @@ const SAFE_HEADERS: [(&str, &str); 5] = [
 
 /// What happened in the browser.
 pub enum Heard {
-    /// Logged in: the token, or why not.
-    LoggedIn(Result<freya_client::Granted, String>),
+    /// Logged in: to the server pinned, the tokens; or why not.
+    LoggedIn(Result<(Option<freya_client::Pin>, freya_client::Granted), String>),
     PasswordChanged,
 }
 
@@ -122,6 +122,11 @@ impl PageProxy {
         format!("{}{PAGES_PATH}/password?start={start}", self.origin())
     }
 
+    /// Waits for no login any more: one that comes back is not taken.
+    pub fn cancel_login(&self) {
+        self.showing().login = None;
+    }
+
     /// Where the login page sends the browser back to.
     pub fn callback(&self) -> String {
         format!("{}/callback", self.origin())
@@ -174,7 +179,7 @@ fn answer(
         let device = crate::settings::device_name();
         return match server.redeem(&login, code, &device) {
             Ok(tokens) => {
-                tell(Heard::LoggedIn(Ok(tokens)));
+                tell(Heard::LoggedIn(Ok((server.pin().cloned(), tokens))));
                 let mut sent = Response::bytes(303, "text/plain; charset=utf-8", Vec::new());
                 sent.headers
                     .push(("Location", format!("{PAGES_PATH}/logged-in")));
@@ -455,7 +460,7 @@ mod tests {
         let done = browser.get(&back).call().unwrap();
         assert_eq!(done.status(), 303);
         assert_eq!(header(&done, "location"), "/web/logged-in");
-        let Heard::LoggedIn(Ok(tokens)) = wait() else {
+        let Heard::LoggedIn(Ok((_, tokens))) = wait() else {
             panic!("not logged in");
         };
         let pc = Http::new(&address).with_token(Some(tokens.access));
