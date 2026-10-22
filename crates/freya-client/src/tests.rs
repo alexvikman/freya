@@ -442,11 +442,11 @@ fn only_a_device_with_a_token_is_answered() {
     let pages = Http::new(&address).pages();
     let login = Login::new("http://127.0.0.1:47477/callback");
     assert_eq!(log_in(&pages, &login, &user, "correct horse").status, 401);
-    let page = mac.0.password_page().unwrap();
+    let ticket = mac.0.password_ticket().unwrap();
+    let page = format!("/web/password?ticket={ticket}");
     let shown = pages.ask("GET", &page, None, Vec::new()).unwrap();
     assert_eq!(shown.status, 200);
     assert!(!String::from_utf8_lossy(&shown.body).contains(r#"name="current""#));
-    let ticket = page.split("ticket=").nth(1).unwrap();
     let changed = pages
         .ask(
             "POST",
@@ -715,5 +715,54 @@ fn a_new_device_knows_the_server_by_its_connection_code() {
     let message = freya_protocol::connection_message(&nonce, digest.as_ref());
     assert!(ring::hmac::verify(&key, &message, &proof).is_err());
     drop(server);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_program_in_the_local_servers_place_is_given_nothing() {
+    let (_plain, _remote, local, dir) = served("impostor");
+    // This user's server keeps its certificate in their folder; another program listens in its
+    // place, with a certificate of its own.
+    let ours = freya_server::tls::Identity::make().unwrap();
+    let certificate = dir.join("tls-certificate.der");
+    std::fs::write(&certificate, &ours.certificate).unwrap();
+    let pairing_key = dir.join("pairing.key");
+    std::fs::write(&pairing_key, "the key").unwrap();
+    let theirs = freya_server::tls::Identity::make().unwrap();
+    let served = Served {
+        library: Arc::clone(&local),
+        server: None,
+        quit: None,
+        accounts: None,
+        certificate: Some(theirs.certificate.clone()),
+    };
+    let impostor = Server::start_tls(
+        "127.0.0.1:0",
+        freya_server::handler(served),
+        theirs.server_config().unwrap(),
+    )
+    .unwrap();
+    let store = TokenStore::new(dir.join("servers.json"), false);
+    store.set(&format!("http://{}", impostor.address()), "a refresh token");
+    let refused = connect_locally(
+        impostor.address(),
+        &dir.join("no such program"),
+        &pairing_key,
+        &certificate,
+        &store,
+        "Mac",
+    )
+    .err()
+    .unwrap();
+    assert!(refused.contains("Another program answers"), "{refused}");
+    assert!(!freya_server::tls::answers_as(
+        impostor.address(),
+        &ours.certificate
+    ));
+    assert!(freya_server::tls::answers_as(
+        impostor.address(),
+        &theirs.certificate
+    ));
+    drop(impostor);
     let _ = std::fs::remove_dir_all(&dir);
 }

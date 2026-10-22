@@ -7,6 +7,9 @@
 //! to that name and looks it up as the server's address itself, so the certificate holds
 //! when the address changes. It does not expire: a client trusts it because it pinned it,
 //! not because of its dates.
+//!
+//! The client on the same computer reads it from the server's folder and pins it too, so a
+//! program of another user listening on the server's address in its place is found out.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -18,6 +21,9 @@ use crate::accounts::write_private;
 
 /// What a client calls the server in TLS, whatever its address.
 pub const TLS_NAME: &str = "freya-server.invalid";
+/// The files in the server's folder that hold its certificate and its key.
+pub const CERTIFICATE_FILE: &str = "tls-certificate.der";
+const KEY_FILE: &str = "tls-key.pk8";
 
 /// The server's certificate, in DER, and its private key, in PKCS #8.
 pub struct Identity {
@@ -28,7 +34,7 @@ pub struct Identity {
 impl Identity {
     /// The identity kept in `dir`, made there the first time.
     pub fn load_or_make(dir: &Path) -> Result<Self, String> {
-        let (certificate, key) = (dir.join("tls-certificate.der"), dir.join("tls-key.pk8"));
+        let (certificate, key) = (dir.join(CERTIFICATE_FILE), dir.join(KEY_FILE));
         if let (Ok(cert), Ok(key)) = (std::fs::read(&certificate), std::fs::read(&key)) {
             return Ok(Self {
                 certificate: cert,
@@ -51,8 +57,9 @@ impl Identity {
             .map_err(|e| e.to_string())?;
         let mut serial = [0; 16];
         ring::rand::SecureRandom::fill(&random, &mut serial).map_err(|e| e.to_string())?;
-        // Positive, as a serial number must be.
-        serial[0] &= 0x7f;
+        // Positive, as a serial number must be, and with its first byte set, so DER takes it as
+        // it is, minimally encoded.
+        serial[0] = (serial[0] & 0x7f) | 0x40;
         let tbs = tbs_certificate(&serial, pair.public_key().as_ref());
         let signature = pair.sign(&random, &tbs).map_err(|e| e.to_string())?;
         let mut signed = bit_string(signature.as_ref());
@@ -87,6 +94,91 @@ impl Identity {
     /// groups of four hex digits.
     pub fn fingerprint(&self) -> String {
         fingerprint(&self.certificate)
+    }
+}
+
+/// Whether what listens at `address` is a server with `certificate`: one that completes TLS
+/// 1.3 with it, as only the one with its key does.
+pub fn answers_as(address: std::net::SocketAddr, certificate: &[u8]) -> bool {
+    let answered = || -> Result<bool, Box<dyn std::error::Error>> {
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let config = rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
+            .with_protocol_versions(&[&rustls::version::TLS13])?
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(Pinned {
+                certificate: certificate.to_vec(),
+                provider,
+            }))
+            .with_no_client_auth();
+        let name = rustls::pki_types::ServerName::try_from(TLS_NAME)?;
+        let mut connection = rustls::ClientConnection::new(Arc::new(config), name)?;
+        let wait = std::time::Duration::from_secs(3);
+        let mut socket = std::net::TcpStream::connect_timeout(&address, wait)?;
+        socket.set_read_timeout(Some(wait))?;
+        socket.set_write_timeout(Some(wait))?;
+        while connection.is_handshaking() {
+            connection.complete_io(&mut socket)?;
+        }
+        Ok(true)
+    };
+    answered().unwrap_or(false)
+}
+
+/// Takes the one certificate given, and no other, with its signatures checked as TLS asks.
+#[derive(Debug)]
+struct Pinned {
+    certificate: Vec<u8>,
+    provider: Arc<rustls::crypto::CryptoProvider>,
+}
+
+impl rustls::client::danger::ServerCertVerifier for Pinned {
+    fn verify_server_cert(
+        &self,
+        end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _name: &rustls::pki_types::ServerName<'_>,
+        _ocsp: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        if end_entity.as_ref() == self.certificate.as_slice() {
+            Ok(rustls::client::danger::ServerCertVerified::assertion())
+        } else {
+            Err(rustls::Error::General("another certificate".into()))
+        }
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        certificate: &rustls::pki_types::CertificateDer<'_>,
+        signature: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            certificate,
+            signature,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        certificate: &rustls::pki_types::CertificateDer<'_>,
+        signature: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            certificate,
+            signature,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
     }
 }
 

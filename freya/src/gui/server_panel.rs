@@ -326,18 +326,15 @@ impl ServerPanel {
             return;
         };
         self.password_error.clear();
-        let page = match remote.0.password_page() {
-            Ok(page) => page,
+        let ticket = match remote.0.password_ticket() {
+            Ok(ticket) => ticket,
             Err(e) => {
                 self.password_error = e.to_string();
                 return;
             }
         };
         let page = match self.proxy() {
-            Ok(proxy) => {
-                proxy.show(remote.0.pages());
-                format!("{}{page}", proxy.origin())
-            }
+            Ok(proxy) => proxy.show_password(remote.0.pages(), ticket),
             Err(e) => {
                 self.password_error = e;
                 return;

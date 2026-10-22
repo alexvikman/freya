@@ -292,8 +292,6 @@ pub fn server_program() -> Option<std::path::PathBuf> {
 
 /// The library of Freya's server on this computer, started from beside this program.
 pub fn local_source() -> Option<library::LibrarySource> {
-    server_program().map(|program| library::LibrarySource::Local {
-        address: format!("http://{}", freya_server::LOCAL_ADDRESS),
-        program,
-    })
+    let address = freya_server::LOCAL_ADDRESS.parse().ok()?;
+    server_program().map(|program| library::LibrarySource::Local { address, program })
 }

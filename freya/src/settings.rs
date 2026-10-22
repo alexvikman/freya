@@ -173,6 +173,16 @@ pub fn pairing_key_path() -> Option<PathBuf> {
     dirs().map(|d| d.data_dir().join("server").join(freya_server::PAIRING_KEY))
 }
 
+/// The certificate Freya's server on this computer keeps in its folder, which the client here
+/// pins.
+pub fn server_certificate_path() -> Option<PathBuf> {
+    dirs().map(|d| {
+        d.data_dir()
+            .join("server")
+            .join(freya_server::tls::CERTIFICATE_FILE)
+    })
+}
+
 /// Where this computer keeps the refresh tokens servers gave it, by their address: the
 /// system's keychain where Freya uses one, else a file only the user can read.
 pub fn token_store() -> Option<freya_client::TokenStore> {

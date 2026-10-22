@@ -5,7 +5,9 @@
 //!
 //! A client on the server's own computer connects with the pairing key: a secret the server
 //! writes to a file of its own, readable only by the user it runs as, and makes anew once
-//! used, so only a program of that user, on that computer, connects so.
+//! used, so only a program of that user, on that computer, connects so. The client does not
+//! send the key, only an HMAC with it over a nonce of its own; a wrong one leaves the key as it
+//! is, so nobody else can keep the user from pairing, and a few a minute are tried.
 //!
 //! Other devices log in in the browser, as OAuth's authorization code with PKCE has it: the
 //! login page gives a code for the password, which only the client that asked for it can trade
@@ -59,6 +61,8 @@ const USED_EVERY: u64 = 60 * 60;
 /// How long a connection code lasts, and how many proofs an address may ask before waiting.
 const CONNECTION_CODE_LASTS: Duration = Duration::from_secs(10 * 60);
 const PROOFS_FREE: u32 = 10;
+/// Wrong pairing proofs taken before the next has to wait.
+const PAIRINGS_FREE: u32 = 10;
 /// How long an access token lasts, in seconds.
 pub const ACCESS_LASTS: u64 = 60 * 60;
 /// How long after it was renewed a refresh token still renews: for a client whose answer was
@@ -182,6 +186,8 @@ pub struct Caller {
     pub user: u32,
     pub device: String,
     pub role: Role,
+    /// Whether the device paired on the server's own computer.
+    pub paired: bool,
 }
 
 struct Connection {
@@ -273,7 +279,7 @@ pub struct Accounts {
     /// Where they are kept; nowhere in tests.
     file: Option<PathBuf>,
     kept: Mutex<Kept>,
-    /// The SHA-256 of the pairing key now, hex, and where it is written.
+    /// The pairing key now, and where it is written.
     pairing: Mutex<Option<String>>,
     pairing_file: Option<PathBuf>,
     grants: Mutex<Vec<Grant>>,
@@ -349,6 +355,7 @@ impl Accounts {
             user,
             device: device.id.clone(),
             role: Role::Admin,
+            paired: device.joined == Some(Joined::Paired),
         };
         let now = now();
         if now >= device.used + USED_EVERY {
@@ -359,18 +366,34 @@ impl Accounts {
         Some(Caller { role, ..caller })
     }
 
-    /// A token for a device named `name` of the owner, given the pairing key; none for
-    /// another key. The key is made anew either way. A device of that name paired before is
-    /// this computer's too, pairing again: it goes, so the devices do not pile up.
-    pub fn pair(&self, key: &str, name: &str) -> Option<Granted> {
+    /// Tokens for a device named `name` of the owner, given `proof`, the HMAC with the pairing
+    /// key over `nonce` and the name; none for another. The key is made anew once used; a
+    /// wrong proof leaves it, and a few a minute are tried.
+    pub fn pair(&self, nonce: &[u8], proof: &[u8], name: &str) -> Option<Granted> {
+        let tried = [("pairing".to_owned(), PAIRINGS_FREE)];
+        {
+            let mut tries = self.tries.lock().unwrap_or_else(|e| e.into_inner());
+            if tries.wait(&tried).is_some() {
+                return None;
+            }
+            tries.count(&tried);
+        }
         let right = {
             let pairing = self.pairing.lock().unwrap_or_else(|e| e.into_inner());
-            pairing.as_deref() == Some(sha256(key.as_bytes()).as_str())
+            pairing.as_ref().is_some_and(|key| {
+                let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key.as_bytes());
+                let message = freya_protocol::pairing_message(nonce, name);
+                ring::hmac::verify(&key, &message, proof).is_ok()
+            })
         };
-        self.new_pairing_key();
         if !right {
             return None;
         }
+        self.tries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .right(&tried);
+        self.new_pairing_key();
         let name = device_name(name);
         self.kept()
             .devices
@@ -739,12 +762,14 @@ impl Accounts {
     /// Makes a new pairing key and writes it where a client on this computer reads it.
     fn new_pairing_key(&self) {
         let key = random_hex(32);
-        *self.pairing.lock().unwrap_or_else(|e| e.into_inner()) = Some(sha256(key.as_bytes()));
+        // Written while held, so the file and the key taken never differ.
+        let mut pairing = self.pairing.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(file) = &self.pairing_file
             && let Err(e) = write_private(file, key.as_bytes())
         {
             log::warn!("could not write the pairing key: {e}");
         }
+        *pairing = Some(key);
     }
 
     fn save(&self, kept: &Kept) {
@@ -909,6 +934,19 @@ pub fn write_private(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    /// Pairs as `name` with the key in `file`, as a client on the server's computer does.
+    fn pair(accounts: &Accounts, file: &Path, name: &str) -> Option<Granted> {
+        let key = std::fs::read_to_string(file).unwrap();
+        pair_with(accounts, &key, name)
+    }
+
+    fn pair_with(accounts: &Accounts, key: &str, name: &str) -> Option<Granted> {
+        let nonce = [9; 32];
+        let signing = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key.as_bytes());
+        let proof = ring::hmac::sign(&signing, &freya_protocol::pairing_message(&nonce, name));
+        accounts.pair(&nonce, proof.as_ref(), name)
+    }
+
     #[test]
     fn devices_pair_log_in_and_are_revoked() {
         let dir = std::env::temp_dir().join(format!("freya-accounts-{}", std::process::id()));
@@ -924,13 +962,21 @@ mod tests {
             assert_eq!(mode(&file), 0o600);
         }
 
-        assert_eq!(accounts.pair("wrong", "Mac"), None);
-        assert_eq!(accounts.pair(&key, "Mac"), None, "a key is used once");
-        let key = std::fs::read_to_string(&pairing).unwrap();
-        let old = accounts.pair(&key, "Mac").unwrap();
+        assert_eq!(pair_with(&accounts, "wrong", "Mac"), None);
+        assert_eq!(
+            std::fs::read_to_string(&pairing).unwrap(),
+            key,
+            "a wrong one leaves the key"
+        );
+        let old = pair(&accounts, &pairing, "Mac").unwrap();
+        assert_eq!(
+            pair_with(&accounts, &key, "Mac"),
+            None,
+            "a key is used once"
+        );
         // Pairing again takes the place of the device paired before.
-        let key = std::fs::read_to_string(&pairing).unwrap();
-        let paired = accounts.pair(&key, "Mac").unwrap();
+        let paired = pair(&accounts, &pairing, "Mac").unwrap();
+        assert!(accounts.caller(&paired.access).unwrap().paired);
         assert_eq!(accounts.caller(&old.access), None);
         let mac = accounts.caller(&paired.access).unwrap();
         assert_eq!(mac.user, OWNER);
@@ -1168,8 +1214,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let pairing = dir.join("pairing.key");
         let accounts = Accounts::open(None, Some(pairing.clone()));
-        let key = std::fs::read_to_string(&pairing).unwrap();
-        let first = accounts.pair(&key, "Mac").unwrap();
+        let first = pair(&accounts, &pairing, "Mac").unwrap();
         let mac = accounts.caller(&first.access).unwrap();
 
         let second = accounts.renew(&first.refresh).unwrap();
@@ -1191,16 +1236,14 @@ mod tests {
         assert_eq!(accounts.renew(&fourth.refresh), None);
 
         // A lost answer is asked again once: twice, the token was copied.
-        let key = std::fs::read_to_string(&pairing).unwrap();
-        let paired = accounts.pair(&key, "Tablet").unwrap();
+        let paired = pair(&accounts, &pairing, "Tablet").unwrap();
         let renewed = accounts.renew(&paired.refresh).unwrap();
         assert!(accounts.renew(&paired.refresh).is_some());
         assert_eq!(accounts.renew(&paired.refresh), None);
         assert_eq!(accounts.caller(&renewed.access), None);
 
         // Forged or ended access tokens are not taken.
-        let key = std::fs::read_to_string(&pairing).unwrap();
-        let fresh = accounts.pair(&key, "Mac").unwrap();
+        let fresh = pair(&accounts, &pairing, "Mac").unwrap();
         let (signed, _) = fresh.access.rsplit_once('.').unwrap();
         assert_eq!(
             accounts.caller(&format!("{signed}.{}", "00".repeat(32))),

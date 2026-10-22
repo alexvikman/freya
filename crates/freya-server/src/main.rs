@@ -7,8 +7,10 @@
 //! `freya-server [--address HOST:PORT] [--data FOLDER]`, or `--version`. It keeps its library, pictures,
 //! settings and log in its own folder, the first time taking in what Freya kept in its folder
 //! before the server was its own. It runs until stopped: Ctrl-C, SIGTERM, or `POST /quit` from
-//! this computer. One that finds another on its address ends at once, and without failing, so
-//! what starts it at login does not start it again and again. On macOS it shows an icon in the
+//! a device paired on this computer. It serves this computer over TLS too, with the
+//! certificate the client here pins from its folder. One that finds this user's server on its
+//! address already ends at once, and without failing, so what starts it at login does not start
+//! it again and again; one that finds another program there says so, and fails. On macOS it shows an icon in the
 //! menu bar, to open Freya, show the log, or stop it.
 
 use std::path::{Path, PathBuf};
@@ -60,12 +62,24 @@ fn main() {
 }
 
 fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> Result<(), String> {
-    // Before the library is opened: two servers never share it.
+    let identity = Identity::load_or_make(data)?;
+    // Before the library is opened: two servers never share it. One already answering with
+    // this certificate is this user's, and this one is not needed; another program holding the
+    // address, of another user perhaps, is said so, and fails, so what starts the server tries
+    // again later.
     match std::net::TcpListener::bind(address) {
         Ok(free) => drop(free),
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-            log::info!("another server answers on {address}; this one is not needed");
-            return Ok(());
+            let ours = address
+                .parse()
+                .is_ok_and(|at| freya_server::tls::answers_as(at, &identity.certificate));
+            if ours {
+                log::info!("this user's server answers on {address} already");
+                return Ok(());
+            }
+            return Err(format!(
+                "another program holds {address}, not this user's server: it cannot start"
+            ));
         }
         Err(e) => return Err(format!("could not listen on {address}: {e}")),
     }
@@ -107,7 +121,6 @@ fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> 
         let _ = stop.send(());
     })
     .map_err(|e| format!("could not listen for being stopped: {e}"))?;
-    let identity = Identity::load_or_make(data)?;
     let served = Served {
         library: service.api(),
         server: Some(Arc::clone(&service) as _),
@@ -118,7 +131,8 @@ fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> 
         ))),
         certificate: Some(identity.certificate.clone()),
     };
-    let server = Server::start(address, handler(served.clone()))
+    // TLS on this computer too, with the certificate the client here pins from this folder.
+    let server = Server::start_tls(address, handler(served.clone()), identity.server_config()?)
         .map_err(|e| format!("could not listen on {address}: {e}"))?;
     let network = Network::follow(served, Arc::clone(&service), identity);
     log::info!(

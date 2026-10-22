@@ -198,7 +198,10 @@ impl Item {
 pub enum LibrarySource {
     /// Freya's server on this computer, at `address`, started from `program` when none answers
     /// there.
-    Local { address: String, program: PathBuf },
+    Local {
+        address: std::net::SocketAddr,
+        program: PathBuf,
+    },
     /// A server on another computer, its certificate pinned, called `name`.
     Remote {
         pin: freya_client::Pin,
@@ -796,26 +799,28 @@ impl LibraryPanel {
         };
         let (api, server): (Arc<dyn LibraryApi>, Arc<dyn Server>) = match source {
             LibrarySource::Local { address, program } => {
-                let (Some(pairing_key), Some(store)) = (
+                let (Some(pairing_key), Some(certificate), Some(store)) = (
                     crate::settings::pairing_key_path(),
+                    crate::settings::server_certificate_path(),
                     crate::settings::token_store(),
                 ) else {
                     log::warn!("no library: no folder for Freya's files");
                     return;
                 };
-                let cache = crate::settings::cache_dir().map(|dir| dir.join("pictures"));
                 let connected = freya_client::connect_locally(
-                    &address,
+                    address,
                     &program,
                     &pairing_key,
+                    &certificate,
                     &store,
                     &crate::settings::device_name(),
-                    cache,
                 );
                 let remote = match connected {
                     Ok(remote) => remote,
                     Err(e) => {
                         log::warn!("no library: {e}");
+                        self.server_state = "unreachable";
+                        self.server_error = e;
                         return;
                     }
                 };

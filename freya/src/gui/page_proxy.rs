@@ -40,6 +40,9 @@ pub enum Heard {
 struct Showing {
     pages: Option<Pages>,
     login: Option<(Http, Login)>,
+    /// The ticket that opens the password page, added on the way to the server: so it is in
+    /// no URL the browser is opened with, nor in any program's command line.
+    ticket: Option<String>,
 }
 
 pub struct PageProxy {
@@ -84,13 +87,17 @@ impl PageProxy {
         let mut showing = self.showing();
         showing.pages = Some(server.pages());
         showing.login = Some((server, login));
+        showing.ticket = None;
     }
 
-    /// Shows `pages`, no login waiting.
-    pub fn show(&self, pages: Pages) {
+    /// Shows `pages`, its password page opened with `ticket`, and no login waiting: the page
+    /// to open.
+    pub fn show_password(&self, pages: Pages, ticket: String) -> String {
         let mut showing = self.showing();
         showing.pages = Some(pages);
         showing.login = None;
+        showing.ticket = Some(ticket);
+        format!("{}{PAGES_PATH}/password", self.origin())
     }
 
     /// Where the login page sends the browser back to.
@@ -116,7 +123,8 @@ fn answer(
         return text(403, "Open this page from Freya.");
     }
     let origin = format!("http://{address}");
-    if request.method == "POST" && request.header("origin").is_some_and(|o| o != origin) {
+    // A form is taken only from the pages themselves, as a browser says it sent it.
+    if request.method == "POST" && request.header("origin") != Some(origin.as_str()) {
         return text(403, "Open this page from Freya.");
     }
     if (request.method.as_str(), request.path.as_str()) == ("GET", "/callback") {
@@ -159,13 +167,21 @@ fn answer(
     if !request.path.starts_with(&format!("{PAGES_PATH}/")) {
         return text(404, "No such page.");
     }
-    let Some(pages) = showing().pages.clone() else {
+    let (Some(pages), ticket) = ({
+        let showing = showing();
+        (showing.pages.clone(), showing.ticket.clone())
+    }) else {
         return text(404, "Open this page from Freya.");
     };
-    let path = if request.query.is_empty() {
-        request.path.clone()
-    } else {
-        format!("{}?{}", request.path, request.query)
+    let path = match ticket {
+        // The password page, opened without its ticket, which is added here.
+        Some(ticket)
+            if request.method == "GET" && request.path == format!("{PAGES_PATH}/password") =>
+        {
+            format!("{}?ticket={ticket}", request.path)
+        }
+        _ if request.query.is_empty() => request.path.clone(),
+        _ => format!("{}?{}", request.path, request.query),
     };
     let page = match pages.ask(
         &request.method,
@@ -264,12 +280,18 @@ mod tests {
         let wait = || heard.recv_timeout(Duration::from_secs(10)).unwrap();
 
         // The password, set on the page Freya opened, as from the server's own computer.
-        let page = mac.password_page().unwrap();
-        proxy.show(mac.pages());
-        let shown = browser.get(&format!("{origin}{page}")).call().unwrap();
+        let ticket = mac.password_ticket().unwrap();
+        let page = proxy.show_password(mac.pages(), ticket.clone());
+        assert!(!page.contains(&ticket), "the ticket is in no URL");
+        let shown = browser.get(&page).call().unwrap();
         assert_eq!(shown.status(), 200);
-        let ticket = page.split("ticket=").nth(1).unwrap();
         let form = format!("ticket={ticket}&password=correct+horse&again=correct+horse");
+        let unsent = browser
+            .post(&format!("{origin}/web/password"))
+            .header("Content-Type", FORM)
+            .send(form.clone())
+            .unwrap();
+        assert_eq!(unsent.status(), 403, "a form says where it was sent from");
         let elsewhere = browser
             .post(&format!("{origin}/web/password"))
             .header("Content-Type", FORM)

@@ -17,8 +17,9 @@
 //! - `GET /certificate`: the server's TLS certificate, in DER, for a client to pin the first
 //!   time it connects.
 //! - `POST /quit`: the server stops; only from this computer.
-//! - `POST /pair`: `{"key", "device"}`, the pairing key a client on this computer read: tokens
-//!   for the device, as `/token` gives them. Only from this computer.
+//! - `POST /pair`: `{"nonce", "proof", "device"}`, the HMAC with the pairing key a client on
+//!   this computer read over its nonce and its name (see [`crate::accounts`]): tokens for the
+//!   device, as `/token` gives them. Only from this computer.
 //! - `POST /token`: tokens for a device, `{"access_token", "refresh_token", "token_type",
 //!   "expires_in"}` (see [`crate::accounts`]), for `{"grant_type": "authorization_code",
 //!   "code", "code_verifier", "redirect_uri", "device"}`, the code the login page gave (see
@@ -151,7 +152,7 @@ fn answer(served: &Served, request: Request) -> Response {
         return Response::error(403, "only the server's admin may do that");
     }
     if let (Some(accounts), Some(caller)) = (&served.accounts, &caller)
-        && let Some(answer) = account(accounts, caller, &request, path, local)
+        && let Some(answer) = account(accounts, caller, &request, path)
     {
         return answer;
     }
@@ -246,8 +247,14 @@ fn answer(served: &Served, request: Request) -> Response {
             200,
             &serde_json::json!({ "version": env!("CARGO_PKG_VERSION") }),
         ),
+        // From this computer, and with accounts by an admin's device paired there.
         ("POST", "/quit") => match &served.quit {
-            Some(quit) if local => {
+            Some(quit)
+                if local
+                    && caller
+                        .as_ref()
+                        .is_none_or(|c| c.paired && c.role == Role::Admin) =>
+            {
                 quit();
                 Response::json(200, &serde_json::Value::Null)
             }
@@ -415,16 +422,20 @@ fn computer_name() -> String {
 fn pair(accounts: &Accounts, request: &Request, local: bool) -> Response {
     #[derive(serde::Deserialize)]
     struct Pairing {
-        key: String,
+        nonce: String,
+        proof: String,
         device: String,
     }
     if !local {
         return Response::error(403, "pairing is only from the server's computer");
     }
-    let Ok(pairing) = serde_json::from_slice::<Pairing>(&request.body) else {
-        return Response::error(400, "a key and a device");
+    let asked = serde_json::from_slice::<Pairing>(&request.body)
+        .ok()
+        .and_then(|asked| Some((unhex(&asked.nonce)?, unhex(&asked.proof)?, asked.device)));
+    let Some((nonce, proof, device)) = asked.filter(|(nonce, _, _)| nonce.len() == 32) else {
+        return Response::error(400, "a nonce, a proof and a device");
     };
-    match accounts.pair(pairing.key.trim(), &pairing.device) {
+    match accounts.pair(&nonce, &proof, &device) {
         Some(granted) => Response::json(200, &granted.json()),
         None => Response::error(403, "not the pairing key"),
     }
@@ -512,7 +523,6 @@ fn account(
     caller: &Caller,
     request: &Request,
     path: &str,
-    local: bool,
 ) -> Option<Response> {
     #[derive(serde::Deserialize)]
     struct Revoked {
@@ -525,7 +535,9 @@ fn account(
         },
         ("POST", "/account/password-page") => Response::json(
             200,
-            &serde_json::json!({ "ticket": accounts.ticket(caller, local) }),
+            // On the server's computer, the password is changed without the one now: for a
+            // device paired there, not any that calls from there.
+            &serde_json::json!({ "ticket": accounts.ticket(caller, caller.paired) }),
         ),
         ("POST", "/account/connection-code") => {
             if caller.role != Role::Admin {

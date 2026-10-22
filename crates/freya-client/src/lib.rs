@@ -488,7 +488,26 @@ impl Http {
     /// Tokens for this device, named `device`, given the pairing key a client on the server's
     /// computer reads.
     pub fn pair(&self, key: &str, device: &str) -> ApiResult<Granted> {
-        let asked = serde_json::json!({ "key": key, "device": device });
+        // The key is not sent: an HMAC with it over a nonce of this client's.
+        let mut nonce = [0; 32];
+        // The system's randomness failing leaves nothing safe to do.
+        ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut nonce)
+            .expect("the system's random numbers");
+        let signing = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key.trim().as_bytes());
+        let proof = ring::hmac::sign(&signing, &freya_protocol::pairing_message(&nonce, device));
+        let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let asked = serde_json::json!({
+            "nonce": hex(&nonce),
+            "proof": hex(proof.as_ref()),
+            "device": device,
+        });
+        Granted::from_answer(self.send_json("/pair", &asked)?)
+    }
+
+    /// A token for this device from a server from before pairing by proof, which took the key
+    /// itself: only to stop such a server, after an update, as a new one makes a key of its own.
+    fn pair_sending_the_key(&self, key: &str, device: &str) -> ApiResult<Granted> {
+        let asked = serde_json::json!({ "key": key.trim(), "device": device });
         Granted::from_answer(self.send_json("/pair", &asked)?)
     }
 
@@ -523,14 +542,15 @@ impl Http {
         }
     }
 
-    /// Where in [`Self::pages`] the account's user changes their password: a page for a while.
-    pub fn password_page(&self) -> ApiResult<String> {
+    /// The ticket that opens the page in [`Self::pages`] where the account's user changes their
+    /// password, `/web/password?ticket=`, for a while: hex, as the server gives it.
+    pub fn password_ticket(&self) -> ApiResult<String> {
         let answer = self.send(|http| http.post("/account/password-page").send_empty())?;
-        let ticket = json(answer)?["ticket"]
+        json(answer)?["ticket"]
             .as_str()
+            .filter(|ticket| !ticket.is_empty() && ticket.bytes().all(|b| b.is_ascii_hexdigit()))
             .map(str::to_owned)
-            .ok_or_else(|| ApiError("the server gave no ticket".into()))?;
-        Ok(format!("{PAGES_PATH}/password?ticket={ticket}"))
+            .ok_or_else(|| ApiError("the server gave no ticket".into()))
     }
 
     /// What the server is called, where it takes clients on other computers and its
@@ -888,77 +908,131 @@ fn follow_events(http: &Http, mut stream: ureq::BodyReader<'static>, tell: &Send
 }
 
 /// Freya's server on this computer at `address`, connected to as this device, named
-/// `device`: started from `program` when none answers there, and one of another version stopped
-/// first, so an update does not leave the old one running. A client without a refresh token
-/// for it, or with one it no longer takes, pairs with the key the server keeps in
-/// `pairing_key`; the refresh token is kept in `store`. Pictures are kept in `cache` when the
-/// server is not on this computer.
+/// `device`, over TLS with the certificate the server keeps in `certificate`, a file of the
+/// user's own: so a program of another user listening there in the server's place is found
+/// out, and given nothing. The server is started from `program` when nothing answers there,
+/// and one of another version stopped first, so an update does not leave the old one running.
+/// A client without a refresh token for it, or with one it no longer takes, pairs with the key
+/// the server keeps in `pairing_key`; the refresh token is kept in `store`.
 pub fn connect_locally(
-    address: &str,
+    address: std::net::SocketAddr,
     program: &Path,
     pairing_key: &Path,
+    certificate: &Path,
     store: &TokenStore,
     device: &str,
-    cache: Option<PathBuf>,
 ) -> Result<Arc<Remote<Http>>, String> {
-    let pair = || -> Result<Granted, String> {
-        let key = std::fs::read_to_string(pairing_key)
+    // Kept by the address it had before it was reached over TLS, so the token stays.
+    let key = format!("http://{address}");
+    let pinned = || -> Result<Pin, String> {
+        let certificate = std::fs::read(certificate).map_err(|_| foreign(address))?;
+        Ok(Pin {
+            address,
+            certificate,
+        })
+    };
+    let pair = |http: &Http| -> Result<Granted, String> {
+        let key_now = std::fs::read_to_string(pairing_key)
             .map_err(|e| format!("could not read the pairing key: {e}"))?;
-        let granted = Http::new(address)
-            .pair(key.trim(), device)
+        let granted = http
+            .pair(&key_now, device)
             .map_err(|e| format!("could not pair with the server: {e}"))?;
-        if !granted.refresh.is_empty() {
-            store.set(address, &granted.refresh);
-        }
+        store.set(&key, &granted.refresh);
         Ok(granted)
     };
-    let kept = || Some((store.clone(), address.to_owned()));
-    let as_kept = || {
-        let refresh = store.get(address).unwrap_or_default();
-        Http::new(address).with_session(refresh, None, kept())
+    let kept = || Some((store.clone(), key.clone()));
+    let as_kept = |pin: &Pin| {
+        let refresh = store.get(&key).unwrap_or_default();
+        Http::pinned(pin.clone()).with_session(refresh, None, kept())
+    };
+    if !answers(address) {
+        start(address, program, certificate)?;
+    }
+    let mut pin = match pinned() {
+        Ok(pin) if Http::pinned(pin.clone()).version().is_ok() => pin,
+        _ => {
+            stop_unpinned(address, pairing_key, device)?;
+            start(address, program, certificate)?;
+            pinned()?
+        }
     };
     let mut paired = None;
-    match Http::new(address).version() {
-        Ok(version) if version == env!("CARGO_PKG_VERSION") => {}
-        Ok(version) => {
-            log::info!("the server here is version {version}; starting this version's");
-            let stopped = as_kept().quit().is_ok()
-                // A server from before refresh tokens takes the token kept as it is.
-                || Http::new(address).with_token(store.get(address)).quit().is_ok();
-            if !stopped {
-                // It does not take this client's token: paired anew to stop it.
-                let granted = pair()?;
-                Http::new(address)
-                    .with_session(granted.refresh.clone(), Some(&granted), kept())
-                    .quit()
-                    .map_err(|e| format!("could not stop the server: {e}"))?;
-                paired = Some(granted).filter(|g| !g.refresh.is_empty());
-            }
-            wait_until_gone(address)?;
-            start(address, program)?;
+    let version = Http::pinned(pin.clone())
+        .version()
+        .map_err(|_| foreign(address))?;
+    if version != env!("CARGO_PKG_VERSION") {
+        log::info!("the server here is version {version}; starting this version's");
+        if as_kept(&pin).quit().is_err() {
+            // It does not take this client's token: paired anew to stop it.
+            let granted = pair(&Http::pinned(pin.clone()))?;
+            Http::pinned(pin.clone())
+                .with_session(granted.refresh.clone(), Some(&granted), kept())
+                .quit()
+                .map_err(|e| format!("could not stop the server: {e}"))?;
+            paired = Some(granted);
         }
-        Err(_) => start(address, program)?,
+        wait_until_gone(address)?;
+        start(address, program, certificate)?;
+        pin = pinned()?;
     }
     let mut http = match &paired {
         Some(granted) => {
-            Http::new(address).with_session(granted.refresh.clone(), Some(granted), kept())
+            Http::pinned(pin.clone()).with_session(granted.refresh.clone(), Some(granted), kept())
         }
-        None => as_kept(),
+        None => as_kept(&pin),
     };
     if http.account().map_err(|e| e.to_string())?.is_none() {
-        let granted = pair()?;
-        http = Http::new(address).with_session(granted.refresh.clone(), Some(&granted), kept());
-    }
-    if !is_this_computer(address) {
-        http.cache = cache.map(PictureCache::new);
+        let granted = pair(&Http::pinned(pin.clone()))?;
+        http = Http::pinned(pin).with_session(granted.refresh.clone(), Some(&granted), kept());
     }
     Ok(Arc::new(Remote(http)))
 }
 
-/// Waits until no server answers at `address`.
-fn wait_until_gone(address: &str) -> Result<(), String> {
+/// What is said of a program answering at `address` that is not this user's server.
+fn foreign(address: std::net::SocketAddr) -> String {
+    format!(
+        "Another program answers at {address} in the place of Freya's server, perhaps another \
+         user's; Freya gives it nothing. Quit it, or log the other user out, and open Freya again."
+    )
+}
+
+/// Whether anything takes connections at `address`.
+fn answers(address: std::net::SocketAddr) -> bool {
+    std::net::TcpStream::connect_timeout(&address, Duration::from_secs(1)).is_ok()
+}
+
+/// Stops what answers at `address` without this user's certificate, when it is a Freya server
+/// from before the server here was reached over TLS: paired with the key itself, as it takes
+/// it, to stop it. Nothing else is given it: the key is useless once a new server makes its
+/// own. Anything else answering there is someone else's.
+fn stop_unpinned(
+    address: std::net::SocketAddr,
+    pairing_key: &Path,
+    device: &str,
+) -> Result<(), String> {
+    let plain = Http::new(&format!("http://{address}"));
+    if plain.version().is_err() {
+        return Err(foreign(address));
+    }
+    log::info!("the server here is from before TLS on this computer; stopping it");
+    // One from before accounts stops without a token.
+    if plain.quit().is_err() {
+        let key = std::fs::read_to_string(pairing_key).map_err(|_| foreign(address))?;
+        let granted = plain
+            .pair_sending_the_key(&key, device)
+            .map_err(|_| foreign(address))?;
+        plain
+            .with_token(Some(granted.access))
+            .quit()
+            .map_err(|_| foreign(address))?;
+    }
+    wait_until_gone(address)
+}
+
+/// Waits until nothing answers at `address`.
+fn wait_until_gone(address: std::net::SocketAddr) -> Result<(), String> {
     let gone = Instant::now() + STARTING;
-    while Http::new(address).version().is_ok() {
+    while answers(address) {
         if Instant::now() > gone {
             return Err("the server did not stop".into());
         }
@@ -967,8 +1041,9 @@ fn wait_until_gone(address: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Starts the server `program`, and waits until it answers at `address`.
-fn start(address: &str, program: &Path) -> Result<(), String> {
+/// Starts the server `program`, and waits until it answers at `address` with the certificate
+/// it keeps in `certificate`.
+fn start(address: std::net::SocketAddr, program: &Path, certificate: &Path) -> Result<(), String> {
     log::info!("starting {}", program.display());
     let mut command = std::process::Command::new(program);
     command
@@ -987,11 +1062,21 @@ fn start(address: &str, program: &Path) -> Result<(), String> {
         .map_err(|e| format!("could not start {}: {e}", program.display()))?;
     let deadline = Instant::now() + STARTING;
     loop {
-        if Http::new(address).version().is_ok() {
-            return Ok(());
+        if let Ok(certificate) = std::fs::read(certificate) {
+            let pin = Pin {
+                address,
+                certificate,
+            };
+            if Http::pinned(pin).version().is_ok() {
+                return Ok(());
+            }
         }
         if Instant::now() > deadline {
-            return Err(format!("{} did not answer", program.display()));
+            return Err(if answers(address) {
+                foreign(address)
+            } else {
+                format!("{} did not answer", program.display())
+            });
         }
         std::thread::sleep(Duration::from_millis(100));
     }
