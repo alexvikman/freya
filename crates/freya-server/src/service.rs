@@ -3,7 +3,7 @@
 //! clients how that goes.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
@@ -96,7 +96,8 @@ impl Service {
             Library::open(&database)
                 .map_err(|e| format!("could not open the library at {}: {e}", database.display()))
         };
-        let (db, reader) = (open()?, open()?);
+        let db = open()?;
+        let readers = (0..READERS).map(|_| open()).collect::<Result<_, _>>()?;
         let pictures = pictures.map(Pictures::new);
         let state = State {
             database: database.clone(),
@@ -129,7 +130,7 @@ impl Service {
             scrobbler,
             stop: AtomicBool::new(false),
             listeners,
-            api: Arc::new(LocalLibrary::new(reader, pictures)),
+            api: Arc::new(LocalLibrary::with_connections(readers, pictures)),
         });
         let mut service = Self {
             shared,
@@ -354,27 +355,53 @@ impl Drop for Service {
     }
 }
 
-/// The library in this process, as a client asks of it: what it holds, read and written on a
-/// connection of its own, and its pictures.
+/// How many connections the server's clients are answered on, so one asking for the whole
+/// library does not hold up another, or a track that is to play.
+const READERS: usize = 4;
+
+/// The library in this process, as a client asks of it: what it holds, read and written on
+/// connections of its own, and its pictures.
 pub struct LocalLibrary {
-    db: Mutex<Library>,
+    connections: Vec<Mutex<Library>>,
+    /// Where the next call looks for a free connection first.
+    next: AtomicUsize,
     pictures: Option<Pictures>,
 }
 
 impl LocalLibrary {
     pub fn new(db: Library, pictures: Option<Pictures>) -> Self {
+        Self::with_connections(vec![db], pictures)
+    }
+
+    /// A library answered on each of `connections`, at once: as many as there are. Each is
+    /// a connection to the same database.
+    pub fn with_connections(connections: Vec<Library>, pictures: Option<Pictures>) -> Self {
+        assert!(!connections.is_empty(), "a library needs a connection");
         Self {
-            db: Mutex::new(db),
+            connections: connections.into_iter().map(Mutex::new).collect(),
+            next: AtomicUsize::new(0),
             pictures,
         }
     }
 
-    /// Runs `f` on the library's own connection.
+    /// A connection no other call uses, or when all are, the next one when it is.
+    fn connection(&self) -> MutexGuard<'_, Library> {
+        let count = self.connections.len();
+        let first = self.next.fetch_add(1, Ordering::Relaxed);
+        for at in first..first + count {
+            if let Ok(free) = self.connections[at % count].try_lock() {
+                return free;
+            }
+        }
+        lock(&self.connections[first % count])
+    }
+
+    /// Runs `f` on one of the library's connections.
     fn with_db<T>(
         &self,
         f: impl FnOnce(&mut Library) -> freya_library::library::Result<T>,
     ) -> ApiResult<T> {
-        f(&mut lock(&self.db)).map_err(api_error)
+        f(&mut self.connection()).map_err(api_error)
     }
 
     fn pictures(&self) -> ApiResult<&Pictures> {
@@ -413,7 +440,7 @@ macro_rules! serve_library_data {
         impl LibraryData for LocalLibrary {
             $(
                 fn $name(&self, $($arg: $ty),*) -> ApiResult<$ret> {
-                    lock(&self.db)
+                    self.connection()
                         .$name($($arg),*)
                         .map(IntoApi::into_api)
                         .map_err(api_error)
@@ -445,7 +472,7 @@ impl LibraryPictures for LocalLibrary {
 
     fn album_art(&self, track: &Path, largest: u32) -> ApiResult<Option<Vec<u8>>> {
         // Only the library's own music is read.
-        if !lock(&self.db).knows_file(track).map_err(api_error)? {
+        if !self.connection().knows_file(track).map_err(api_error)? {
             return Ok(None);
         }
         let Some(picture) = freya_library::cover::album_art_large(track, largest) else {

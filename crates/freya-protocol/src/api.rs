@@ -183,30 +183,32 @@ macro_rules! calls {
         /// The names of the calls, as they go over the network.
         pub const $names: &[&str] = &[$(stringify!($name)),*];
 
-        /// Answers the call of `method` with `args`, as [`Remote`] sent them, from `api`; the
-        /// arguments back when there is no such call.
+        /// Answers the call of `method` with `args`, as [`Remote`] sent them, from `api`: its
+        /// answer as JSON, read and written straight from and to the types. `None` when there
+        /// is no such call, and an error outside when the arguments could not be read.
         pub fn $dispatch(
             api: &dyn $trait_name,
             method: &str,
-            args: serde_json::Value,
-        ) -> Result<ApiResult<serde_json::Value>, serde_json::Value> {
+            args: &[u8],
+        ) -> Option<Result<ApiResult<Vec<u8>>, ApiError>> {
             match method {
                 $(
-                    stringify!($name) => Ok((|| {
+                    stringify!($name) => Some((|| {
                         let ($($arg,)*): ($(<$ty as WireArg<'_>>::Owned,)*) =
-                            serde_json::from_value(args).map_err(wire_error)?;
-                        let answer = api.$name($(<$ty as WireArg<'_>>::lend(&$arg)),*)?;
-                        serde_json::to_value(answer).map_err(wire_error)
+                            serde_json::from_slice(args).map_err(wire_error)?;
+                        Ok(api
+                            .$name($(<$ty as WireArg<'_>>::lend(&$arg)),*)
+                            .and_then(|answer| serde_json::to_vec(&answer).map_err(wire_error)))
                     })()),
                 )*
-                _ => Err(args),
+                _ => None,
             }
         }
 
         impl<T: Transport> $trait_name for Remote<T> {
             $(
                 fn $name(&self, $($arg: $ty),*) -> ApiResult<$ret> {
-                    let args = serde_json::to_value(($($arg,)*)).map_err(wire_error)?;
+                    let args = serde_json::to_vec(&($($arg,)*)).map_err(wire_error)?;
                     let answer = self.0.call(stringify!($name), args)?;
                     serde_json::from_slice(&answer).map_err(wire_error)
                 }
@@ -381,9 +383,9 @@ fn wire_error(e: impl std::fmt::Display) -> ApiError {
 
 /// What carries a call to a library elsewhere and brings back its answer.
 pub trait Transport: Send + Sync {
-    /// The answer to the call of `method` with `args`, as JSON, read into its own type by the
-    /// caller: never into a tree of values, many times its size.
-    fn call(&self, method: &str, args: serde_json::Value) -> ApiResult<Vec<u8>>;
+    /// The answer to the call of `method` with `args`, both as JSON, read into its own type by
+    /// the caller: never into a tree of values, many times its size.
+    fn call(&self, method: &str, args: Vec<u8>) -> ApiResult<Vec<u8>>;
     /// The picture kept as `checksum`.
     fn picture(&self, checksum: &str) -> ApiResult<Option<Vec<u8>>>;
     /// Keeps the picture in `bytes`, at most `largest` wide or high when given: its checksum.

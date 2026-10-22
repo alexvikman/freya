@@ -226,7 +226,7 @@ what the hardening made: answers per user and role, nothing compressed that carr
 | # | Milestone | Done when |
 |---|---|---|
 | **P1** ✓ | **Measuring**: the rig for the library's calls, covers, the time to the first sound, seeking and the gap between tracks, at 0, 2 and 10 ms each way; the client logs every call made on the UI thread and how long it waited | Each number below has a before |
-| **P2** | **The server answers at once**: answers serialized straight to bytes; gzip for large answers; readers that do not wait for each other (a pool of SQLite connections), SQLite tuned (statement cache, cache, memory-mapped reads); a whole answer in one write, audio in 64 KB writes, a socket's deadline set only when it changes; connections and the event stream kept open minutes for known devices | `all_tracks` in under a third of the time and bytes |
+| **P2** ✓ | **The server answers at once**: answers serialized straight to bytes; gzip for large answers; readers that do not wait for each other (a pool of SQLite connections), SQLite tuned (statement cache, cache, memory-mapped reads); a whole answer in one write, audio in 64 KB writes, a socket's deadline set only when it changes; connections and the event stream kept open minutes for known devices | `all_tracks` in under a third of the time and bytes |
 | **P3** | **Nothing fetched twice**: the library has a generation, bumped by every change; answers carry it as an ETag and a client that has them gets 304 with no body; the client keeps the answers in memory and the whole-library ones on disk, so it shows the library at once on start and checks it after; favourites and edits kept until they change; a scan's progress reloads the view at most every few seconds | Going back to a view costs one round trip without a body; the library shows before the server answers |
 | **P4** | **Fewer round trips**: several calls in one request; a playlist's tracks in one call; an artist's page, a genre's page and search each one call on the server, search waiting for a pause in typing; no call per artist for its picture | A page is one round trip; a keystroke at most one |
 | **P5** | **The window never waits**: every call to the server made on a worker, its answer applied when it comes, an older one dropped; connecting and renewing tokens off the UI thread too | No call on the UI thread in the log; scrolling stays smooth with 100 ms each way |
@@ -254,6 +254,18 @@ The window, started against its own server on the same computer (no delay): 475 
 the UI thread in its first 20 seconds, 289 of them `albums` and 168 `artist_mbid`, made
 for the artists' pictures. Each would hold the window up 25 ms at 10 ms each way: 12 seconds
 in all. The client logs each such call, `freya_client::window`.
+
+#### P2
+
+`all_tracks` at 10 ms each way 72 → 63 ms, and 3.0 MB → 675 KB on the network (gzip at
+level 1, 8 ms; the client's unzipping 4 ms). Of what is left, 16 ms is the query, 4 ms the
+JSON, 8 ms reading it on the client: the bytes are under a third, the time is not, and comes
+with the next step, which keeps answers instead of making them again. The answer goes straight from its types to bytes (13 ms of a tree before), four
+connections answer at once, a known device's connection waits two minutes for its next
+request, answers go out in 64 KB writes with their head. Not done: setting a socket's
+deadline only when it changes, which costs a microsecond a write now that writes are large.
+Calls measured at 10 ms each way cost 23–30 ms, before and after: the rig's sleeping adds
+some.
 
 ### U7: the hologram (from 2026-10-17)
 

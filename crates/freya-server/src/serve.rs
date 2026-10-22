@@ -203,19 +203,22 @@ fn answer(served: &Served, request: Request) -> Response {
     match (request.method.as_str(), path) {
         ("POST", path) if path.starts_with("/call/") => {
             let method = &path["/call/".len()..];
-            let args = match serde_json::from_slice(&request.body) {
-                Ok(args) => args,
-                Err(e) => return Response::error(400, e),
-            };
-            let answered =
-                dispatch_data(library, method, args).or_else(|args| match &served.server {
-                    Some(server) => dispatch_control(server.as_ref(), method, args),
-                    None => Err(args),
-                });
+            let args = &request.body;
+            let data = dispatch_data(library, method, args);
+            // The library's answers carry no secret, so may be compressed.
+            let compressible = data.is_some();
+            let answered = data.or_else(|| {
+                served
+                    .server
+                    .as_ref()
+                    .and_then(|server| dispatch_control(server.as_ref(), method, args))
+            });
             match answered {
-                Err(_) => Response::error(404, format!("no such call: {method}")),
-                Ok(Ok(answer)) => Response::json(200, &answer),
-                Ok(Err(e)) => Response::error(500, e),
+                None => Response::error(404, format!("no such call: {method}")),
+                Some(Err(e)) => Response::error(400, e),
+                Some(Ok(Ok(answer))) if compressible => json_for(&request, answer),
+                Some(Ok(Ok(answer))) => Response::bytes(200, "application/json", answer),
+                Some(Ok(Err(e))) => Response::error(500, e),
             }
         }
         ("GET", path) if path.starts_with("/pictures/") => {
@@ -342,6 +345,38 @@ fn is_music_file(served: &Served, path: &std::path::Path) -> bool {
 }
 
 /// The file of the library's track `?path=`, whole or the part `Range` asks for.
+/// JSON as large as an answer is gzipped beyond, when the client takes it so.
+const COMPRESSED_FROM: usize = 16 * 1024;
+
+/// `json` as the answer to `request`: gzipped when it is large and the client takes it so.
+fn json_for(request: &Request, json: Vec<u8>) -> Response {
+    let takes_gzip = request.header("accept-encoding").is_some_and(|accepted| {
+        accepted
+            .split(',')
+            .any(|coding| coding.split(';').next().unwrap_or_default().trim() == "gzip")
+    });
+    if json.len() < COMPRESSED_FROM || !takes_gzip {
+        return Response::bytes(200, "application/json", json);
+    }
+    let mut zipped = flate2::write::GzEncoder::new(
+        Vec::with_capacity(json.len() / 6),
+        flate2::Compression::new(GZIP_LEVEL),
+    );
+    match std::io::Write::write_all(&mut zipped, &json).and_then(|()| zipped.finish()) {
+        Ok(zipped) => {
+            let mut response = Response::bytes(200, "application/json", zipped);
+            response
+                .headers
+                .push(("Content-Encoding", "gzip".to_owned()));
+            response
+        }
+        Err(_) => Response::bytes(200, "application/json", json),
+    }
+}
+
+/// How hard large answers are compressed: quickly, as most are made for the one who asks.
+const GZIP_LEVEL: u32 = 1;
+
 fn audio(served: &Served, request: &Request) -> Response {
     let library = served.library.as_ref();
     let Some(path) = request

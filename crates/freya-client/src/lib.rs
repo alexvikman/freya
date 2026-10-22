@@ -156,6 +156,11 @@ fn make_agent(
     config: ureq::config::ConfigBuilder<ureq::typestate::AgentScope>,
     pin: Option<&Pin>,
 ) -> ureq::Agent {
+    // Kept a little less than a server keeps a known device's, so none is used as the server
+    // lets it go; enough of them for pictures fetched side by side.
+    let config = config
+        .max_idle_age(Duration::from_secs(100))
+        .max_idle_connections_per_host(8);
     let Some(pin) = pin else {
         return config.build().into();
     };
@@ -868,12 +873,12 @@ fn json_at_most(answer: Answer, limit: u64) -> ApiResult<serde_json::Value> {
 }
 
 impl Transport for Http {
-    fn call(&self, method: &str, args: serde_json::Value) -> ApiResult<Vec<u8>> {
+    fn call(&self, method: &str, args: Vec<u8>) -> ApiResult<Vec<u8>> {
         let _held = HeldUp::by(|| method.to_owned());
         let answer = self.send(|http| {
             http.post(&format!("/call/{method}"))
                 .header("Content-Type", "application/json")
-                .send(args.to_string())
+                .send(&args[..])
         })?;
         match read_at_most(answer, MAX_ANSWER)? {
             (200, body) => Ok(body),

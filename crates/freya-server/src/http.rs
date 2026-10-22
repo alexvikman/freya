@@ -34,6 +34,9 @@ const MAX_HEADERS: usize = 64;
 const IDLE: Duration = Duration::from_secs(15);
 #[cfg(test)]
 const IDLE: Duration = Duration::from_secs(2);
+/// How long a known device's connection may wait for its next request, so going back to the
+/// library after a while needs no new connection.
+const IDLE_KNOWN: Duration = Duration::from_secs(120);
 #[cfg(not(test))]
 const HEAD_TIME: Duration = Duration::from_secs(10);
 #[cfg(test)]
@@ -44,6 +47,8 @@ const WRITE_TIME: Duration = Duration::from_secs(30);
 const MAX_CONNECTIONS: usize = 128;
 const MAX_FROM_ONE: usize = 16;
 const MAX_ALL: usize = 512;
+/// The most of an answer written at once: four of TLS's largest records.
+const WRITTEN_AT_ONCE: usize = 64 * 1024;
 /// How long a streamed answer may take to be taken: longer than the events stream lasts.
 const STREAM_TIME: Duration = Duration::from_secs(90);
 
@@ -431,6 +436,9 @@ struct Connection {
     /// Whether a request was read on it yet: the first, after TLS's handshake, is waited for
     /// as long as a request's head.
     served: bool,
+    /// Whether a request with a valid token came on it: a known device's, whose connection is
+    /// kept open longer between requests.
+    known: bool,
 }
 
 /// Why a request could not be read: the status to answer, and why.
@@ -466,6 +474,7 @@ impl Connection {
             secure: tls.is_some(),
             pending: Vec::new(),
             served: false,
+            known: false,
         })
     }
 
@@ -527,7 +536,7 @@ impl Connection {
         // the first, with TLS's handshake before it, in `HEAD_TIME` from the start.
         let mut began = (!buffer.is_empty()).then(Instant::now);
         let waited = if self.served {
-            Instant::now() + IDLE
+            Instant::now() + if self.known { IDLE_KNOWN } else { IDLE }
         } else {
             self.deadlines
                 .lock()
@@ -606,6 +615,7 @@ impl Connection {
         let admission = admit(&request);
         if admission.known {
             admitted.know();
+            self.known = true;
         }
         if length > admission.body.min(MAX_BODY) {
             return Err(Ok(Refused(413, "the request is too large")));
@@ -672,24 +682,28 @@ impl Connection {
                     Body::Stream(_) => STREAM_TIME,
                 },
         );
+        // The head goes with the start of the body, and the body in writes as large as TLS's
+        // records take a few of.
+        let mut out = io::BufWriter::with_capacity(WRITTEN_AT_ONCE, &mut self.stream);
         match response.body {
             Body::Bytes(bytes) => {
                 head.push_str(&format!("Content-Length: {}\r\n\r\n", bytes.len()));
-                self.stream.write_all(head.as_bytes())?;
-                self.stream.write_all(&bytes)?;
-                self.stream.flush()
+                out.write_all(head.as_bytes())?;
+                out.write_all(&bytes)?;
+                out.flush()
             }
             Body::Read(length, reader) => {
                 head.push_str(&format!("Content-Length: {length}\r\n\r\n"));
-                self.stream.write_all(head.as_bytes())?;
-                let sent = io::copy(&mut reader.take(length), &mut self.stream)?;
+                out.write_all(head.as_bytes())?;
+                let sent = io::copy(&mut reader.take(length), &mut out)?;
                 if sent < length {
                     // Shorter than said: the connection cannot be used again.
                     return Err(io::ErrorKind::UnexpectedEof.into());
                 }
-                self.stream.flush()
+                out.flush()
             }
             Body::Stream(stream) => {
+                drop(out);
                 head.push_str("Transfer-Encoding: chunked\r\n\r\n");
                 self.stream.write_all(head.as_bytes())?;
                 let mut chunked = Chunked(&mut *self.stream);
@@ -709,10 +723,11 @@ impl Write for Chunked<'_> {
         if bytes.is_empty() {
             return Ok(0);
         }
-        self.0
-            .write_all(format!("{:x}\r\n", bytes.len()).as_bytes())?;
-        self.0.write_all(bytes)?;
-        self.0.write_all(b"\r\n")?;
+        // In one write, so one record and one packet.
+        let mut chunk = format!("{:x}\r\n", bytes.len()).into_bytes();
+        chunk.extend_from_slice(bytes);
+        chunk.extend_from_slice(b"\r\n");
+        self.0.write_all(&chunk)?;
         self.0.flush()?;
         Ok(bytes.len())
     }

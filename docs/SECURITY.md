@@ -115,11 +115,14 @@ Nobody can wear it out before logging in:
   device's, and strangers' do not crowd it out; 512 in all;
 - the TLS handshake and a request's head within 10 seconds, its body at 32 KB a second at
   least, an answer taken within 30 seconds and a second more for each 32 KB, each in all,
-  inside TLS too, and 15 seconds' wait for the next request;
+  inside TLS too, and 15 seconds' wait for the next request, two minutes on a connection a
+  known device made;
 - as many open files as the system allows, not the 256 macOS gives an agent;
 - bodies as large as the route and caller allow, decided before any of it is read: 16 KB
   without a valid token, 8 MB for a call, 64 MB for an admin's picture; read as they come;
 - one `Content-Length`, in digits, and no chunked requests;
+- only the library's answers compressed, which carry no secret, so the length of a
+  compressed answer tells nothing of a token or a key;
 - events wait for a listener in a queue of 1,024, past which it is let go;
 - stopping the server, or turning the network off, ends every connection.
 

@@ -1778,6 +1778,7 @@ dependencies = [
  "ctrlc",
  "directories",
  "env_logger",
+ "flate2",
  "freya-lastfm",
  "freya-library",
  "freya-protocol",

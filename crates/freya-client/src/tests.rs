@@ -103,9 +103,9 @@ fn pictures_go_both_ways_and_only_the_librarys_music_is_read() {
 fn a_failed_call_says_why() {
     let (_server, remote, _local, dir) = served("errors");
     let http = Http::new(&format!("http://{}", _server.address()));
-    let unknown = http.call("no_such_call", serde_json::Value::Null);
+    let unknown = http.call("no_such_call", b"null".to_vec());
     assert!(unknown.unwrap_err().0.contains("no such call"));
-    let bad = http.call("search", serde_json::json!(["only one"]));
+    let bad = http.call("search", br#"["only one"]"#.to_vec());
     assert!(bad.unwrap_err().0.contains("could not read what was sent"));
     drop(remote);
     let gone = connect("http://127.0.0.1:1", None, None).stats();
@@ -863,8 +863,16 @@ fn measure_a_real_library() {
     let open = || Library::open(&folder.join("library.sqlite3")).unwrap();
     let local: Arc<dyn LibraryApi> = Arc::new(LocalLibrary::new(open(), pictures()));
     let identity = freya_server::tls::Identity::make().unwrap();
+    // As many connections as a server answers on, unless `FREYA_BENCH_READERS` says.
+    let readers = std::env::var("FREYA_BENCH_READERS")
+        .ok()
+        .and_then(|r| r.parse().ok())
+        .unwrap_or(4);
     let served = Served {
-        library: Arc::new(LocalLibrary::new(open(), pictures())),
+        library: Arc::new(LocalLibrary::with_connections(
+            (0..readers).map(|_| open()).collect(),
+            pictures(),
+        )),
         server: None,
         quit: None,
         accounts: None,
@@ -949,6 +957,28 @@ fn measure_a_real_library() {
         .artist_summary(artist.as_deref(), 3));
     measure!("album_favorites", |api| api.album_favorites());
     measure!("artist_favorites", |api| api.artist_favorites());
+
+    // A small call while another client asks for the whole library, again and again.
+    let busy = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let other = {
+        let (busy, remote) = (Arc::clone(&busy), Arc::clone(&remote));
+        std::thread::spawn(move || {
+            while busy.load(std::sync::atomic::Ordering::Relaxed) {
+                remote.all_tracks().unwrap();
+            }
+        })
+    };
+    std::thread::sleep(Duration::from_millis(100));
+    let started = Instant::now();
+    for _ in 0..20 {
+        remote.stats().unwrap();
+    }
+    println!(
+        "stats while another asks for all tracks: {:.1} ms",
+        started.elapsed().as_secs_f64() * 1000.0 / 20.0
+    );
+    busy.store(false, std::sync::atomic::Ordering::Relaxed);
+    other.join().unwrap();
 
     // Covers: the first albums of a grid, each its own request.
     let covers = local.album_covers().unwrap();

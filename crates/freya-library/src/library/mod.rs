@@ -199,6 +199,12 @@ impl Library {
         // WAL lets the window read while a scan writes on another connection.
         db.pragma_update(None, "journal_mode", "WAL")?;
         db.pragma_update(None, "synchronous", "NORMAL")?;
+        // Every query the library makes kept prepared, its pages in memory and read mapped
+        // rather than copied, and sorts done in memory.
+        db.set_prepared_statement_cache_capacity(128);
+        db.pragma_update(None, "cache_size", -16 * 1024)?;
+        db.pragma_update(None, "mmap_size", 256 * 1024 * 1024)?;
+        db.pragma_update(None, "temp_store", "MEMORY")?;
         let mut version: i32 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
         // Each file is read again on the next scan, which keeps when its tracks came in.
         if version == 3 {
