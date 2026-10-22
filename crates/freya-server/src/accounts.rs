@@ -59,7 +59,7 @@ const LONGEST_WAIT: Duration = Duration::from_secs(15 * 60);
 const TRIES_FORGOTTEN: Duration = Duration::from_secs(24 * 60 * 60);
 /// The most tries remembered, and addresses users logged in from: past it, the oldest go, so
 /// made-up names and addresses cannot fill the memory.
-const MAX_TRIED: usize = 10_000;
+const MAX_TRIED: usize = 100_000;
 const MAX_KNOWN: usize = 1_000;
 /// The user a server starts with, who owns it.
 const OWNER: u32 = 1;
@@ -256,7 +256,10 @@ impl Tries {
     /// waits still running, which are never dropped to make room, none is taken.
     fn count(&mut self, keys: &[TriedFor]) -> bool {
         let now = Instant::now();
-        self.0.retain(|_, tried| now < tried.last + TRIES_FORGOTTEN);
+        // Tidied only when full: a try costs nothing more otherwise.
+        if self.0.len() >= MAX_TRIED {
+            self.0.retain(|_, tried| now < tried.last + TRIES_FORGOTTEN);
+        }
         if self.0.len() >= MAX_TRIED {
             // Room is made among those not waiting, the oldest first.
             let mut idle: Vec<(Instant, String)> = self
@@ -317,6 +320,7 @@ pub struct Accounts {
     grants: Mutex<Vec<Grant>>,
     tickets: Mutex<Vec<Ticket>>,
     tries: Mutex<Tries>,
+    proofs: Mutex<Tries>,
     /// The users who logged in from an address, by its network: tries for their name from
     /// elsewhere do not hold them up there.
     known: Mutex<HashSet<(u32, String)>>,
@@ -358,6 +362,7 @@ impl Accounts {
             grants: Mutex::new(Vec::new()),
             tickets: Mutex::new(Vec::new()),
             tries: Mutex::new(Tries::default()),
+            proofs: Mutex::new(Tries::default()),
             known: Mutex::new(HashSet::new()),
             connection: Mutex::new(None),
         };
@@ -463,11 +468,11 @@ impl Accounts {
         };
         let named = format!("user:{typed}");
         let mut keys: Vec<TriedFor> = Vec::new();
-        // From where the user logged in before, tries from elsewhere do not hold them up.
-        if !id
+        let at_home = id
             .zip(network.as_ref())
-            .is_some_and(|(id, network)| known(id, network))
-        {
+            .is_some_and(|(id, network)| known(id, network));
+        // From where the user logged in before, tries from elsewhere do not hold them up.
+        if !at_home {
             keys.push((named.clone(), FREE_TRIES_FOR_A_NAME));
         }
         if let Some(network) = &network {
@@ -479,7 +484,9 @@ impl Accounts {
             if let Some(wait) = tries.wait(&keys) {
                 return Err(Refused::Wait(wait));
             }
-            if !tries.count(&keys) {
+            // With the table full of waits, only a user where they logged in before is let try:
+            // a guesser filling it locks nobody out of home.
+            if !tries.count(&keys) && !at_home {
                 return Err(Refused::Wait(FIRST_WAIT));
             }
         }
@@ -694,8 +701,9 @@ impl Accounts {
         let Some(from) = from else {
             return true;
         };
-        let key = [(format!("proof:{from}"), PROOFS_FREE)];
-        let mut tries = self.tries.lock().unwrap_or_else(|e| e.into_inner());
+        // Counted apart from logins, by network, so asking for proofs fills nothing logins need.
+        let key = [(format!("proof:{}", network(from)), PROOFS_FREE)];
+        let mut tries = self.proofs.lock().unwrap_or_else(|e| e.into_inner());
         if tries.wait(&key).is_some() {
             return false;
         }
