@@ -692,27 +692,26 @@ fn a_new_device_knows_the_server_by_its_connection_code() {
         certificate: certificate_of(server.address()).unwrap(),
     };
     assert!(
-        verify_server(&pin, "K7Q2-M9XD").is_err(),
+        verify_server(&pin, "K7Q2M-9XD4T").is_err(),
         "no code shown yet"
     );
     let (code, _) = accounts.connection_code();
     assert!(verify_server(&pin, "K7Q2").is_err(), "too short to be one");
     let typed = freya_protocol::show_code(&code).to_lowercase();
     verify_server(&pin, &typed).unwrap();
-    assert!(verify_server(&pin, &code).is_err(), "used up");
-    // A wrong code does not match, and uses the code up too.
-    let (code, _) = accounts.connection_code();
+    verify_server(&pin, &code).unwrap();
+    // A wrong code does not match.
     let wrong = if code.starts_with('0') { "1" } else { "0" }.to_owned() + &code[1..];
     let mismatch = verify_server(&pin, &wrong).unwrap_err();
     assert!(mismatch.contains("does not match"), "{mismatch}");
-    assert!(verify_server(&pin, &code).is_err());
     // A proof for another certificate does not match the one pinned.
     let (code, _) = accounts.connection_code();
     let nonce = [1; 32];
     let proof = Http::pinned(pin.clone()).enroll(&nonce).unwrap();
-    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, code.as_bytes());
     let other = freya_server::tls::Identity::make().unwrap().certificate;
     let digest = ring::digest::digest(&ring::digest::SHA256, &other);
+    let derived = freya_protocol::connection_key(&code, digest.as_ref());
+    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &derived);
     let message = freya_protocol::connection_message(&nonce, digest.as_ref());
     assert!(ring::hmac::verify(&key, &message, &proof).is_err());
     drop(server);

@@ -18,9 +18,10 @@
 //! A device connected before refresh tokens renews with the token it has.
 //!
 //! A new device first knows the server by a connection code, shown on the server's computer:
-//! the server proves it knows the code with an HMAC over the device's nonce and the server's
-//! own certificate. A code lasts ten minutes and is used up by the first proof, right or not,
-//! so it cannot be found by asking again. Passwords are set and changed in
+//! the server proves it knows the code with an HMAC, keyed by the code stretched with PBKDF2
+//! and salted with the server's certificate, over the device's nonce and that certificate. A
+//! code lasts ten minutes; finding it from a proof would take thousands of years, so asking
+//! for proofs again neither helps nor uses it up. Passwords are set and changed in
 //! the browser too, on a page a device's ticket opens.
 
 use std::collections::HashMap;
@@ -55,8 +56,9 @@ const OWNER: u32 = 1;
 /// How often when a device was last used is kept: no more than this, so calling the server
 /// does not write the accounts every time.
 const USED_EVERY: u64 = 60 * 60;
-/// How long a connection code lasts.
+/// How long a connection code lasts, and how many proofs an address may ask before waiting.
 const CONNECTION_CODE_LASTS: Duration = Duration::from_secs(10 * 60);
+const PROOFS_FREE: u32 = 10;
 /// How long an access token lasts, in seconds.
 pub const ACCESS_LASTS: u64 = 60 * 60;
 /// How long after it was renewed a refresh token still renews: for a client whose answer was
@@ -182,6 +184,12 @@ pub struct Caller {
     pub role: Role,
 }
 
+struct Connection {
+    code: String,
+    until: Instant,
+    key: Option<ring::hmac::Key>,
+}
+
 /// Why a password was not taken.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refused {
@@ -271,8 +279,8 @@ pub struct Accounts {
     grants: Mutex<Vec<Grant>>,
     tickets: Mutex<Vec<Ticket>>,
     tries: Mutex<Tries>,
-    /// The connection code shown now, and until when.
-    connection: Mutex<Option<(String, Instant)>>,
+    /// The connection code shown now, until when, and its key once derived.
+    connection: Mutex<Option<Connection>>,
 }
 
 impl Accounts {
@@ -550,27 +558,41 @@ impl Accounts {
             .iter()
             .map(|b| freya_protocol::CODE_ALPHABET[usize::from(b & 31)] as char)
             .collect();
-        *self.connection.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some((code.clone(), Instant::now() + CONNECTION_CODE_LASTS));
+        *self.connection.lock().unwrap_or_else(|e| e.into_inner()) = Some(Connection {
+            code: code.clone(),
+            until: Instant::now() + CONNECTION_CODE_LASTS,
+            key: None,
+        });
         (code, CONNECTION_CODE_LASTS)
     }
 
     /// The proof that this server knows the connection code shown, for the device that sent
-    /// `nonce` and was given `certificate`; none without a code. The code is used up.
+    /// `nonce` and was given `certificate`; none without a code that lasts still. The code's
+    /// key is derived once, so asking again costs the server little.
     pub fn prove(&self, nonce: &[u8], certificate: &[u8]) -> Option<Vec<u8>> {
-        let (code, until) = self
-            .connection
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()?;
-        if until <= Instant::now() {
-            return None;
-        }
-        log::info!("a device asked for the connection code's proof; the code is used up");
-        let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, code.as_bytes());
         let digest = ring::digest::digest(&ring::digest::SHA256, certificate);
+        let mut connection = self.connection.lock().unwrap_or_else(|e| e.into_inner());
+        let shown = connection.as_mut().filter(|c| c.until > Instant::now())?;
+        let key = shown.key.get_or_insert_with(|| {
+            let derived = freya_protocol::connection_key(&shown.code, digest.as_ref());
+            ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &derived)
+        });
         let message = freya_protocol::connection_message(nonce, digest.as_ref());
-        Some(ring::hmac::sign(&key, &message).as_ref().to_vec())
+        Some(ring::hmac::sign(key, &message).as_ref().to_vec())
+    }
+
+    /// Whether a device at `from` may ask for another proof now: a few a minute.
+    pub fn may_ask_proof(&self, from: Option<IpAddr>) -> bool {
+        let Some(from) = from else {
+            return true;
+        };
+        let key = [(format!("proof:{from}"), PROOFS_FREE)];
+        let mut tries = self.tries.lock().unwrap_or_else(|e| e.into_inner());
+        if tries.wait(&key).is_some() {
+            return false;
+        }
+        tries.count(&key);
+        true
     }
 
     /// A ticket that opens the password page of `caller`'s user; `local` when they call from
@@ -1092,26 +1114,35 @@ mod tests {
     }
 
     #[test]
-    fn a_connection_code_is_proved_once() {
+    fn a_connection_code_is_proved_while_it_lasts() {
         let accounts = Accounts::open(None, None);
         let (nonce, certificate) = ([7; 32], b"the server's certificate".as_slice());
         assert_eq!(accounts.prove(&nonce, certificate), None, "no code shown");
         let (code, lasts) = accounts.connection_code();
         assert_eq!(lasts, CONNECTION_CODE_LASTS);
+        assert_eq!(code.len(), freya_protocol::CODE_LENGTH);
         assert_eq!(
             freya_protocol::normalize_code(&code).as_deref(),
             Some(code.as_str())
         );
         let proof = accounts.prove(&nonce, certificate).unwrap();
-        let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, code.as_bytes());
         let digest = ring::digest::digest(&ring::digest::SHA256, certificate);
+        let derived = freya_protocol::connection_key(&code, digest.as_ref());
+        let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &derived);
         let message = freya_protocol::connection_message(&nonce, digest.as_ref());
         assert!(ring::hmac::verify(&key, &message, &proof).is_ok());
-        assert_eq!(accounts.prove(&nonce, certificate), None, "used up");
+        // Asking again is no use to anyone, and does not use the code up.
+        assert!(accounts.prove(&[8; 32], certificate).is_some());
         // A new one takes the place of the one before.
         let (first, _) = accounts.connection_code();
         let (second, _) = accounts.connection_code();
         assert_ne!(first, second);
+        // An address asks a few a minute.
+        let from = Some(IpAddr::from([192, 168, 1, 30]));
+        for _ in 0..PROOFS_FREE {
+            assert!(accounts.may_ask_proof(from));
+        }
+        assert!(!accounts.may_ask_proof(from));
     }
 
     #[test]

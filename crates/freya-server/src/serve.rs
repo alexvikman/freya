@@ -433,6 +433,12 @@ fn pair(accounts: &Accounts, request: &Request, local: bool) -> Response {
 /// `{"nonce"}`: the proof that this server knows the connection code its computer shows, over
 /// the nonce and the server's certificate.
 fn enroll(accounts: &Accounts, served: &Served, request: &Request) -> Response {
+    if !accounts.may_ask_proof(request.peer.map(|peer| peer.ip())) {
+        return Response::error(
+            429,
+            "too many questions for the connection code: wait a while",
+        );
+    }
     #[derive(serde::Deserialize)]
     struct Asked {
         nonce: String,

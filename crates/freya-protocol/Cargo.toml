@@ -9,5 +9,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+# The connection code's key (see src/scan.rs), as the server and the client derive it.
+ring = "0.17.14"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.152"

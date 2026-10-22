@@ -7644,7 +7644,7 @@ component ServerForm inherits MenuSurface {
             }
             if !Server.login-verified: FormField {
                 label: "Connection code";
-                placeholder: "K7Q2-M9XD";
+                placeholder: "K7Q2M-9XD4T";
                 text <=> root.code;
                 accepted => { Server.verify-code(root.code); }
             }
@@ -8056,8 +8056,8 @@ component SettingsView inherits Rectangle {
                 if !Server.remote && Server.network: SettingsRow {
                     label: "Add a device";
                     detail: Server.connection-code != ""
-                        ? "Type the code on the other device. It works once, until " + Server.connection-code-until + "."
-                        : "A new device proves it reached this computer with a code shown here, once.";
+                        ? "Type the code on the other device. It works until " + Server.connection-code-until + "."
+                        : "A new device proves it reached this computer with a code shown here.";
 
                     HorizontalLayout {
                         spacing: 16px;

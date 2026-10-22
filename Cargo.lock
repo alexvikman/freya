@@ -1765,6 +1765,7 @@ dependencies = [
 name = "freya-protocol"
 version = "0.2.1"
 dependencies = [
+ "ring",
  "serde",
  "serde_json",
 ]

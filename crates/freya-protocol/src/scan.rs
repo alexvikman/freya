@@ -121,12 +121,16 @@ pub const DISCOVERY_QUESTION: &[u8] = b"freya-server?";
 
 /// A connection code: what a new device types to know that the server it reached is the one
 /// whose computer shows the code. Crockford's base 32, which leaves out letters that look like
-/// digits, eight of them.
+/// digits, ten of them: 50 bits.
 pub const CODE_ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-pub const CODE_LENGTH: usize = 8;
+pub const CODE_LENGTH: usize = 10;
+/// How many PBKDF2 rounds a code's key takes, as a password's does: so that each guess at a
+/// code, made from a proof the server gave, costs as much, and finding one takes thousands of
+/// years while a code lasts minutes.
+pub const CODE_ROUNDS: u32 = 600_000;
 
-/// The code `typed` is, its look-alikes read as meant: "k7q2-m9xd" and "K7Q2 M9XD" are
-/// "K7Q2M9XD", an O a 0, an I or L a 1; none when it is not one.
+/// The code `typed` is, its look-alikes read as meant: "k7q2m-9xd4t" and "K7Q2M 9XD4T" are
+/// "K7Q2M9XD4T", an O a 0, an I or L a 1; none when it is not one.
 pub fn normalize_code(typed: &str) -> Option<String> {
     let code: String = typed
         .chars()
@@ -141,13 +145,28 @@ pub fn normalize_code(typed: &str) -> Option<String> {
     valid.then_some(code)
 }
 
-/// A code as it is shown: "K7Q2-M9XD".
+/// A code as it is shown: "K7Q2M-9XD4T".
 pub fn show_code(code: &str) -> String {
     let (first, last) = code.split_at(code.len() / 2);
     format!("{first}-{last}")
 }
 
-/// What a server signs with the code, by HMAC-SHA256 keyed with it, to prove it knows it: the
+/// The key a server proves it knows the code with: PBKDF2 of the code, salted with the SHA-256
+/// of the certificate, so each server, and each certificate passed off as one, needs a search
+/// of its own.
+pub fn connection_key(code: &str, certificate_digest: &[u8]) -> [u8; 32] {
+    let mut key = [0; 32];
+    ring::pbkdf2::derive(
+        ring::pbkdf2::PBKDF2_HMAC_SHA256,
+        std::num::NonZeroU32::new(CODE_ROUNDS).unwrap_or(std::num::NonZeroU32::MIN),
+        certificate_digest,
+        code.as_bytes(),
+        &mut key,
+    );
+    key
+}
+
+/// What a server signs with the code's key, by HMAC-SHA256, to prove it knows the code: the
 /// client's nonce and the SHA-256 of the certificate the client was given. Another computer in
 /// its place, with a certificate of its own, cannot.
 pub fn connection_message(nonce: &[u8], certificate_digest: &[u8]) -> Vec<u8> {

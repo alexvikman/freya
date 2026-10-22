@@ -423,7 +423,7 @@ The server that keeps the library: Freya's own on this computer, or one on anoth
 | `finding`, `found` | bool, [`FoundServer`] | While looking for servers on the network, and those that answered: `name`, `address`, `fingerprint` |
 | `logging-in`, `login-address`, `login-fingerprint`, `login-busy`, `login-waiting`, `login-error` | | While logging in to a server chosen: where it is, its certificate's fingerprint, whether Freya is asking it now, whether its login page is open in the browser, and what went wrong |
 | `login-verified` | bool | Whether the server chosen proved it knows the connection code, or is the one this computer used before: only then can it be logged in to |
-| `connection-code`, `connection-code-until` | string | On the server's computer: the connection code shown for a new device ("K7Q2-M9XD") and until when it works ("20:31"); "" when none is |
+| `connection-code`, `connection-code-until` | string | On the server's computer: the connection code shown for a new device ("K7Q2M-9XD4T") and until when it works ("20:31"); "" when none is |
 
 | Callback | |
 |---|---|

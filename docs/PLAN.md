@@ -187,13 +187,13 @@ found no sign of anything malicious in Freya's dependencies; what they found is 
 The worst: a process of another user on the same computer can answer on 127.0.0.1:47474 before
 Freya's server does, and be handed the refresh token and the pairing key; and anyone on the
 network can exhaust the server's memory and connections without logging in. Decided with the
-user: a new device proves the server with a one-time code shown on the server's computer,
+user: a new device proves the server with a code shown on the server's computer for ten minutes (50 bits, its key stretched by PBKDF2, so a proof cannot be searched for the code),
 which replaces comparing fingerprints, and is done first; changing the password asks whether
 to log the other devices out.
 
 | # | Milestone | Done when |
 |---|---|---|
-| **S6** ✓ | **First contact without blind trust, and least privilege** (first): a one-time code shown on the server's computer proves the certificate a new device was given; TLS 1.3 only; the systemd unit hardened | Another computer answering in the server's place cannot take a login |
+| **S6** ✓ | **First contact without blind trust, and least privilege** (first): a code shown on the server's computer proves the certificate a new device was given; TLS 1.3 only; the systemd unit hardened | Another computer answering in the server's place cannot take a login |
 | **S1** | **The same computer**: the local connection over TLS pinned to the certificate in the user's private folder; pairing by challenge and answer, the key never sent, and not changed by a wrong one; the server says so when another user holds its port; "local" meaning a paired device; the password page's ticket kept in the proxy, never in a URL | Another account on the computer cannot pose as the server or learn a secret |
 | **S2** | **The HTTP server under load**: connections capped in all and per address; deadlines for headers and writes, a short keep-alive; body limits per route before reading, 16 KB without a token; connections closed when the network is turned off; events in a bounded queue; discovery answering private addresses only, limited; strict Content-Length | A device on the network cannot make the server stop answering |
 | **S3** | **The files**: /audio and covers serve only regular files within the music folders; accounts and the key never replaced silently; private log; control characters out of log lines | No file outside the music can be read |

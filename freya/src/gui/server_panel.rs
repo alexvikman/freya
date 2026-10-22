@@ -29,8 +29,8 @@ struct Pending {
 enum Done {
     Found(Vec<Found>),
     Certificate(Result<(Pending, String), String>),
-    /// Whether the server knew the connection code typed.
-    Verified(Result<(), String>),
+    /// Whether the server with this certificate knew the connection code typed.
+    Verified(Vec<u8>, Result<(), String>),
 }
 
 /// A server the user logged in to, for the app to show the library of.
@@ -134,6 +134,9 @@ impl ServerPanel {
 
     /// Starts logging in to the server at `typed`: "mini.local", "192.168.1.20:47475".
     pub fn choose_address(&mut self, typed: &str) {
+        if self.login_busy {
+            return;
+        }
         let typed = typed.trim().to_owned();
         self.login_busy = true;
         self.login_error.clear();
@@ -144,6 +147,9 @@ impl ServerPanel {
     }
 
     fn take_certificate(&mut self, address: Result<SocketAddr, String>, name: String) {
+        if self.login_busy {
+            return;
+        }
         self.login_busy = true;
         self.login_error.clear();
         self.spawn(move || Done::Certificate(certificate(address, name)));
@@ -166,7 +172,10 @@ impl ServerPanel {
         let typed = typed.to_owned();
         self.login_busy = true;
         self.login_error.clear();
-        self.spawn(move || Done::Verified(freya_client::verify_server(&pin, &typed)));
+        self.spawn(move || {
+            let verified = freya_client::verify_server(&pin, &typed);
+            Done::Verified(pin.certificate, verified)
+        });
     }
 
     /// Shows a new connection code for a device to type, made by the server on this computer.
@@ -245,10 +254,13 @@ impl ServerPanel {
                         self.known_certificate.as_ref() == Some(&pending.pin.certificate);
                     self.login = Some(pending);
                 }
-                Done::Verified(verified) => {
+                Done::Verified(certificate, verified) => {
                     self.login_busy = false;
+                    // Only for the server chosen now, not one chosen before it.
+                    let chosen = self.login.as_ref().map(|pending| &pending.pin.certificate);
                     match verified {
-                        Ok(()) => self.login_verified = true,
+                        Ok(()) if chosen == Some(&certificate) => self.login_verified = true,
+                        Ok(()) => {}
                         Err(e) => self.login_error = e,
                     }
                 }

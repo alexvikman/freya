@@ -142,11 +142,10 @@ pub fn connect_pinned(pin: Pin, store: TokenStore, cache: Option<PathBuf>) -> Ar
 }
 
 /// Whether the server `pin` names knows the connection code `typed`, shown on its computer:
-/// that it, and not another computer in its place, gave the certificate pinned. The code is
-/// used up either way.
+/// that it, and not another computer in its place, gave the certificate pinned.
 pub fn verify_server(pin: &Pin, typed: &str) -> Result<(), String> {
     let code = freya_protocol::normalize_code(typed)
-        .ok_or("That is not a code: eight letters and digits, like K7Q2-M9XD.")?;
+        .ok_or("That is not a code: ten letters and digits, like K7Q2M-9XD4T.")?;
     let mut nonce = [0; 32];
     // The system's randomness failing leaves nothing safe to do.
     ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut nonce)
@@ -154,12 +153,13 @@ pub fn verify_server(pin: &Pin, typed: &str) -> Result<(), String> {
     let proof = Http::pinned(pin.clone())
         .enroll(&nonce)
         .map_err(|e| e.to_string())?;
-    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, code.as_bytes());
     let digest = ring::digest::digest(&ring::digest::SHA256, &pin.certificate);
+    let derived = freya_protocol::connection_key(&code, digest.as_ref());
+    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &derived);
     let message = freya_protocol::connection_message(&nonce, digest.as_ref());
     ring::hmac::verify(&key, &message, &proof).map_err(|_| {
         "The code does not match: it was mistyped, or another computer answered in the server's \
-         place. Show a new code on the server's computer and try again."
+         place."
             .to_owned()
     })
 }
