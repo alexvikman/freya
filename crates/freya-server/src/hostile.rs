@@ -184,7 +184,7 @@ fn let_in(request: &Request, response: &Response) -> bool {
         return false;
     };
     let open = ["/version", "/certificate", "/pair", "/token", "/enroll"];
-    let open = open.iter().any(|path| route == *path);
+    let open = open.contains(&route);
     response.status < 300 && !open
 }
 
