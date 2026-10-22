@@ -771,11 +771,20 @@ impl App {
         }
         if self.view.library_out.available {
             self.library.attach(&self.view.ui);
-            self.server.refresh(self.library.remote().as_deref());
-            if let Some(server) = self.library.server() {
-                self.playlists.connect(Arc::clone(&server));
-                self.lastfm.use_server(server);
-            }
+            self.take_connected();
+        }
+    }
+
+    /// Takes what connecting to the server found, once it is connected: the account and the
+    /// server, the playlists, how scrobbling goes, and the server's settings.
+    fn take_connected(&mut self) {
+        if let Some(connected) = self.library.take_connected() {
+            let remote = self.library.remote();
+            self.server
+                .connected(remote.as_deref(), connected.account, connected.info);
+            self.playlists
+                .connect(Arc::clone(&connected.server), connected.playlists);
+            self.lastfm.use_server(connected.server, connected.lastfm);
             // The server's settings, as the settings page shows them.
             if let Some(server) = self.library.server_settings().cloned() {
                 let settings = &mut self.settings;
@@ -1435,6 +1444,7 @@ impl App {
         self.lastfm_was_playing = playing;
 
         self.library.poll();
+        self.take_connected();
         if let Some(chosen) = self.server.poll() {
             self.use_remote_server(chosen);
         }
@@ -1902,6 +1912,7 @@ impl App {
             .or_else(|| self.unloaded_skin.clone());
         self.settings.queue_from = self.library_from();
         self.settings.save();
+        crate::errands::finish();
         self.library.save();
         if let Some(path) = settings::playlist_path() {
             let result = path

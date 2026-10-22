@@ -124,8 +124,8 @@ Nobody can wear it out before logging in:
 - one `Content-Length`, in digits, and no chunked requests;
 - only the library's answers compressed, which carry no secret, so the length of a
   compressed answer tells nothing of a token or a key;
-- calls asked at once (`/calls`) only those that read the library, at most 256, each
-  allowed to a listener or not on its own, as if asked alone;
+- calls asked at once (`/calls`) only those that read the library, at most 256 and 32 MB
+  of answers, each allowed to a listener or not on its own, as if asked alone;
 - events wait for a listener in a queue of 1,024, past which it is let go;
 - stopping the server, or turning the network off, ends every connection.
 

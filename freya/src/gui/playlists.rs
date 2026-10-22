@@ -42,9 +42,14 @@ impl Playlists {
     }
 
     /// Takes the playlists `server` keeps, which keeps them from now on.
-    pub fn connect(&mut self, server: Arc<dyn Server>) {
+    /// Keeps the playlists of `server`, which are `saved`, as it said when connected to.
+    pub fn connect(
+        &mut self,
+        server: Arc<dyn Server>,
+        saved: freya_protocol::ApiResult<Vec<freya_protocol::SavedPlaylist>>,
+    ) {
         self.server = Some(server);
-        self.reload();
+        self.keep(saved);
     }
 
     /// Reads the playlists from the server again: another client changed them.
@@ -52,7 +57,12 @@ impl Playlists {
         let Some(server) = &self.server else {
             return;
         };
-        let saved = match server.playlists() {
+        let saved = server.playlists();
+        self.keep(saved);
+    }
+
+    fn keep(&mut self, saved: freya_protocol::ApiResult<Vec<freya_protocol::SavedPlaylist>>) {
+        let saved = match saved {
             Ok(saved) => saved,
             Err(e) => {
                 log::warn!("could not read the playlists: {e}");

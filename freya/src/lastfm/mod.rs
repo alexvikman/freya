@@ -30,9 +30,13 @@ impl LastFm {
         }
     }
 
-    /// Scrobbles through `server` from now on.
-    pub fn use_server(&mut self, server: Arc<dyn Server>) {
-        match server.lastfm_status() {
+    /// Scrobbles through `server`, which said how it goes, `status`.
+    pub fn use_server(
+        &mut self,
+        server: Arc<dyn Server>,
+        status: freya_protocol::ApiResult<Status>,
+    ) {
+        match status {
             Ok(status) => self.status = status,
             Err(e) => log::warn!("could not ask how scrobbling goes: {e}"),
         }
@@ -78,14 +82,28 @@ impl LastFm {
         });
     }
 
+    /// Tells the server what plays, the window not waiting for it.
     pub fn now_playing(&self, track: Track) {
-        self.tell("tell Last.fm what plays", |server| {
-            server.lastfm_now_playing(&track)
+        let Some(server) = self.server.clone() else {
+            return;
+        };
+        crate::errands::run(move || {
+            if let Err(e) = server.lastfm_now_playing(&track) {
+                log::warn!("could not tell Last.fm what plays: {e}");
+            }
         });
     }
 
+    /// Tells the server a play to scrobble, the window not waiting for it.
     pub fn scrobble(&self, scrobble: Scrobble) {
-        self.tell("scrobble", |server| server.lastfm_scrobble(&scrobble));
+        let Some(server) = self.server.clone() else {
+            return;
+        };
+        crate::errands::run(move || {
+            if let Err(e) = server.lastfm_scrobble(&scrobble) {
+                log::warn!("could not scrobble: {e}");
+            }
+        });
     }
 
     fn tell(&self, what: &str, call: impl FnOnce(&dyn Server) -> freya_protocol::ApiResult<()>) {

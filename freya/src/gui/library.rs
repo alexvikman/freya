@@ -261,6 +261,21 @@ pub struct LibraryPanel {
     opened: Vec<Level>,
     /// Search text; when not empty, search results are shown instead of `level`.
     query: String,
+    /// Told when what the rows need was asked of the server, on a thread of its own: they are
+    /// read then.
+    asking: Option<std::sync::mpsc::Receiver<()>>,
+    /// Told whether each play noted on the errands' thread was written.
+    plays_written: (Sender<bool>, Receiver<bool>),
+    /// What connecting to the server gives, on a thread of its own; and what it found for the
+    /// app, until the app takes it.
+    connecting: Option<Receiver<Result<Connection, (&'static str, String)>>>,
+    found: Option<Connected>,
+    /// The same for the covers and pictures, and whether they are lined up to be made then.
+    asking_pictures: Option<std::sync::mpsc::Receiver<()>>,
+    prepare_after: bool,
+    /// Whether the row of the track playing is to be shown once the rows are read, and in its
+    /// album.
+    reveal_playing: Option<bool>,
     /// Text typed while searching or suggesting, waiting for a pause in the typing, and when
     /// each was last done: a key pressed after a pause is answered at once, those typed fast
     /// after it once the typing pauses.
@@ -683,6 +698,13 @@ impl LibraryPanel {
             covers_dir: covers,
             opened: vec![Level::Artists],
             query: String::new(),
+            asking: None,
+            plays_written: std::sync::mpsc::channel(),
+            connecting: None,
+            found: None,
+            asking_pictures: None,
+            prepare_after: false,
+            reveal_playing: None,
             typed: None,
             searched: Instant::now() - TYPING_PAUSE,
             typed_suggest: None,
@@ -812,104 +834,64 @@ impl LibraryPanel {
         let _ = ui.set_global_property("Library", "album-matches", self.album_rows.model_value());
         self.folders_shown = None;
         self.draft_shown = None;
-        if self.db.is_some() {
+        if self.db.is_some() || self.connecting.is_some() {
             return;
         }
         let Some(source) = self.source.clone() else {
             return;
         };
-        let (api, server): (Arc<dyn LibraryApi>, Arc<dyn Server>) = match source {
-            LibrarySource::Local { address, program } => {
-                let (Some(pairing_key), Some(certificate), Some(store)) = (
-                    crate::settings::pairing_key_path(),
-                    crate::settings::server_certificate_path(),
-                    crate::settings::token_store(),
-                ) else {
-                    log::warn!("no library: no folder for Freya's files");
-                    return;
-                };
-                let connected = freya_client::connect_locally(
-                    address,
-                    &program,
-                    &pairing_key,
-                    &certificate,
-                    &store,
-                    &crate::settings::device_name(),
-                );
-                let remote = match connected {
-                    Ok(remote) => remote,
-                    Err(e) => {
-                        log::warn!("no library: {e}");
-                        self.server_state = "unreachable";
-                        self.server_error = e;
-                        return;
-                    }
-                };
-                self.remote = Some(Arc::clone(&remote));
-                (Arc::clone(&remote) as _, remote)
-            }
-            LibrarySource::Remote { pin, .. } => {
-                let Some(store) = crate::settings::token_store() else {
-                    log::warn!("no library: no folder for Freya's files");
-                    return;
-                };
-                let remote = freya_client::connect_pinned(pin, store, crate::settings::cache_dir());
-                match remote.0.account() {
-                    Ok(Some(_)) => {}
-                    Ok(None) => {
-                        self.server_state = "log-in";
-                        self.server_error =
-                            "The server no longer takes this computer: log in again.".into();
-                        return;
-                    }
-                    Err(e) => {
-                        log::warn!("could not reach the server: {e}");
-                        self.server_state = "unreachable";
-                        self.server_error = e.to_string();
-                        return;
-                    }
-                }
-                self.remote = Some(Arc::clone(&remote));
-                (Arc::clone(&remote) as _, remote)
-            }
-            #[cfg(test)]
-            LibrarySource::InProcess { database, pictures } => {
-                let config = ServiceConfig {
-                    settings: self.settings.clone(),
-                    settings_file: None,
-                    scans_allowed: true,
-                    lastfm: freya_server::lastfm(),
-                    playlists: database.parent().map(|dir| dir.join("playlists")),
-                    scrobbles: None,
-                };
-                match Service::start(database, pictures, config) {
-                    Ok(service) => {
-                        let service = Arc::new(service);
-                        (service.api(), service)
-                    }
-                    Err(e) => {
-                        log::warn!("{e}");
-                        return;
-                    }
-                }
+        // A server is connected to on a thread of its own: the window shows what it has
+        // meanwhile, and the library once it is there.
+        #[cfg(test)]
+        if let LibrarySource::InProcess { .. } = source {
+            let connected = connect(source, self.settings.clone());
+            self.connected(connected);
+            return;
+        }
+        let settings = self.settings.clone();
+        let (done, connected) = std::sync::mpsc::sync_channel(1);
+        let started = std::thread::Builder::new()
+            .name("freya-connect".into())
+            .spawn(move || {
+                let _ = done.send(connect(source, settings));
+            });
+        match started {
+            Ok(_) => self.connecting = Some(connected),
+            Err(e) => log::warn!("no library: could not connect: {e}"),
+        }
+    }
+
+    /// Opens the library `connected` gave, or says why there is none.
+    fn connected(&mut self, connected: Result<Connection, (&'static str, String)>) {
+        self.connecting = None;
+        let connection = match connected {
+            Ok(connection) => connection,
+            Err((state, error)) => {
+                self.server_state = state;
+                self.server_error = error;
+                return;
             }
         };
-        match server.settings() {
-            Ok(settings) => self.settings = settings,
+        match &connection.settings {
+            Ok(settings) => self.settings = settings.clone(),
             Err(e) => log::warn!("could not read the server's settings: {e}"),
         }
-        match server.events() {
+        self.remote.clone_from(&connection.remote);
+        self.server = Some(Arc::clone(&connection.server));
+        self.audio.clone_from(&connection.audio);
+        self.server_state = "connected";
+        self.server_error.clear();
+        match connection.events {
             Ok(events) => self.server_events = Some(events),
             Err(e) => log::warn!("could not follow the server: {e}"),
         }
-        self.server = Some(server);
-        if let Some(remote) = &self.remote {
-            let (audio, agent) = remote.0.audio(freya_audio::REMOTE_TIMEOUT);
-            self.audio = Some((audio, Arc::new(agent)));
-        }
-        self.server_state = "connected";
-        self.server_error.clear();
-        self.open(api);
+        self.found = Some(connection.found);
+        self.open(connection.api);
+    }
+
+    /// What connecting to the server found for the app, once, when it was connected to.
+    pub fn take_connected(&mut self) -> Option<Connected> {
+        self.found.take()
     }
 
     /// Where the server serves the file of the library's track at `path`, when it is to be
@@ -998,11 +980,6 @@ impl LibraryPanel {
     /// The library, once open.
     pub fn api(&self) -> Option<Arc<dyn LibraryApi>> {
         self.db.clone()
-    }
-
-    /// The server that keeps the library, once connected.
-    pub fn server(&self) -> Option<Arc<dyn Server>> {
-        self.server.clone()
     }
 
     /// How scrobbling goes, when the server told since this was last asked.
@@ -1165,7 +1142,38 @@ impl LibraryPanel {
 
     /// Handles scan progress and covers made. Returns true when the rows changed.
     pub fn poll(&mut self) -> bool {
+        if let Some(connecting) = &self.connecting {
+            match connecting.try_recv() {
+                Ok(connected) => self.connected(connected),
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.connecting = None,
+            }
+        }
         self.take_typed();
+        if self
+            .plays_written
+            .1
+            .try_iter()
+            .fold(false, |any, written| any | written)
+            && self.shows_plays()
+        {
+            self.reload();
+        }
+        let answered = |asking: &Option<std::sync::mpsc::Receiver<()>>| {
+            asking.as_ref().is_some_and(|asking| {
+                !matches!(asking.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty))
+            })
+        };
+        if answered(&self.asking_pictures) {
+            self.load_pictures_now();
+            if std::mem::take(&mut self.prepare_after) {
+                self.prepare_pictures();
+            }
+            self.show_artist_info();
+        }
+        if answered(&self.asking) {
+            self.reload_now();
+        }
         // Made again: what was read of them is old.
         for key in self
             .thumbnails
@@ -1325,7 +1333,10 @@ impl LibraryPanel {
         if finished {
             self.prepare_all();
         }
-        if self.stale && (finished || self.reloaded.elapsed() >= RELOAD_INTERVAL) {
+        if self.stale
+            && self.asking.is_none()
+            && (finished || self.reloaded.elapsed() >= RELOAD_INTERVAL)
+        {
             self.reload();
             return true;
         }
@@ -1336,16 +1347,27 @@ impl LibraryPanel {
 
     /// Notes that a track was played just now.
     pub fn record_play(&mut self, path: PathBuf, part: Option<Part>) {
-        // While a scan writes, the play waits rather than the window.
-        let written = self.server.as_ref().is_some_and(|server| {
-            server
-                .record_play(&path, part, SystemTime::now())
-                .unwrap_or_else(|e| {
-                    log::warn!("could not note a play of {}: {e}", path.display());
-                    false
-                })
-        });
-        if written && self.shows_plays() {
+        let Some(server) = self.server.clone() else {
+            return;
+        };
+        let at = SystemTime::now();
+        let note = move || {
+            // While a scan writes, the play waits rather than the window.
+            server.record_play(&path, part, at).unwrap_or_else(|e| {
+                log::warn!("could not note a play of {}: {e}", path.display());
+                false
+            })
+        };
+        // A server reached over the network is told on the errands' thread, and the rows made
+        // of plays read again when it was.
+        if self.remote.is_some() {
+            let written = self.plays_written.0.clone();
+            crate::errands::run(move || {
+                let _ = written.send(note());
+            });
+            return;
+        }
+        if note() && self.shows_plays() {
             self.reload();
         }
     }
@@ -1523,9 +1545,8 @@ impl LibraryPanel {
             });
         }
         self.query.clear();
+        self.reveal_playing = Some(album);
         self.reload();
-        self.reveal_row = if album { self.playing_row } else { -1 };
-        self.reveals += 1;
         true
     }
 
@@ -2267,7 +2288,10 @@ impl LibraryPanel {
         let mbid = artist
             .as_deref()
             .and_then(|a| self.edits.get(a)?.mbid.clone());
-        let found = self.found_mbid(artist.as_deref());
+        // With no artist being matched, nothing to ask.
+        let found = artist
+            .as_deref()
+            .and_then(|artist| self.found_mbid(Some(artist)));
         Value::Struct(Struct::from_iter([
             (
                 "artist".to_owned(),
@@ -2491,8 +2515,12 @@ impl LibraryPanel {
             .as_deref()
             .and_then(|a| self.edits.get(a).cloned())
             .unwrap_or_default();
-        // Without the user's: the tags', else what MusicBrainz's search found.
-        let found_mbid = self.found_mbid(artist.as_deref()).unwrap_or_default();
+        // Without the user's: the tags', else what MusicBrainz's search found; with no artist
+        // being changed, nothing to ask.
+        let found_mbid = artist
+            .as_deref()
+            .and_then(|artist| self.found_mbid(Some(artist)))
+            .unwrap_or_default();
         let text = |value: Option<String>| string(value.unwrap_or_default());
         // Theirs, else Last.fm's to start from.
         let found = edit.biography.is_none() && !self.found_biography.is_empty();
@@ -2758,12 +2786,44 @@ impl LibraryPanel {
     // ----- What the skin shows -----------------------------------------------------------------
 
     /// Reads the rows for the current level or search from the database.
+    /// Reads the rows anew. A server is asked for all they need on a thread of its own, the
+    /// window not waiting for it, and they are read once its answers come.
     fn reload(&mut self) {
+        if self.remote.is_some()
+            && let Some(db) = &self.db
+        {
+            let calls = self.calls_ahead();
+            let level = self.level().clone();
+            let (list, searching) = (self.album_list, self.searching());
+            let api = Arc::clone(db);
+            let (done, answered) = std::sync::mpsc::sync_channel(1);
+            let asked = std::thread::Builder::new()
+                .name("freya-ask-ahead".into())
+                .spawn(move || {
+                    api.prefetch(&calls);
+                    if !searching {
+                        api.prefetch(&calls_after(api.as_ref(), &level, list));
+                    }
+                    let _ = done.send(());
+                });
+            if asked.is_ok() {
+                self.asking = Some(answered);
+                return;
+            }
+        }
+        self.reload_now();
+    }
+
+    /// Reads the rows anew now, from what was asked ahead.
+    fn reload_now(&mut self) {
+        self.asking = None;
         if std::mem::take(&mut self.stale) {
             self.stats = None;
         }
-        self.ask_ahead();
-        self.load_pictures();
+        if let Some(db) = &self.db {
+            db.prefetch(&self.calls_ahead());
+        }
+        self.load_pictures_now();
         self.reloaded = Instant::now();
         let Some(db) = &self.db else {
             return;
@@ -2892,6 +2952,10 @@ impl LibraryPanel {
         self.rows.sync(rows);
         self.letter_rows.sync(self.letters());
         self.find_playing_row();
+        if let Some(album) = self.reveal_playing.take() {
+            self.reveal_row = if album { self.playing_row } else { -1 };
+            self.reveals += 1;
+        }
         log::debug!("library rows loaded in {:?}", started.elapsed());
     }
 
@@ -2934,12 +2998,9 @@ impl LibraryPanel {
             .collect()
     }
 
-    /// Asks for what [`Self::reload`] reads next all at once: one round trip to a server
-    /// elsewhere, not one a call.
-    fn ask_ahead(&self) {
-        let Some(db) = &self.db else {
-            return;
-        };
+    /// What [`Self::reload`] reads next, to be asked all at once: one round trip to the
+    /// server, not one a call.
+    fn calls_ahead(&self) -> Vec<(&'static str, Vec<u8>)> {
         let mut calls = vec![
             ahead("artist_edits", &()),
             ahead("album_favorites", &()),
@@ -2948,13 +3009,7 @@ impl LibraryPanel {
             ahead("stats", &()),
         ];
         if self.pictures_stale {
-            calls.extend([
-                ahead("album_covers", &()),
-                ahead("genre_infos", &()),
-                ahead("artist_pictures", &(PictureKind::Portrait,)),
-                ahead("artist_pictures", &(PictureKind::Backdrop,)),
-                ahead("all_albums", &()),
-            ]);
+            calls.extend(picture_calls());
         }
         if self.searching() {
             calls.extend([
@@ -2963,8 +3018,7 @@ impl LibraryPanel {
                 ahead("all_albums", &()),
                 ahead("genres", &()),
             ]);
-            db.prefetch(&calls);
-            return;
+            return calls;
         }
         match self.level() {
             Level::Artists => calls.push(ahead("artists_by", &(self.artist_order,))),
@@ -3006,7 +3060,7 @@ impl LibraryPanel {
                 ahead("album_plays", &(artist.as_deref(), album.as_deref())),
             ]),
         }
-        db.prefetch(&calls);
+        calls
     }
 
     fn load(&self, db: &dyn LibraryApi) -> freya_protocol::ApiResult<Vec<Item>> {
@@ -3240,21 +3294,42 @@ impl LibraryPanel {
 
     /// Reads the albums' covers and the artists' pictures from the library, when a scan or the
     /// user changed them; what was shown of those that changed is made and read anew.
+    ///
+    /// A server is asked for them on a thread of its own, the window not waiting for it, and
+    /// they are read once its answers come.
     fn load_pictures(&mut self) {
+        if !self.pictures_stale || self.asking_pictures.is_some() {
+            return;
+        }
+        if self.remote.is_some()
+            && let Some(db) = &self.db
+        {
+            let api = Arc::clone(db);
+            let (done, answered) = std::sync::mpsc::sync_channel(1);
+            let asked = std::thread::Builder::new()
+                .name("freya-ask-ahead".into())
+                .spawn(move || {
+                    api.prefetch(&picture_calls());
+                    let _ = done.send(());
+                });
+            if asked.is_ok() {
+                self.asking_pictures = Some(answered);
+                return;
+            }
+        }
+        self.load_pictures_now();
+    }
+
+    /// Reads the albums' covers and the artists' pictures now, from what was asked ahead.
+    fn load_pictures_now(&mut self) {
+        self.asking_pictures = None;
         if !std::mem::take(&mut self.pictures_stale) {
             return;
         }
         let Some(db) = &self.db else {
             return;
         };
-        db.prefetch(&[
-            ahead("album_covers", &()),
-            ahead("genre_infos", &()),
-            ahead("artist_pictures", &(PictureKind::Portrait,)),
-            ahead("artist_pictures", &(PictureKind::Backdrop,)),
-            ahead("all_albums", &()),
-            ahead("artists", &()),
-        ]);
+        db.prefetch(&picture_calls());
         let covers = db.album_covers().unwrap_or_else(|e| {
             log::warn!("could not read the albums' covers: {e}");
             HashMap::new()
@@ -3347,10 +3422,21 @@ impl LibraryPanel {
         }
     }
 
-    /// Lines up every artist's and album's picture to be made ahead of its being shown.
+    /// Lines up every artist's and album's picture to be made ahead of its being shown: once
+    /// they are read, when a server is asked for them.
     fn prepare_all(&mut self) {
         self.pictures_stale = true;
-        self.load_pictures();
+        if self.remote.is_some() {
+            self.prepare_after = true;
+            self.load_pictures();
+            return;
+        }
+        self.load_pictures_now();
+        self.prepare_pictures();
+    }
+
+    /// Lines up the pictures read to be made.
+    fn prepare_pictures(&mut self) {
         let Some(db) = &self.db else {
             return;
         };
@@ -3959,6 +4045,172 @@ pub fn entry(track: &Track) -> Entry {
     Entry::with_tags(&track.path, track.part, &track.tags())
 }
 
+/// What the covers and pictures are read from, to be asked all at once.
+fn picture_calls() -> Vec<(&'static str, Vec<u8>)> {
+    vec![
+        ahead("album_covers", &()),
+        ahead("genre_infos", &()),
+        ahead("artist_pictures", &(PictureKind::Portrait,)),
+        ahead("artist_pictures", &(PictureKind::Backdrop,)),
+        ahead("all_albums", &()),
+        ahead("artists", &()),
+    ]
+}
+
+/// What is read after the rows of `level` come, to be asked all at once: each genre's albums,
+/// for its picture; each album's tracks of an artist's list.
+fn calls_after(
+    api: &dyn LibraryApi,
+    level: &Level,
+    album_list: bool,
+) -> Vec<(&'static str, Vec<u8>)> {
+    match level {
+        Level::Genres => api
+            .genres()
+            .unwrap_or_default()
+            .iter()
+            .map(|genre| ahead("genre_albums", &(genre.name.as_deref(),)))
+            .collect(),
+        Level::ArtistAlbums { artist } if album_list => api
+            .albums(artist.as_deref())
+            .unwrap_or_default()
+            .iter()
+            .map(|album| {
+                ahead(
+                    "album_tracks",
+                    &(album.artist.as_deref(), album.name.as_deref()),
+                )
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// What connecting to a server gave: the library, the server, and what the window and the
+/// app read of them first, all asked on the thread that connects.
+struct Connection {
+    api: Arc<dyn LibraryApi>,
+    server: Arc<dyn Server>,
+    remote: Option<Arc<freya_protocol::Remote<freya_client::Http>>>,
+    settings: freya_protocol::ApiResult<ServerSettings>,
+    events: freya_protocol::ApiResult<Receiver<ServiceEvent>>,
+    audio: Option<(String, Arc<ureq::Agent>)>,
+    found: Connected,
+}
+
+/// What connecting to a server found for the app: the account and the server as they say
+/// themselves, the playlists, and how scrobbling goes.
+pub struct Connected {
+    pub server: Arc<dyn Server>,
+    pub account: Option<freya_protocol::AccountInfo>,
+    pub info: Option<freya_protocol::ServerFound>,
+    pub playlists: freya_protocol::ApiResult<Vec<freya_protocol::SavedPlaylist>>,
+    pub lastfm: freya_protocol::ApiResult<freya_protocol::LastFmStatus>,
+}
+
+/// Connects to the library `source` names, as this computer's device, `settings` the
+/// window's for a library in this process: what it gave, or the state to show and why not.
+fn connect(
+    source: LibrarySource,
+    settings: ServerSettings,
+) -> Result<Connection, (&'static str, String)> {
+    #[cfg(not(test))]
+    let _ = settings;
+    let no_folder = || {
+        (
+            "unreachable",
+            "There is no folder for Freya's files.".to_owned(),
+        )
+    };
+    let (api, server, remote): (Arc<dyn LibraryApi>, Arc<dyn Server>, _) = match source {
+        LibrarySource::Local { address, program } => {
+            let (Some(pairing_key), Some(certificate), Some(store)) = (
+                crate::settings::pairing_key_path(),
+                crate::settings::server_certificate_path(),
+                crate::settings::token_store(),
+            ) else {
+                return Err(no_folder());
+            };
+            let remote = freya_client::connect_locally(
+                address,
+                &program,
+                &pairing_key,
+                &certificate,
+                &store,
+                &crate::settings::device_name(),
+            )
+            .map_err(|e| {
+                log::warn!("no library: {e}");
+                ("unreachable", e)
+            })?;
+            (
+                Arc::clone(&remote) as _,
+                Arc::clone(&remote) as _,
+                Some(remote),
+            )
+        }
+        LibrarySource::Remote { pin, .. } => {
+            let store = crate::settings::token_store().ok_or_else(no_folder)?;
+            let remote = freya_client::connect_pinned(pin, store, crate::settings::cache_dir());
+            match remote.0.account() {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    return Err((
+                        "log-in",
+                        "The server no longer takes this computer: log in again.".into(),
+                    ));
+                }
+                Err(e) => {
+                    log::warn!("could not reach the server: {e}");
+                    return Err(("unreachable", e.to_string()));
+                }
+            }
+            (
+                Arc::clone(&remote) as _,
+                Arc::clone(&remote) as _,
+                Some(remote),
+            )
+        }
+        #[cfg(test)]
+        LibrarySource::InProcess { database, pictures } => {
+            let config = ServiceConfig {
+                settings,
+                settings_file: None,
+                scans_allowed: true,
+                lastfm: freya_server::lastfm(),
+                playlists: database.parent().map(|dir| dir.join("playlists")),
+                scrobbles: None,
+            };
+            let service = Service::start(database, pictures, config).map_err(|e| {
+                log::warn!("{e}");
+                ("unreachable", e)
+            })?;
+            let service = Arc::new(service);
+            (service.api(), service as _, None)
+        }
+    };
+    let audio = remote.as_ref().map(|remote| {
+        let (audio, agent) = remote.0.audio(freya_audio::REMOTE_TIMEOUT);
+        (audio, Arc::new(agent))
+    });
+    let found = Connected {
+        server: Arc::clone(&server),
+        account: remote.as_ref().and_then(|r| r.0.account().ok().flatten()),
+        info: remote.as_ref().and_then(|r| r.0.info().ok()),
+        playlists: server.playlists(),
+        lastfm: server.lastfm_status(),
+    };
+    Ok(Connection {
+        settings: server.settings(),
+        events: server.events(),
+        api,
+        server,
+        remote,
+        audio,
+        found,
+    })
+}
+
 /// A call to ask for ahead, with its arguments, as [`LibraryApi::prefetch`] takes it.
 fn ahead(method: &'static str, args: &impl serde::Serialize) -> (&'static str, Vec<u8>) {
     (method, freya_protocol::args(args))
@@ -4369,6 +4621,66 @@ mod tests {
         assert!(panel.open_playing(false));
         assert!(matches!(panel.level(), Level::ArtistAlbums { .. }));
         assert_eq!((panel.reveal_row, panel.reveals), (-1, 2));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_server_is_asked_off_the_windows_thread() {
+        let dir = std::env::temp_dir().join(format!("freya-asked-off-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fixtures =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-audio/tests/fixtures");
+        for name in ["sine.flac", "sine.ogg"] {
+            std::fs::copy(fixtures.join(name), dir.join(name)).unwrap();
+        }
+        let mut db = Library::open(&dir.join("library.db")).unwrap();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        freya_library::library::scan(&mut db, std::slice::from_ref(&dir), &cancel, |_| {}).unwrap();
+        let served = freya_server::Served {
+            library: local(db, None),
+            server: None,
+            quit: None,
+            accounts: None,
+            certificate: None,
+            callback_port: freya_protocol::CALLBACK_PORT,
+        };
+        let server =
+            freya_server::http::Server::start("127.0.0.1:0", freya_server::handler(served))
+                .unwrap();
+        let remote = freya_client::connect(&format!("http://{}", server.address()), None, None);
+        let mut panel = LibraryPanel::new(None, None);
+        panel.remote = Some(Arc::clone(&remote));
+        panel.open(remote);
+        // Asked on a thread: the rows come once the answers do.
+        assert!(panel.asking.is_some());
+        let answered = |panel: &mut LibraryPanel| {
+            let waited = Instant::now();
+            while panel.asking.is_some() || panel.asking_pictures.is_some() {
+                assert!(waited.elapsed() < Duration::from_secs(10), "no answer");
+                std::thread::sleep(Duration::from_millis(5));
+                panel.poll();
+            }
+        };
+        answered(&mut panel);
+        panel.show("songs");
+        assert!(
+            panel.asking.is_some(),
+            "the rows shown stay until the new ones come"
+        );
+        answered(&mut panel);
+        let tracks = panel.db.as_ref().unwrap().all_tracks().unwrap();
+        assert!(!tracks.is_empty());
+        assert_eq!(panel.items.len(), tracks.len());
+
+        // What is done once the rows are read waits for them.
+        let playing = dir.join("sine.ogg");
+        panel.set_playing(Some((&playing, Duration::ZERO)));
+        assert!(panel.open_playing(true));
+        answered(&mut panel);
+        assert!(panel.playing_row >= 0);
+        assert_eq!(panel.reveal_row, panel.playing_row);
+        drop(server);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

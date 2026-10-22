@@ -334,13 +334,25 @@ impl ServerPanel {
 
     /// Reads the account and the server's own information again.
     pub fn refresh(&mut self, remote: Option<&Remote<Http>>) {
+        let account = remote.and_then(|remote| remote.0.account().ok().flatten());
+        let info = remote.and_then(|remote| remote.0.info().ok());
+        self.connected(remote, account, info);
+    }
+
+    /// The server connected to through `remote`, its account and itself as they say.
+    pub fn connected(
+        &mut self,
+        remote: Option<&Remote<Http>>,
+        account: Option<freya_protocol::AccountInfo>,
+        info: Option<freya_protocol::ServerFound>,
+    ) {
         let Some(remote) = remote else {
             self.account = None;
             self.info = None;
             return;
         };
-        self.account = remote.0.account().ok().flatten();
-        self.info = remote.0.info().ok();
+        self.account = account;
+        self.info = info;
         // The fingerprint shown is the certificate's this computer pinned, not what the server
         // says of itself.
         self.fingerprint = remote

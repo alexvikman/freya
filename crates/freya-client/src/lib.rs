@@ -345,15 +345,15 @@ pub struct Http {
 /// too, between runs, so a client started again is told it has it rather than sent it.
 const KEPT_LIMIT: usize = 128 * 1024 * 1024;
 const KEPT_ON_DISK_FROM: usize = 16 * 1024;
-/// How long an answer asked for with others at once is taken as current, once, by the call
-/// that follows, without the server's telling of changes.
+/// How long an answer asked for with others at once is taken as current by the calls that
+/// follow, without the server's telling of changes.
 const FRESH_FOR: Duration = Duration::from_secs(2);
 
 /// Answers to the calls that only read the library ([`freya_protocol::CACHED_CALLS`]), each
 /// with the server's tag for it. One is given again without asking while the server tells
 /// this client of every change and none came since it was asked, or, asked for with others
-/// at once, once within [`FRESH_FOR`]; else it is asked for with its tag, and the server
-/// answers with no more than that when it is the same.
+/// at once, within [`FRESH_FOR`]; else it is asked for with its tag, and the server answers
+/// with no more than that when it is the same.
 #[derive(Default)]
 struct Kept {
     answers: HashMap<(String, Vec<u8>), KeptAnswer>,
@@ -374,27 +374,24 @@ struct KeptAnswer {
     /// server last said it was.
     current: bool,
     fetched: Instant,
-    /// How many times it was asked for with others at once, for as many calls that follow to
-    /// take.
-    lent: u32,
+    /// Until when it is current, asked for with others at once for the calls that follow.
+    lent: Option<Instant>,
 }
 
 impl Kept {
     /// The answer to `call`, when it is known to be current: as the server tells, or asked
-    /// for at once just now, which only the first call takes.
-    fn current(&mut self, call: &(String, Vec<u8>)) -> Option<Vec<u8>> {
-        let told = self.told;
-        let kept = self.answers.get_mut(call)?;
-        let lent = kept.lent > 0 && kept.fetched.elapsed() < FRESH_FOR;
-        kept.lent = kept.lent.saturating_sub(1);
-        (kept.current && (told || lent)).then(|| kept.json.clone())
+    /// for at once just now.
+    fn current(&self, call: &(String, Vec<u8>)) -> Option<Vec<u8>> {
+        let kept = self.answers.get(call)?;
+        let lent = kept.lent.is_some_and(|until| Instant::now() < until);
+        (kept.current && (self.told || lent)).then(|| kept.json.clone())
     }
 
-    /// Notes that the answer to `call` was asked for at once with others, `times`, for as
-    /// many calls that follow.
-    fn lend(&mut self, call: &(String, Vec<u8>), times: u32) {
+    /// Notes that the answer to `call` was asked for at once with others, for the calls that
+    /// follow.
+    fn lend(&mut self, call: &(String, Vec<u8>)) {
         if let Some(kept) = self.answers.get_mut(call) {
-            kept.lent += times;
+            kept.lent = Some(Instant::now() + FRESH_FOR);
         }
     }
 
@@ -481,7 +478,7 @@ impl Kept {
                 json,
                 current,
                 fetched,
-                lent: 0,
+                lent: None,
             },
         );
     }
@@ -1174,25 +1171,22 @@ impl Transport for Http {
     fn prefetch(&self, calls: &[(&str, Vec<u8>)]) {
         let (asked, wanted) = {
             let mut kept = self.kept_answers();
-            // Each call once, for as many as ask it.
+            // Each call once, and none that is current.
             let mut wanted: Vec<(String, Vec<u8>, Option<String>)> = Vec::new();
-            let mut times: HashMap<(String, Vec<u8>), u32> = HashMap::new();
+            let mut seen = std::collections::HashSet::new();
             for (method, args) in calls {
                 let call = ((*method).to_owned(), args.clone());
-                let told = kept.told && kept.answers.get(&call).is_some_and(|k| k.current);
-                if told || wanted.len() == freya_protocol::MOST_AT_ONCE {
+                if kept.current(&call).is_some()
+                    || wanted.len() == freya_protocol::MOST_AT_ONCE
+                    || !seen.insert(call.clone())
+                {
                     continue;
                 }
-                let asked = times.entry(call.clone()).or_default();
-                *asked += 1;
-                if *asked == 1 {
-                    let tag = kept.tag(&call);
-                    wanted.push((call.0, call.1, tag));
-                }
+                let tag = kept.tag(&call);
+                wanted.push((call.0, call.1, tag));
             }
-            (kept.changes, (wanted, times))
+            (kept.changes, wanted)
         };
-        let (wanted, times) = wanted;
         if wanted.is_empty() {
             return;
         }
@@ -1245,7 +1239,7 @@ impl Transport for Http {
                 // Asked again by the call itself, which says why.
                 _ => continue,
             }
-            kept.lend(&call, times.get(&call).copied().unwrap_or(1));
+            kept.lend(&call);
         }
     }
 

@@ -229,7 +229,7 @@ what the hardening made: answers per user and role, nothing compressed that carr
 | **P2** ✓ | **The server answers at once**: answers serialized straight to bytes; gzip for large answers; readers that do not wait for each other (a pool of SQLite connections), SQLite tuned (statement cache, cache, memory-mapped reads); a whole answer in one write, audio in 64 KB writes, a socket's deadline set only when it changes; connections and the event stream kept open minutes for known devices | `all_tracks` in under a third of the time and bytes |
 | **P3** ✓ | **Nothing fetched twice**: the library has a generation, bumped by every change; answers carry it as an ETag and a client that has them gets 304 with no body; the client keeps the answers in memory and the whole-library ones on disk, so it shows the library at once on start and checks it after; favourites and edits kept until they change; a scan's progress reloads the view at most every few seconds | Going back to a view costs one round trip without a body; the library shows before the server answers |
 | **P4** ✓ | **Fewer round trips**: several calls in one request; a playlist's tracks in one call; an artist's page, a genre's page and search each one call on the server, search waiting for a pause in typing; no call per artist for its picture | A page is one round trip; a keystroke at most one |
-| **P5** | **The window never waits**: every call to the server made on a worker, its answer applied when it comes, an older one dropped; connecting and renewing tokens off the UI thread too | No call on the UI thread in the log; scrolling stays smooth with 100 ms each way |
+| **P5** ✓ | **The window never waits**: every call to the server made on a worker, its answer applied when it comes, an older one dropped; connecting and renewing tokens off the UI thread too | No call on the UI thread in the log; scrolling stays smooth with 100 ms each way |
 | **P6** | **Pictures**: thumbnails made and kept by the server in the sizes the grid asks for; several fetched at once, the ones in view first; the cover of what plays from what the scan kept instead of read from the file each time | 60 covers at 10 ms each way in under 0.2 s |
 | **P7** | **Sound**: the next track opened and its first part fetched before the current ends, so tracks follow without a gap; a first part small enough to start at once, later ones larger; MP3s sought by estimate first; a part no longer needed given up; the audio connection kept warm | The first sound in two round trips and a little; no gap between tracks at 10 ms each way |
 
@@ -294,6 +294,20 @@ artists' pictures are made from one `all_albums`, not `albums` an artist. Search
 suggestions against a server elsewhere wait for a pause of 150 ms in the typing, a key after
 a pause answered at once. The window, started against its own server: 475 calls in its first
 20 seconds before, now 10 that reach the server, two of them six calls each.
+
+#### P5
+
+Connecting, pairing or logging in, the server's settings, events, account, playlists and
+how scrobbling goes are asked on a thread of their own, and the window takes them once
+there. A server reached over the network has what a view, a page, the covers and the
+artists' pictures read asked all at once on a thread, and the rows are read from what came,
+the old rows shown meanwhile; what follows the rows, like showing the track playing, waits
+for them. A play noted, what plays now and a scrobble go on an errands' thread, in order,
+and quitting waits a moment for them. Two forms asked for an artist's id with no artist
+being changed. The window against its own server 100 ms away each way, through a proxy:
+nothing held it up in its first 30 seconds, where before every call would have, 475 of
+them. What still waits on the window's thread: the user's own changes, a favourite made or
+an artist matched, a round trip each.
 
 ### U7: the hologram (from 2026-10-17)
 

@@ -242,7 +242,7 @@ fn calls_asked_at_once_are_answered_by_the_calls_that_follow() {
     let track = local.all_tracks().unwrap()[0].clone();
     remote.prefetch(&[
         ("stats", freya_protocol::args(&())),
-        // Asked twice, it answers twice.
+        // Asked twice, it is asked once.
         ("stats", freya_protocol::args(&())),
         ("all_tracks", freya_protocol::args(&())),
         (
@@ -264,7 +264,6 @@ fn calls_asked_at_once_are_answered_by_the_calls_that_follow() {
     drop(server);
     assert_eq!(remote.stats().unwrap(), local.stats().unwrap());
     assert_eq!(remote.stats().unwrap(), local.stats().unwrap());
-    assert!(remote.stats().is_err());
     assert_eq!(remote.all_tracks().unwrap(), local.all_tracks().unwrap());
     assert_eq!(
         remote
@@ -274,6 +273,9 @@ fn calls_asked_at_once_are_answered_by_the_calls_that_follow() {
     );
     assert!(remote.album_tracks(None, Some("Sines")).is_ok());
     assert!(remote.artist_edits().is_err());
+    // For a moment only: then they are asked again.
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    assert!(remote.stats().is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
 

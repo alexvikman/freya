@@ -888,7 +888,11 @@ mod tests {
         assert_eq!(statuses[0], 200);
         assert_eq!(statuses[99], 413);
         // The bound, the last answer over it, and a short refusal for each beyond.
-        assert!(bytes.len() < MOST_ANSWERED_AT_ONCE + 100 * 128, "{}", bytes.len());
+        assert!(
+            bytes.len() < MOST_ANSWERED_AT_ONCE + 100 * 128,
+            "{}",
+            bytes.len()
+        );
     }
 
     #[test]
