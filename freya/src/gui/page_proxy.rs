@@ -305,6 +305,14 @@ mod tests {
 
     const FORM: &str = "application/x-www-form-urlencoded";
 
+    #[test]
+    fn listens_where_servers_send_logins_back() {
+        assert_eq!(
+            ADDRESS,
+            format!("127.0.0.1:{}", freya_protocol::CALLBACK_PORT)
+        );
+    }
+
     fn header<'a>(answer: &'a ureq::http::Response<ureq::Body>, name: &str) -> &'a str {
         answer
             .headers()
@@ -318,6 +326,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("freya-page-proxy-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let pairing = dir.join("pairing.key");
+        let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let here = free.local_addr().unwrap().to_string();
+        drop(free);
         let served = Served {
             library: Arc::new(freya_server::LocalLibrary::new(
                 Library::open_in_memory().unwrap(),
@@ -327,6 +338,7 @@ mod tests {
             quit: None,
             accounts: Some(Arc::new(Accounts::open(None, Some(pairing.clone())))),
             certificate: None,
+            callback_port: here.rsplit_once(':').unwrap().1.parse().unwrap(),
         };
         let server = Server::start("127.0.0.1:0", freya_server::handler(served)).unwrap();
         let address = format!("http://{}", server.address());
@@ -335,9 +347,6 @@ mod tests {
             .with_token(Some(Http::new(&address).pair(&key, "Mac").unwrap().access));
         let user = mac.account().unwrap().unwrap().user;
 
-        let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let here = free.local_addr().unwrap().to_string();
-        drop(free);
         let (tell, heard) = channel();
         let proxy = PageProxy::start_at(&here, tell).unwrap();
         let origin = proxy.origin();

@@ -4,9 +4,9 @@
 //! - `GET /login`, with OAuth's `response_type=code`, `redirect_uri`, `state`, `code_challenge`
 //!   and `code_challenge_method=S256`: a form for the user and their password. `POST /login`
 //!   sends the browser on to `redirect_uri` with a code and the state, which the client that
-//!   asked trades for a token at the API's `/token`. Only a client on the browser's own
-//!   computer is sent to: `redirect_uri` is `http://127.0.0.1:port/callback` or
-//!   `http://[::1]:port/callback`.
+//!   asked trades for a token at the API's `/token`. Only Freya on the browser's own
+//!   computer is sent to: `redirect_uri` is `http://127.0.0.1:47477/callback`
+//!   ([`freya_protocol::CALLBACK_PORT`], or the one [`Served`] names, as in tests).
 //! - `GET /logged-in`: where the client sends the browser once it has its token.
 //! - `GET /password?ticket=`: a form for a new password, and the one now unless the ticket is
 //!   of a device on the server's computer. `POST /password` changes it.
@@ -54,14 +54,14 @@ pub fn answer(served: &Served, request: &Request) -> Option<Response> {
     Some(match (request.method.as_str(), path) {
         ("GET", "/login") => {
             let values = values(&request.query);
-            match Login::asked(&values) {
+            match Login::asked(&values, served.callback_port) {
                 Ok(login) => login_page(200, &server, &login, "", ""),
                 Err(why) => message(400, "Freya Cannot Log In Here", why),
             }
         }
         ("POST", "/login") => {
             let values = values(&String::from_utf8_lossy(&request.body));
-            match Login::asked(&values) {
+            match Login::asked(&values, served.callback_port) {
                 Ok(login) => logged_in(accounts, &server, &login, &values, request),
                 Err(why) => message(400, "Freya Cannot Log In Here", why),
             }
@@ -90,11 +90,17 @@ pub fn answer(served: &Served, request: &Request) -> Option<Response> {
                 )
             } else {
                 let from = request.peer.map(|peer| peer.ip());
-                match accounts.change_password(ticket, value(&values, "current"), new, from) {
+                let others = value(&values, "others") == "out";
+                match accounts.change_password(ticket, value(&values, "current"), new, from, others)
+                {
                     Ok(()) => message(
                         200,
                         "The Password Is Changed",
-                        "Other devices log in with it from now on. You can close this page.",
+                        if others {
+                            "Your other devices are logged out, and log in with it from now on. You can close this page."
+                        } else {
+                            "Other devices log in with it from now on. You can close this page."
+                        },
                     ),
                     Err(why) => password_page(accounts, 400, &server, ticket, &why),
                 }
@@ -113,7 +119,7 @@ struct Login {
 }
 
 impl Login {
-    fn asked(values: &[(String, String)]) -> Result<Self, &'static str> {
+    fn asked(values: &[(String, String)], callback_port: u16) -> Result<Self, &'static str> {
         if value(values, "response_type") != "code"
             || value(values, "code_challenge_method") != "S256"
         {
@@ -127,7 +133,7 @@ impl Login {
             return Err("Freya sent a challenge this server does not take.");
         }
         let redirect = value(values, "redirect_uri");
-        if !is_loopback(redirect) {
+        if !is_callback(redirect, callback_port) {
             return Err("Logging in sends you back to Freya on this computer only.");
         }
         let state = value(values, "state");
@@ -250,6 +256,7 @@ fn password_page(
 {current}
 <label>New password<input name="password" type="password" autocomplete="new-password" minlength="{SHORTEST_PASSWORD}" required{focus}></label>
 <label>Again<input name="again" type="password" autocomplete="new-password" minlength="{SHORTEST_PASSWORD}" required></label>
+<label class="choice"><input name="others" type="checkbox" value="out"> Log out my other devices: they log in again with the new password</label>
 {error}<button>Save</button>
 </form>"#,
         user = escape(&page.user),
@@ -313,6 +320,8 @@ label {{ display: grid; gap: 6px; font-size: 13px; font-weight: 600; }}
 input {{ font: inherit; padding: 9px 11px; border: 1px solid var(--divider); border-radius: 8px; background: var(--background); color: var(--text); }}
 input:focus {{ outline: 2px solid var(--accent); outline-offset: -1px; }}
 input[readonly] {{ color: var(--secondary); }}
+label.choice {{ display: flex; gap: 8px; align-items: flex-start; font-weight: 400; color: var(--secondary); }}
+label.choice input {{ margin: 2px 0 0; }}
 button {{ font: inherit; font-weight: 600; padding: 10px; border: 0; border-radius: 8px; background: var(--accent); color: var(--on-accent); cursor: pointer; }}
 .error {{ margin: 0; color: var(--danger); }}
 </style>
@@ -328,22 +337,10 @@ button {{ font: inherit; font-weight: 600; padding: 10px; border: 0; border-radi
     )
 }
 
-/// Whether `uri` is a client's callback on this computer, by its address:
-/// `http://127.0.0.1:port/callback` or `http://[::1]:port/callback`, and nothing more.
-fn is_loopback(uri: &str) -> bool {
-    let Some(rest) = uri.strip_prefix("http://") else {
-        return false;
-    };
-    let Some((authority, "callback")) = rest.split_once('/') else {
-        return false;
-    };
-    let Some((host, port)) = authority.rsplit_once(':') else {
-        return false;
-    };
-    ["127.0.0.1", "[::1]"].contains(&host)
-        && !port.is_empty()
-        && port.bytes().all(|b| b.is_ascii_digit())
-        && port.parse::<u16>().is_ok()
+/// Whether `uri` is Freya's callback on the browser's computer, `http://127.0.0.1:{port}/callback`,
+/// and nothing more.
+fn is_callback(uri: &str, port: u16) -> bool {
+    uri == format!("http://127.0.0.1:{port}/callback")
 }
 
 /// The pairs of a query or form: `a=1&b=x+y`, its `+` spaces and its escapes undone.
@@ -396,21 +393,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sends_back_to_this_computer_only() {
-        assert!(is_loopback("http://127.0.0.1:47477/callback"));
-        assert!(is_loopback("http://[::1]:5000/callback"));
-        assert!(!is_loopback("http://127.0.0.1:47477/elsewhere"));
-        assert!(!is_loopback("http://127.0.0.1:47477/callback?x=1"));
-        assert!(!is_loopback(
-            "http://127.0.0.1:47477/callback\r\nSet-Cookie: x=1"
+    fn sends_back_to_freya_only() {
+        assert!(is_callback("http://127.0.0.1:47477/callback", 47477));
+        assert!(!is_callback("http://127.0.0.1:5555/callback", 47477));
+        assert!(!is_callback("http://[::1]:47477/callback", 47477));
+        assert!(!is_callback("https://127.0.0.1:47477/callback", 47477));
+        assert!(!is_callback("http://127.0.0.1:47477/elsewhere", 47477));
+        assert!(!is_callback("http://127.0.0.1:47477/callback?x=1", 47477));
+        assert!(!is_callback(
+            "http://evil.example@127.0.0.1:47477/callback",
+            47477
         ));
-        assert!(!is_loopback("http://127.0.0.1:+80/callback"));
-        assert!(!is_loopback("https://127.0.0.1:47477/callback"));
-        assert!(!is_loopback("http://127.0.0.1.evil.example:80/"));
-        assert!(!is_loopback("http://evil.example@127.0.0.1:80/"));
-        assert!(!is_loopback("http://localhost:47477/callback"));
-        assert!(!is_loopback("http://127.0.0.1/callback"));
-        assert!(!is_loopback("http://127.0.0.1:47477/callback#x"));
     }
 
     #[test]

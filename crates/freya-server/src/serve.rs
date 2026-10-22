@@ -72,6 +72,9 @@ pub struct Served {
     pub accounts: Option<Arc<Accounts>>,
     /// The server's TLS certificate, in DER, when clients on other computers may connect.
     pub certificate: Option<Vec<u8>>,
+    /// The port of Freya's callback on a browser's computer, which login codes are sent to:
+    /// [`freya_protocol::CALLBACK_PORT`], or another in tests.
+    pub callback_port: u16,
 }
 
 /// Answers requests to the API as `served` says.
@@ -258,12 +261,14 @@ fn answer(served: &Served, request: Request) -> Response {
                 Ok(events) => events,
                 Err(e) => return Response::error(500, e),
             };
+            let listener = caller.as_ref().is_some_and(|c| c.role == Role::Listener);
             Response::stream(
                 "application/x-ndjson",
                 Box::new(move |out| {
                     let ends = std::time::Instant::now() + STREAM_LASTS;
                     while std::time::Instant::now() < ends {
                         let line = match events.recv_timeout(HEARTBEAT) {
+                            Ok(event) if listener && !for_listeners(&event) => continue,
                             Ok(event) => event_line(&event),
                             Err(RecvTimeoutError::Timeout) => "\n".to_owned(),
                             Err(RecvTimeoutError::Disconnected) => return Ok(()),
@@ -633,6 +638,29 @@ fn account(
     })
 }
 
+/// Whether a listener is told of `event`: how the library everyone shares goes, without the
+/// folders it is in, and nothing of the owner's plays, playlists or Last.fm.
+fn for_listeners(event: &ServiceEvent) -> bool {
+    use freya_protocol::ScanEvent;
+    match event {
+        ServiceEvent::Connected { .. } | ServiceEvent::ScanStarted | ServiceEvent::ScanEnded => {
+            true
+        }
+        ServiceEvent::Scan(scan) => matches!(
+            scan,
+            ScanEvent::Progress { .. }
+                | ScanEvent::Covers { .. }
+                | ScanEvent::Artists { .. }
+                | ScanEvent::Genres { .. }
+                | ScanEvent::Finished(_)
+        ),
+        ServiceEvent::Lost
+        | ServiceEvent::PlaysWritten
+        | ServiceEvent::PlaylistsChanged
+        | ServiceEvent::LastFm(_) => false,
+    }
+}
+
 fn event_line(event: &ServiceEvent) -> String {
     let mut line = serde_json::to_string(event).unwrap_or_default();
     line.push('\n');
@@ -710,6 +738,7 @@ mod tests {
             quit: None,
             accounts: Some(Arc::clone(&accounts)),
             certificate: None,
+            callback_port: freya_protocol::CALLBACK_PORT,
         };
         let limit = body_limit(served);
         let mut asked = request(&[], b"");
@@ -739,5 +768,23 @@ mod tests {
         assert_eq!(limit(&asked), 8 * 1024 * 1024);
         asked.path = format!("{API_PATH}/pictures");
         assert_eq!(limit(&asked), 8 * 1024 * 1024);
+    }
+
+    #[test]
+    fn listeners_hear_only_how_the_shared_library_goes() {
+        use freya_protocol::{LastFmStatus, ScanEvent, ScanSummary};
+        assert!(for_listeners(&ServiceEvent::ScanStarted));
+        assert!(for_listeners(&ServiceEvent::Scan(ScanEvent::Progress {
+            done: 1,
+            total: 2
+        })));
+        assert!(for_listeners(&ServiceEvent::Scan(ScanEvent::Finished(
+            ScanSummary::default()
+        ))));
+        assert!(!for_listeners(&ServiceEvent::Scan(ScanEvent::Looking(
+            "/Users/owner/Music".into()
+        ))));
+        assert!(!for_listeners(&ServiceEvent::PlaylistsChanged));
+        assert!(!for_listeners(&ServiceEvent::LastFm(LastFmStatus::default())));
     }
 }

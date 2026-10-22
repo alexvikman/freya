@@ -39,6 +39,7 @@ fn served(name: &str) -> (Server, Arc<dyn LibraryApi>, Arc<dyn LibraryApi>, Path
         quit: None,
         accounts: None,
         certificate: None,
+        callback_port: freya_protocol::CALLBACK_PORT,
     };
     let server = Server::start("127.0.0.1:0", freya_server::handler(served)).unwrap();
     let remote = connect(&format!("http://{}", server.address()), None, None);
@@ -151,6 +152,7 @@ fn the_server_is_told_what_to_do_and_tells_what_happens() {
         quit: None,
         accounts: None,
         certificate: None,
+        callback_port: freya_protocol::CALLBACK_PORT,
     };
     let server = Server::start("127.0.0.1:0", freya_server::handler(served)).unwrap();
     let remote = connect(&format!("http://{}", server.address()), None, None);
@@ -378,6 +380,7 @@ fn only_a_device_with_a_token_is_answered() {
         quit: None,
         accounts: Some(Arc::clone(&accounts)),
         certificate: None,
+        callback_port: freya_protocol::CALLBACK_PORT,
     };
     let server = Server::start("127.0.0.1:0", freya_server::handler(served)).unwrap();
     let address = format!("http://{}", server.address());
@@ -591,6 +594,7 @@ fn a_server_elsewhere_is_reached_over_tls_with_its_certificate_pinned() {
         quit: None,
         accounts: None,
         certificate: Some(identity.certificate.clone()),
+        callback_port: freya_protocol::CALLBACK_PORT,
     };
     let server = Server::start_tls(
         "127.0.0.1:0",
@@ -681,6 +685,7 @@ fn a_new_device_knows_the_server_by_its_connection_code() {
         quit: None,
         accounts: Some(Arc::clone(&accounts)),
         certificate: Some(identity.certificate.clone()),
+        callback_port: freya_protocol::CALLBACK_PORT,
     };
     let server = Server::start_tls(
         "127.0.0.1:0",
@@ -736,6 +741,7 @@ fn a_program_in_the_local_servers_place_is_given_nothing() {
         quit: None,
         accounts: None,
         certificate: Some(theirs.certificate.clone()),
+        callback_port: freya_protocol::CALLBACK_PORT,
     };
     let impostor = Server::start_tls(
         "127.0.0.1:0",

@@ -30,7 +30,7 @@
 //! for proofs again neither helps nor uses it up. Passwords are set and changed in
 //! the browser too, on a page a device's ticket opens.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
@@ -57,6 +57,10 @@ const FREE_TRIES_FOR_A_NAME: u32 = 20;
 const FIRST_WAIT: Duration = Duration::from_secs(30);
 const LONGEST_WAIT: Duration = Duration::from_secs(15 * 60);
 const TRIES_FORGOTTEN: Duration = Duration::from_secs(24 * 60 * 60);
+/// The most tries remembered, and addresses users logged in from: past it, the oldest go, so
+/// made-up names and addresses cannot fill the memory.
+const MAX_TRIED: usize = 10_000;
+const MAX_KNOWN: usize = 1_000;
 /// The user a server starts with, who owns it.
 const OWNER: u32 = 1;
 /// How often when a device was last used is kept: no more than this, so calling the server
@@ -172,6 +176,8 @@ struct Ticket {
     /// The SHA-256 of the ticket, hex.
     ticket: String,
     user: u32,
+    /// The device it was asked from, which stays logged in when the others are logged out.
+    device: String,
     until: Instant,
 }
 
@@ -250,6 +256,17 @@ impl Tries {
     fn count(&mut self, keys: &[TriedFor]) {
         let now = Instant::now();
         self.0.retain(|_, tried| now < tried.last + TRIES_FORGOTTEN);
+        if self.0.len() > MAX_TRIED {
+            let mut by_age: Vec<(Instant, String)> = self
+                .0
+                .iter()
+                .map(|(key, tried)| (tried.last, key.clone()))
+                .collect();
+            by_age.sort();
+            for (_, key) in by_age.into_iter().take(MAX_TRIED / 2) {
+                self.0.remove(&key);
+            }
+        }
         for (key, free) in keys {
             let tried = self.0.entry(key.clone()).or_insert(Tried {
                 wrong: 0,
@@ -288,6 +305,9 @@ pub struct Accounts {
     grants: Mutex<Vec<Grant>>,
     tickets: Mutex<Vec<Ticket>>,
     tries: Mutex<Tries>,
+    /// The users who logged in from an address, by its network: tries for their name from
+    /// elsewhere do not hold them up there.
+    known: Mutex<HashSet<(u32, String)>>,
     /// The connection code shown now, until when, and its key once derived.
     connection: Mutex<Option<Connection>>,
 }
@@ -326,6 +346,7 @@ impl Accounts {
             grants: Mutex::new(Vec::new()),
             tickets: Mutex::new(Vec::new()),
             tries: Mutex::new(Tries::default()),
+            known: Mutex::new(HashSet::new()),
             connection: Mutex::new(None),
         };
         accounts.save(&accounts.kept());
@@ -411,25 +432,35 @@ impl Accounts {
 
     /// The user `name` is, given their password, tried from `from`. A wrong one holds the
     /// answer up; after a few, for that name or from that address, none is tried for a while.
+    ///
+    /// Whether the name is a user's does not show: a made-up one is counted and waited for as
+    /// a user's, and a password is checked against a hash of nothing for it, as long.
     fn check(&self, name: &str, password: &str, from: Option<IpAddr>) -> Result<u32, Refused> {
+        let typed = name.trim().to_lowercase();
         let (id, hashed) = {
             let kept = self.kept();
-            let user = kept
-                .users
-                .iter()
-                .find(|u| u.name.eq_ignore_ascii_case(name.trim()));
+            let user = kept.users.iter().find(|u| u.name.to_lowercase() == typed);
             (user.map(|u| u.id), user.and_then(|u| u.password.clone()))
         };
-        // A name only counts when there is such a user, so made-up ones fill nothing.
+        let network = from.map(network);
+        let known = |id: u32, network: &String| {
+            self.known
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains(&(id, network.clone()))
+        };
+        let named = format!("user:{typed}");
         let mut keys: Vec<TriedFor> = Vec::new();
-        if let Some(id) = id {
-            keys.push((format!("user:{id}"), FREE_TRIES_FOR_A_NAME));
+        // From where the user logged in before, tries from elsewhere do not hold them up.
+        if !id
+            .zip(network.as_ref())
+            .is_some_and(|(id, network)| known(id, network))
+        {
+            keys.push((named.clone(), FREE_TRIES_FOR_A_NAME));
         }
-        if let Some(ip) = from {
-            keys.push((format!("from:{ip}"), FREE_TRIES));
-            if let Some(id) = id {
-                keys.push((format!("user:{id}@{ip}"), FREE_TRIES));
-            }
+        if let Some(network) = &network {
+            keys.push((format!("from:{network}"), FREE_TRIES));
+            keys.push((format!("{named}@{network}"), FREE_TRIES));
         }
         {
             let mut tries = self.tries.lock().unwrap_or_else(|e| e.into_inner());
@@ -438,12 +469,26 @@ impl Accounts {
             }
             tries.count(&keys);
         }
-        match (id, hashed.is_some_and(|hashed| hashed.check(password))) {
+        let right = match &hashed {
+            Some(hashed) => hashed.check(password),
+            None => {
+                no_password().check(password);
+                false
+            }
+        };
+        match (id, right) {
             (Some(id), true) => {
                 self.tries
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .right(&keys);
+                if let Some(network) = network {
+                    let mut known = self.known.lock().unwrap_or_else(|e| e.into_inner());
+                    if known.len() >= MAX_KNOWN {
+                        known.clear();
+                    }
+                    known.insert((id, network));
+                }
                 Ok(id)
             }
             _ => {
@@ -653,6 +698,7 @@ impl Accounts {
         tickets.push(Ticket {
             ticket: sha256(ticket.as_bytes()),
             user: caller.user,
+            device: caller.device.clone(),
             until: Instant::now() + TICKET_LASTS,
         });
         ticket
@@ -678,12 +724,15 @@ impl Accounts {
 
     /// Changes the password of the user `ticket` is for to `new`, given the one now when the
     /// page asks for it; the ticket is used up once it did.
+    /// With `log_out_others`, every other device of the user is logged out too, but the one the
+    /// page was opened from.
     pub fn change_password(
         &self,
         ticket: &str,
         current: &str,
         new: &str,
         from: Option<IpAddr>,
+        log_out_others: bool,
     ) -> Result<(), String> {
         let page = self
             .password_page(ticket)
@@ -700,16 +749,28 @@ impl Accounts {
                 Err(waiting) => return Err(waiting.said()),
             }
         }
-        let user = {
+        let used = {
             let mut tickets = self.tickets.lock().unwrap_or_else(|e| e.into_inner());
             let hash = sha256(ticket.as_bytes());
             let at = tickets
                 .iter()
                 .position(|t| t.ticket == hash)
                 .ok_or("This page is out of date. Open it again from Freya's settings.")?;
-            tickets.swap_remove(at).user
+            tickets.swap_remove(at)
         };
-        self.set_password(user, new)
+        self.set_password(used.user, new)?;
+        if log_out_others {
+            let mut kept = self.kept();
+            let before = kept.devices.len();
+            kept.devices
+                .retain(|d| d.user != used.user || d.id == used.device);
+            log::info!(
+                "the password changed, and {} other devices were logged out",
+                before - kept.devices.len()
+            );
+            self.save(&kept);
+        }
+        Ok(())
     }
 
     /// Sets the password `user` logs in with on other devices.
@@ -869,6 +930,28 @@ fn signing_key(kept: &Kept) -> Option<ring::hmac::Key> {
         ring::hmac::HMAC_SHA256,
         &unhex(&kept.secret)?,
     ))
+}
+
+/// The network an address is in, as tries are counted: an IPv6 address by its /64, which one
+/// computer may change at will within.
+fn network(ip: IpAddr) -> String {
+    match ip {
+        IpAddr::V4(ip) => ip.to_string(),
+        IpAddr::V6(ip) => match ip.to_ipv4_mapped() {
+            Some(ip) => ip.to_string(),
+            None => {
+                let s = ip.segments();
+                format!("{:x}:{:x}:{:x}:{:x}::/64", s[0], s[1], s[2], s[3])
+            }
+        },
+    }
+}
+
+/// A password of nothing, which a made-up name's is checked against, so the check takes as
+/// long as a user's.
+fn no_password() -> &'static Password {
+    static NONE: std::sync::OnceLock<Password> = std::sync::OnceLock::new();
+    NONE.get_or_init(|| Password::new(&random_hex(16)))
 }
 
 /// Seconds since 1970.
@@ -1032,11 +1115,11 @@ mod tests {
         assert!(!accounts.password_page(&ticket).unwrap().asks_current);
         assert!(
             accounts
-                .change_password(&ticket, "", "short", None)
+                .change_password(&ticket, "", "short", None, false)
                 .is_err()
         );
         accounts
-            .change_password(&ticket, "", "correct horse", None)
+            .change_password(&ticket, "", "correct horse", None, false)
             .unwrap();
         assert!(
             accounts.password_page(&ticket).is_none(),
@@ -1085,11 +1168,11 @@ mod tests {
         assert!(accounts.password_page(&ticket).unwrap().asks_current);
         assert!(
             accounts
-                .change_password(&ticket, "wrong horse", "battery staple", None)
+                .change_password(&ticket, "wrong horse", "battery staple", None, false)
                 .is_err()
         );
         accounts
-            .change_password(&ticket, "correct horse", "battery staple", None)
+            .change_password(&ticket, "correct horse", "battery staple", None, false)
             .unwrap();
 
         // Kept across starts.
@@ -1120,11 +1203,12 @@ mod tests {
         );
         let here = Some(IpAddr::from([192, 168, 1, 20]));
         let elsewhere = Some(IpAddr::from([192, 168, 1, 21]));
+        let _ = kim;
         let at = |ip: &str| {
             [
-                (format!("user:{kim}"), FREE_TRIES_FOR_A_NAME),
+                ("user:kim".to_owned(), FREE_TRIES_FOR_A_NAME),
                 (format!("from:{ip}"), FREE_TRIES),
-                (format!("user:{kim}@{ip}"), FREE_TRIES),
+                (format!("user:kim@{ip}"), FREE_TRIES),
             ]
         };
         let mut tries = accounts.tries.lock().unwrap();
@@ -1158,7 +1242,8 @@ mod tests {
             accounts.check("Kim", "correct horse", elsewhere),
             Err(Refused::Wait(_))
         ));
-        // Made-up names count only for the address.
+        // Made-up names count as users' do, so neither the answer nor the wait tells them
+        // apart.
         let mut tries = accounts.tries.lock().unwrap();
         tries.0.clear();
         drop(tries);
@@ -1166,7 +1251,16 @@ mod tests {
             accounts.check("nobody", "x", elsewhere),
             Err(Refused::Wrong)
         );
-        assert_eq!(accounts.tries.lock().unwrap().0.len(), 1);
+        assert!(accounts.tries.lock().unwrap().0.contains_key("user:nobody"));
+        // IPv6 addresses count by their /64.
+        assert_eq!(
+            network("2001:db8:1:2:aaaa::1".parse().unwrap()),
+            network("2001:db8:1:2:bbbb::9".parse().unwrap())
+        );
+        assert_ne!(
+            network("2001:db8:1:2::1".parse().unwrap()),
+            network("2001:db8:1:3::1".parse().unwrap())
+        );
 
         // A few from one address hold the name up there, not elsewhere.
         accounts.tries.lock().unwrap().0.clear();
@@ -1180,7 +1274,7 @@ mod tests {
             accounts.check("Kim", "correct horse", here),
             Err(Refused::Wait(_))
         ));
-        assert_eq!(accounts.check("Kim", "correct horse", elsewhere), Ok(kim));
+        let kim = accounts.check("Kim", "correct horse", elsewhere).unwrap();
         // The right one forgets the name's tries from there.
         assert!(
             !accounts
@@ -1188,8 +1282,48 @@ mod tests {
                 .lock()
                 .unwrap()
                 .0
-                .contains_key(&format!("user:{kim}@192.168.1.21"))
+                .contains_key("user:kim@192.168.1.21")
         );
+        // Where the user logged in before, a guesser elsewhere does not hold them up.
+        {
+            let mut tries = accounts.tries.lock().unwrap();
+            for _ in 0..FREE_TRIES_FOR_A_NAME + 1 {
+                tries.count(&[("user:kim".to_owned(), FREE_TRIES_FOR_A_NAME)]);
+            }
+        }
+        assert_eq!(accounts.check("Kim", "correct horse", elsewhere), Ok(kim));
+        assert!(matches!(
+            accounts.check("Kim", "correct horse", Some(IpAddr::from([10, 0, 0, 9]))),
+            Err(Refused::Wait(_))
+        ));
+    }
+
+    #[test]
+    fn changing_the_password_may_log_the_other_devices_out() {
+        let accounts = Accounts::open(None, None);
+        accounts
+            .add_user("Kim", Role::Listener, "correct horse")
+            .unwrap();
+        let redirect = "http://127.0.0.1:47477/callback";
+        let verifier = "a secret only the client knows, long enough";
+        let device = |name: &str| {
+            let code = accounts
+                .grant("Kim", "correct horse", &challenge(verifier), redirect, None)
+                .unwrap();
+            let tokens = accounts.redeem(&code, verifier, redirect, name).unwrap();
+            accounts.caller(&tokens.access).unwrap();
+            tokens
+        };
+        let (phone, pad) = (device("Phone"), device("Pad"));
+        let ticket = accounts.ticket(&accounts.caller(&phone.access).unwrap());
+        accounts
+            .change_password(&ticket, "correct horse", "battery staple", None, true)
+            .unwrap();
+        assert!(
+            accounts.caller(&phone.access).is_some(),
+            "the one it was changed on"
+        );
+        assert_eq!(accounts.caller(&pad.access), None);
     }
 
     #[test]

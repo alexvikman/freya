@@ -145,6 +145,7 @@ fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> 
             Some(data.join(PAIRING_KEY)),
         ))),
         certificate: Some(identity.certificate.clone()),
+        callback_port: freya_protocol::CALLBACK_PORT,
     };
     // TLS on this computer too, with the certificate the client here pins from this folder.
     let server = Server::serve(
