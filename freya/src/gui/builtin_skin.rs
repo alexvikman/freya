@@ -280,6 +280,29 @@ impl Convert for ServerDevice {
     }
 }
 
+impl Convert for ServerUser {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            name: field(&s, "name"),
+            role: field(&s, "role"),
+            state: field(&s, "state"),
+            invited_until: field(&s, "invited-until"),
+            devices: field(&s, "devices"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("name", self.name.to_value()),
+            ("role", self.role.to_value()),
+            ("state", self.state.to_value()),
+            ("invited-until", self.invited_until.to_value()),
+            ("devices", self.devices.to_value()),
+        ])
+    }
+}
+
 impl Convert for FoundServer {
     fn from_value(value: Value) -> Option<Self> {
         let Value::Struct(s) = value else { return None };
@@ -1105,6 +1128,14 @@ skin_api! {
         Server."connection-code-until" => set_connection_code_until, get_connection_code_until;
         Server."connection-code-error" => set_connection_code_error, get_connection_code_error;
         Server."login-error" => set_login_error, get_login_error;
+        Server."login-kind" => set_login_kind, get_login_kind;
+        Server."login-user" => set_login_user, get_login_user;
+        Server."admin" => set_admin, get_admin;
+        Server."users" => set_users, get_users;
+        Server."invite-code" => set_invite_code, get_invite_code;
+        Server."invite-for" => set_invite_for, get_invite_for;
+        Server."invite-until" => set_invite_until, get_invite_until;
+        Server."invite-error" => set_invite_error, get_invite_error;
         Server."browsing" => set_browsing, get_browsing;
         Server."browse-folder" => set_browse_folder, get_browse_folder;
         Server."browse-folders" => set_browse_folders, get_browse_folders;
@@ -1268,6 +1299,10 @@ skin_api! {
         Server."change-password" => on_change_password, invoke_change_password();
         Server."revoke" => on_revoke, invoke_revoke(id: SharedString);
         Server."log-out" => on_log_out, invoke_log_out();
+        Server."invite-user" => on_invite_user, invoke_invite_user(name: SharedString, admin: bool);
+        Server."invite-again" => on_invite_again, invoke_invite_again(name: SharedString);
+        Server."remove-user" => on_remove_user, invoke_remove_user(name: SharedString);
+        Server."hide-invite-code" => on_hide_invite_code, invoke_hide_invite_code();
         Server."verify-code" => on_verify_code, invoke_verify_code(code: SharedString);
         Server."show-connection-code" => on_show_connection_code, invoke_show_connection_code();
         Server."set-network" => on_set_network, invoke_set_network(on: bool);

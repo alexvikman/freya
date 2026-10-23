@@ -1089,6 +1089,20 @@ export struct ServerDevice {
     this: bool,
 }
 
+/// A user of the server, as an admin sees them.
+export struct ServerUser {
+    /// What `Server.invite-again` and `remove-user` take.
+    name: string,
+    /// "admin" or "listener".
+    role: string,
+    /// "owner" (who adopted the server), "joined" (chose their password), "invited" (their code
+    /// works until `invited-until`, "2026-10-30") or "not-joined" (their code ran out: invite
+    /// them again).
+    state: string,
+    invited-until: string,
+    devices: int,
+}
+
 /// A server found on the network.
 export struct FoundServer {
     name: string,
@@ -1153,6 +1167,22 @@ export global Server {
     in property <string> connection-code-until;
     /// Why no connection code could be shown, after `show-connection-code`; "" otherwise.
     in property <string> connection-code-error;
+    /// What the code typed lets this device do once verified: "log-in" (the user logs in),
+    /// "adopt" (the server is not adopted yet: the user chooses the owner's name and password)
+    /// or "join" (the code is an invitation: the user `login-user` chooses their password).
+    in property <string> login-kind: "log-in";
+    in property <string> login-user;
+
+    /// Whether the account is an admin's, who sees and invites the server's users.
+    in property <bool> admin;
+    /// The server's users, the owner first, for an admin.
+    in property <[ServerUser]> users;
+    /// The code a user was just invited with, "K7Q2M-9XD4T", whom it is for, and until when it
+    /// works ("2026-10-30"); "" when none is shown. Why inviting failed; "" otherwise.
+    in property <string> invite-code;
+    in property <string> invite-for;
+    in property <string> invite-until;
+    in property <string> invite-error;
 
     /// Look for servers on the network.
     callback find();
@@ -1178,6 +1208,12 @@ export global Server {
     /// Log this computer out of the server elsewhere: the server takes its token back, and the
     /// library is this computer's again.
     callback log-out();
+    /// Invite a user named so, an admin or a listener, showing the code they join with; invite
+    /// one again with a new code; take one away with their devices; stop showing the code.
+    callback invite-user(string /* name */, bool /* admin */);
+    callback invite-again(string /* name */);
+    callback remove-user(string /* name */);
+    callback hide-invite-code();
     callback set-network(bool);
     callback set-server-name(string);
     callback set-autostart(bool);

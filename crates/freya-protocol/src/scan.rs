@@ -192,6 +192,36 @@ pub fn connection_message(nonce: &[u8], certificate_digest: &[u8]) -> Vec<u8> {
     .concat()
 }
 
+/// What a device signs with a code's key, by HMAC-SHA256, to prove to the server that it knows
+/// the code too: to adopt a server, with its connection code, or to join it, with the code a
+/// user was invited with. Apart from what the server signs, so neither stands for the other.
+pub fn claim_message(nonce: &[u8], certificate_digest: &[u8]) -> Vec<u8> {
+    [b"freya claim\0".as_slice(), nonce, certificate_digest].concat()
+}
+
+/// What a device that proved it knows a code may do: adopt the server, choosing its owner's
+/// name and password, or join it as the user invited, choosing their password.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", tag = "kind")]
+pub enum Claim {
+    Adopt,
+    Join { user: String },
+}
+
+/// A user of the server, as an admin sees them.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct UserInfo {
+    pub name: String,
+    pub role: Role,
+    /// Whether they chose a password, and can log in.
+    pub joined: bool,
+    /// Until when the code they were invited with lasts, while it does.
+    pub invited_until: Option<std::time::SystemTime>,
+    pub devices: u32,
+    /// The server's owner, who cannot be removed.
+    pub owner: bool,
+}
+
 /// A server on the network, as it answers one looking for servers.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct ServerFound {

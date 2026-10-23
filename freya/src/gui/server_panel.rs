@@ -4,13 +4,16 @@
 //! the browser too. Asking the network happens on threads, so the window never waits for it.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, SystemTime};
 
 use freya_client::{Found, Http, Login, Pin};
 use std::path::{Path, PathBuf};
 
-use freya_protocol::{AccountInfo, FolderListing, Remote, ServerControl, ServerFound};
+use freya_protocol::{
+    AccountInfo, Claim, FolderListing, Remote, Role, ServerControl, ServerFound, UserInfo,
+};
 use slint_interpreter::{Struct, Value};
 
 use super::page_proxy::{ADDRESS, Heard, PageProxy};
@@ -33,8 +36,15 @@ struct Pending {
 enum Done {
     Found(Vec<Found>),
     Certificate(Result<(Pending, String), String>),
-    /// Whether the server with this certificate knew the connection code typed.
-    Verified(Vec<u8>, Result<(), String>),
+    /// Whether the server with this certificate knew the code typed, and what this device may
+    /// do with it: adopt or join the server, with the ticket for that page.
+    Verified(Vec<u8>, Result<Option<(String, Claim)>, String>),
+    /// The server's users, for an admin.
+    Users(Result<Vec<UserInfo>, String>),
+    /// A user invited, and the code they join with, until when; or why not.
+    Invited(Result<(String, String, SystemTime), String>),
+    /// A user taken away, or why not.
+    Removed(Result<(), String>),
 }
 
 /// A server the user logged in to, for the app to show the library of.
@@ -57,6 +67,14 @@ pub struct ServerPanel {
     /// computer knew already, by its certificate.
     login_verified: bool,
     known_certificate: Option<Vec<u8>>,
+    /// What the code typed lets this device do instead of logging in: adopt the server, or
+    /// join it as the user invited, with the ticket for the page.
+    claim: Option<(String, Claim)>,
+    /// The server's users, for an admin; the code a user was just invited with, whom for, and
+    /// until when; and why inviting or taking one away failed.
+    users: Vec<UserInfo>,
+    invite: Option<(String, String, SystemTime)>,
+    invite_error: String,
     /// The connection code shown on this computer, for a new device, and until when; why
     /// none could be made.
     connection_code: Option<(String, SystemTime)>,
@@ -78,6 +96,7 @@ pub struct ServerPanel {
     done: (Sender<Done>, Receiver<Done>),
     pub device_rows: ModelRows,
     pub found_rows: ModelRows,
+    pub user_rows: ModelRows,
     pub browse_rows: ModelRows,
 }
 
@@ -92,6 +111,10 @@ impl ServerPanel {
             login_error: String::new(),
             login_verified: false,
             known_certificate: None,
+            claim: None,
+            users: Vec::new(),
+            invite: None,
+            invite_error: String::new(),
             connection_code: None,
             connection_code_error: String::new(),
             login_waiting: false,
@@ -106,6 +129,7 @@ impl ServerPanel {
             browse: None,
             done: channel(),
             device_rows: ModelRows::new(),
+            user_rows: ModelRows::new(),
             found_rows: ModelRows::new(),
             browse_rows: ModelRows::new(),
         }
@@ -237,11 +261,17 @@ impl ServerPanel {
             return;
         }
         self.login_error.clear();
+        let claim = self.claim.clone();
         let page = match self.proxy() {
             Ok(proxy) => {
                 let login = Login::new(&proxy.callback());
-                let page = format!("{}{}", proxy.origin(), login.page());
-                proxy.log_in(Http::pinned(pin), login);
+                let (page, ticket) = match claim {
+                    // Adopting or joining the server: its page logs in too.
+                    Some((ticket, _)) => (login.join_page(), Some(ticket)),
+                    None => (login.page(), None),
+                };
+                let page = format!("{}{page}", proxy.origin());
+                proxy.claim(Http::pinned(pin), login, ticket);
                 page
             }
             Err(e) => {
@@ -259,6 +289,7 @@ impl ServerPanel {
         }
         self.login = None;
         self.login_verified = false;
+        self.claim = None;
         self.login_busy = false;
         self.login_waiting = false;
         self.login_error.clear();
@@ -285,14 +316,29 @@ impl ServerPanel {
                     // Only for the server chosen now, not one chosen before it.
                     let chosen = self.login.as_ref().map(|pending| &pending.pin.certificate);
                     match verified {
-                        Ok(()) if chosen == Some(&certificate) => self.login_verified = true,
-                        Ok(()) => {}
+                        Ok(claim) if chosen == Some(&certificate) => {
+                            self.login_verified = true;
+                            self.claim = claim;
+                        }
+                        Ok(_) => {}
                         Err(e) => self.login_error = e,
                     }
                 }
                 Done::Certificate(Err(e)) => {
                     self.login_busy = false;
                     self.login_error = e;
+                }
+                Done::Users(Ok(users)) => self.users = users,
+                Done::Users(Err(e)) => log::warn!("could not read the server's users: {e}"),
+                Done::Invited(Ok(invite)) => {
+                    self.invite = Some(invite);
+                    self.invite_error.clear();
+                    self.refresh_wanted = true;
+                }
+                Done::Invited(Err(e)) | Done::Removed(Err(e)) => self.invite_error = e,
+                Done::Removed(Ok(())) => {
+                    self.invite_error.clear();
+                    self.refresh_wanted = true;
                 }
             }
         }
@@ -330,6 +376,77 @@ impl ServerPanel {
     /// Whether the account wants reading again, as after its password changed.
     pub fn take_refresh_wanted(&mut self) -> bool {
         std::mem::take(&mut self.refresh_wanted)
+    }
+
+    /// Reads the server's users again, on a thread, when the account is an admin's.
+    pub fn load_users(&mut self, remote: Option<Arc<Remote<Http>>>) {
+        let admin = self.account.as_ref().is_some_and(|a| a.role == Role::Admin);
+        let Some(remote) = remote.filter(|_| admin) else {
+            self.users.clear();
+            return;
+        };
+        self.spawn(move || Done::Users(remote.0.users().map_err(|e| e.to_string())));
+    }
+
+    /// Invites a user named `name`, an admin or a listener, showing the code they join with.
+    pub fn invite_user(&mut self, remote: Option<Arc<Remote<Http>>>, name: &str, admin: bool) {
+        let Some(remote) = remote else {
+            return;
+        };
+        let (name, role) = (
+            name.trim().to_owned(),
+            if admin { Role::Admin } else { Role::Listener },
+        );
+        self.invite = None;
+        self.invite_error.clear();
+        self.spawn(move || {
+            let invited = remote.0.invite_user(&name, role);
+            Done::Invited(
+                invited
+                    .map(|(code, lasts)| (name, code, SystemTime::now() + lasts))
+                    .map_err(|e| e.to_string()),
+            )
+        });
+    }
+
+    /// Invites the user `name` again, with a new code.
+    pub fn invite_again(&mut self, remote: Option<Arc<Remote<Http>>>, name: &str) {
+        let Some(remote) = remote else {
+            return;
+        };
+        let name = name.to_owned();
+        self.invite = None;
+        self.invite_error.clear();
+        self.spawn(move || {
+            let invited = remote.0.invite_again(&name);
+            Done::Invited(
+                invited
+                    .map(|(code, lasts)| (name, code, SystemTime::now() + lasts))
+                    .map_err(|e| e.to_string()),
+            )
+        });
+    }
+
+    /// Takes the user `name` away, with their devices.
+    pub fn remove_user(&mut self, remote: Option<Arc<Remote<Http>>>, name: &str) {
+        let Some(remote) = remote else {
+            return;
+        };
+        let name = name.to_owned();
+        self.invite_error.clear();
+        if self
+            .invite
+            .as_ref()
+            .is_some_and(|(invited, ..)| *invited == name)
+        {
+            self.invite = None;
+        }
+        self.spawn(move || Done::Removed(remote.0.remove_user(&name).map_err(|e| e.to_string())));
+    }
+
+    /// Stops showing the code a user was invited with.
+    pub fn hide_invite_code(&mut self) {
+        self.invite = None;
     }
 
     /// Reads the account and the server's own information again.
@@ -446,6 +563,17 @@ impl ServerPanel {
         );
         self.found_rows
             .sync(self.found.iter().map(found_row).collect());
+        self.user_rows
+            .sync(self.users.iter().map(user_row).collect());
+        // Shown only while it lasts.
+        if self
+            .invite
+            .as_ref()
+            .is_some_and(|(.., until)| *until <= SystemTime::now())
+        {
+            self.invite = None;
+        }
+        let invite = self.invite.as_ref();
         let browse = self.browse.as_ref();
         self.browse_rows.sync(
             browse
@@ -535,8 +663,84 @@ impl ServerPanel {
             ("connection-code-until", string(code_until)),
             ("connection-code-error", string(&self.connection_code_error)),
             ("login-error", string(&self.login_error)),
+            (
+                "login-kind",
+                string(match &self.claim {
+                    None => "log-in",
+                    Some((_, Claim::Adopt)) => "adopt",
+                    Some((_, Claim::Join { .. })) => "join",
+                }),
+            ),
+            (
+                "login-user",
+                string(match &self.claim {
+                    Some((_, Claim::Join { user })) => user.as_str(),
+                    _ => "",
+                }),
+            ),
+            (
+                "admin",
+                Value::Bool(account.is_some_and(|a| a.role == Role::Admin)),
+            ),
+            (
+                "invite-code",
+                string(
+                    invite
+                        .map(|(_, code, _)| freya_protocol::show_code(code))
+                        .unwrap_or_default(),
+                ),
+            ),
+            (
+                "invite-for",
+                string(invite.map(|(name, ..)| name.clone()).unwrap_or_default()),
+            ),
+            (
+                "invite-until",
+                string(invite.map(|(.., until)| day(*until)).unwrap_or_default()),
+            ),
+            ("invite-error", string(&self.invite_error)),
         ]
     }
+}
+
+/// The day `at` is, here: "2026-10-30".
+fn day(at: SystemTime) -> String {
+    jiff::Timestamp::try_from(at)
+        .map(|at| {
+            at.to_zoned(jiff::tz::TimeZone::system())
+                .strftime("%Y-%m-%d")
+                .to_string()
+        })
+        .unwrap_or_default()
+}
+
+/// A row of `Server.users`.
+fn user_row(user: &UserInfo) -> Value {
+    let state = if user.owner {
+        "owner"
+    } else if user.joined {
+        "joined"
+    } else if user.invited_until.is_some() {
+        "invited"
+    } else {
+        "not-joined"
+    };
+    Value::Struct(Struct::from_iter([
+        ("name".to_owned(), string(&user.name)),
+        (
+            "role".to_owned(),
+            string(match user.role {
+                Role::Admin => "admin",
+                Role::Listener => "listener",
+            }),
+        ),
+        ("state".to_owned(), string(state)),
+        (
+            "invited-until".to_owned(),
+            string(user.invited_until.map(day).unwrap_or_default()),
+        ),
+        ("devices".to_owned(), Value::Number(f64::from(user.devices))),
+    ]))
 }
 
 /// The certificate of the server at `address`, to pin, and its fingerprint.

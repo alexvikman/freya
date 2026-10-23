@@ -34,6 +34,7 @@ fn main() {
     let mut address = LOCAL_ADDRESS.to_owned();
     let mut data = None;
     let mut forget_password = false;
+    let mut show_code = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         if arg == "--version" {
@@ -44,12 +45,16 @@ fn main() {
             forget_password = true;
             continue;
         }
+        if arg == "--code" {
+            show_code = true;
+            continue;
+        }
         match (arg.as_str(), args.next()) {
             ("--address", Some(value)) => address = value,
             ("--data", Some(value)) => data = Some(PathBuf::from(value)),
             _ => {
                 eprintln!(
-                    "usage: freya-server [--address HOST:PORT] [--data FOLDER] [--forget-password] | --version"
+                    "usage: freya-server [--address HOST:PORT] [--data FOLDER] [--forget-password | --code] | --version"
                 );
                 std::process::exit(2);
             }
@@ -67,6 +72,9 @@ fn main() {
     }
     if forget_password {
         std::process::exit(forget_owner_password(&address, &data));
+    }
+    if show_code {
+        std::process::exit(print_adoption_code(&data));
     }
     start_log(&data.join("server.log"));
     if let Err(e) = run(&address, &data, freya.as_ref()) {
@@ -139,14 +147,16 @@ fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> 
         let _ = stop.send(());
     })
     .map_err(|e| format!("could not listen for being stopped: {e}"))?;
+    let accounts = Arc::new(Accounts::open(
+        Some(data.join("accounts.json")),
+        Some(data.join(PAIRING_KEY)),
+    ));
+    keep_adoption_code(Arc::clone(&accounts), data.join(ADOPTION_CODE));
     let served = Served {
         library: service.api(),
         server: Some(Arc::clone(&service) as _),
         quit: Some(quit),
-        accounts: Some(Arc::new(Accounts::open(
-            Some(data.join("accounts.json")),
-            Some(data.join(PAIRING_KEY)),
-        ))),
+        accounts: Some(accounts),
         certificate: Some(identity.certificate.clone()),
         callback_port: freya_protocol::CALLBACK_PORT,
     };
@@ -221,6 +231,70 @@ fn more_open_files() {
 
 #[cfg(not(unix))]
 fn more_open_files() {}
+
+/// Where a server not adopted yet keeps the code a device adopts it with, for
+/// `freya-server --code`: its folder, readable by its user alone.
+const ADOPTION_CODE: &str = "adoption-code";
+
+/// Keeps a connection code while the server is not adopted, written to `file` with until when
+/// it lasts, a new one as each runs out; the file goes once the server is adopted. The code
+/// itself is not logged: a log may be read by more than the server's user.
+fn keep_adoption_code(accounts: Arc<Accounts>, file: PathBuf) {
+    let kept = std::thread::Builder::new()
+        .name("freya-adoption".into())
+        .spawn(move || {
+            let mut written = None;
+            while let Some((code, lasts)) = accounts.adoption_code() {
+                if written.as_ref() != Some(&code) {
+                    let until = std::time::SystemTime::now() + lasts;
+                    let seconds = until
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_secs());
+                    let text = format!("{code}\n{seconds}\n");
+                    match freya_server::accounts::write_private(&file, text.as_bytes()) {
+                        Ok(()) => log::info!(
+                            "not adopted yet: freya-server --code shows the code a device adopts it with"
+                        ),
+                        Err(e) => log::warn!("could not keep the adoption code: {e}"),
+                    }
+                    written = Some(code);
+                }
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+            let _ = std::fs::remove_file(&file);
+        });
+    if let Err(e) = kept {
+        log::warn!("could not keep an adoption code: {e}");
+    }
+}
+
+/// Prints the code a server in `data` not adopted yet is adopted with: the code to end with.
+fn print_adoption_code(data: &Path) -> i32 {
+    let kept = std::fs::read_to_string(data.join(ADOPTION_CODE)).unwrap_or_default();
+    let mut lines = kept.lines();
+    let (Some(code), Some(until)) = (
+        lines.next(),
+        lines.next().and_then(|u| u.parse::<u64>().ok()),
+    ) else {
+        eprintln!(
+            "freya-server: no code to adopt this server with: it is adopted already (add devices in Freya's settings), or not running"
+        );
+        return 1;
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let Some(left) = until.checked_sub(now).filter(|left| *left > 0) else {
+        eprintln!("freya-server: the code ran out: ask again in a few seconds");
+        return 1;
+    };
+    println!(
+        "{}\n\nType it in Freya on the computer adopting this server, within {} minutes.",
+        freya_protocol::show_code(code),
+        left.div_ceil(60)
+    );
+    0
+}
 
 /// Forgets the owner's password in `data`, while no server answers at `address`: the code to
 /// end with.

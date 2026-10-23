@@ -595,7 +595,9 @@ fn only_a_device_with_a_token_is_answered() {
             "POST",
             "/web/password",
             Some(FORM),
-            format!("ticket={ticket}&password=correct+horse&again=correct+horse").into_bytes(),
+            // The owner adopting it from its computer keeps the name they have.
+            format!("ticket={ticket}&username={user}&password=correct+horse&again=correct+horse")
+                .into_bytes(),
         )
         .unwrap();
     assert_eq!(changed.status, 200);
@@ -818,6 +820,141 @@ fn servers_on_the_network_are_found() {
     assert_eq!(servers[0].address, "127.0.0.1:47475".parse().unwrap());
 }
 
+/// Adopts or joins the server through `pages` with the claim `ticket`, as `name` with
+/// `password`: the code the page sends the browser back with.
+fn claim(pages: &Pages, login: &Login, ticket: &str, name: &str, password: &str) -> String {
+    let page = login.join_page();
+    let shown = pages
+        .ask("GET", &format!("{page}&ticket={ticket}"), None, Vec::new())
+        .unwrap();
+    assert_eq!(
+        shown.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&shown.body)
+    );
+    let opened = page.split_once('?').unwrap().1;
+    let password = password.replace(' ', "+");
+    let typed = format!("ticket={ticket}&username={name}&password={password}&again={password}");
+    let sent = pages
+        .ask(
+            "POST",
+            "/web/join",
+            Some(FORM),
+            format!("{opened}&{typed}").into_bytes(),
+        )
+        .unwrap();
+    assert_eq!(sent.status, 303, "{}", String::from_utf8_lossy(&sent.body));
+    let location = &sent
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("location"))
+        .unwrap()
+        .1;
+    location["http://127.0.0.1:47477/callback?code=".len()..]
+        .split('&')
+        .next()
+        .unwrap()
+        .to_owned()
+}
+
+#[test]
+fn a_server_is_adopted_and_joined_with_codes() {
+    let (_plain, _remote, local, dir) = served("adopt");
+    let identity = freya_server::tls::Identity::make().unwrap();
+    let accounts = Arc::new(freya_server::accounts::Accounts::open(None, None));
+    let served = Served {
+        library: Arc::clone(&local),
+        server: None,
+        quit: None,
+        accounts: Some(Arc::clone(&accounts)),
+        certificate: Some(identity.certificate.clone()),
+        callback_port: freya_protocol::CALLBACK_PORT,
+    };
+    let server = Server::start_tls(
+        "127.0.0.1:0",
+        freya_server::handler(served),
+        identity.server_config().unwrap(),
+    )
+    .unwrap();
+    let pin = Pin {
+        address: server.address(),
+        certificate: certificate_of(server.address()).unwrap(),
+    };
+    let http = Http::pinned(pin.clone());
+    let pages = http.pages();
+    let callback = "http://127.0.0.1:47477/callback";
+
+    // Not adopted: the code it keeps lets a device adopt it, choosing the owner's name.
+    assert!(!accounts.adopted());
+    let (code, _) = accounts.adoption_code().unwrap();
+    let (ticket, claimed) = verify_server(&pin, &code).unwrap().unwrap();
+    assert_eq!(claimed, freya_protocol::Claim::Adopt);
+    let login = Login::new(callback);
+    let given = claim(&pages, &login, &ticket, "Ada", "correct horse");
+    let laptop = http.redeem(&login, &given, "Laptop").unwrap();
+    let owner = Http::pinned(pin.clone()).with_token(Some(laptop.access.clone()));
+    let account = owner.account().unwrap().unwrap();
+    assert_eq!(
+        (account.user.as_str(), account.role),
+        ("Ada", freya_protocol::Role::Admin)
+    );
+    assert!(accounts.adopted());
+    assert_eq!(accounts.adoption_code(), None);
+    // The ticket was used up, and a code now only logs in.
+    let again = Login::new(callback);
+    let used = pages
+        .ask(
+            "GET",
+            &format!("{}&ticket={ticket}", again.join_page()),
+            None,
+            Vec::new(),
+        )
+        .unwrap();
+    assert_eq!(used.status, 404);
+    let (code, _) = accounts.connection_code();
+    assert_eq!(verify_server(&pin, &code).unwrap(), None);
+
+    // Kim is invited as a listener: the code proves the server to them, and lets them choose
+    // their password.
+    let (invitation, _) = owner
+        .invite_user("Kim", freya_protocol::Role::Listener)
+        .unwrap();
+    let (ticket, claimed) = verify_server(&pin, &invitation).unwrap().unwrap();
+    assert_eq!(claimed, freya_protocol::Claim::Join { user: "Kim".into() });
+    let login = Login::new(callback);
+    // The name stays the one invited, whatever is sent.
+    let given = claim(&pages, &login, &ticket, "Mallory", "battery staple");
+    let phone = http.redeem(&login, &given, "Phone").unwrap();
+    let kim = Http::pinned(pin.clone()).with_token(Some(phone.access.clone()));
+    let account = kim.account().unwrap().unwrap();
+    assert_eq!(
+        (account.user.as_str(), account.role),
+        ("Kim", freya_protocol::Role::Listener)
+    );
+    // The invitation is used up.
+    assert!(verify_server(&pin, &invitation).is_err());
+    // A listener sees no users, and invites nobody.
+    assert!(kim.users().is_err());
+    assert!(kim.invite_user("Eve", freya_protocol::Role::Admin).is_err());
+
+    let users = owner.users().unwrap();
+    let names: Vec<(&str, bool, bool)> = users
+        .iter()
+        .map(|u| (u.name.as_str(), u.owner, u.joined))
+        .collect();
+    assert_eq!(names, [("Ada", true, true), ("Kim", false, true)]);
+    assert_eq!(users[1].devices, 1);
+
+    // The owner stays; Kim goes, with her devices.
+    assert!(owner.remove_user("Ada").is_err());
+    owner.remove_user("Kim").unwrap();
+    assert!(kim.account().unwrap().is_none());
+    assert_eq!(owner.users().unwrap().len(), 1);
+    drop(server);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_new_device_knows_the_server_by_its_connection_code() {
     let (_plain, _remote, local, dir) = served("code");
@@ -857,13 +994,17 @@ fn a_new_device_knows_the_server_by_its_connection_code() {
     // A proof for another certificate does not match the one pinned.
     let (code, _) = accounts.connection_code();
     let nonce = [1; 32];
-    let proof = Http::pinned(pin.clone()).enroll(&nonce).unwrap();
+    let proofs = Http::pinned(pin.clone()).enroll(&nonce).unwrap();
     let other = freya_server::tls::Identity::make().unwrap().certificate;
     let digest = ring::digest::digest(&ring::digest::SHA256, &other);
     let derived = freya_protocol::connection_key(&code, digest.as_ref());
     let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &derived);
     let message = freya_protocol::connection_message(&nonce, digest.as_ref());
-    assert!(ring::hmac::verify(&key, &message, &proof).is_err());
+    assert!(
+        proofs
+            .iter()
+            .all(|proof| ring::hmac::verify(&key, &message, proof).is_err())
+    );
     drop(server);
     let _ = std::fs::remove_dir_all(&dir);
 }

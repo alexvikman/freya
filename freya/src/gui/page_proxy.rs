@@ -43,11 +43,13 @@ pub enum Heard {
     PasswordChanged,
 }
 
-/// The server whose pages are shown, and the login waiting for its code.
+/// The server whose pages are shown, and the login waiting for its code; with the ticket that
+/// lets it adopt or join the server instead, added to the page on the way.
 #[derive(Default)]
 struct Showing {
     pages: Option<Pages>,
     login: Option<(Http, Login)>,
+    claim: Option<String>,
     password: Option<PasswordPage>,
 }
 
@@ -99,11 +101,13 @@ impl PageProxy {
         self.showing.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Shows the pages of `server`, waiting for `login` to come back.
-    pub fn log_in(&self, server: Http, login: Login) {
+    /// Shows the pages of `server`, waiting for `login` to come back: logged in, or, with a
+    /// claim's `ticket`, once the server is adopted or joined.
+    pub fn claim(&self, server: Http, login: Login, ticket: Option<String>) {
         let mut showing = self.showing();
         showing.pages = Some(server.pages());
         showing.login = Some((server, login));
+        showing.claim = ticket;
         showing.password = None;
     }
 
@@ -124,7 +128,9 @@ impl PageProxy {
 
     /// Waits for no login any more: one that comes back is not taken.
     pub fn cancel_login(&self) {
-        self.showing().login = None;
+        let mut showing = self.showing();
+        showing.login = None;
+        showing.claim = None;
     }
 
     /// Where the login page sends the browser back to.
@@ -236,6 +242,12 @@ fn answer(
         } else {
             request.path.clone()
         }
+    } else if request.method == "GET" && request.path == format!("{PAGES_PATH}/join") {
+        // Its ticket, added here.
+        let Some(ticket) = showing().claim.clone() else {
+            return text(404, "Start again from Freya's settings, with the code.");
+        };
+        format!("{}?{}&ticket={ticket}", request.path, request.query)
     } else if request.query.is_empty() {
         request.path.clone()
     } else {
@@ -364,7 +376,8 @@ mod tests {
         let key = std::fs::read_to_string(&pairing).unwrap();
         let mac = Http::new(&address)
             .with_token(Some(Http::new(&address).pair(&key, "Mac").unwrap().access));
-        let user = mac.account().unwrap().unwrap().user;
+        // Paired on the server's computer, as the owner of a server not adopted yet.
+        assert!(!mac.account().unwrap().unwrap().has_password);
 
         let (tell, heard) = channel();
         let proxy = PageProxy::start_at(&here, tell).unwrap();
@@ -402,7 +415,9 @@ mod tests {
             .call()
             .unwrap();
         assert_eq!(shown.status(), 200);
-        let form = format!("ticket={ticket}&password=correct+horse&again=correct+horse");
+        // The owner adopting the server from its computer names themselves too.
+        let form =
+            format!("ticket={ticket}&username=Ada&password=correct+horse&again=correct+horse");
         let unsent = browser
             .post(&format!("{origin}/web/password"))
             .header("Content-Type", FORM)
@@ -437,7 +452,7 @@ mod tests {
         // token before it says so.
         let login = Login::new(&proxy.callback());
         let page = login.page();
-        proxy.log_in(Http::new(&address), login);
+        proxy.claim(Http::new(&address), login, None);
         let shown = browser.get(&format!("{origin}{page}")).call().unwrap();
         assert_eq!(shown.status(), 200);
         assert_eq!(header(&shown, "x-frame-options"), "DENY");
@@ -446,7 +461,7 @@ mod tests {
             .post(&format!("{origin}/web/login"))
             .header("Content-Type", FORM)
             .header("Origin", origin.as_str())
-            .send(format!("{opened}&username={user}&password=correct+horse"))
+            .send(format!("{opened}&username=Ada&password=correct+horse"))
             .unwrap();
         assert_eq!(sent.status(), 303);
         let back = header(&sent, "location").to_owned();

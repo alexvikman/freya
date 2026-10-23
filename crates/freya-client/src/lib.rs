@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use freya_protocol::{
-    API_PATH, AccountInfo, ApiError, ApiResult, PAGES_PATH, Remote, ServiceEvent, Transport,
+    API_PATH, AccountInfo, ApiError, ApiResult, Claim, PAGES_PATH, Remote, Role, ServiceEvent,
+    Transport, UserInfo,
 };
 
 mod session;
@@ -71,6 +72,9 @@ impl Drop for HeldUp {
 const MAX_ANSWER: u64 = 512 * 1024 * 1024;
 const MAX_PICTURE: u64 = 32 * 1024 * 1024;
 const MAX_SMALL: u64 = 1024 * 1024;
+/// The most proofs taken from a server for the codes it knows: its connection code's, and its
+/// users' invitations.
+const MOST_PROOFS: usize = 256;
 const MAX_EVENT: usize = 1024 * 1024;
 
 /// The server at `address`, such as `http://127.0.0.1:47474`: its library, and what it is
@@ -200,27 +204,53 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Whether the server `pin` names knows the connection code `typed`, shown on its computer:
-/// that it, and not another computer in its place, gave the certificate pinned.
-pub fn verify_server(pin: &Pin, typed: &str) -> Result<(), String> {
+fn unhex(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(text.get(i..i + 2)?, 16).ok())
+        .collect()
+}
+
+/// Whether the server `pin` names knows the code `typed`, shown on its computer or given to a
+/// user invited: that it, and not another computer in its place, gave the certificate pinned.
+/// Then what this device may do with the code, proving it knows it too: adopt the server or
+/// join it, with the ticket for the page doing so; none when the code lets it only log in.
+pub fn verify_server(pin: &Pin, typed: &str) -> Result<Option<(String, Claim)>, String> {
     let code = freya_protocol::normalize_code(typed)
         .ok_or("That is not a code: ten letters and digits, like K7Q2M-9XD4T.")?;
-    let mut nonce = [0; 32];
-    // The system's randomness failing leaves nothing safe to do.
-    ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut nonce)
-        .expect("the system's random numbers");
-    let proof = Http::pinned(pin.clone())
-        .enroll(&nonce)
-        .map_err(|e| e.to_string())?;
+    let server = Http::pinned(pin.clone());
+    let nonce = random_bytes();
+    let proofs = server.enroll(&nonce).map_err(|e| e.to_string())?;
     let digest = ring::digest::digest(&ring::digest::SHA256, &pin.certificate);
     let derived = freya_protocol::connection_key(&code, digest.as_ref());
     let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &derived);
     let message = freya_protocol::connection_message(&nonce, digest.as_ref());
-    ring::hmac::verify(&key, &message, &proof).map_err(|_| {
-        "The code does not match: it was mistyped, or another computer answered in the server's \
-         place."
-            .to_owned()
-    })
+    if !proofs
+        .iter()
+        .any(|proof| ring::hmac::verify(&key, &message, proof).is_ok())
+    {
+        return Err("The code does not match: it was mistyped, or another computer answered in the server's \
+             place."
+            .to_owned());
+    }
+    let nonce = random_bytes();
+    let message = freya_protocol::claim_message(&nonce, digest.as_ref());
+    let proof = ring::hmac::sign(&key, &message);
+    server
+        .claim(&nonce, proof.as_ref())
+        .map_err(|e| e.to_string())
+}
+
+/// 32 random bytes, for a nonce.
+fn random_bytes() -> [u8; 32] {
+    let mut bytes = [0; 32];
+    // The system's randomness failing leaves nothing safe to do.
+    ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut bytes)
+        .expect("the system's random numbers");
+    bytes
 }
 
 /// Where a server typed in is: "mini.local", "192.168.1.20" or either with ":port", which is
@@ -803,19 +833,90 @@ impl Http {
     }
 
     /// The server's proof that it knows the connection code its computer shows, for `nonce`.
-    pub fn enroll(&self, nonce: &[u8]) -> ApiResult<Vec<u8>> {
-        let nonce: String = nonce.iter().map(|b| format!("{b:02x}")).collect();
-        let (status, body) = self.send_json("/enroll", &serde_json::json!({ "nonce": nonce }))?;
+    /// The server's proofs that it knows the codes a device may type now, over `nonce`: the
+    /// connection code shown, and the codes users were invited with.
+    pub fn enroll(&self, nonce: &[u8]) -> ApiResult<Vec<Vec<u8>>> {
+        let (status, body) =
+            self.send_json("/enroll", &serde_json::json!({ "nonce": hex(nonce) }))?;
         if status != 200 {
             return Err(error(status, &body));
         }
         let answer: serde_json::Value = serde_json::from_slice(&body).map_err(failed)?;
-        let proof = answer["proof"].as_str().unwrap_or_default();
-        (0..proof.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(proof.get(i..i + 2)?, 16).ok())
-            .collect::<Option<Vec<u8>>>()
+        answer["proofs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .take(MOST_PROOFS)
+            .map(|proof| unhex(proof.as_str().unwrap_or_default()))
+            .collect::<Option<Vec<Vec<u8>>>>()
+            .filter(|proofs| !proofs.is_empty())
             .ok_or_else(|| ApiError("the server gave no proof".into()))
+    }
+
+    /// What this device may do, proving with `proof` over `nonce` that it knows the code
+    /// typed: adopt the server or join it, with the ticket for the page doing so; none when
+    /// the code lets it only log in.
+    pub fn claim(&self, nonce: &[u8], proof: &[u8]) -> ApiResult<Option<(String, Claim)>> {
+        let asked = serde_json::json!({ "nonce": hex(nonce), "proof": hex(proof) });
+        match self.send_json("/claim", &asked)? {
+            (200, body) => {
+                #[derive(serde::Deserialize)]
+                struct Claimed {
+                    ticket: String,
+                    claim: Claim,
+                }
+                let claimed: Claimed = serde_json::from_slice(&body).map_err(failed)?;
+                Ok(Some((claimed.ticket, claimed.claim)))
+            }
+            (404, _) => Ok(None),
+            (status, body) => Err(error(status, &body)),
+        }
+    }
+
+    /// The server's users, for an admin.
+    pub fn users(&self) -> ApiResult<Vec<UserInfo>> {
+        let answer = self.send(|http| http.get("/account/users").call())?;
+        match read_at_most(answer, MAX_SMALL)? {
+            (200, body) => serde_json::from_slice(&body).map_err(failed),
+            (status, body) => Err(error(status, &body)),
+        }
+    }
+
+    /// Invites a user named `name` with `role`: the code they join with, and how long it
+    /// lasts; only for an admin.
+    pub fn invite_user(&self, name: &str, role: Role) -> ApiResult<(String, Duration)> {
+        let asked = serde_json::json!({ "name": name, "role": role });
+        self.invited(self.send_json("/account/users/invite", &asked)?)
+    }
+
+    /// Invites the user `name` again, with a new code; only for an admin.
+    pub fn invite_again(&self, name: &str) -> ApiResult<(String, Duration)> {
+        let asked = serde_json::json!({ "name": name });
+        self.invited(self.send_json("/account/users/invite-again", &asked)?)
+    }
+
+    fn invited(&self, (status, body): (u16, Vec<u8>)) -> ApiResult<(String, Duration)> {
+        if status != 200 {
+            return Err(error(status, &body));
+        }
+        let answer: serde_json::Value = serde_json::from_slice(&body).map_err(failed)?;
+        let code = answer["code"]
+            .as_str()
+            .and_then(freya_protocol::normalize_code)
+            .ok_or_else(|| ApiError("the server gave no code".into()))?;
+        let lasts = Duration::from_secs(answer["lasts"].as_u64().unwrap_or(0));
+        Ok((code, lasts))
+    }
+
+    /// Takes the user `name` away, with their devices; only for an admin.
+    pub fn remove_user(&self, name: &str) -> ApiResult<()> {
+        match self.send_json(
+            "/account/users/remove",
+            &serde_json::json!({ "name": name }),
+        )? {
+            (200, _) => Ok(()),
+            (status, body) => Err(error(status, &body)),
+        }
     }
 
     /// A new connection code for a device to type, shown on this server's computer, and how
@@ -905,6 +1006,12 @@ impl Login {
     }
 
     /// The login page, under a server's address.
+    /// The page adopting or joining the server, which logs in the same way, with a claim's
+    /// ticket the page proxy adds.
+    pub fn join_page(&self) -> String {
+        self.page().replacen("/login?", "/join?", 1)
+    }
+
     pub fn page(&self) -> String {
         let challenge = URL_SAFE_NO_PAD.encode(ring::digest::digest(
             &ring::digest::SHA256,

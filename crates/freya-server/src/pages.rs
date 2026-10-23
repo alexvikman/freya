@@ -9,7 +9,12 @@
 //!   ([`freya_protocol::CALLBACK_PORT`], or the one [`Served`] names, as in tests).
 //! - `GET /logged-in`: where the client sends the browser once it has its token.
 //! - `GET /password?ticket=`: a form for a new password, and the one now unless the ticket is
-//!   of a device on the server's computer. `POST /password` changes it.
+//!   of a device on the server's computer. `POST /password` changes it. The owner of a server
+//!   not adopted yet chooses their name with it, adopting it.
+//! - `GET /join?ticket=`, with the login's parameters: for a device that proved it knows a
+//!   code (see `/claim` in the API), a form adopting the server, with the owner's name and
+//!   password, or joining it as the user invited, with their password. `POST /join` sends the
+//!   browser on as `/login` does.
 //!
 //! A page is answered only through this computer's name over plain HTTP, as the API is, and a
 //! form only when sent from the page's own origin. Nothing on a page is scripted, and no other
@@ -66,6 +71,22 @@ pub fn answer(served: &Served, request: &Request) -> Option<Response> {
                 Err(why) => message(400, "Freya Cannot Log In Here", why),
             }
         }
+        ("GET", "/join") => {
+            let values = values(&request.query);
+            match Login::asked(&values, served.callback_port) {
+                Ok(login) => {
+                    join_page(accounts, 200, &server, &login, value(&values, "ticket"), "")
+                }
+                Err(why) => message(400, "Freya Cannot Log In Here", why),
+            }
+        }
+        ("POST", "/join") => {
+            let values = values(&String::from_utf8_lossy(&request.body));
+            match Login::asked(&values, served.callback_port) {
+                Ok(login) => joined(accounts, &server, &login, &values),
+                Err(why) => message(400, "Freya Cannot Log In Here", why),
+            }
+        }
         ("GET", "/logged-in") => message(
             200,
             "You Are Logged In",
@@ -91,8 +112,15 @@ pub fn answer(served: &Served, request: &Request) -> Option<Response> {
             } else {
                 let from = request.peer.map(|peer| peer.ip());
                 let others = value(&values, "others") == "out";
-                match accounts.change_password(ticket, value(&values, "current"), new, from, others)
-                {
+                let name = value(&values, "username");
+                match accounts.change_password(
+                    ticket,
+                    value(&values, "current"),
+                    new,
+                    from,
+                    others,
+                    name,
+                ) {
                     Ok(()) => message(
                         200,
                         "The Password Is Changed",
@@ -177,6 +205,11 @@ fn logged_in(
             return page;
         }
     };
+    sent_back(login, &code)
+}
+
+/// The browser sent back to the client that asked for `login`, with `code`.
+fn sent_back(login: &Login, code: &str) -> Response {
     let joined = if login.redirect.contains('?') {
         '&'
     } else {
@@ -190,6 +223,110 @@ fn logged_in(
     let mut sent = html(303, "");
     sent.headers.push(("Location", to));
     sent
+}
+
+/// The browser sent on to the client with a code, once the server is adopted or joined as the
+/// page's ticket allows; the form again when something was wrong.
+fn joined(
+    accounts: &Accounts,
+    server: &str,
+    login: &Login,
+    values: &[(String, String)],
+) -> Response {
+    let ticket = value(values, "ticket");
+    let (password, again) = (value(values, "password"), value(values, "again"));
+    if password != again {
+        return join_page(
+            accounts,
+            400,
+            server,
+            login,
+            ticket,
+            "The passwords are not the same.",
+        );
+    }
+    let claimed = accounts.complete_claim(
+        ticket,
+        value(values, "username"),
+        password,
+        &login.challenge,
+        &login.redirect,
+    );
+    match claimed {
+        Ok(code) => sent_back(login, &code),
+        Err(why) => join_page(accounts, 400, server, login, ticket, &why),
+    }
+}
+
+/// The page adopting the server, choosing its owner's name and password, or joining it as the
+/// user invited, choosing their password; what the ticket allows.
+fn join_page(
+    accounts: &Accounts,
+    status: u16,
+    server: &str,
+    login: &Login,
+    ticket: &str,
+    error: &str,
+) -> Response {
+    let Some((claim, name)) = accounts.claim_page(ticket) else {
+        return message(
+            404,
+            "This Page Is Out of Date",
+            "Start again from Freya, with the code.",
+        );
+    };
+    let adopting = claim == freya_protocol::Claim::Adopt;
+    let (title, said) = if adopting {
+        (
+            format!("Adopt {server}"),
+            format!(
+                "You own {server} from now on: choose the name and password you log in with, from any device."
+            ),
+        )
+    } else {
+        (
+            format!("Join {server}"),
+            format!("You were invited to {server} as {name}: choose your password."),
+        )
+    };
+    let hidden = [
+        ("response_type", "code"),
+        ("code_challenge_method", "S256"),
+        ("code_challenge", login.challenge.as_str()),
+        ("redirect_uri", login.redirect.as_str()),
+        ("state", login.state.as_str()),
+        ("ticket", ticket),
+    ]
+    .iter()
+    .map(|(name, value)| {
+        format!(
+            r#"<input type="hidden" name="{name}" value="{}">"#,
+            escape(value)
+        )
+    })
+    .collect::<String>();
+    let body = format!(
+        r#"<h1>{title}</h1>
+<p>{said} At least {SHORTEST_PASSWORD} characters.</p>
+<form method="post" action="{PAGES_PATH}/join">{hidden}
+<label>User<input name="username" autocomplete="username" autocapitalize="none" spellcheck="false" value="{name}"{name_field}></label>
+<label>Password<input name="password" type="password" autocomplete="new-password" minlength="{SHORTEST_PASSWORD}" required{focus_password}></label>
+<label>Again<input name="again" type="password" autocomplete="new-password" minlength="{SHORTEST_PASSWORD}" required></label>
+{error}<button>{button}</button>
+</form>"#,
+        title = escape(&title),
+        said = escape(&said),
+        name = escape(&name),
+        name_field = if adopting {
+            " required autofocus"
+        } else {
+            " readonly"
+        },
+        focus_password = if adopting { "" } else { " autofocus" },
+        button = if adopting { "Adopt" } else { "Join" },
+        error = error_line(error),
+    );
+    html(status, &document(&title, &body))
 }
 
 fn login_page(status: u16, server: &str, login: &Login, user: &str, error: &str) -> Response {
@@ -252,7 +389,7 @@ fn password_page(
 <p>{user} logs in to the library on {server} with it, from other devices. At least {SHORTEST_PASSWORD} characters.</p>
 <form method="post" action="{PAGES_PATH}/password">
 <input type="hidden" name="ticket" value="{ticket}">
-<label>User<input name="username" autocomplete="username" value="{user}" readonly></label>
+<label>User<input name="username" autocomplete="username" value="{user}"{name}></label>
 {current}
 <label>New password<input name="password" type="password" autocomplete="new-password" minlength="{SHORTEST_PASSWORD}" required{focus}></label>
 <label>Again<input name="again" type="password" autocomplete="new-password" minlength="{SHORTEST_PASSWORD}" required></label>
@@ -262,6 +399,8 @@ fn password_page(
         user = escape(&page.user),
         server = escape(server),
         ticket = escape(ticket),
+        // Chosen by the owner adopting the server; else the user's name, as it is.
+        name = if page.names { " required" } else { " readonly" },
         focus = if page.asks_current { "" } else { " autofocus" },
         error = error_line(error),
     );

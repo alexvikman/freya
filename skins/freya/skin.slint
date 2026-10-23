@@ -4,7 +4,7 @@
 // contrast against the background it is drawn on (WCAG AA), light and dark mode follow the
 // system.
 
-import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, LastFm, Server, ServerDevice, FoundServer, PlaybackState, Shortcuts, TrackRow, LibraryRow, AlbumPage, ArtistPage, ArtistDraft, PictureChoice, MatchChoice, AlbumMatchDraft, AlbumMatchChoice, ArtistMatchDraft, PlaylistRow, PlaylistPage, PlaylistEntryRow, SearchSection, StationRow, NativeSpectrum, NativeOscilloscope, NativeHologram } from "@freya/v1.slint";
+import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, LastFm, Server, ServerDevice, ServerUser, FoundServer, PlaybackState, Shortcuts, TrackRow, LibraryRow, AlbumPage, ArtistPage, ArtistDraft, PictureChoice, MatchChoice, AlbumMatchDraft, AlbumMatchChoice, ArtistMatchDraft, PlaylistRow, PlaylistPage, PlaylistEntryRow, SearchSection, StationRow, NativeSpectrum, NativeOscilloscope, NativeHologram } from "@freya/v1.slint";
 import { AboutSlint, ListView, Palette, ScrollView } from "std-widgets.slint";
 
 // Every skin re-exports the API globals so the app can reach them.
@@ -7628,15 +7628,20 @@ component ServerForm inherits MenuSurface {
                 spacing: 4px;
 
                 Text {
-                    text: (Server.login-verified ? "Log in to " : "Connect to ") + Server.login-address;
+                    text: !Server.login-verified ? "Connect to " + Server.login-address
+                        : Server.login-kind == "adopt" ? "Adopt " + Server.login-address
+                        : Server.login-kind == "join" ? "Join " + Server.login-address
+                        : "Log in to " + Server.login-address;
                     font-size: 17px;
                     font-weight: 600;
                     color: Theme.text;
                 }
                 Text {
-                    text: Server.login-verified
-                        ? "It is the server whose computer showed the code, or the one this computer used before."
-                        : "Type the code Freya shows on that computer, under Settings, Server, Add a Device. It proves that computer answered, and not another in its place.";
+                    text: !Server.login-verified
+                        ? "Type the code Freya shows on that computer, under Settings, Server, Add a Device, or the code you were invited with. It proves that computer answered, and not another in its place."
+                        : Server.login-kind == "adopt" ? "Nobody owns this server yet. You become its owner, with the name and password you choose."
+                        : Server.login-kind == "join" ? "You were invited as " + Server.login-user + ". You choose your own password."
+                        : "It is the server whose computer showed the code, or the one this computer used before.";
                     font-size: 13px;
                     color: Theme.text-secondary;
                     wrap: word-wrap;
@@ -7650,8 +7655,12 @@ component ServerForm inherits MenuSurface {
             }
             if Server.login-verified: Text {
                 text: Server.login-waiting
-                    ? "Log in on the page that opened in your browser. Freya uses the library there once you have."
-                    : "You log in in your browser, where your password manager can fill in the user and password.";
+                    ? (Server.login-kind == "log-in"
+                        ? "Log in on the page that opened in your browser. Freya uses the library there once you have."
+                        : "Choose your password on the page that opened in your browser. Freya uses the library there once you have.")
+                    : (Server.login-kind == "log-in"
+                        ? "You log in in your browser, where your password manager can fill in the user and password."
+                        : "You choose it in your browser, where your password manager keeps it.");
                 font-size: 13px;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
@@ -7676,7 +7685,10 @@ component ServerForm inherits MenuSurface {
                     clicked => { Server.verify-code(root.code); }
                 }
                 if Server.login-verified: TextButton {
-                    text: Server.login-waiting ? "Open the Page Again" : "Log In in Browser…";
+                    text: Server.login-waiting ? "Open the Page Again"
+                        : Server.login-kind == "adopt" ? "Adopt in Browser…"
+                        : Server.login-kind == "join" ? "Join in Browser…"
+                        : "Log In in Browser…";
                     primary: !Server.login-waiting;
                     clicked => { Server.log-in(); }
                 }
@@ -7719,6 +7731,8 @@ component SettingsView inherits Rectangle {
     callback find-servers();
 
     property <string> server-name;
+    property <string> invite-name;
+    property <bool> invite-admin;
 
     VerticalLayout {
         // The title and tabs stay put while a tab scrolls.
@@ -8142,6 +8156,7 @@ component SettingsView inherits Rectangle {
                     detail: Server.password-error != "" ? Server.password-error
                         : Server.password-waiting ? "Set it on the page that opened in your browser."
                         : Server.has-password ? "Other computers log in with your password, in the browser."
+                        : !Server.remote ? "Nobody has adopted this server yet. Choose your name and password to own it, and to use it from other computers."
                         : "Set a password to use this library from other computers.";
 
                     VerticalLayout {
@@ -8151,7 +8166,10 @@ component SettingsView inherits Rectangle {
                             spacing: 8px;
 
                             TextButton {
-                                text: Server.has-password ? "Change Password…" : "Set a Password…";
+                                text: Server.has-password ? "Change Password…"
+                                    : !Server.remote ? "Adopt This Server…"
+                                    : "Set a Password…";
+                                primary: !Server.has-password;
                                 clicked => { Server.change-password(); }
                             }
                             if Server.remote: TextButton {
@@ -8174,6 +8192,103 @@ component SettingsView inherits Rectangle {
                         TextButton {
                             text: "Disconnect";
                             clicked => { Server.revoke(device.id); }
+                        }
+                    }
+                }
+            }
+
+            if root.tab == "account" && Server.admin && Server.users.length > 0: SettingsSection {
+                title: "Users";
+
+                SettingsRow {
+                    label: "Invite a user";
+                    detail: Server.invite-error != "" ? Server.invite-error
+                        : "They join from their own computer with a code shown here, and choose their own password. A listener plays the library; an admin keeps the server too.";
+
+                    HorizontalLayout {
+                        spacing: 8px;
+
+                        FormField {
+                            width: 180px;
+                            placeholder: "Name";
+                            text <=> root.invite-name;
+                            accepted => {
+                                Server.invite-user(root.invite-name, root.invite-admin);
+                                root.invite-name = "";
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+
+                            Toggle {
+                                label: "Admin";
+                                checked: root.invite-admin;
+                                toggled => { root.invite-admin = !root.invite-admin; }
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+
+                            TextButton {
+                                text: "Invite";
+                                primary: root.invite-name != "";
+                                clicked => {
+                                    Server.invite-user(root.invite-name, root.invite-admin);
+                                    root.invite-name = "";
+                                }
+                            }
+                        }
+                    }
+                }
+                if Server.invite-code != "": SettingsRow {
+                    label: "The code for " + Server.invite-for;
+                    detail: "In Freya on their computer: Settings, Server, find this server or type its address, then type the code. It works until " + Server.invite-until + ", once.";
+
+                    HorizontalLayout {
+                        spacing: 16px;
+
+                        Text {
+                            text: Server.invite-code;
+                            font-size: 24px;
+                            font-weight: 700;
+                            letter-spacing: 1px;
+                            color: Theme.text;
+                            vertical-alignment: center;
+                            accessible-role: text;
+                            accessible-label: "Invitation code " + Server.invite-code;
+                        }
+                        VerticalLayout {
+                            alignment: center;
+
+                            TextButton {
+                                text: "Done";
+                                clicked => { Server.hide-invite-code(); }
+                            }
+                        }
+                    }
+                }
+                for user in Server.users: SettingsRow {
+                    label: user.name + (user.state == "owner" ? " (owner)" : "");
+                    detail: (user.role == "admin" ? "Admin" : "Listener")
+                        + (user.state == "invited" ? " · invited, not joined yet: the code works until " + user.invited-until
+                        : user.state == "not-joined" ? " · not joined: the code ran out"
+                        : "")
+                        + " · " + user.devices + (user.devices == 1 ? " device" : " devices");
+
+                    if user.state != "owner": VerticalLayout {
+                        alignment: center;
+
+                        HorizontalLayout {
+                            spacing: 8px;
+
+                            TextButton {
+                                text: user.state == "joined" ? "New Password Code" : "New Code";
+                                clicked => { Server.invite-again(user.name); }
+                            }
+                            TextButton {
+                                text: "Remove";
+                                clicked => { Server.remove-user(user.name); }
+                            }
                         }
                     }
                 }

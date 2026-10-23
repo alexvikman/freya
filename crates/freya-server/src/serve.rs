@@ -180,6 +180,7 @@ fn answer(served: &Served, answers: &Answers, request: Request) -> Response {
             ("POST", "/pair") => return pair(accounts, &request, local),
             ("POST", "/token") => return token(accounts, &request),
             ("POST", "/enroll") => return enroll(accounts, served, &request),
+            ("POST", "/claim") => return claim(accounts, served, &request),
             _ => {
                 let token = request
                     .header("authorization")
@@ -198,7 +199,13 @@ fn answer(served: &Served, answers: &Answers, request: Request) -> Response {
         return Response::error(403, "only the server's admin may do that");
     }
     if let (Some(accounts), Some(caller)) = (&served.accounts, &caller)
-        && let Some(answer) = account(accounts, caller, &request, path)
+        && let Some(answer) = account(
+            accounts,
+            caller,
+            &request,
+            path,
+            served.certificate.as_deref(),
+        )
     {
         return answer;
     }
@@ -749,12 +756,48 @@ fn enroll(accounts: &Accounts, served: &Served, request: &Request) -> Response {
     let Some(certificate) = &served.certificate else {
         return Response::error(404, "this server takes no devices elsewhere");
     };
-    match accounts.prove(&nonce, certificate) {
-        Some(proof) => Response::json(200, &serde_json::json!({ "proof": hex(&proof) })),
-        None => Response::error(
+    let proofs: Vec<String> = accounts
+        .prove(&nonce, certificate)
+        .iter()
+        .map(|proof| hex(proof))
+        .collect();
+    if proofs.is_empty() {
+        return Response::error(
             404,
             "no connection code now: show one in Settings on the server's computer",
+        );
+    }
+    Response::json(200, &serde_json::json!({ "proofs": proofs }))
+}
+
+/// `{"nonce", "proof"}`: a ticket for the device that proves it knows a code letting it claim
+/// the server, adopting it or joining it, and what it may do; refused for any other proof.
+/// Asked as often as proofs are.
+fn claim(accounts: &Accounts, served: &Served, request: &Request) -> Response {
+    if !accounts.may_ask_proof(request.peer.map(|peer| peer.ip())) {
+        return Response::error(429, "too many tries with a code: wait a while");
+    }
+    #[derive(serde::Deserialize)]
+    struct Asked {
+        nonce: String,
+        proof: String,
+    }
+    let asked = serde_json::from_slice::<Asked>(&request.body)
+        .ok()
+        .and_then(|asked| Some((unhex(&asked.nonce)?, unhex(&asked.proof)?)))
+        .filter(|(nonce, _)| nonce.len() == 32);
+    let Some((nonce, proof)) = asked else {
+        return Response::error(400, "a nonce of 32 bytes and a proof, in hex");
+    };
+    let Some(certificate) = &served.certificate else {
+        return Response::error(404, "this server takes no devices elsewhere");
+    };
+    match accounts.claim(&nonce, &proof, certificate) {
+        Some((ticket, claim)) => Response::json(
+            200,
+            &serde_json::json!({ "ticket": ticket, "claim": claim }),
         ),
+        None => Response::error(404, "nothing to claim with that code: log in"),
     }
 }
 
@@ -808,12 +851,55 @@ fn account(
     caller: &Caller,
     request: &Request,
     path: &str,
+    certificate: Option<&[u8]>,
 ) -> Option<Response> {
     #[derive(serde::Deserialize)]
     struct Revoked {
         device: String,
     }
+    #[derive(serde::Deserialize)]
+    struct Named {
+        name: String,
+        #[serde(default)]
+        role: Role,
+    }
+    let invited = |invited: Result<(String, Duration), String>| match invited {
+        Ok((code, lasts)) => Response::json(
+            200,
+            &serde_json::json!({ "code": code, "lasts": lasts.as_secs() }),
+        ),
+        Err(why) => Response::error(400, why),
+    };
+    if path.starts_with("/account/users") && caller.role != Role::Admin {
+        return Some(Response::error(403, "only the server's admin may do that"));
+    }
+    let named = || serde_json::from_slice::<Named>(&request.body);
     Some(match (request.method.as_str(), path) {
+        ("GET", "/account/users") => match serde_json::to_value(accounts.users()) {
+            Ok(users) => Response::json(200, &users),
+            Err(e) => Response::error(500, e),
+        },
+        ("POST", "/account/users/invite") => match (named(), certificate) {
+            (Ok(named), Some(certificate)) => {
+                invited(accounts.invite_user(&named.name, named.role, certificate))
+            }
+            (Err(e), _) => Response::error(400, e),
+            (_, None) => Response::error(404, "this server takes no devices elsewhere"),
+        },
+        ("POST", "/account/users/invite-again") => match (named(), certificate) {
+            (Ok(named), Some(certificate)) => {
+                invited(accounts.invite_again(&named.name, certificate))
+            }
+            (Err(e), _) => Response::error(400, e),
+            (_, None) => Response::error(404, "this server takes no devices elsewhere"),
+        },
+        ("POST", "/account/users/remove") => match named() {
+            Ok(named) => match accounts.remove_user(&named.name) {
+                Ok(()) => Response::json(200, &serde_json::Value::Null),
+                Err(why) => Response::error(400, why),
+            },
+            Err(e) => Response::error(400, e),
+        },
         ("GET", "/account") => match serde_json::to_value(accounts.info(caller)) {
             Ok(info) => Response::json(200, &info),
             Err(e) => Response::error(500, e),

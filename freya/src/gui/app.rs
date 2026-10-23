@@ -772,6 +772,7 @@ impl App {
             let ui = &self.view.ui;
             let _ =
                 ui.set_global_property("Server", "devices", self.server.device_rows.model_value());
+            let _ = ui.set_global_property("Server", "users", self.server.user_rows.model_value());
             let _ = ui.set_global_property("Server", "found", self.server.found_rows.model_value());
             let _ = ui.set_global_property(
                 "Server",
@@ -792,6 +793,7 @@ impl App {
             let remote = self.library.remote();
             self.server
                 .connected(remote.as_deref(), connected.account, connected.info);
+            self.server.load_users(remote);
             self.playlists
                 .connect(Arc::clone(&connected.server), connected.playlists);
             self.lastfm.use_server(connected.server, connected.lastfm);
@@ -1459,7 +1461,9 @@ impl App {
             self.use_remote_server(chosen);
         }
         if self.server.take_refresh_wanted() {
-            self.server.refresh(self.library.remote().as_deref());
+            let remote = self.library.remote();
+            self.server.refresh(remote.as_deref());
+            self.server.load_users(remote);
         }
         if self.library.wants_reconnect() {
             self.attach_library();

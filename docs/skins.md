@@ -425,6 +425,10 @@ The server that keeps the library: Freya's own on this computer, or one on anoth
 | `login-verified` | bool | Whether the server chosen proved it knows the connection code, or is the one this computer used before: only then can it be logged in to |
 | `connection-code-error` | string | Why no connection code could be shown; "" otherwise |
 | `connection-code`, `connection-code-until` | string | On the server's computer: the connection code shown for a new device ("K7Q2M-9XD4T") and until when it works ("20:31"); "" when none is |
+| `login-kind`, `login-user` | string, string | What the code typed lets this computer do once verified: "log-in", "adopt" (the server is not adopted yet: the user chooses the owner's name and password) or "join" (the code is an invitation for `login-user`, who chooses their password) |
+| `admin` | bool | Whether the account is an admin's, who sees and invites the server's users |
+| `users` | [`ServerUser`] | The server's users, the owner first, for an admin: `name`, `role` ("admin" or "listener"), `state` ("owner", "joined", "invited" or "not-joined": their code ran out), `invited-until` (a date, while invited), `devices` |
+| `invite-code`, `invite-for`, `invite-until`, `invite-error` | string | The code a user was just invited with ("K7Q2M-9XD4T"), whom for, and until when it works; why inviting or taking one away failed; "" otherwise |
 
 | Callback | |
 |---|---|
@@ -432,11 +436,12 @@ The server that keeps the library: Freya's own on this computer, or one on anoth
 | `choose-found(index)`, `choose-address(text)` | Starts logging in to a server found, or to one typed in ("mini.local", "192.168.1.20:47475"): Freya takes its certificate, and `logging-in` turns on |
 | `verify-code(code)` | Checks the connection code typed with the server chosen; `login-verified` turns on when it matches |
 | `show-connection-code()` | On the server's computer: shows a new connection code, in place of any before |
-| `log-in()`, `cancel-login()` | Opens the server's login page in the browser, where a password manager fills it in; once the user logged in there, the library is that server's |
+| `log-in()`, `cancel-login()` | Opens the server's login page in the browser, where a password manager fills it in, or, as `login-kind` says, the page adopting or joining the server; once the user is done there, the library is that server's |
 | `use-this-computer()` | The library is this computer's server's again |
-| `change-password()` | Opens the page the password is set or changed on in the browser |
+| `change-password()` | Opens the page the password is set or changed on in the browser; for the owner of a server not adopted yet, the name too, adopting it |
 | `revoke(id)` | Takes a device's token back: it has to log in again |
 | `log-out()` | Logs this computer out of the server elsewhere: the server takes its token back, and the library is this computer's again |
+| `invite-user(name, admin)`, `invite-again(name)`, `remove-user(name)`, `hide-invite-code()` | For an admin: invites a user, an admin or a listener, showing the code they join with; invites one again with a new code (for one who joined, it lets them choose a new password); takes one away with their devices; stops showing the code |
 | `set-network(on)`, `set-server-name(name)`, `set-autostart(on)` | For the server on this computer |
 | `browse-start()`, `browse-into(index)`, `browse-up()`, `browse-add()`, `browse-cancel()` | Choosing a music folder among a server's on another computer: `browsing`, `browse-folder` ("" where to start: the home folder and the drives) and `browse-folders` say what is shown; `browse-add` adds the folder shown to `Library.folders-draft` |
 

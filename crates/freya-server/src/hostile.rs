@@ -92,7 +92,11 @@ fn served() -> (Served, Arc<Accounts>) {
 /// A request a stranger might send: to a route that is there, or near one, with headers and a
 /// body made up, many of them wrong.
 fn stranger(random: &mut Random) -> Request {
-    const ROUTES: [&str; 18] = [
+    const ROUTES: [&str; 22] = [
+        "/claim",
+        "/account/users",
+        "/account/users/invite",
+        "/account/users/remove",
         "/calls",
         "/pictures/small",
         "/call/stats",
@@ -185,7 +189,14 @@ fn let_in(request: &Request, response: &Response) -> bool {
     let Some(route) = request.path.strip_prefix(API_PATH) else {
         return false;
     };
-    let open = ["/version", "/certificate", "/pair", "/token", "/enroll"];
+    let open = [
+        "/version",
+        "/certificate",
+        "/pair",
+        "/token",
+        "/enroll",
+        "/claim",
+    ];
     let open = open.contains(&route);
     response.status < 300 && !open
 }

@@ -930,6 +930,36 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     );
     bind(
         "Server",
+        "invite-user",
+        Box::new(|app, args| {
+            let remote = app.library.remote();
+            let admin = matches!(args.get(1), Some(Value::Bool(true)));
+            app.server.invite_user(remote, &text_arg(args, 0), admin);
+        }),
+    );
+    bind(
+        "Server",
+        "invite-again",
+        Box::new(|app, args| {
+            let remote = app.library.remote();
+            app.server.invite_again(remote, &text_arg(args, 0));
+        }),
+    );
+    bind(
+        "Server",
+        "remove-user",
+        Box::new(|app, args| {
+            let remote = app.library.remote();
+            app.server.remove_user(remote, &text_arg(args, 0));
+        }),
+    );
+    bind(
+        "Server",
+        "hide-invite-code",
+        Box::new(|app, _| app.server.hide_invite_code()),
+    );
+    bind(
+        "Server",
         "revoke",
         Box::new(|app, args| {
             let remote = app.library.remote();

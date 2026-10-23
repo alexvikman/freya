@@ -49,6 +49,31 @@ files, and with them Freya's.
   second, with a short answer, so the server cannot be used to flood another computer. A
   server found that gives another certificate than it named is refused.
 
+## Owning the server, and its users
+
+- **Users belong to the server**: they are kept in its `accounts.json`, with no account
+  anywhere else. It starts with its owner, an admin, named after the system's user it runs as
+  and without a password: not adopted yet.
+- **Adopting** it is choosing the owner's name and password. On the server's own computer, the
+  device paired there does so on the password page. From another computer, the device types
+  the connection code, as any new device does, and also proves to the server that it knows
+  it, with an HMAC under the same key over a message of its own (`/claim`, asked as often as
+  proofs are); only then, and only while nobody has adopted the server, is it given a ticket
+  for the page that adopts it. Anyone on the network can reach an unadopted server, but only
+  someone who sees its computer's code can own it. A server not adopted keeps a connection
+  code, a new one every ten minutes, written to a file only its user reads, for
+  `freya-server --code` on a server without a screen; the log says where it is, never what
+  it is.
+- **Inviting** a user, which admins alone may do, gives a one-time code lasting a week, kept
+  by the server only as its key (PBKDF2, as a connection code's). Typed on the user's
+  computer, it proves the server, and the device proving it knows it too is given a ticket for
+  the page where the user chooses their password, under the name they were invited with,
+  whatever is sent. Joining uses it up; inviting a user again replaces it, and lets one who
+  joined choose a new password. Removing a user takes their devices away; the owner is not
+  removed.
+- The server proves itself with each code it knows at once, so a device on the network learns
+  how many invitations are pending, nothing more.
+
 ## Logging in
 
 - **On the same computer**, the client pairs with the pairing key the server writes to a file

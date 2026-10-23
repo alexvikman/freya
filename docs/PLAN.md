@@ -201,6 +201,24 @@ to log the other devices out.
 | **S5** ✓ | **The client trusts the server less**: a library elsewhere always streamed, never looked for by its paths here; limits on all a server sends (1 MB for small answers and event lines, 32 MB for pictures), pictures decoded within 12,000 pixels and 256 MB; the picture cache taking only bytes whose SHA-256 is their name; the proxy setting its own security headers (no script on a page, so one cannot read what a password manager fills in) and letting a page send the browser only to its own pages or the callback; the fingerprint shown computed from the certificate pinned, and a found server whose certificate is not the one it named refused; at most 32 found; pages opened only over HTTPS, or Freya's own, in plain URL characters. Not done: an origin of its own per server for the login page (Safari does not reach `*.localhost`, and macOS has only 127.0.0.1): a server is logged in to only once its connection code proved it | A hostile server cannot harm the client or draw out a password |
 | **S7** ✓ | **Checking**: hostile and random input against the HTTP parser and the forms; `docs/SECURITY.md` with the threat model; a new independent review of all of it | The review finds nothing serious |
 
+### Adopting the server, and its users (from 2026-10-23)
+
+Users belong to the server: they are kept in its `accounts.json`, and there is no account
+anywhere else. Until now the server made its owner itself, named after the system's user it
+runs as and without a password, and only Freya on the server's own computer could be that
+owner's first device (its pairing key is readable by that system user alone). A server
+without a screen, like a Mac mini that only serves, could not be given a password from
+another computer, and there was no way to add users.
+
+Decided with the user: a server is adopted, as a new device of its own kind proves it knows
+the connection code shown on the server's computer (not, as some servers do, by anyone on the
+network); users are invited with a one-time code, so the owner never knows their passwords.
+
+| # | Milestone | Done when |
+|---|---|---|
+| **B1** ✓ | **Adopting**: a server whose owner has no password is not adopted yet. A device that typed its connection code proves it knows it too, and the server's page in the browser lets it choose the owner's name and password, logging it in as the owner. On the server's own computer, choosing the password chooses the name too. Without a screen, `freya-server --code` shows the code a server not adopted keeps | A Mac mini that only serves is adopted from another computer |
+| **B2** ✓ | **Users**: the owner, and any admin, adds a user as an admin or a listener and is given a one-time code for them, lasting a week. Typed on the user's computer, the code proves the server, as a connection code does, and opens a page where the user chooses their password. Users are listed with their devices, invited again with a new code, and removed with their devices | A listener joins from their own computer without the owner knowing their password |
+
 ### Speed between server and client (from 2026-10-22)
 
 Measured on the dev library (7,832 tracks, 782 albums) over TLS with a delay each way: every

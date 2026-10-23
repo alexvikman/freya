@@ -42,7 +42,7 @@ use std::time::{Duration, Instant, SystemTime};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
-use freya_protocol::{AccountInfo, DeviceInfo, Joined, Role};
+use freya_protocol::{AccountInfo, Claim, DeviceInfo, Joined, Role, UserInfo};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 
@@ -85,6 +85,10 @@ const RETIRED_KEPT: usize = 32;
 /// How long a login's code may wait to be traded for a token, and a password page be used.
 const CODE_LASTS: Duration = Duration::from_secs(120);
 const TICKET_LASTS: Duration = Duration::from_secs(15 * 60);
+/// How long the code a user is invited with lasts.
+const INVITE_LASTS: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+/// The longest name a user is given.
+const LONGEST_USER_NAME: usize = 64;
 /// The fewest characters a password has.
 pub const SHORTEST_PASSWORD: usize = 8;
 
@@ -95,6 +99,37 @@ struct Kept {
     /// What access tokens are signed with, hex.
     #[serde(default)]
     secret: String,
+    /// The codes users were invited with, while they last.
+    #[serde(default)]
+    invites: Vec<Invite>,
+}
+
+/// A user's invitation: the key of the code they were given, as a connection code's is made
+/// (PBKDF2 of the code, salted with the certificate's SHA-256), never the code itself.
+#[derive(Clone, Serialize, Deserialize)]
+struct Invite {
+    user: u32,
+    /// Hex.
+    key: String,
+    /// Seconds since 1970.
+    until: u64,
+}
+
+/// What a claim ticket lets the browser that comes with it do: adopt the server, or join it as
+/// the user invited.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Claimed {
+    Adopt,
+    Join(u32),
+}
+
+/// A ticket a device was given for proving it knows a code, which opens the page claiming
+/// the server, for a while.
+struct ClaimTicket {
+    /// The SHA-256 of the ticket, hex.
+    ticket: String,
+    claimed: Claimed,
+    until: Instant,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -190,6 +225,9 @@ pub struct PasswordPage {
     pub user: String,
     /// Whether the password now has to be given to change it.
     pub asks_current: bool,
+    /// Whether a name is chosen with it: by the owner of a server not adopted yet, adopting it
+    /// from its own computer.
+    pub names: bool,
 }
 
 /// A device a token was given to, as a request names it.
@@ -331,6 +369,7 @@ pub struct Accounts {
     pairing_file: Option<PathBuf>,
     grants: Mutex<Vec<Grant>>,
     tickets: Mutex<Vec<Ticket>>,
+    claims: Mutex<Vec<ClaimTicket>>,
     tries: Mutex<Tries>,
     home: Mutex<Tries>,
     proofs: Mutex<Tries>,
@@ -374,6 +413,7 @@ impl Accounts {
             pairing_file,
             grants: Mutex::new(Vec::new()),
             tickets: Mutex::new(Vec::new()),
+            claims: Mutex::new(Vec::new()),
             tries: Mutex::new(Tries::default()),
             home: Mutex::new(Tries::default()),
             proofs: Mutex::new(Tries::default()),
@@ -727,19 +767,324 @@ impl Accounts {
         (code, CONNECTION_CODE_LASTS)
     }
 
-    /// The proof that this server knows the connection code shown, for the device that sent
-    /// `nonce` and was given `certificate`; none without a code that lasts still. The code's
-    /// key is derived once, so asking again costs the server little.
-    pub fn prove(&self, nonce: &[u8], certificate: &[u8]) -> Option<Vec<u8>> {
+    /// The proofs that this server knows the codes a device may type, for the device that
+    /// sent `nonce` and was given `certificate`: the connection code shown, while it lasts, and
+    /// each code a user was invited with. A code's key is derived once, so asking again costs
+    /// the server little.
+    pub fn prove(&self, nonce: &[u8], certificate: &[u8]) -> Vec<Vec<u8>> {
         let digest = ring::digest::digest(&ring::digest::SHA256, certificate);
-        let mut connection = self.connection.lock().unwrap_or_else(|e| e.into_inner());
-        let shown = connection.as_mut().filter(|c| c.until > Instant::now())?;
-        let key = shown.key.get_or_insert_with(|| {
-            let derived = freya_protocol::connection_key(&shown.code, digest.as_ref());
-            ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &derived)
-        });
         let message = freya_protocol::connection_message(nonce, digest.as_ref());
-        Some(ring::hmac::sign(key, &message).as_ref().to_vec())
+        self.code_keys(certificate)
+            .iter()
+            .map(|(key, _)| ring::hmac::sign(key, &message).as_ref().to_vec())
+            .collect()
+    }
+
+    /// The keys of the codes a device may type now, each with what knowing it lets the device
+    /// do: the connection code's, to adopt the server while it is not adopted, and each
+    /// invitation's.
+    fn code_keys(&self, certificate: &[u8]) -> Vec<(ring::hmac::Key, Option<Claimed>)> {
+        let digest = ring::digest::digest(&ring::digest::SHA256, certificate);
+        let mut keys = Vec::new();
+        {
+            let mut connection = self.connection.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(shown) = connection.as_mut().filter(|c| c.until > Instant::now()) {
+                let key = shown.key.get_or_insert_with(|| {
+                    let derived = freya_protocol::connection_key(&shown.code, digest.as_ref());
+                    ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &derived)
+                });
+                keys.push((key.clone(), (!self.adopted()).then_some(Claimed::Adopt)));
+            }
+        }
+        let now = now();
+        for invite in self.kept().invites.iter().filter(|i| i.until > now) {
+            if let Some(key) = unhex(&invite.key) {
+                let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &key);
+                keys.push((key, Some(Claimed::Join(invite.user))));
+            }
+        }
+        keys
+    }
+
+    /// Whether the server was adopted: its owner chose a password.
+    pub fn adopted(&self) -> bool {
+        self.kept()
+            .users
+            .iter()
+            .any(|u| u.id == OWNER && u.password.is_some())
+    }
+
+    /// The connection code a server not adopted yet keeps, for a device to adopt it with: the
+    /// one shown now while it lasts, else a new one; how long it lasts. None once adopted.
+    pub fn adoption_code(&self) -> Option<(String, Duration)> {
+        if self.adopted() {
+            return None;
+        }
+        {
+            let connection = self.connection.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(shown) = connection.as_ref()
+                && let Some(left) = shown.until.checked_duration_since(Instant::now())
+                && !left.is_zero()
+            {
+                return Some((shown.code.clone(), left));
+            }
+        }
+        Some(self.connection_code())
+    }
+
+    /// A ticket for the device that sent `nonce`, was given `certificate`, and proves with
+    /// `proof` that it knows a code that lets it claim the server: adopting it with its
+    /// connection code while it is not adopted, or joining it with an invitation's. None for
+    /// any other proof.
+    pub fn claim(&self, nonce: &[u8], proof: &[u8], certificate: &[u8]) -> Option<(String, Claim)> {
+        let digest = ring::digest::digest(&ring::digest::SHA256, certificate);
+        let message = freya_protocol::claim_message(nonce, digest.as_ref());
+        let claimed = self
+            .code_keys(certificate)
+            .into_iter()
+            .find(|(key, _)| ring::hmac::verify(key, &message, proof).is_ok())?
+            .1?;
+        let claim = match claimed {
+            Claimed::Adopt => Claim::Adopt,
+            Claimed::Join(user) => Claim::Join {
+                user: self
+                    .kept()
+                    .users
+                    .iter()
+                    .find(|u| u.id == user)?
+                    .name
+                    .clone(),
+            },
+        };
+        let ticket = random_hex(32);
+        let mut claims = self.claims.lock().unwrap_or_else(|e| e.into_inner());
+        claims.retain(|c| c.until > Instant::now());
+        claims.push(ClaimTicket {
+            ticket: sha256(ticket.as_bytes()),
+            claimed,
+            until: Instant::now() + TICKET_LASTS,
+        });
+        Some((ticket, claim))
+    }
+
+    /// What the claim `ticket` lets its page do, while it does: adopt the server, with the
+    /// owner's name now to start from, or join it as the user named.
+    pub fn claim_page(&self, ticket: &str) -> Option<(Claim, String)> {
+        let claimed = {
+            let claims = self.claims.lock().unwrap_or_else(|e| e.into_inner());
+            let hash = sha256(ticket.as_bytes());
+            claims
+                .iter()
+                .find(|c| c.ticket == hash && c.until > Instant::now())?
+                .claimed
+        };
+        let kept = self.kept();
+        match claimed {
+            Claimed::Adopt => {
+                let owner = kept.users.iter().find(|u| u.id == OWNER)?;
+                // Adopted meanwhile, from another device.
+                if owner.password.is_some() {
+                    return None;
+                }
+                Some((Claim::Adopt, owner.name.clone()))
+            }
+            Claimed::Join(user) => {
+                let user = kept.users.iter().find(|u| u.id == user)?;
+                Some((
+                    Claim::Join {
+                        user: user.name.clone(),
+                    },
+                    user.name.clone(),
+                ))
+            }
+        }
+    }
+
+    /// Claims the server with the `ticket`: adopting it, its owner named `name`, or joining it
+    /// as the user invited, with `password`. Then a code for the device's login, as
+    /// [`Self::grant`] gives one for a password; the ticket and the invitation are used up.
+    pub fn complete_claim(
+        &self,
+        ticket: &str,
+        name: &str,
+        password: &str,
+        challenge: &str,
+        redirect: &str,
+    ) -> Result<String, String> {
+        let out_of_date = "This page is out of date. Start again from Freya.";
+        let (claim, _) = self.claim_page(ticket).ok_or(out_of_date)?;
+        if password.chars().count() < SHORTEST_PASSWORD {
+            return Err(format!(
+                "A password needs at least {SHORTEST_PASSWORD} characters."
+            ));
+        }
+        let claimed = {
+            let mut claims = self.claims.lock().unwrap_or_else(|e| e.into_inner());
+            let hash = sha256(ticket.as_bytes());
+            let at = claims
+                .iter()
+                .position(|c| c.ticket == hash)
+                .ok_or(out_of_date)?;
+            claims.swap_remove(at).claimed
+        };
+        let mut kept = self.kept();
+        let user = match (claimed, claim) {
+            (Claimed::Adopt, Claim::Adopt) => {
+                let name = user_name(name)?;
+                let taken = kept
+                    .users
+                    .iter()
+                    .any(|u| u.id != OWNER && u.name.eq_ignore_ascii_case(&name));
+                if taken {
+                    return Err(format!("There is a user named {name} already."));
+                }
+                let owner = kept
+                    .users
+                    .iter_mut()
+                    .find(|u| u.id == OWNER)
+                    .ok_or(out_of_date)?;
+                owner.name = name;
+                owner.password = Some(Password::new(password));
+                log::info!("the server was adopted by {}", owner.name);
+                OWNER
+            }
+            (Claimed::Join(user), _) => {
+                let joined = kept
+                    .users
+                    .iter_mut()
+                    .find(|u| u.id == user)
+                    .ok_or(out_of_date)?;
+                joined.password = Some(Password::new(password));
+                log::info!("{} joined the server", joined.name);
+                kept.invites.retain(|i| i.user != user);
+                user
+            }
+            _ => return Err(out_of_date.into()),
+        };
+        self.save(&kept);
+        drop(kept);
+        let code = random_hex(32);
+        let mut grants = self.grants.lock().unwrap_or_else(|e| e.into_inner());
+        grants.retain(|g| g.until > Instant::now());
+        grants.push(Grant {
+            code: sha256(code.as_bytes()),
+            user,
+            challenge: challenge.to_owned(),
+            redirect: redirect.to_owned(),
+            until: Instant::now() + CODE_LASTS,
+        });
+        Ok(code)
+    }
+
+    /// Invites a user named `name` with `role`: the code they join with, from their own
+    /// device, for a server with `certificate`; how long it lasts. They choose their password
+    /// when they join.
+    pub fn invite_user(
+        &self,
+        name: &str,
+        role: Role,
+        certificate: &[u8],
+    ) -> Result<(String, Duration), String> {
+        let name = user_name(name)?;
+        let id = {
+            let mut kept = self.kept();
+            if kept
+                .users
+                .iter()
+                .any(|u| u.name.eq_ignore_ascii_case(&name))
+            {
+                return Err(format!("There is a user named {name} already."));
+            }
+            let id = kept.users.iter().map(|u| u.id).max().unwrap_or(0) + 1;
+            kept.users.push(User {
+                id,
+                name,
+                password: None,
+                role,
+            });
+            self.save(&kept);
+            id
+        };
+        Ok(self.invite(id, certificate))
+    }
+
+    /// Invites the user `name` again, with a new code in place of any before: one who has not
+    /// joined, or has forgotten their password, which the new one replaces when they join.
+    pub fn invite_again(
+        &self,
+        name: &str,
+        certificate: &[u8],
+    ) -> Result<(String, Duration), String> {
+        let id = self
+            .kept()
+            .users
+            .iter()
+            .find(|u| u.name.eq_ignore_ascii_case(name.trim()))
+            .map(|u| u.id)
+            .ok_or("There is no such user.")?;
+        Ok(self.invite(id, certificate))
+    }
+
+    fn invite(&self, user: u32, certificate: &[u8]) -> (String, Duration) {
+        let code: String = random_bytes(freya_protocol::CODE_LENGTH)
+            .iter()
+            .map(|b| freya_protocol::CODE_ALPHABET[usize::from(b & 31)] as char)
+            .collect();
+        let digest = ring::digest::digest(&ring::digest::SHA256, certificate);
+        let key = freya_protocol::connection_key(&code, digest.as_ref());
+        let mut kept = self.kept();
+        let now = now();
+        kept.invites.retain(|i| i.user != user && i.until > now);
+        kept.invites.push(Invite {
+            user,
+            key: key.iter().map(|b| format!("{b:02x}")).collect(),
+            until: now + INVITE_LASTS.as_secs(),
+        });
+        self.save(&kept);
+        (code, INVITE_LASTS)
+    }
+
+    /// Takes the user `name` away, with their devices and invitation; not the owner.
+    pub fn remove_user(&self, name: &str) -> Result<(), String> {
+        let mut kept = self.kept();
+        let user = kept
+            .users
+            .iter()
+            .find(|u| u.name.eq_ignore_ascii_case(name.trim()))
+            .ok_or("There is no such user.")?;
+        if user.id == OWNER {
+            return Err("The server's owner stays.".into());
+        }
+        let id = user.id;
+        kept.users.retain(|u| u.id != id);
+        kept.devices.retain(|d| d.user != id);
+        kept.invites.retain(|i| i.user != id);
+        self.save(&kept);
+        Ok(())
+    }
+
+    /// The server's users, the owner first.
+    pub fn users(&self) -> Vec<UserInfo> {
+        let kept = self.kept();
+        let now = now();
+        let mut users: Vec<UserInfo> = kept
+            .users
+            .iter()
+            .map(|u| UserInfo {
+                name: u.name.clone(),
+                role: u.role,
+                joined: u.password.is_some(),
+                invited_until: kept
+                    .invites
+                    .iter()
+                    .find(|i| i.user == u.id && i.until > now)
+                    .map(|i| SystemTime::UNIX_EPOCH + Duration::from_secs(i.until)),
+                devices: kept.devices.iter().filter(|d| d.user == u.id).count() as u32,
+                owner: u.id == OWNER,
+            })
+            .collect();
+        users.sort_by_key(|u| (!u.owner, u.name.to_lowercase()));
+        users
     }
 
     /// Whether a device at `from` may ask for another proof now: a few a minute.
@@ -787,6 +1132,7 @@ impl Accounts {
         Some(PasswordPage {
             user: user.name.clone(),
             asks_current: user.password.is_some(),
+            names: user.id == OWNER && user.password.is_none(),
         })
     }
 
@@ -794,6 +1140,7 @@ impl Accounts {
     /// page asks for it; the ticket is used up once it did.
     /// With `log_out_others`, every other device of the user is logged out too, but the one the
     /// page was opened from.
+    /// When the page names, the owner is named `name` too: the server is adopted.
     pub fn change_password(
         &self,
         ticket: &str,
@@ -801,6 +1148,7 @@ impl Accounts {
         new: &str,
         from: Option<IpAddr>,
         log_out_others: bool,
+        name: &str,
     ) -> Result<(), String> {
         let page = self
             .password_page(ticket)
@@ -810,6 +1158,20 @@ impl Accounts {
                 "A password needs at least {SHORTEST_PASSWORD} characters."
             ));
         }
+        let name = if page.names {
+            let name = user_name(name)?;
+            let taken = self
+                .kept()
+                .users
+                .iter()
+                .any(|u| u.id != OWNER && u.name.eq_ignore_ascii_case(&name));
+            if taken {
+                return Err(format!("There is a user named {name} already."));
+            }
+            Some(name)
+        } else {
+            None
+        };
         if page.asks_current {
             match self.check(&page.user, current, from) {
                 Ok(_) => {}
@@ -827,6 +1189,14 @@ impl Accounts {
             tickets.swap_remove(at)
         };
         self.set_password(used.user, new)?;
+        if let Some(name) = name {
+            let mut kept = self.kept();
+            if let Some(owner) = kept.users.iter_mut().find(|u| u.id == OWNER) {
+                owner.name = name;
+                log::info!("the server was adopted by {}", owner.name);
+            }
+            self.save(&kept);
+        }
         if log_out_others {
             let mut kept = self.kept();
             let before = kept.devices.len();
@@ -1024,6 +1394,21 @@ fn no_password() -> &'static Password {
     NONE.get_or_init(|| Password::new(&random_hex(16)))
 }
 
+/// A user's name as given: trimmed, without control characters, at most
+/// [`LONGEST_USER_NAME`] characters; an error for none.
+fn user_name(name: &str) -> Result<String, String> {
+    let name: String = name.trim().chars().filter(|c| !c.is_control()).collect();
+    if name.is_empty() {
+        return Err("A user needs a name.".into());
+    }
+    if name.chars().count() > LONGEST_USER_NAME {
+        return Err(format!(
+            "A name has at most {LONGEST_USER_NAME} characters."
+        ));
+    }
+    Ok(name)
+}
+
 /// Seconds since 1970.
 fn now() -> u64 {
     SystemTime::now()
@@ -1185,11 +1570,11 @@ mod tests {
         assert!(!accounts.password_page(&ticket).unwrap().asks_current);
         assert!(
             accounts
-                .change_password(&ticket, "", "short", None, false)
+                .change_password(&ticket, "", "short", None, false, &owner)
                 .is_err()
         );
         accounts
-            .change_password(&ticket, "", "correct horse", None, false)
+            .change_password(&ticket, "", "correct horse", None, false, &owner)
             .unwrap();
         assert!(
             accounts.password_page(&ticket).is_none(),
@@ -1238,11 +1623,11 @@ mod tests {
         assert!(accounts.password_page(&ticket).unwrap().asks_current);
         assert!(
             accounts
-                .change_password(&ticket, "wrong horse", "battery staple", None, false)
+                .change_password(&ticket, "wrong horse", "battery staple", None, false, "")
                 .is_err()
         );
         accounts
-            .change_password(&ticket, "correct horse", "battery staple", None, false)
+            .change_password(&ticket, "correct horse", "battery staple", None, false, "")
             .unwrap();
 
         // Kept across starts.
@@ -1376,10 +1761,10 @@ mod tests {
         let accounts = Accounts::open(Some(file.clone()), Some(pairing.clone()));
         let mac = pair(&accounts, &pairing, "Mac").unwrap();
         let ticket = accounts.ticket(&accounts.caller(&mac.access).unwrap());
-        accounts
-            .change_password(&ticket, "", "correct horse", None, false)
-            .unwrap();
         let owner = accounts.info(&accounts.caller(&mac.access).unwrap()).user;
+        accounts
+            .change_password(&ticket, "", "correct horse", None, false, &owner)
+            .unwrap();
         let redirect = "http://127.0.0.1:47477/callback";
         let verifier = "a secret only the client knows, long enough";
         let code = accounts
@@ -1465,7 +1850,7 @@ mod tests {
         let (phone, pad) = (device("Phone"), device("Pad"));
         let ticket = accounts.ticket(&accounts.caller(&phone.access).unwrap());
         accounts
-            .change_password(&ticket, "correct horse", "battery staple", None, true)
+            .change_password(&ticket, "correct horse", "battery staple", None, true, "")
             .unwrap();
         assert!(
             accounts.caller(&phone.access).is_some(),
@@ -1478,7 +1863,10 @@ mod tests {
     fn a_connection_code_is_proved_while_it_lasts() {
         let accounts = Accounts::open(None, None);
         let (nonce, certificate) = ([7; 32], b"the server's certificate".as_slice());
-        assert_eq!(accounts.prove(&nonce, certificate), None, "no code shown");
+        assert!(
+            accounts.prove(&nonce, certificate).is_empty(),
+            "no code shown"
+        );
         let (code, lasts) = accounts.connection_code();
         assert_eq!(lasts, CONNECTION_CODE_LASTS);
         assert_eq!(code.len(), freya_protocol::CODE_LENGTH);
@@ -1486,14 +1874,14 @@ mod tests {
             freya_protocol::normalize_code(&code).as_deref(),
             Some(code.as_str())
         );
-        let proof = accounts.prove(&nonce, certificate).unwrap();
+        let proof = accounts.prove(&nonce, certificate).remove(0);
         let digest = ring::digest::digest(&ring::digest::SHA256, certificate);
         let derived = freya_protocol::connection_key(&code, digest.as_ref());
         let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &derived);
         let message = freya_protocol::connection_message(&nonce, digest.as_ref());
         assert!(ring::hmac::verify(&key, &message, &proof).is_ok());
         // Asking again is no use to anyone, and does not use the code up.
-        assert!(accounts.prove(&[8; 32], certificate).is_some());
+        assert!(!accounts.prove(&[8; 32], certificate).is_empty());
         // A new one takes the place of the one before.
         let (first, _) = accounts.connection_code();
         let (second, _) = accounts.connection_code();
