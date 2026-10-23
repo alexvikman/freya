@@ -629,17 +629,10 @@ impl Http {
     }
 
     /// The address tracks are read from, `/audio`, and an agent that reaches it as this
-    /// client does: for the player, which reads a track a part at a time, each part in at
-    /// most `timeout`.
-    pub fn audio(&self, timeout: Duration) -> (String, ureq::Agent) {
-        let agent = make_agent(
-            ureq::Agent::config_builder()
-                .timeout_global(Some(timeout))
-                .user_agent(concat!("Freya/", env!("CARGO_PKG_VERSION")))
-                .http_status_as_error(false),
-            self.pin.as_ref(),
-        );
-        (self.url("/audio"), agent)
+    /// client does: for the player, which reads a track a part at a time, each in a time of
+    /// its own. Its connections are the library's, so the first part needs none made.
+    pub fn audio(&self) -> (String, ureq::Agent) {
+        (self.url("/audio"), self.agent.clone())
     }
 
     /// The certificate pinned for the server, when it is reached over TLS.

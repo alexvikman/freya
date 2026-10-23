@@ -436,6 +436,15 @@ impl Source {
         &self.info
     }
 
+    /// Decodes the first block of audio ahead, kept for [`Self::next_chunk`]: for a track
+    /// opened ahead, so what it reads first is read before it plays.
+    pub fn prime(&mut self) -> Result<(), Error> {
+        if self.buf_pos >= self.buf.len() && self.frames_left() != Some(0) {
+            self.decode_packet()?;
+        }
+        Ok(())
+    }
+
     /// The next block of audio. Returns `None` at the end of the track.
     pub fn next_chunk(&mut self) -> Result<Option<Chunk<'_>>, Error> {
         if self.frames_left() == Some(0) {

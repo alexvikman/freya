@@ -4223,7 +4223,7 @@ fn connect(
         }
     };
     let audio = remote.as_ref().map(|remote| {
-        let (audio, agent) = remote.0.audio(freya_audio::REMOTE_TIMEOUT);
+        let (audio, agent) = remote.0.audio();
         (audio, Arc::new(agent))
     });
     let found = Connected {

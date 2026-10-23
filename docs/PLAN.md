@@ -231,7 +231,7 @@ what the hardening made: answers per user and role, nothing compressed that carr
 | **P4** ✓ | **Fewer round trips**: several calls in one request; a playlist's tracks in one call; an artist's page, a genre's page and search each one call on the server, search waiting for a pause in typing; no call per artist for its picture | A page is one round trip; a keystroke at most one |
 | **P5** ✓ | **The window never waits**: every call to the server made on a worker, its answer applied when it comes, an older one dropped; connecting and renewing tokens off the UI thread too | No call on the UI thread in the log; scrolling stays smooth with 100 ms each way |
 | **P6** ✓ | **Pictures**: thumbnails made and kept by the server in the sizes the grid asks for; several fetched at once, the ones in view first; the cover of what plays from what the scan kept instead of read from the file each time | 60 covers at 10 ms each way in under 0.2 s |
-| **P7** | **Sound**: the next track opened and its first part fetched before the current ends, so tracks follow without a gap; a first part small enough to start at once, later ones larger; MP3s sought by estimate first; a part no longer needed given up; the audio connection kept warm | The first sound in two round trips and a little; no gap between tracks at 10 ms each way |
+| **P7** ✓ | **Sound**: the next track opened and its first part fetched before the current ends, so tracks follow without a gap; a first part small enough to start at once, later ones larger; MP3s sought by estimate first; a part no longer needed given up; the audio connection kept warm | The first sound in two round trips and a little; no gap between tracks at 10 ms each way |
 
 #### Measured before (P1)
 
@@ -320,6 +320,38 @@ those of a server elsewhere are kept apart, as they cannot be checked against th
 40 ms, 4.5–5.6 s before, 225 ms now. The cover of what plays is the one the scan kept,
 fetched once by its checksum, rather than read from the file, decoded and scaled by the
 server at each track; and the album of the track playing is looked up on a thread.
+
+#### P7
+
+The next track read from a server is opened on a thread as soon as it is queued, its first
+audio decoded, so it follows without waiting for the server. A file's end is asked for
+beside its start, as tags and indexes are read there before anything else, and the four
+parts read last are kept, so going back to the start asks nothing. Parts start at 1 MB and
+grow to 4 MB while they come within a second (a smaller first part was tried: with the
+network's delay what costs is round trips, and it took more of them); one fetched ahead and
+no longer wanted after a seek is given up. Tracks are read on the library's connections, so
+the first part needs no connection made. M4A has a gap of its own, about 11 ms with no delay
+at all, not the network's. MP3s are still sought exactly, not by estimate first: an
+estimate puts the position shown off in a file whose bitrate varies.
+
+#### Measured after (P1–P7)
+
+The same rig and library as before; "again" is a call asked again by a client not following
+the server's events, which one that does answers without asking. Milliseconds.
+
+| Each way | 0 | 2 | 10 | 40 |
+|---|---|---|---|---|
+| `all_tracks` (3.0 MB; 675 KB on the network) | 40 → 44 | 42 → 54 | 72 → 89 | 141 → 154 |
+| `all_tracks` again | 40 → 8 | 42 → 15 | 72 → 41 | 141 → 99 |
+| An artist's page | 3 → 0.3 | 45 → 7 | 196 → 25 | 677 → 99 |
+| A playlist's 200 tracks | 25 → 2 | 1,286 → 14 | 5,446 → 38 | 18,739 → 106 |
+| 60 covers of the grid (3.4 → 1.5 MB) | 36 → 13 | 308 → 24 | 1,403 → 58 | 4,515 → 190 |
+| The first sound | 17–24 → 11–30 | 32–39 → 18–43 | 83–128 → 34–64 | 278–372 → 101–111 |
+| Silent after seeking to 70 % | 11–32 → 11–32 | 11–53 → 11–64 | 21–139 → 32–160 | 85–437 → 75–437 |
+| Gap between tracks (MP3 and FLAC; M4A) | 0; 11 → 0; 0 | 0; 11 → 0; 11 | 0; 32 → 0; 11 | 0–17; 75 → 0; 75 |
+
+The window: 475 calls held it up in its first 20 seconds before; none now, with its server
+100 ms away each way. The first call of all costs the new connection a TLS handshake more.
 
 ### U7: the hologram (from 2026-10-17)
 

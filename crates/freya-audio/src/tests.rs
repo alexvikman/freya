@@ -664,8 +664,8 @@ fn a_stream_stays_ended_for_every_read() {
     );
 }
 
-/// A server of `file` that answers Range requests, as Freya's does, one connection a request;
-/// with `fail_every`, every that many requests is dropped unanswered.
+/// A server of `file` that answers Range requests, as Freya's does, its end's too, one
+/// connection a request; with `fail_every`, every that many requests is dropped unanswered.
 fn file_server(file: PathBuf, fail_every: Option<usize>) -> String {
     use std::io::{BufRead, BufReader, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -685,7 +685,12 @@ fn file_server(file: PathBuf, fail_every: Option<usize>) -> String {
                 }
                 if let Some(value) = line.to_ascii_lowercase().strip_prefix("range: bytes=") {
                     let (from, to) = value.trim().split_once('-').unwrap();
-                    range = Some((from.parse::<usize>().unwrap(), to.parse::<usize>().unwrap()));
+                    let to = to.parse::<usize>().unwrap();
+                    range = Some(match from.parse::<usize>() {
+                        Ok(from) => (from, to),
+                        // The last `to` bytes.
+                        Err(_) => (bytes.len().saturating_sub(to), bytes.len() - 1),
+                    });
                 }
             }
             if fail_every.is_some_and(|every| n % every == every - 1) {
@@ -743,6 +748,68 @@ fn a_file_read_from_a_server_plays_as_the_file_itself() {
             "{name} sought"
         );
     }
+}
+
+#[test]
+fn the_next_track_from_a_server_is_opened_before_it_plays() {
+    // Asked for slowly: a quarter of a second each request.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let slow = listener.local_addr().unwrap();
+    let served = file_server(fixture("sine.flac"), None);
+    let asked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = std::sync::Arc::clone(&asked);
+    std::thread::spawn(move || {
+        let target = served
+            .trim_start_matches("http://")
+            .trim_end_matches("/audio")
+            .to_owned();
+        for client in listener.incoming().flatten() {
+            counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let target = target.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(250));
+                let Ok(server) = std::net::TcpStream::connect(target) else {
+                    return;
+                };
+                let (mut from_client, mut to_server) =
+                    (client.try_clone().unwrap(), server.try_clone().unwrap());
+                std::thread::spawn(move || std::io::copy(&mut from_client, &mut to_server));
+                let (mut from_server, mut to_client) = (server, client);
+                let _ = std::io::copy(&mut from_server, &mut to_client);
+            });
+        }
+    });
+    let next = Media {
+        remote: Some(crate::RemoteSource {
+            url: format!("http://{slow}/audio"),
+            bearer: None,
+            agent: None,
+        }),
+        ..Media::from(fixture("sine.flac"))
+    };
+    let player = Player::silent(48_000);
+    player.play(fixture("sine.flac"));
+    let started = |player: &Player| loop {
+        let event = player.events().recv_timeout(Duration::from_secs(10));
+        if let crate::Event::TrackStarted(info) = event.unwrap() {
+            break info;
+        }
+    };
+    started(&player);
+    player.set_next(Some(next.clone()));
+    let before = player.starved();
+    let info = started(&player);
+    assert!(
+        info.remote.is_some(),
+        "the next track played from the server"
+    );
+    // Asked for while the first played, and followed it without a gap.
+    assert!(asked.load(std::sync::atomic::Ordering::Relaxed) > 0);
+    assert!(
+        player.starved() - before < Duration::from_millis(50),
+        "{:?}",
+        player.starved() - before
+    );
 }
 
 #[test]

@@ -61,6 +61,13 @@ enum Wake {
     Disconnected,
 }
 
+/// A track opened ahead: what it plays, its source once opened, and what gives up on it.
+struct OpenedAhead {
+    media: Media,
+    opened: crossbeam_channel::Receiver<Result<Source, Error>>,
+    given_up: Interrupt,
+}
+
 pub(crate) struct Engine {
     shared: Arc<Shared>,
     /// Raised by the player for commands that should not wait for a slow stream.
@@ -73,6 +80,9 @@ pub(crate) struct Engine {
 
     current: Option<Current>,
     next: Option<Media>,
+    /// The next track, opened ahead on a thread when it is read from a server, so it follows
+    /// without a gap.
+    ahead: Option<OpenedAhead>,
     /// Resampler and the input rate it was built for.
     converter: Option<(u32, RateConverter)>,
     mapped: Vec<f32>,
@@ -105,6 +115,7 @@ impl Engine {
             channels,
             current: None,
             next: None,
+            ahead: None,
             converter: None,
             mapped: Vec::new(),
             pending: Vec::new(),
@@ -197,7 +208,10 @@ impl Engine {
         }
         match cmd {
             Command::Play(media) => self.play(&media),
-            Command::SetNext(media) => self.next = media,
+            Command::SetNext(media) => {
+                self.open_ahead(media.as_ref());
+                self.next = media;
+            }
             Command::Seek(position) => self.seek(position),
             Command::Stop => {
                 self.reset_output();
@@ -302,8 +316,66 @@ impl Engine {
         timeline.push(self.written, position, serial, Arc::clone(track));
     }
 
+    /// Opens `media`, the next track, on a thread of its own when it is read from a server,
+    /// giving up on the one opened ahead before.
+    fn open_ahead(&mut self, media: Option<&Media>) {
+        if let Some(ahead) = self.ahead.take() {
+            ahead.given_up.raise();
+        }
+        let Some(media) = media.filter(|media| media.remote.is_some()) else {
+            return;
+        };
+        let (tell, opened) = crossbeam_channel::bounded(1);
+        let given_up = Interrupt::default();
+        let (opening, interrupt) = (media.clone(), given_up.clone());
+        let started = std::thread::Builder::new()
+            .name("freya-open-next".into())
+            .spawn(move || {
+                // Its first audio decoded too, which may be far from what opening it read.
+                let opened = Source::open(&opening, &interrupt).and_then(|mut source| {
+                    source.prime()?;
+                    Ok(source)
+                });
+                let _ = tell.send(opened);
+            });
+        if started.is_ok() {
+            self.ahead = Some(OpenedAhead {
+                media: media.clone(),
+                opened,
+                given_up,
+            });
+        }
+    }
+
+    /// The source of `media`: opened ahead when it was, else opened now. Waiting for it gives
+    /// up, as opening it would, when a command comes that should not wait.
+    fn source(&mut self, media: &Media) -> Result<Source, Error> {
+        let opened_ahead = self
+            .ahead
+            .as_ref()
+            .is_some_and(|ahead| ahead.media == *media);
+        if let Some(OpenedAhead {
+            opened, given_up, ..
+        }) = self.ahead.take_if(|_| opened_ahead)
+        {
+            loop {
+                match opened.recv_timeout(Duration::from_millis(20)) {
+                    Ok(source) => return source,
+                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                        if self.interrupt.is_raised() {
+                            given_up.raise();
+                            return Err(Error::Interrupted);
+                        }
+                    }
+                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        }
+        Source::open(media, &self.interrupt)
+    }
+
     fn open(&mut self, media: &Media, serial: Option<u64>) -> Result<Current, Error> {
-        let source = Source::open(media, &self.interrupt)?;
+        let source = self.source(media)?;
         let serial = serial.unwrap_or_else(|| {
             self.serial += 1;
             self.serial

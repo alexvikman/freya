@@ -770,7 +770,7 @@ fn a_server_elsewhere_is_reached_over_tls_with_its_certificate_pinned() {
 
     // A track plays over it too.
     let track = local.all_tracks().unwrap()[0].path.clone();
-    let (base, agent) = remote.0.audio(freya_audio::REMOTE_TIMEOUT);
+    let (base, agent) = remote.0.audio();
     let player = freya_audio::Player::silent(48_000);
     player.play(freya_audio::Media {
         remote: Some(freya_audio::RemoteSource {
@@ -1035,7 +1035,7 @@ fn measure_a_real_library() {
         certificate: identity.certificate.clone(),
     });
     http.cache = Some(PictureCache::new(cache.clone()));
-    let (audio, agent) = http.audio(freya_audio::REMOTE_TIMEOUT);
+    let (audio, agent) = http.audio();
     let agent = Arc::new(agent);
     let remote: Arc<dyn LibraryApi> = Arc::new(Remote(http));
 
