@@ -333,8 +333,9 @@ parts read last are kept, so going back to the start asks nothing. Parts start a
 grow to 4 MB while they come within a second (a smaller first part was tried: with the
 network's delay what costs is round trips, and it took more of them); one fetched ahead and
 no longer wanted after a seek is given up. Tracks are read on the library's connections, so
-the first part needs no connection made. M4A has a gap of its own, about 11 ms with no delay
-at all, not the network's. MP3s are still sought exactly, not by estimate first: an
+the first part needs no connection made. What was measured as M4A's gap was the silence
+after the first of the two tracks started near its end, not between them: measured from a
+second into it, there is no gap in any kind of file. MP3s are still sought exactly, not by estimate first: an
 estimate puts the position shown off in a file whose bitrate varies.
 
 A FLAC file without a seek table is sought by halving its frames' bytes until the frame is
@@ -357,8 +358,8 @@ the server's events, which one that does answers without asking. Milliseconds.
 | A playlist's 200 tracks | 25 → 2 | 1,286 → 14 | 5,446 → 38 | 18,739 → 106 |
 | 60 covers of the grid (3.4 → 1.5 MB) | 36 → 13 | 308 → 24 | 1,403 → 58 | 4,515 → 190 |
 | The first sound | 17–24 → 11–30 | 32–39 → 18–43 | 83–128 → 34–64 | 278–372 → 101–111 |
-| Silent after seeking to 70 % | 11–32 → 11–32 | 11–53 → 11–64 | 21–139 → 32–160 | 85–437 → 75–437 |
-| Gap between tracks (MP3 and FLAC; M4A) | 0; 11 → 0; 0 | 0; 11 → 0; 11 | 0; 32 → 0; 11 | 0–17; 75 → 0; 75 |
+| Silent after seeking to 70 % | 11–32 → 11–21 | 11–53 → 11–64 | 21–139 → 32–75 | 85–437 → 85–235 |
+| Gap between tracks, any kind of file | 0–11 → 0 | 0–11 → 0 | 0–32 → 0 | 0–75 → 0 |
 
 The window: 475 calls held it up in its first 20 seconds before; none now, with its server
 100 ms away each way. The first call of all costs the new connection a TLS handshake more.

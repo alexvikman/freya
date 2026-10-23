@@ -1301,10 +1301,12 @@ fn measure_a_real_library() {
                 std::thread::sleep(Duration::from_millis(5));
             }
             let seek_silent = player.starved() - before;
-            // The last seconds of one, the next queued after it.
+            // The last seconds of one, the next queued after it; measured from a second in,
+            // after what starting it took.
             player.play(media(first, duration - Duration::from_secs(3)));
             started(&player);
             player.set_next(Some(media(second, Duration::ZERO)));
+            std::thread::sleep(Duration::from_secs(1));
             let before = player.starved();
             started(&player);
             std::thread::sleep(Duration::from_millis(500));
