@@ -102,6 +102,21 @@ struct Kept {
     /// The codes users were invited with, while they last.
     #[serde(default)]
     invites: Vec<Invite>,
+    /// The id the next user is given: ids are never given twice, so nothing kept of a user
+    /// taken away is taken for another's.
+    #[serde(default)]
+    next_user: u32,
+}
+
+impl Kept {
+    /// An id never given before.
+    fn new_user_id(&mut self) -> u32 {
+        let id = self
+            .next_user
+            .max(self.users.iter().map(|u| u.id).max().unwrap_or(0) + 1);
+        self.next_user = id + 1;
+        id
+    }
 }
 
 /// A user's invitation: the key of the code they were given, as a connection code's is made
@@ -123,12 +138,21 @@ enum Claimed {
     Join(u32),
 }
 
+/// A claim ticket and what it was given for: the invitation's key, for joining, so it lasts no
+/// longer than the invitation it was proved with.
+struct ClaimFor {
+    claimed: Claimed,
+    invite: Option<String>,
+}
+
 /// A ticket a device was given for proving it knows a code, which opens the page claiming
 /// the server, for a while.
 struct ClaimTicket {
     /// The SHA-256 of the ticket, hex.
     ticket: String,
     claimed: Claimed,
+    /// The key of the invitation it was proved with, hex, for joining.
+    invite: Option<String>,
     until: Instant,
 }
 
@@ -636,7 +660,7 @@ impl Accounts {
         if name.is_empty() || kept.users.iter().any(|u| u.name.eq_ignore_ascii_case(name)) {
             return Err(format!("There is a user named {name} already."));
         }
-        let id = kept.users.iter().map(|u| u.id).max().unwrap_or(0) + 1;
+        let id = kept.new_user_id();
         kept.users.push(User {
             id,
             name: name.to_owned(),
@@ -783,7 +807,7 @@ impl Accounts {
     /// The keys of the codes a device may type now, each with what knowing it lets the device
     /// do: the connection code's, to adopt the server while it is not adopted, and each
     /// invitation's.
-    fn code_keys(&self, certificate: &[u8]) -> Vec<(ring::hmac::Key, Option<Claimed>)> {
+    fn code_keys(&self, certificate: &[u8]) -> Vec<(ring::hmac::Key, Option<ClaimFor>)> {
         let digest = ring::digest::digest(&ring::digest::SHA256, certificate);
         let mut keys = Vec::new();
         {
@@ -793,14 +817,22 @@ impl Accounts {
                     let derived = freya_protocol::connection_key(&shown.code, digest.as_ref());
                     ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &derived)
                 });
-                keys.push((key.clone(), (!self.adopted()).then_some(Claimed::Adopt)));
+                let adopt = (!self.adopted()).then_some(ClaimFor {
+                    claimed: Claimed::Adopt,
+                    invite: None,
+                });
+                keys.push((key.clone(), adopt));
             }
         }
         let now = now();
         for invite in self.kept().invites.iter().filter(|i| i.until > now) {
             if let Some(key) = unhex(&invite.key) {
                 let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &key);
-                keys.push((key, Some(Claimed::Join(invite.user))));
+                let join = ClaimFor {
+                    claimed: Claimed::Join(invite.user),
+                    invite: Some(invite.key.clone()),
+                };
+                keys.push((key, Some(join)));
             }
         }
         keys
@@ -844,6 +876,7 @@ impl Accounts {
             .into_iter()
             .find(|(key, _)| ring::hmac::verify(key, &message, proof).is_ok())?
             .1?;
+        let ClaimFor { claimed, invite } = claimed;
         let claim = match claimed {
             Claimed::Adopt => Claim::Adopt,
             Claimed::Join(user) => Claim::Join {
@@ -862,6 +895,7 @@ impl Accounts {
         claims.push(ClaimTicket {
             ticket: sha256(ticket.as_bytes()),
             claimed,
+            invite,
             until: Instant::now() + TICKET_LASTS,
         });
         Some((ticket, claim))
@@ -870,15 +904,21 @@ impl Accounts {
     /// What the claim `ticket` lets its page do, while it does: adopt the server, with the
     /// owner's name now to start from, or join it as the user named.
     pub fn claim_page(&self, ticket: &str) -> Option<(Claim, String)> {
-        let claimed = {
+        let (claimed, invite) = {
             let claims = self.claims.lock().unwrap_or_else(|e| e.into_inner());
             let hash = sha256(ticket.as_bytes());
-            claims
+            let found = claims
                 .iter()
-                .find(|c| c.ticket == hash && c.until > Instant::now())?
-                .claimed
+                .find(|c| c.ticket == hash && c.until > Instant::now())?;
+            (found.claimed, found.invite.clone())
         };
         let kept = self.kept();
+        // An invitation replaced, used or taken back since takes its tickets with it.
+        if let Some(invite) = &invite
+            && !lasts(&kept, invite)
+        {
+            return None;
+        }
         match claimed {
             Claimed::Adopt => {
                 let owner = kept.users.iter().find(|u| u.id == OWNER)?;
@@ -918,16 +958,28 @@ impl Accounts {
                 "A password needs at least {SHORTEST_PASSWORD} characters."
             ));
         }
-        let claimed = {
+        let (claimed, invite) = {
             let mut claims = self.claims.lock().unwrap_or_else(|e| e.into_inner());
             let hash = sha256(ticket.as_bytes());
             let at = claims
                 .iter()
                 .position(|c| c.ticket == hash)
                 .ok_or(out_of_date)?;
-            claims.swap_remove(at).claimed
+            let used = claims.swap_remove(at);
+            (used.claimed, used.invite)
         };
         let mut kept = self.kept();
+        // Checked again under the lock it is written under: adopted meanwhile, or the
+        // invitation replaced or taken back, the claim is out of date.
+        let adopted = kept
+            .users
+            .iter()
+            .any(|u| u.id == OWNER && u.password.is_some());
+        if (claimed == Claimed::Adopt && adopted)
+            || invite.as_ref().is_some_and(|invite| !lasts(&kept, invite))
+        {
+            return Err(out_of_date.into());
+        }
         let user = match (claimed, claim) {
             (Claimed::Adopt, Claim::Adopt) => {
                 let name = user_name(name)?;
@@ -954,15 +1006,25 @@ impl Accounts {
                     .iter_mut()
                     .find(|u| u.id == user)
                     .ok_or(out_of_date)?;
+                // A new password for one who had one: their devices log in again with it.
+                let had_one = joined.password.is_some();
                 joined.password = Some(Password::new(password));
                 log::info!("{} joined the server", joined.name);
                 kept.invites.retain(|i| i.user != user);
+                if had_one {
+                    kept.devices.retain(|d| d.user != user);
+                }
                 user
             }
             _ => return Err(out_of_date.into()),
         };
         self.save(&kept);
         drop(kept);
+        // The other tickets for the same claim are out of date now.
+        self.claims
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|c| c.claimed != claimed);
         let code = random_hex(32);
         let mut grants = self.grants.lock().unwrap_or_else(|e| e.into_inner());
         grants.retain(|g| g.until > Instant::now());
@@ -995,7 +1057,7 @@ impl Accounts {
             {
                 return Err(format!("There is a user named {name} already."));
             }
-            let id = kept.users.iter().map(|u| u.id).max().unwrap_or(0) + 1;
+            let id = kept.new_user_id();
             kept.users.push(User {
                 id,
                 name,
@@ -1008,21 +1070,38 @@ impl Accounts {
         Ok(self.invite(id, certificate))
     }
 
-    /// Invites the user `name` again, with a new code in place of any before: one who has not
-    /// joined, or has forgotten their password, which the new one replaces when they join.
+    /// Invites the user `name` again, for `caller`, with a new code in place of any before: one
+    /// who has not joined, or has forgotten their password, which the new one replaces when
+    /// they join. Never the owner, whose password is reset on the server's computer; an admin
+    /// only by the owner, so no admin takes another's account.
     pub fn invite_again(
         &self,
+        caller: &Caller,
         name: &str,
         certificate: &[u8],
     ) -> Result<(String, Duration), String> {
-        let id = self
-            .kept()
+        let id = self.other_user(caller, name)?;
+        Ok(self.invite(id, certificate))
+    }
+
+    /// The user `name`, for `caller` to invite again or take away: not the owner, and an admin
+    /// only for the owner.
+    fn other_user(&self, caller: &Caller, name: &str) -> Result<u32, String> {
+        let kept = self.kept();
+        let user = kept
             .users
             .iter()
             .find(|u| u.name.eq_ignore_ascii_case(name.trim()))
-            .map(|u| u.id)
             .ok_or("There is no such user.")?;
-        Ok(self.invite(id, certificate))
+        if user.id == OWNER {
+            return Err(
+                "The server's owner stays, and changes their password on its computer.".into(),
+            );
+        }
+        if user.role == Role::Admin && caller.user != OWNER {
+            return Err("Only the server's owner may do that to an admin.".into());
+        }
+        Ok(user.id)
     }
 
     fn invite(&self, user: u32, certificate: &[u8]) -> (String, Duration) {
@@ -1044,22 +1123,28 @@ impl Accounts {
         (code, INVITE_LASTS)
     }
 
-    /// Takes the user `name` away, with their devices and invitation; not the owner.
-    pub fn remove_user(&self, name: &str) -> Result<(), String> {
+    /// Takes the user `name` away, for `caller`, with their devices, invitation, and whatever
+    /// was given them to log in with: not the owner, and an admin only for the owner.
+    pub fn remove_user(&self, caller: &Caller, name: &str) -> Result<(), String> {
+        let id = self.other_user(caller, name)?;
         let mut kept = self.kept();
-        let user = kept
-            .users
-            .iter()
-            .find(|u| u.name.eq_ignore_ascii_case(name.trim()))
-            .ok_or("There is no such user.")?;
-        if user.id == OWNER {
-            return Err("The server's owner stays.".into());
-        }
-        let id = user.id;
         kept.users.retain(|u| u.id != id);
         kept.devices.retain(|d| d.user != id);
         kept.invites.retain(|i| i.user != id);
         self.save(&kept);
+        drop(kept);
+        self.claims
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|c| c.claimed != Claimed::Join(id));
+        self.tickets
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|t| t.user != id);
+        self.grants
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|g| g.user != id);
         Ok(())
     }
 
@@ -1394,6 +1479,12 @@ fn no_password() -> &'static Password {
     NONE.get_or_init(|| Password::new(&random_hex(16)))
 }
 
+/// Whether the invitation whose key is `key` lasts still, in `kept`.
+fn lasts(kept: &Kept, key: &str) -> bool {
+    let now = now();
+    kept.invites.iter().any(|i| i.key == key && i.until > now)
+}
+
 /// A user's name as given: trimmed, without control characters, at most
 /// [`LONGEST_USER_NAME`] characters; an error for none.
 fn user_name(name: &str) -> Result<String, String> {
@@ -1502,6 +1593,147 @@ pub fn write_private(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Proves to `accounts` knowing `code`, for a server with `certificate`: what may be done
+    /// with it.
+    fn claim_with(accounts: &Accounts, code: &str, certificate: &[u8]) -> Option<(String, Claim)> {
+        let digest = ring::digest::digest(&ring::digest::SHA256, certificate);
+        let key = freya_protocol::connection_key(code, digest.as_ref());
+        let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &key);
+        let nonce = [7; 32];
+        let proof = ring::hmac::sign(
+            &key,
+            &freya_protocol::claim_message(&nonce, digest.as_ref()),
+        );
+        accounts.claim(&nonce, proof.as_ref(), certificate)
+    }
+
+    fn caller(user: u32, role: Role) -> Caller {
+        Caller {
+            user,
+            device: String::new(),
+            role,
+            paired: false,
+        }
+    }
+
+    #[test]
+    fn admins_take_neither_the_owners_account_nor_each_others() {
+        let accounts = Accounts::open(None, None);
+        let certificate = b"the server's certificate";
+        let redirect = "http://127.0.0.1:47477/callback";
+        let owner = caller(OWNER, Role::Admin);
+        let (code, _) = accounts
+            .invite_user("Bo", Role::Admin, certificate)
+            .unwrap();
+        let (ticket, _) = claim_with(&accounts, &code, certificate).unwrap();
+        accounts
+            .complete_claim(&ticket, "", "correct horse", "challenge", redirect)
+            .unwrap();
+        let bo_id = accounts
+            .kept()
+            .users
+            .iter()
+            .find(|u| u.name == "Bo")
+            .unwrap()
+            .id;
+        let bo = caller(bo_id, Role::Admin);
+        accounts
+            .invite_user("Kim", Role::Listener, certificate)
+            .unwrap();
+        accounts
+            .invite_user("Eva", Role::Admin, certificate)
+            .unwrap();
+        let owner_name = accounts.users()[0].name.clone();
+
+        // Another admin re-invites no owner, and no admin; a listener, yes.
+        assert!(
+            accounts
+                .invite_again(&bo, &owner_name, certificate)
+                .is_err()
+        );
+        assert!(accounts.invite_again(&bo, "Eva", certificate).is_err());
+        assert!(accounts.remove_user(&bo, "Eva").is_err());
+        assert!(accounts.remove_user(&bo, &owner_name).is_err());
+        assert!(accounts.invite_again(&bo, "Kim", certificate).is_ok());
+        // The owner does, but stays.
+        assert!(accounts.invite_again(&owner, "Eva", certificate).is_ok());
+        assert!(accounts.remove_user(&owner, &owner_name).is_err());
+
+        // A ticket lasts no longer than the invitation it was proved with.
+        let (first, _) = accounts.invite_again(&owner, "Kim", certificate).unwrap();
+        let (ticket, _) = claim_with(&accounts, &first, certificate).unwrap();
+        accounts.invite_again(&owner, "Kim", certificate).unwrap();
+        assert_eq!(accounts.claim_page(&ticket), None);
+        assert!(
+            accounts
+                .complete_claim(&ticket, "", "correct horse", "challenge", redirect)
+                .is_err()
+        );
+
+        // A joined user invited again chooses a new password, and their devices log in again.
+        let (again, _) = accounts.invite_again(&owner, "Bo", certificate).unwrap();
+        let code = accounts
+            .grant(
+                "Bo",
+                "correct horse",
+                &challenge("a verifier long enough to be one"),
+                redirect,
+                None,
+            )
+            .unwrap();
+        accounts
+            .redeem(
+                &code,
+                "a verifier long enough to be one",
+                redirect,
+                "Laptop",
+            )
+            .unwrap();
+        assert_eq!(
+            accounts
+                .users()
+                .iter()
+                .find(|u| u.name == "Bo")
+                .unwrap()
+                .devices,
+            1
+        );
+        let (ticket, _) = claim_with(&accounts, &again, certificate).unwrap();
+        accounts
+            .complete_claim(&ticket, "", "battery staple", "challenge", redirect)
+            .unwrap();
+        assert_eq!(
+            accounts
+                .users()
+                .iter()
+                .find(|u| u.name == "Bo")
+                .unwrap()
+                .devices,
+            0
+        );
+
+        // A user taken away leaves their id to nobody.
+        let before = accounts
+            .kept()
+            .users
+            .iter()
+            .find(|u| u.name == "Kim")
+            .unwrap()
+            .id;
+        accounts.remove_user(&owner, "Kim").unwrap();
+        accounts
+            .invite_user("Kim", Role::Listener, certificate)
+            .unwrap();
+        let after = accounts
+            .kept()
+            .users
+            .iter()
+            .find(|u| u.name == "Kim")
+            .unwrap()
+            .id;
+        assert!(after > before);
+    }
 
     /// Pairs as `name` with the key in `file`, as a client on the server's computer does.
     fn pair(accounts: &Accounts, file: &Path, name: &str) -> Option<Granted> {

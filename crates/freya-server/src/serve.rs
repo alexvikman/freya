@@ -888,13 +888,13 @@ fn account(
         },
         ("POST", "/account/users/invite-again") => match (named(), certificate) {
             (Ok(named), Some(certificate)) => {
-                invited(accounts.invite_again(&named.name, certificate))
+                invited(accounts.invite_again(caller, &named.name, certificate))
             }
             (Err(e), _) => Response::error(400, e),
             (_, None) => Response::error(404, "this server takes no devices elsewhere"),
         },
         ("POST", "/account/users/remove") => match named() {
-            Ok(named) => match accounts.remove_user(&named.name) {
+            Ok(named) => match accounts.remove_user(caller, &named.name) {
                 Ok(()) => Response::json(200, &serde_json::Value::Null),
                 Err(why) => Response::error(400, why),
             },
