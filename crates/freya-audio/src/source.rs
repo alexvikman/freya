@@ -208,6 +208,8 @@ pub struct Source {
     /// Set when `info` changed while playing: a new song on the radio, or a new part of a
     /// chained Ogg file.
     info_changed: bool,
+    /// What a seek asks a server for ahead, for a FLAC file without a seek table.
+    seek_ahead: Option<crate::remote::SeekAhead>,
 }
 
 impl Source {
@@ -220,10 +222,11 @@ impl Source {
         let mut station = None;
         let mut titles = None;
         let mut file_len = None;
+        let mut seek_ahead = None;
 
         let input: Box<dyn MediaSource> = match path.to_str().filter(|p| stream::is_url(p)) {
             _ if let Some(remote) = &media.remote => {
-                let file = RemoteFile::open(remote, interrupt.clone()).map_err(|e| {
+                let mut file = RemoteFile::open(remote, interrupt.clone()).map_err(|e| {
                     if interrupt.is_raised() {
                         Error::Interrupted
                     } else {
@@ -231,6 +234,7 @@ impl Source {
                     }
                 })?;
                 file_len = file.byte_len();
+                seek_ahead = file.take_seek_ahead();
                 if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                     hint.with_extension(ext);
                 }
@@ -345,6 +349,7 @@ impl Source {
             buf_channels: 0,
             titles,
             info_changed: false,
+            seek_ahead,
         };
         source.play_part(media);
         if !media.start.is_zero() {
@@ -562,6 +567,11 @@ impl Source {
     /// Seeks to `position` in the part played and returns the position actually reached.
     pub fn seek(&mut self, position: Duration) -> Result<Duration, Error> {
         let target = self.info.start + position;
+        if let (Some(ahead), Some(duration)) = (&self.seek_ahead, self.file_duration)
+            && !duration.is_zero()
+        {
+            ahead.seek_to(target.as_secs_f64() / duration.as_secs_f64());
+        }
         let time = Time::try_from_secs_f64(target.as_secs_f64())
             .ok_or_else(|| Error::Seek("invalid position".into()))?;
         let seeked = self

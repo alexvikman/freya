@@ -337,6 +337,13 @@ the first part needs no connection made. M4A has a gap of its own, about 11 ms w
 at all, not the network's. MP3s are still sought exactly, not by estimate first: an
 estimate puts the position shown off in a file whose bitrate varies.
 
+A FLAC file without a seek table is sought by halving its frames' bytes until the frame is
+found, each half far from the last a round trip. Its search is followed ahead, from where
+its metadata says the frames start, for the aim and 2.5 % of the audio either side, as the
+bytes a second vary: those places, 32 KB each, and the part it ends in are asked for at
+once, about 0.6 MB more a seek. Sought to 70 % at 40 ms each way, 437 → 235 ms: one round
+trip for the search, one for the frames played from, when the aim was off.
+
 #### Measured after (P1–P7)
 
 The same rig and library as before; "again" is a call asked again by a client not following

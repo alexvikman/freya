@@ -39,8 +39,11 @@ const FIRST_WAIT: Duration = Duration::from_millis(250);
 const TAIL: u64 = 256 * 1024;
 #[cfg(test)]
 const TAIL: u64 = 1024;
-/// How many parts are kept, the ones read last.
-const KEPT_PARTS: usize = 4;
+/// How many parts are kept, the ones read last, and how much of them at most.
+const KEPT_PARTS: usize = 64;
+const KEPT_BYTES: usize = 16 * 1024 * 1024;
+/// How much a seek's search looks at, at each place: more than a FLAC frame of a CD's.
+const LOOKED_AT: u64 = 32 * 1024;
 /// How much of a part is read before looking whether it is still wanted.
 const READ_AT_ONCE: usize = 64 * 1024;
 
@@ -188,8 +191,82 @@ impl Drop for Ahead {
     }
 }
 
+/// What a seek in a FLAC file without a seek table reads, asked for all at once: its search
+/// halves the bytes of the frames again and again, each half a round trip to the server
+/// otherwise.
+pub(crate) struct SeekAhead {
+    first_frame: u64,
+    len: u64,
+    wanted: crossbeam_channel::Sender<Vec<(u64, u64)>>,
+}
+
+impl SeekAhead {
+    /// Asks for what a seek to `fraction` of the file's audio reads: the places its search
+    /// looks at, as Symphonia's FLAC reader halves the frames' bytes, while they are far
+    /// apart, then all of the part it ends in. As the bytes a second vary, the search is
+    /// followed for an aim a little before and after too.
+    pub fn seek_to(&self, fraction: f64) {
+        let mut wanted: Vec<(u64, u64)> = Vec::new();
+        for off in [0.0, -AIM_OFF, AIM_OFF] {
+            let searched = self.searched((fraction + off).clamp(0.0, 1.0));
+            // Where it ends is read whole for the aim itself, which is played from.
+            let looked = searched.len() - usize::from(off != 0.0);
+            for &asked in &searched[..looked] {
+                if !wanted.iter().any(|&(start, _)| start == asked.0) {
+                    wanted.push(asked);
+                }
+            }
+        }
+        let _ = self.wanted.send(wanted);
+    }
+
+    /// What the search for `fraction` of the audio's bytes reads: the places it looks at, and
+    /// last, the part it ends in.
+    fn searched(&self, fraction: f64) -> Vec<(u64, u64)> {
+        let (mut start, mut end) = (self.first_frame, self.len);
+        let aimed = start + (end.saturating_sub(start) as f64 * fraction) as u64;
+        let mut searched = Vec::new();
+        while end - start > FIRST_PART {
+            let middle = (start + end) / 2;
+            searched.push((middle, LOOKED_AT));
+            if aimed < middle {
+                end = middle;
+            } else {
+                start = middle;
+            }
+        }
+        searched.push((start, end - start));
+        searched
+    }
+}
+
+/// How far before and after the aim a seek's search is followed too, of the audio's bytes.
+const AIM_OFF: f64 = 0.025;
+
+/// Where a FLAC file's frames start, after its metadata in `bytes`, its start; and whether
+/// it has a seek table. None for another file, or metadata longer than `bytes`.
+fn flac_frames(bytes: &[u8]) -> Option<(u64, bool)> {
+    if !bytes.starts_with(b"fLaC") {
+        return None;
+    }
+    let (mut at, mut table) = (4usize, false);
+    loop {
+        let header = bytes.get(at..at + 4)?;
+        let length = u32::from_be_bytes([0, header[1], header[2], header[3]]) as usize;
+        table |= header[0] & 0x7f == 3;
+        at += 4 + length;
+        if header[0] & 0x80 != 0 {
+            return Some((at as u64, table));
+        }
+    }
+}
+
 pub(crate) struct RemoteFile {
     fetcher: Fetcher,
+    /// What a seek told it will read, asked for all at once before it reads; and what tells
+    /// it, until a source takes it.
+    wanted: crossbeam_channel::Receiver<Vec<(u64, u64)>>,
+    seek_ahead: Option<SeekAhead>,
     len: u64,
     pos: u64,
     /// The parts read last, the last first: where each starts in the file, and its bytes. A
@@ -234,8 +311,19 @@ impl RemoteFile {
         {
             parts.push_back((from, bytes));
         }
+        let (tell, wanted) = crossbeam_channel::unbounded();
+        let seek_ahead =
+            flac_frames(&parts[0].1)
+                .filter(|(_, table)| !table)
+                .map(|(first_frame, _)| SeekAhead {
+                    first_frame,
+                    len,
+                    wanted: tell,
+                });
         let mut file = Self {
             fetcher,
+            wanted,
+            seek_ahead,
             len,
             pos: 0,
             parts,
@@ -245,6 +333,64 @@ impl RemoteFile {
         file.grow(took);
         file.fetch_ahead();
         Ok(file)
+    }
+
+    /// What a seek in it asks for ahead, when it is a FLAC file without a seek table.
+    pub fn take_seek_ahead(&mut self) -> Option<SeekAhead> {
+        self.seek_ahead.take()
+    }
+
+    /// Asks for what a seek said it will read, all at once, and keeps it.
+    fn fetch_wanted(&mut self) {
+        let wanted: Vec<(u64, u64)> = self
+            .wanted
+            .try_iter()
+            .last()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(start, _)| *start < self.len && self.part_at(*start).is_none())
+            .collect();
+        if wanted.is_empty() {
+            return;
+        }
+        let fetched: Vec<_> = std::thread::scope(|threads| {
+            let asked: Vec<_> = wanted
+                .iter()
+                .map(|&(start, size)| {
+                    let fetcher = &self.fetcher;
+                    threads.spawn(move || {
+                        let fetched = fetcher.fetch(start, size, &AtomicBool::new(false));
+                        (start, fetched)
+                    })
+                })
+                .collect();
+            asked
+                .into_iter()
+                .filter_map(|asked| asked.join().ok())
+                .collect()
+        });
+        for (start, fetched) in fetched {
+            if let Ok((bytes, _, _)) = fetched {
+                self.keep(start, bytes);
+            }
+        }
+    }
+
+    /// Keeps the part `bytes`, at `start`, as the one read last; those read longest ago go
+    /// beyond [`KEPT_PARTS`] or [`KEPT_BYTES`].
+    fn keep(&mut self, start: u64, bytes: Vec<u8>) {
+        self.parts.push_front((start, bytes));
+        self.parts.truncate(KEPT_PARTS);
+        while self.parts.len() > 1
+            && self
+                .parts
+                .iter()
+                .map(|(_, bytes)| bytes.len())
+                .sum::<usize>()
+                > KEPT_BYTES
+        {
+            self.parts.pop_back();
+        }
     }
 
     /// The parts grow while they come quickly, and shrink when they come slowly.
@@ -297,8 +443,7 @@ impl RemoteFile {
             }
         }?;
         self.grow(fetched.2);
-        self.parts.push_front((pos, fetched.0));
-        self.parts.truncate(KEPT_PARTS);
+        self.keep(pos, fetched.0);
         self.fetch_ahead();
         Ok(())
     }
@@ -316,6 +461,7 @@ impl Read for RemoteFile {
         if self.pos >= self.len || out.is_empty() {
             return Ok(0);
         }
+        self.fetch_wanted();
         match self.part_at(self.pos) {
             Some(0) => {}
             // Kept: read first from now on, and what follows it fetched ahead.
@@ -363,5 +509,61 @@ impl MediaSource for RemoteFile {
 
     fn byte_len(&self) -> Option<u64> {
         Some(self.len)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A FLAC file's start: its marker, then metadata blocks, each a kind and a length.
+    fn flac_start(blocks: &[(u8, usize)]) -> Vec<u8> {
+        let mut bytes = b"fLaC".to_vec();
+        for (i, &(kind, length)) in blocks.iter().enumerate() {
+            let last = if i + 1 == blocks.len() { 0x80 } else { 0 };
+            bytes.push(last | kind);
+            bytes.extend_from_slice(&(length as u32).to_be_bytes()[1..]);
+            bytes.extend(std::iter::repeat_n(0, length));
+        }
+        bytes
+    }
+
+    #[test]
+    fn a_flac_files_frames_are_found_after_its_metadata() {
+        // Stream info, a picture, a seek table.
+        let start = flac_start(&[(0, 34), (6, 1000), (3, 18)]);
+        assert_eq!(flac_frames(&start), Some((start.len() as u64, true)));
+        let start = flac_start(&[(0, 34), (4, 100)]);
+        assert_eq!(flac_frames(&start), Some((start.len() as u64, false)));
+        // Only the blocks' heads are read: with one cut short, where the frames start is not
+        // known; nor in a file that is not FLAC.
+        assert_eq!(flac_frames(&start[..44]), None);
+        assert_eq!(flac_frames(b"ID3\x04"), None);
+    }
+
+    #[test]
+    fn a_seek_asks_for_where_its_search_looks_at_once() {
+        let (tell, wanted) = crossbeam_channel::unbounded();
+        let ahead = SeekAhead {
+            first_frame: 8192,
+            len: 100 * 1024 * 1024,
+            wanted: tell,
+        };
+        ahead.seek_to(0.63);
+        let asked = wanted.try_recv().unwrap();
+        // Halving the frames' bytes, as the search does: first their middle.
+        assert_eq!(asked[0].0, (8192 + 100 * 1024 * 1024) / 2);
+        assert!(asked.iter().all(|&(start, size)| start + size <= ahead.len));
+        // All of the part it ends in, around the aim, to play from.
+        let aimed = 8192 + ((100 * 1024 * 1024 - 8192) as f64 * 0.63) as u64;
+        assert!(
+            asked
+                .iter()
+                .any(|&(start, size)| (start..start + size).contains(&aimed))
+        );
+        // Each place once.
+        let mut starts: Vec<u64> = asked.iter().map(|&(start, _)| start).collect();
+        starts.dedup();
+        assert_eq!(starts.len(), asked.len());
     }
 }
