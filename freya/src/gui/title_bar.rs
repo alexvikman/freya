@@ -1,17 +1,30 @@
-//! The window's title bar, which a skin may draw into on macOS (`App.title-bar-height`): the
+//! The window's title bar, which a skin may draw into (`App.title-bar-height`). On macOS the
 //! title bar turns transparent, the skin reaches the window's top edge, and the window buttons
-//! move into the skin's top bar, centred in its height. Other systems keep their title bar.
+//! move into the skin's top bar, centred in its height. On Windows the skin goes frameless and
+//! draws the window buttons itself (`App.window-controls`). Other systems keep their title bar.
 
 use std::cell::Cell;
 use std::rc::Rc;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 use slint_interpreter::Value;
 
 use super::skin_window::SkinWindow;
 
 #[cfg(target_os = "macos")]
 mod mac;
+#[cfg(windows)]
+mod windows;
+
+/// What the skin is told of the title bar.
+#[derive(Default)]
+pub struct Shown {
+    /// `App.window-buttons-width`: the room the system's window buttons take in the skin's
+    /// top bar.
+    pub buttons_width: f32,
+    /// `App.window-controls`: whether the skin draws the window buttons itself, frameless.
+    pub controls: bool,
+}
 
 /// One window's title bar.
 #[derive(Default)]
@@ -19,36 +32,63 @@ pub struct TitleBar {
     /// The height of the skin's top bar the title bar was made for; 0 while it is the system's
     /// own. Shared with `after_frame`.
     height: Rc<Cell<f32>>,
-    /// How much taller the window's content got by reaching into the title bar.
-    added: f32,
+    /// How much wider and taller the window's content got by reaching into the title bar.
+    added: (f32, f32),
     /// Puts the buttons back as soon as the title changes.
     #[cfg(target_os = "macos")]
     watch: Option<mac::TitleWatch>,
+    /// Without its frame, how much more of the window the content takes, once measured.
+    #[cfg(windows)]
+    frame: Option<(f32, f32)>,
 }
 
 impl TitleBar {
-    /// Gives the window the title bar its skin asks for. Returns the room the window buttons
-    /// take in the skin's top bar, for `App.window-buttons-width`.
+    /// Gives the window the title bar its skin asks for, and says what the skin needs to know
+    /// of it.
     #[cfg(target_os = "macos")]
-    pub fn update(&mut self, ui: &SkinWindow) -> f32 {
-        let wanted = match ui.get_global_property("App", "title-bar-height") {
-            Ok(Value::Number(height)) if height > 0.0 => height as f32,
-            _ => 0.0,
-        };
+    pub fn update(&mut self, ui: &SkinWindow) -> Shown {
+        let wanted = wanted_height(ui);
         if wanted != self.height.get()
             && let Some(added) = mac::set_height(ui.window(), wanted)
         {
             self.height.set(wanted);
-            self.added = added;
+            self.added = (0.0, added);
             match &self.watch {
                 Some(watch) => watch.set_height(wanted),
                 None => self.watch = mac::TitleWatch::new(ui.window(), wanted),
             }
         }
-        if self.height.get() > 0.0 {
-            mac::buttons_width(ui.window(), self.height.get())
+        Shown {
+            buttons_width: if self.height.get() > 0.0 {
+                mac::buttons_width(ui.window(), self.height.get())
+            } else {
+                0.0
+            },
+            controls: false,
+        }
+    }
+
+    /// Gives the window the title bar its skin asks for, and says what the skin needs to know
+    /// of it. The skin takes the frame off itself, by binding the window's `no-frame` to
+    /// `App.window-controls`: Slint sets the frame from it whenever the window changes.
+    #[cfg(windows)]
+    pub fn update(&mut self, ui: &SkinWindow) -> Shown {
+        let window = ui.window();
+        let mut controls = wanted_height(ui) > 0.0 && !window.is_fullscreen();
+        if controls && self.frame.is_none() {
+            // Measured while the frame is still on.
+            self.frame = windows::prepare(window);
+            controls = self.frame.is_some();
+        }
+        windows::set_frameless(controls);
+        self.added = if controls {
+            self.frame.unwrap_or_default()
         } else {
-            0.0
+            (0.0, 0.0)
+        };
+        Shown {
+            buttons_width: 0.0,
+            controls,
         }
     }
 
@@ -68,15 +108,25 @@ impl TitleBar {
     }
 
     /// Other systems keep their own title bar, whatever the skin asks.
-    #[cfg(not(target_os = "macos"))]
-    pub fn update(&mut self, _ui: &SkinWindow) -> f32 {
-        0.0
+    #[cfg(not(any(target_os = "macos", windows)))]
+    pub fn update(&mut self, _ui: &SkinWindow) -> Shown {
+        Shown::default()
     }
 
-    /// How much taller the window's content is than it would be under the system's title bar:
-    /// subtracted when the window's size is saved, as it is restored under the system's.
-    pub fn added_height(&self) -> f32 {
+    /// How much wider and taller the window's content is than it would be under the system's
+    /// title bar: subtracted when the window's size is saved, as it is restored under the
+    /// system's.
+    pub fn added(&self) -> (f32, f32) {
         self.added
+    }
+}
+
+/// The height of the top bar the skin asks to draw into the title bar; 0 for the system's.
+#[cfg(any(target_os = "macos", windows))]
+fn wanted_height(ui: &SkinWindow) -> f32 {
+    match ui.get_global_property("App", "title-bar-height") {
+        Ok(Value::Number(height)) if height > 0.0 => height as f32,
+        _ => 0.0,
     }
 }
 
@@ -85,7 +135,9 @@ impl TitleBar {
 pub fn drag(window: &slint::Window) {
     #[cfg(target_os = "macos")]
     mac::drag(window);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    windows::drag(window);
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         use slint::winit_030::WinitWindowAccessor;
         window.with_winit_window(|w| {

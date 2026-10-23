@@ -360,12 +360,15 @@ Her poses are pictures in `assets/hologram/` (JPEG or PNG, built into Freya), sh
 | `equalizer-visible` | bool | Whether the user wants the equalizer shown |
 | `title-bar-height` | length | `in-out`, set by the skin: see below. 0 by default |
 | `window-buttons-width` | length | The room the window buttons take at the left of the skin's top bar; 0 while the system draws its own title bar, and in full screen |
+| `window-controls` | bool | Whether the skin draws the window buttons itself, frameless (Windows): see below |
+| `window-maximized` | bool | Whether the window is maximized, for the maximize button's look |
 
 | Callback | |
 |---|---|
 | `show-about()`, `show-skins()` | Freya's About window and skin picker |
 | `set-theme(name)`, `toggle-equalizer()` | |
 | `drag-window()` | Call on a mouse press in an empty part of the top bar: the window follows the mouse, and a double click zooms or minimizes it, as the system's settings say |
+| `minimize-window()`, `toggle-maximize-window()`, `close-window()` | The window buttons, for a skin that draws them; closing quits Freya |
 | `open-link(name)` | Opens one of Freya's own pages in the browser: "github", "releases", "issues", "license", or "licenses", the third-party licenses built into Freya; or "fanart-key", fanart.tv's page for a personal API key. Other names are ignored: a skin cannot open other addresses |
 
 A settings page in a skin can be built from what the API already offers: `App.set-theme`, `App.show-skins`, the library's `folders`, `add-folder`, `remove-folder(index)` and `rescan`, the visualizer's `set-mode` and `set-fps`, and `Updates`. The built-in skin opens its Settings and About views from the "⋯" menu at the top right (Cmd+, or Ctrl+, opens Settings).
@@ -380,14 +383,20 @@ init => { App.title-bar-height = 56px; }
 // In the top bar, behind its controls:
 TouchArea {
     pointer-event(event) => {
-        if (event.kind == PointerEventKind.down && App.window-buttons-width > 0) {
+        if (event.kind == PointerEventKind.down && (App.window-buttons-width > 0 || App.window-controls)) {
             App.drag-window();
         }
     }
 }
 ```
 
-On other systems the title bar stays the system's, and `window-buttons-width` stays 0, so the same skin works everywhere.
+On Windows the same `title-bar-height` makes `App.window-controls` true, outside full screen. Bind the window's `no-frame` to it: the system's title bar goes, and the skin draws the window buttons at the right of its top bar, calling `App.minimize-window()`, `App.toggle-maximize-window()` and `App.close-window()`. The window keeps its shadow, snapping and resizing at its edges; a double click on empty parts of the top bar maximizes it.
+
+```slint
+no-frame: App.window-controls;
+```
+
+On other systems the title bar stays the system's, and `window-buttons-width` and `window-controls` stay 0 and false, so the same skin works everywhere.
 
 ### `LastFm`
 

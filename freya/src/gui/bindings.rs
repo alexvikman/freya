@@ -1139,6 +1139,33 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
             Value::Void
         });
     }
+    // The window buttons a frameless skin draws. Minimizing and maximizing resize the window
+    // at once, which the skin follows: not while the app is borrowed.
+    for (name, act) in [
+        (
+            "minimize-window",
+            (|window: &slint::Window| window.set_minimized(true)) as fn(&slint::Window),
+        ),
+        ("toggle-maximize-window", |window| {
+            window.set_maximized(!window.is_maximized());
+        }),
+    ] {
+        let app = weak.clone();
+        let _ = ui.set_global_callback("App", name, move |_| {
+            let ui = app
+                .upgrade()
+                .and_then(|app| app.try_borrow().ok().map(|app| app.view.ui.clone()));
+            if let Some(ui) = ui {
+                act(ui.window());
+            }
+            Value::Void
+        });
+    }
+    // As the system's close button: Freya quits.
+    let _ = ui.set_global_callback("App", "close-window", |_| {
+        let _ = slint::quit_event_loop();
+        Value::Void
+    });
 
     bind(
         "Visualizer",

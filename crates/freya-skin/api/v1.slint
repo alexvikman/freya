@@ -1000,14 +1000,22 @@ export global App {
     in property <string> theme: "system";
     /// Whether the skin shows its equalizer; kept between runs.
     in property <bool> equalizer-visible;
-    /// To draw into the window's title bar on macOS, set this to the height of the skin's top
-    /// bar, e.g. in the window's `init`. The title bar then turns transparent, the skin reaches
+    /// To draw into the window's title bar, set this to the height of the skin's top bar, e.g.
+    /// in the window's `init`. On macOS the title bar then turns transparent, the skin reaches
     /// the window's top edge, and the window buttons sit at the left of the top bar, centred in
-    /// its height. 0, the default, keeps the system's title bar, as other systems always do.
+    /// its height. On Windows, see `window-controls`. 0, the default, keeps the system's title
+    /// bar, as other systems always do.
     in-out property <length> title-bar-height;
     /// The room the window buttons take at the left of the skin's top bar, from the window's
     /// edge: 0 when the system draws its own title bar, and in full screen.
     in property <length> window-buttons-width;
+    /// Whether the skin draws the window buttons itself, at the right of its top bar: on
+    /// Windows, while `title-bar-height` is set, except in full screen. Bind the window's
+    /// `no-frame` to it; the skin then reaches the window's top edge, and calls
+    /// `minimize-window`, `toggle-maximize-window` and `close-window`.
+    in property <bool> window-controls;
+    /// Whether the window is maximized, for the maximize button's look.
+    in property <bool> window-maximized;
 
     /// Back and forward, as in a web browser, for skins with views (pages): bind the window's
     /// view to `view` (`in-out property <string> view <=> App.view;`) and call `navigated`
@@ -1040,6 +1048,10 @@ export global App {
     /// title bar: the window follows the mouse, and a double click zooms or minimizes it, as
     /// the system's settings say.
     callback drag-window();
+    /// The window buttons, for a skin that draws them (`window-controls`). Closing quits.
+    callback minimize-window();
+    callback toggle-maximize-window();
+    callback close-window();
     /// The skin changed `view`.
     callback navigated();
     callback go-back();

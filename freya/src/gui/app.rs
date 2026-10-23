@@ -1773,7 +1773,7 @@ impl App {
         if !view.icon_set {
             view.icon_set = app_icon::set_window_icon(ui.window());
         }
-        let buttons_width = view.title_bar.update(ui);
+        let title_bar = view.title_bar.update(ui);
         let lastfm = self.lastfm.status();
         match lastfm.state {
             lastfm::State::Connected => self.settings.lastfm_user = Some(lastfm.user.clone()),
@@ -1838,8 +1838,10 @@ impl App {
             vec![
                 (
                     "window-buttons-width",
-                    Value::Number(f64::from(buttons_width)),
+                    Value::Number(f64::from(title_bar.buttons_width)),
                 ),
+                ("window-controls", Value::Bool(title_bar.controls)),
+                ("window-maximized", Value::Bool(ui.window().is_maximized())),
                 ("theme", skin_state::string(&self.settings.theme)),
                 (
                     "equalizer-visible",
@@ -1941,8 +1943,8 @@ impl App {
         if !window.is_fullscreen() {
             let size = window.size().to_logical(window.scale_factor());
             // Restored as the size under the system's title bar.
-            let height = size.height - self.view.title_bar.added_height();
-            self.settings.window_size = Some((size.width, height));
+            let (width, height) = self.view.title_bar.added();
+            self.settings.window_size = Some((size.width - width, size.height - height));
         }
         self.settings.skin = self
             .skin

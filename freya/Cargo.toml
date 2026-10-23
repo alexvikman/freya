@@ -143,8 +143,16 @@ libc = "0.2.190"
 objc2-metal = { version = "0.3.2", default-features = false, features = ["std", "MTLAllocation", "MTLBlitCommandEncoder", "MTLCommandBuffer", "MTLCommandEncoder", "MTLCommandQueue", "MTLDevice", "MTLDrawable", "MTLLibrary", "MTLPixelFormat", "MTLRenderCommandEncoder", "MTLRenderPass", "MTLRenderPipeline", "MTLResource", "MTLTexture", "MTLTypes", "objc2-core-foundation"] }
 
 [target.'cfg(windows)'.dependencies]
-# Printing to the terminal Freya was started from.
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }
+# Printing to the terminal Freya was started from, and a frameless window's edges (see
+# gui/title_bar/windows.rs).
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 # The spectrum drawn with Windows.UI.Composition (see gui/native_spectrum.rs), and media keys
 # and the media overlay (see gui/system_media/smtc.rs).
 windows = { version = "0.62.2", features = [

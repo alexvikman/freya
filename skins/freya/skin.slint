@@ -6791,9 +6791,65 @@ component UpdateForm inherits MenuSurface {
 /// moves the window, and a double click zooms it, as on a title bar.
 component TitleBarArea inherits TouchArea {
     pointer-event(event) => {
-        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left && App.window-buttons-width > 0) {
+        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left && (App.window-buttons-width > 0 || App.window-controls)) {
             App.drag-window();
         }
+    }
+}
+
+/// One of the window buttons a frameless window has on Windows: as wide as the system's, the
+/// height of the top bar, with a glyph drawn in a 10-pixel box.
+component WindowButton inherits Rectangle {
+    in property <string> glyph;
+    in property <string> label;
+    /// Close: red under the pointer, as the system's.
+    in property <bool> danger;
+    callback clicked;
+
+    width: 46px;
+    accessible-role: button;
+    accessible-label: label;
+    accessible-action-default => { root.clicked(); }
+    background: root.danger && touch.has-hover ? (touch.pressed ? #c42b1cd0 : #c42b1c)
+        : touch.pressed ? Theme.pressed
+        : touch.has-hover ? Theme.hover : transparent;
+
+    Path {
+        width: 10px;
+        height: 10px;
+        viewbox-width: 10;
+        viewbox-height: 10;
+        commands: root.glyph;
+        fill: transparent;
+        stroke: root.danger && touch.has-hover ? #ffffff : Theme.text;
+        stroke-width: 1px;
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+/// Minimize, maximize and close, at the right of the top bar, when the skin draws them.
+component WindowControls inherits HorizontalLayout {
+    WindowButton {
+        glyph: "M0 5 H10";
+        label: "Minimize";
+        clicked => { App.minimize-window(); }
+    }
+    WindowButton {
+        // Restore: one window behind another.
+        glyph: App.window-maximized
+            ? "M2.5 2.5 V0.5 H9.5 V7.5 H7.5 M0.5 2.5 H7.5 V9.5 H0.5 Z"
+            : "M0.5 0.5 H9.5 V9.5 H0.5 Z";
+        label: App.window-maximized ? "Restore" : "Maximize";
+        clicked => { App.toggle-maximize-window(); }
+    }
+    WindowButton {
+        glyph: "M0 0 L10 10 M10 0 L0 10";
+        label: "Close";
+        danger: true;
+        clicked => { App.close-window(); }
     }
 }
 
@@ -6841,9 +6897,9 @@ component Sidebar inherits Rectangle {
         // empty room there moves the window, as a title bar would. Under the system's own
         // title bar, back and forward have a row of their own.
         Rectangle {
-            height: App.window-buttons-width > 0 ? App.title-bar-height : 48px;
+            height: App.window-buttons-width > 0 || App.window-controls ? App.title-bar-height : 48px;
 
-            if App.window-buttons-width > 0: TitleBarArea { }
+            if App.window-buttons-width > 0 || App.window-controls: TitleBarArea { }
             HorizontalLayout {
                 padding-left: App.window-buttons-width > 0 ? App.window-buttons-width : 10px;
                 alignment: start;
@@ -8779,7 +8835,7 @@ component Toolbar inherits HorizontalLayout {
 
     height: 56px;
     padding-left: max(10px, root.inset);
-    padding-right: 12px;
+    padding-right: App.window-controls ? 0 : 12px;
     spacing: 6px;
 
     // Back and forward live in the navigation; with it hidden, here in its place.
@@ -8966,6 +9022,8 @@ component Toolbar inherits HorizontalLayout {
         tooltip: "More options";
         clicked => { menu.show(); }
     }
+    if App.window-controls: Rectangle { width: 6px; }
+    if App.window-controls: WindowControls { }
 
     // What Freya is doing.
     activity-popup := PopupWindow {
@@ -9141,6 +9199,8 @@ export component FreyaSkin inherits Window {
     background: Theme.background;
     default-font-size: 14px;
     forward-focus: shortcuts;
+    // On Windows the skin draws the window buttons itself, without the system's frame.
+    no-frame: App.window-controls;
 
     /// The view in the content area: "queue", "library", "radio", "playlist", "visualizer",
     /// "equalizer", "settings", "activity" or "about".

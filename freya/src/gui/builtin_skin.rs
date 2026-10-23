@@ -1083,6 +1083,8 @@ skin_api! {
         App."equalizer-visible" => set_equalizer_visible, get_equalizer_visible;
         App."title-bar-height" => set_title_bar_height, get_title_bar_height;
         App."window-buttons-width" => set_window_buttons_width, get_window_buttons_width;
+        App."window-controls" => set_window_controls, get_window_controls;
+        App."window-maximized" => set_window_maximized, get_window_maximized;
         App."view" => set_view, get_view;
         App."scroll" => set_scroll, get_scroll;
         App."restore-view" => set_restore_view, get_restore_view;
@@ -1279,6 +1281,9 @@ skin_api! {
         App."set-theme" => on_set_theme, invoke_set_theme(theme: SharedString);
         App."toggle-equalizer" => on_toggle_equalizer, invoke_toggle_equalizer();
         App."drag-window" => on_drag_window, invoke_drag_window();
+        App."minimize-window" => on_minimize_window, invoke_minimize_window();
+        App."toggle-maximize-window" => on_toggle_maximize_window, invoke_toggle_maximize_window();
+        App."close-window" => on_close_window, invoke_close_window();
         App."open-link" => on_open_link, invoke_open_link(name: SharedString);
         App."navigated" => on_navigated, invoke_navigated();
         App."go-back" => on_go_back, invoke_go_back();
