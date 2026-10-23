@@ -1025,9 +1025,13 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
         "App",
         "open-link",
         Box::new(|_, args| {
-            if let Some(Value::String(name)) = args.first()
-                && let Some(url) = crate::update::page(name)
-            {
+            let Some(Value::String(name)) = args.first() else {
+                return;
+            };
+            // Built into Freya, not a page on the web.
+            if name.as_str() == "licenses" {
+                crate::update::open_licenses();
+            } else if let Some(url) = crate::update::page(name) {
                 crate::update::open_page(&url);
             }
         }),

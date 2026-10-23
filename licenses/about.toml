@@ -1,0 +1,124 @@
+# What `cargo about` lists in licenses/THIRD-PARTY.html: every crate built into Freya and its
+# server, with the license each is used under. Made by `ci/check.sh licenses`, and checked
+# against the dependencies by `ci/check.sh deps` (see docs/DEPENDENCIES.md).
+
+# The licenses deny.toml allows, and Slint's royalty-free one, which it allows Slint alone.
+accepted = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+    "LicenseRef-Slint-Royalty-free-2.0",
+]
+
+# The platforms Freya is built for, as in deny.toml.
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-gnu",
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+]
+
+# What is built into the programs shipped: not what only builds them or tests them.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+# ring's license is OpenSSL's and ISC's together, which cargo-about knows how to read.
+workarounds = ["ring"]
+
+# Freya's own crates, never published, are not third parties.
+[private]
+ignore = true
+
+# Slint is used under its royalty-free license, of the three it is offered under (see deny.toml);
+# each crate keeps its text where cargo-about does not look for it. Its file is named under
+# another id: cargo-about 0.9.2 takes a clarified file as a LicenseRef's text only when the
+# file is said to be under something else.
+
+[slint.clarify]
+license = "LicenseRef-Slint-Royalty-free-2.0"
+[[slint.clarify.files]]
+path = "LICENSES/LicenseRef-Slint-Royalty-free-2.0.md"
+license = "LicenseRef-Slint-Royalty-free-2.0-text"
+checksum = "5167f5056e850419106ab6265efbdca7cba4d99c849d1445ca0bbf6a1e2315fe"
+
+[slint-interpreter.clarify]
+license = "LicenseRef-Slint-Royalty-free-2.0"
+[[slint-interpreter.clarify.files]]
+path = "LICENSES/LicenseRef-Slint-Royalty-free-2.0.md"
+license = "LicenseRef-Slint-Royalty-free-2.0-text"
+checksum = "5167f5056e850419106ab6265efbdca7cba4d99c849d1445ca0bbf6a1e2315fe"
+
+[slint-macros.clarify]
+license = "LicenseRef-Slint-Royalty-free-2.0"
+[[slint-macros.clarify.files]]
+path = "LICENSES/LicenseRef-Slint-Royalty-free-2.0.md"
+license = "LicenseRef-Slint-Royalty-free-2.0-text"
+checksum = "5167f5056e850419106ab6265efbdca7cba4d99c849d1445ca0bbf6a1e2315fe"
+
+[i-slint-backend-selector.clarify]
+license = "LicenseRef-Slint-Royalty-free-2.0"
+[[i-slint-backend-selector.clarify.files]]
+path = "LICENSES/LicenseRef-Slint-Royalty-free-2.0.md"
+license = "LicenseRef-Slint-Royalty-free-2.0-text"
+checksum = "5167f5056e850419106ab6265efbdca7cba4d99c849d1445ca0bbf6a1e2315fe"
+
+[i-slint-backend-winit.clarify]
+license = "LicenseRef-Slint-Royalty-free-2.0"
+[[i-slint-backend-winit.clarify.files]]
+path = "LICENSES/LicenseRef-Slint-Royalty-free-2.0.md"
+license = "LicenseRef-Slint-Royalty-free-2.0-text"
+checksum = "5167f5056e850419106ab6265efbdca7cba4d99c849d1445ca0bbf6a1e2315fe"
+
+[i-slint-common.clarify]
+license = "LicenseRef-Slint-Royalty-free-2.0"
+[[i-slint-common.clarify.files]]
+path = "LICENSES/LicenseRef-Slint-Royalty-free-2.0.md"
+license = "LicenseRef-Slint-Royalty-free-2.0-text"
+checksum = "5167f5056e850419106ab6265efbdca7cba4d99c849d1445ca0bbf6a1e2315fe"
+
+[i-slint-compiler.clarify]
+license = "LicenseRef-Slint-Royalty-free-2.0"
+[[i-slint-compiler.clarify.files]]
+path = "LICENSES/LicenseRef-Slint-Royalty-free-2.0.md"
+license = "LicenseRef-Slint-Royalty-free-2.0-text"
+checksum = "5167f5056e850419106ab6265efbdca7cba4d99c849d1445ca0bbf6a1e2315fe"
+
+[i-slint-core.clarify]
+license = "LicenseRef-Slint-Royalty-free-2.0"
+[[i-slint-core.clarify.files]]
+path = "LICENSES/LicenseRef-Slint-Royalty-free-2.0.md"
+license = "LicenseRef-Slint-Royalty-free-2.0-text"
+checksum = "5167f5056e850419106ab6265efbdca7cba4d99c849d1445ca0bbf6a1e2315fe"
+
+[i-slint-core-macros.clarify]
+license = "LicenseRef-Slint-Royalty-free-2.0"
+[[i-slint-core-macros.clarify.files]]
+path = "LICENSES/LicenseRef-Slint-Royalty-free-2.0.md"
+license = "LicenseRef-Slint-Royalty-free-2.0-text"
+checksum = "5167f5056e850419106ab6265efbdca7cba4d99c849d1445ca0bbf6a1e2315fe"
+
+[i-slint-renderer-femtovg.clarify]
+license = "LicenseRef-Slint-Royalty-free-2.0"
+[[i-slint-renderer-femtovg.clarify.files]]
+path = "LICENSES/LicenseRef-Slint-Royalty-free-2.0.md"
+license = "LicenseRef-Slint-Royalty-free-2.0-text"
+checksum = "5167f5056e850419106ab6265efbdca7cba4d99c849d1445ca0bbf6a1e2315fe"
+
+[i-slint-renderer-software.clarify]
+license = "LicenseRef-Slint-Royalty-free-2.0"
+[[i-slint-renderer-software.clarify.files]]
+path = "LICENSES/LicenseRef-Slint-Royalty-free-2.0.md"
+license = "LicenseRef-Slint-Royalty-free-2.0-text"
+checksum = "5167f5056e850419106ab6265efbdca7cba4d99c849d1445ca0bbf6a1e2315fe"

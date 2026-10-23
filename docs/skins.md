@@ -364,7 +364,7 @@ Her poses are pictures in `assets/hologram/` (JPEG or PNG, built into Freya), sh
 | `show-about()`, `show-skins()` | Freya's About window and skin picker |
 | `set-theme(name)`, `toggle-equalizer()` | |
 | `drag-window()` | Call on a mouse press in an empty part of the top bar: the window follows the mouse, and a double click zooms or minimizes it, as the system's settings say |
-| `open-link(name)` | Opens one of Freya's own pages in the browser: "github", "releases", "issues" or "license". Other names are ignored: a skin cannot open other addresses |
+| `open-link(name)` | Opens one of Freya's own pages in the browser: "github", "releases", "issues", "license", or "licenses", the third-party licenses built into Freya; or "fanart-key", fanart.tv's page for a personal API key. Other names are ignored: a skin cannot open other addresses |
 
 A settings page in a skin can be built from what the API already offers: `App.set-theme`, `App.show-skins`, the library's `folders`, `add-folder`, `remove-folder(index)` and `rescan`, the visualizer's `set-mode` and `set-fps`, and `Updates`. The built-in skin opens its Settings and About views from the "⋯" menu at the top right (Cmd+, or Ctrl+, opens Settings).
 

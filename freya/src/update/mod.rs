@@ -343,6 +343,27 @@ pub fn open_page_privately(url: &str) {
 }
 
 /// Hands `what`, a page's address or a file, to the system to open.
+/// The licenses of the crates and libraries built into Freya and its server, as cargo-about
+/// lists them (see docs/DEPENDENCIES.md): their notices go with the programs.
+const THIRD_PARTY: &str = include_str!("../../../licenses/THIRD-PARTY.html");
+
+/// Opens the third-party licenses in the browser, from a file Freya writes out of what is built
+/// into it.
+pub fn open_licenses() {
+    let Some(dir) = crate::settings::cache_dir() else {
+        log::warn!("no folder to open the licenses from");
+        return;
+    };
+    let file = dir.join("third-party-licenses.html");
+    if std::fs::read(&file).ok().as_deref() != Some(THIRD_PARTY.as_bytes())
+        && let Err(e) = write_private(&file, THIRD_PARTY.as_bytes())
+    {
+        log::warn!("could not write the licenses: {e}");
+        return;
+    }
+    open_with_system(file.as_os_str());
+}
+
 fn open_with_system(what: &std::ffi::OsStr) {
     let opener = if cfg!(target_os = "macos") {
         "open"

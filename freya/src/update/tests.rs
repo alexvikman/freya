@@ -274,3 +274,16 @@ fn opens_only_plain_https_pages_and_freyas_own() {
     assert!(!is_openable("https://example.com/a,b"));
     assert!(!is_openable("https://example.com/\"--args"));
 }
+
+#[test]
+fn the_licenses_built_in_name_what_freya_is_made_with() {
+    assert!(THIRD_PARTY.starts_with("<!doctype html>"));
+    // Slint under the license Freya uses it with, and libopus' copyright.
+    assert!(THIRD_PARTY.contains("LicenseRef-Slint-Royalty-free-2.0"));
+    assert!(THIRD_PARTY.contains("Xiph.Org"));
+    for krate in ["symphonia", "rustls", "rusqlite", "ureq"] {
+        assert!(THIRD_PARTY.contains(&format!(">{krate} ")), "{krate}");
+    }
+    // Freya's own crates are not third parties.
+    assert!(!THIRD_PARTY.contains(">freya-server "));
+}

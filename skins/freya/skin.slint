@@ -8573,6 +8573,11 @@ component AboutView inherits Rectangle {
                 text: "License";
                 clicked => { App.open-link("license"); }
             }
+            LinkRow {
+                icon: Icons.document;
+                text: "Third-Party Licenses";
+                clicked => { App.open-link("licenses"); }
+            }
         }
 
         SettingsSection {

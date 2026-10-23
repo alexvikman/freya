@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Freya: third-party licenses</title>
+<style>
+  :root { color-scheme: light dark; --muted: #6b6b6b; --line: #d8d8d8; --code: #f4f4f4; }
+  @media (prefers-color-scheme: dark) { :root { --muted: #a0a0a0; --line: #3a3a3a; --code: #1d1d1d; } }
+  body { font: 15px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif; max-width: 52rem; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.6rem; margin-bottom: .2rem; }
+  h2 { font-size: 1.15rem; margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+  p.lead, .used { color: var(--muted); }
+  ul.overview { columns: 2; padding-left: 1.2rem; }
+  pre { white-space: pre-wrap; background: var(--code); padding: 1rem; border-radius: 6px; font-size: 13px; }
+  .used { font-size: 14px; }
+</style>
+</head>
+<body>
+<h1>Third-party licenses</h1>
+<p class="lead">Freya and its server are made with the work of others: the Rust crates below,
+each used under the license shown with it, and the C libraries they build in. Freya itself is
+MIT OR Apache-2.0.</p>
+<ul class="overview">
+{{#each overview}}
+  <li><a href="#{{id}}">{{name}}</a> ({{count}})</li>
+{{/each}}
+</ul>
+<h2>Built in from C</h2>
+<p>libopus, in the crate opusic-sys, under the BSD-3-Clause license given with that crate
+below. SQLite, in the crate libsqlite3-sys, is in the public domain.</p>
+{{#each licenses}}
+<h2 id="{{id}}">{{name}}</h2>
+<p class="used">Used by:
+{{#each used_by}}{{#if @first}}{{else}}, {{/if}}<a href="{{#if crate.repository}}{{crate.repository}}{{else}}https://crates.io/crates/{{crate.name}}{{/if}}">{{crate.name}} {{crate.version}}</a>{{/each}}</p>
+<pre>{{text}}</pre>
+{{/each}}
+</body>
+</html>

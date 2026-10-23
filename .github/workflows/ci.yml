@@ -54,8 +54,16 @@ jobs:
       - run: |
           cargo install cargo-deny --locked --version 0.20.2
           cargo install cargo-vet --locked --version 0.10.2
+          cargo install cargo-about --locked --version 0.9.2 --features cli
       - run: cargo deny --locked check
       - run: cargo vet --locked
+      # The licenses shipped list the dependencies as they are (see docs/DEPENDENCIES.md).
+      - run: |
+          cargo fetch --locked
+          cargo about generate --locked --offline --workspace --config licenses/about.toml \
+            licenses/about.hbs --output-file "$RUNNER_TEMP/THIRD-PARTY.html"
+          cmp "$RUNNER_TEMP/THIRD-PARTY.html" licenses/THIRD-PARTY.html ||
+            { echo "licenses/THIRD-PARTY.html is out of date: run ci/check.sh licenses"; exit 1; }
 
   scripts:
     runs-on: ubuntu-24.04

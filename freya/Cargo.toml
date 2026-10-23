@@ -29,6 +29,8 @@ out-dir = "../target/packages"
 binaries-dir = "../target/release"
 # The server beside the client, which starts it (see crates/freya-server).
 binaries = [{ path = "freya", main = true }, { path = "freya-server", main = false }]
+# The licenses of what is built into them, which go with them (see docs/DEPENDENCIES.md).
+resources = ["../licenses/THIRD-PARTY.html"]
 icons = [
     "../assets/icons/32x32.png",
     "../assets/icons/64x64.png",

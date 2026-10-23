@@ -2,12 +2,13 @@
 # shellcheck disable=SC2016 # the commands are single-quoted: the container's shell expands them
 # Checks Freya on Linux and cross-compiles it for Windows, in Docker.
 #
-# Usage: ci/check.sh [linux | windows | deps | secrets | workflows | package | gui]
+# Usage: ci/check.sh [linux | windows | deps | licenses | secrets | workflows | package | gui]
 #        (default: linux, windows, deps, secrets, workflows)
 #
 # `deps` checks the dependencies (see docs/DEPENDENCIES.md): known vulnerabilities, malicious
 # or abandoned crates, licenses and sources with cargo-deny, and that every crate version is
-# audited or knowingly exempted with cargo-vet.
+# audited or knowingly exempted with cargo-vet; and that licenses/THIRD-PARTY.html lists them
+# as they are. `licenses` writes that list anew, after the dependencies changed.
 #
 # `secrets` scans every commit for credentials with gitleaks, as the pre-commit hook in
 # .githooks does for each new one (see docs/RELEASING.md).
@@ -68,12 +69,21 @@ workflows() {
 # Git refuses to read a repository owned by another user, as the mounted checkout is.
 secrets='git config --global --add safe.directory /src
          gitleaks git --redact --no-banner /src'
-deps='cargo install cargo-deny --locked --version 0.20.2 --root /target/tools
+# The third-party licenses, as cargo-about lists them from the crates themselves, written to
+# the file named after it; offline, so the list is the same wherever it is made.
+about='cargo install cargo-about --locked --version 0.9.2 --features cli --root /target/tools
+       cd /src && cargo fetch --locked
+       /target/tools/bin/cargo-about generate --locked --offline --workspace \
+           --config /src/licenses/about.toml /src/licenses/about.hbs --output-file'
+deps="cargo install cargo-deny --locked --version 0.20.2 --root /target/tools
       cargo install cargo-vet --locked --version 0.10.2 --root /target/tools
-      export PATH="/target/tools/bin:$PATH"
+      export PATH=\"/target/tools/bin:\$PATH\"
       cargo deny --locked check
       cp -R /src/supply-chain /tmp/supply-chain
-      cargo vet --locked --store-path /tmp/supply-chain'
+      cargo vet --locked --store-path /tmp/supply-chain
+      $about /tmp/THIRD-PARTY.html
+      cmp /tmp/THIRD-PARTY.html /src/licenses/THIRD-PARTY.html ||
+          { echo 'licenses/THIRD-PARTY.html is out of date: run ci/check.sh licenses'; exit 1; }"
 # cargo-packager writes next to the source, so it works on a copy. The checkout's own target
 # folder holds this Mac's binaries; the copy's target is the Linux build in the volume instead.
 package='cargo install cargo-packager --locked --version 0.11.8 --root /target/tools
@@ -90,6 +100,9 @@ case "${1:-all}" in
     linux) run "$linux" ;;
     windows) run "$windows" ;;
     deps) run "$deps" ;;
+    licenses)
+        extra="-v $PWD/licenses:/out"
+        run "$about /out/THIRD-PARTY.html" ;;
     secrets) run "$secrets" ;;
     workflows) workflows ;;
     package) run "$package" ;;
@@ -98,5 +111,5 @@ case "${1:-all}" in
         extra="-v $PWD/target/ci-gui:/out"
         run "sh /src/ci/gui-test.sh" ;;
     all) run "$linux"; run "$windows"; run "$deps"; run "$secrets"; workflows ;;
-    *) echo "usage: ci/check.sh [linux | windows | deps | secrets | workflows | package | gui]" >&2; exit 2 ;;
+    *) echo "usage: ci/check.sh [linux | windows | deps | licenses | secrets | workflows | package | gui]" >&2; exit 2 ;;
 esac

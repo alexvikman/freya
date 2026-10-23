@@ -1040,9 +1040,10 @@ export global App {
     callback navigated();
     callback go-back();
     callback go-forward();
-    /// Open one of Freya's own pages in the browser: "github", "releases", "issues" or
-    /// "license"; or "fanart-key", fanart.tv's page for getting a personal API key. Other names
-    /// are ignored; skins cannot open other addresses.
+    /// Open one of Freya's own pages in the browser: "github", "releases", "issues",
+    /// "license", or "licenses", the third-party licenses built into Freya; or "fanart-key",
+    /// fanart.tv's page for getting a personal API key. Other names are ignored; skins cannot
+    /// open other addresses.
     callback open-link(string);
 }
 

@@ -37,3 +37,5 @@ echo "${changes:-  none}"
 echo
 cargo deny check
 cargo vet
+echo
+echo "Then write the licenses' list anew: ci/check.sh licenses"

@@ -135,6 +135,22 @@ pulls in (`cargo tree -p <crate>`). Then add it to `Cargo.toml` with a version, 
 least `build.rs`, macros and `unsafe` blocks) and record it with `cargo vet certify`, or, for
 a large crate from a well-known publisher, `cargo vet add-exemption` with a note why.
 
+## 4. The licenses shipped
+
+MIT, Apache-2.0 and the BSD licenses ask that their notices go with the programs built from
+the code. [`licenses/THIRD-PARTY.html`](../licenses/THIRD-PARTY.html) lists every crate built
+into Freya and its server, each license's text once with the crates under it, and the C
+libraries they build in (libopus; SQLite is in the public domain). It is made by
+[cargo-about](https://github.com/EmbarkStudios/cargo-about) from the crates themselves, offline,
+by `ci/check.sh licenses`, as [`licenses/about.toml`](../licenses/about.toml) says: the
+licenses `deny.toml` allows, the platforms Freya is built for, what is built into the
+programs rather than what builds or tests them, and none of Freya's own crates. Slint's
+royalty-free license is read from the file each Slint crate keeps it in.
+
+The list is built into Freya, which opens it from About (Third-Party Licenses), and goes into
+every package beside the programs. `ci/check.sh deps`, and CI, fail when it no longer matches
+the dependencies.
+
 ## Updating
 
 Update as a step of its own, never in passing with other work:
@@ -147,8 +163,9 @@ ci/update-deps.sh rusqlite   # one crate
 The script lists every crate version that goes or comes, then runs both checks. New versions
 that nobody trusted has audited stop at `cargo vet`. For each, look at what changed with
 `cargo vet diff <crate> <old> <new>` (or `cargo vet inspect` for a new crate), then certify
-it or add an exemption. Run the tests and `ci/check.sh`, and commit `Cargo.lock` and
-`supply-chain/` together, with the list of changes in the commit message.
+it or add an exemption. Write the licenses' list anew with `ci/check.sh licenses`, run the
+tests and `ci/check.sh`, and commit `Cargo.lock`, `supply-chain/` and
+`licenses/THIRD-PARTY.html` together, with the list of changes in the commit message.
 
 Moving to a new major version (changing `Cargo.toml`) works the same way, followed by the
 usual build and test.
@@ -160,5 +177,5 @@ whatever new clippy lints find, and run the tests and `ci/check.sh`.
 ## Tools
 
 `cargo install --locked cargo-deny cargo-vet` installs both. `ci/check.sh deps` uses pinned
-versions (cargo-deny 0.20.2, cargo-vet 0.10.2) in Docker, so the check does not depend on
-what is installed locally.
+versions (cargo-deny 0.20.2, cargo-vet 0.10.2, and cargo-about 0.9.2 with its `cli` feature)
+in Docker, so the check does not depend on what is installed locally.

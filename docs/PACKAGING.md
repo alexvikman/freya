@@ -28,7 +28,7 @@ Freya also carries its icon itself, for where the system takes it from the runni
 - **Identifier and maintainer.** The identifier is `io.github.alexvikman.freya`, after the GitHub repository Freya is released from; Freya's settings and library are found by its name, so changing it moves nothing. The author "Freya contributors" is still a placeholder for a maintainer name and address.
 - **macOS signing.** `ci/package-macos.sh` signs the app ad hoc with the hardened runtime, so macOS warns the first time a downloaded copy is opened. With an Apple Developer ID it also notarizes; see [RELEASING.md](RELEASING.md).
 - **Windows signing.** The `.msi` and `freya.exe` are unsigned, so SmartScreen warns; see [RELEASING.md](RELEASING.md).
-- **Licenses.** Freya is MIT OR Apache-2.0. The packages include libopus (BSD) and Slint under its royalty-free license, which is credited in Freya's About window.
+- **Licenses.** Freya is MIT OR Apache-2.0. Every package carries `THIRD-PARTY.html`, the licenses of the crates and C libraries built in (libopus is BSD; Slint is used under its royalty-free license, which is credited in Freya's About window), also built into Freya and opened from About; see [DEPENDENCIES.md](DEPENDENCIES.md).
 
 ## What was tested
 
