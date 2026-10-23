@@ -69,7 +69,8 @@ files, and with them Freya's.
   computer, it proves the server, and the device proving it knows it too is given a ticket for
   the page where the user chooses their password, under the name they were invited with,
   whatever is sent. Joining uses it up; inviting a user again replaces it, and lets one who
-  joined choose a new password, logging out their devices. A ticket lasts no longer than the
+  joined choose a new password, logging out their devices and voiding the logins and password
+  pages given before. A ticket lasts no longer than the
   invitation it was proved with, and adopting is checked again as it is written, so two
   devices do not both adopt. Removing a user takes their devices, invitation and tickets away,
   and no id is given twice. The owner is neither invited again nor removed (their password is

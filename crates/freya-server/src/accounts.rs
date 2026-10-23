@@ -980,6 +980,8 @@ impl Accounts {
         {
             return Err(out_of_date.into());
         }
+        // Whether a password was replaced: what was given for the old one goes too.
+        let mut reset = false;
         let user = match (claimed, claim) {
             (Claimed::Adopt, Claim::Adopt) => {
                 let name = user_name(name)?;
@@ -1013,6 +1015,7 @@ impl Accounts {
                 kept.invites.retain(|i| i.user != user);
                 if had_one {
                     kept.devices.retain(|d| d.user != user);
+                    reset = true;
                 }
                 user
             }
@@ -1020,11 +1023,15 @@ impl Accounts {
         };
         self.save(&kept);
         drop(kept);
-        // The other tickets for the same claim are out of date now.
+        // The other tickets for the same claim are out of date now; and for a password
+        // replaced, the codes and password pages given while the old one held.
         self.claims
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .retain(|c| c.claimed != claimed);
+        if reset {
+            self.forget_given(user);
+        }
         let code = random_hex(32);
         let mut grants = self.grants.lock().unwrap_or_else(|e| e.into_inner());
         grants.retain(|g| g.until > Instant::now());
@@ -1137,15 +1144,20 @@ impl Accounts {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .retain(|c| c.claimed != Claimed::Join(id));
+        self.forget_given(id);
+        Ok(())
+    }
+
+    /// Forgets the login codes and password pages given to `user`, not traded or used yet.
+    fn forget_given(&self, user: u32) {
         self.tickets
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .retain(|t| t.user != id);
+            .retain(|t| t.user != user);
         self.grants
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .retain(|g| g.user != id);
-        Ok(())
+            .retain(|g| g.user != user);
     }
 
     /// The server's users, the owner first.
@@ -1699,6 +1711,16 @@ mod tests {
                 .devices,
             1
         );
+        let waiting = accounts
+            .grant(
+                "Bo",
+                "correct horse",
+                &challenge("a verifier long enough to be one"),
+                redirect,
+                None,
+            )
+            .unwrap();
+        let page = accounts.ticket(&bo);
         let (ticket, _) = claim_with(&accounts, &again, certificate).unwrap();
         accounts
             .complete_claim(&ticket, "", "battery staple", "challenge", redirect)
@@ -1712,6 +1734,18 @@ mod tests {
                 .devices,
             0
         );
+        // Nor do a login or a password page given while the old password held.
+        assert!(
+            accounts
+                .redeem(
+                    &waiting,
+                    "a verifier long enough to be one",
+                    redirect,
+                    "Pad"
+                )
+                .is_none()
+        );
+        assert!(accounts.password_page(&page).is_none());
 
         // A user taken away leaves their id to nobody.
         let before = accounts
