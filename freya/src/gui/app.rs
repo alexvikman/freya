@@ -326,6 +326,8 @@ fn remove_other_cover_files(keep: &Path) {
 
 pub struct App {
     pub player: Player,
+    /// While muted, the volume to go back to; the player plays at 0.
+    muted: Option<f32>,
     pub playlist: Playlist,
     pub settings: Settings,
     tags: TagLoader,
@@ -454,6 +456,7 @@ impl App {
         );
         let mut app = Self {
             player,
+            muted: None,
             playlist: Playlist::new(),
             settings,
             tags: TagLoader::new(),
@@ -571,6 +574,26 @@ impl App {
                 self.play_index(index);
             }
         }
+    }
+
+    /// Mutes, or plays at the volume from before. With the volume at 0 already, nothing.
+    pub fn toggle_mute(&mut self) {
+        match self.muted.take() {
+            Some(volume) => self.player.set_volume(volume),
+            None => {
+                let volume = self.player.volume();
+                if volume > 0.0 {
+                    self.muted = Some(volume);
+                    self.player.set_volume(0.0);
+                }
+            }
+        }
+    }
+
+    /// Plays at `volume`, muted or not before.
+    pub fn set_volume(&mut self, volume: f32) {
+        self.muted = None;
+        self.player.set_volume(volume);
     }
 
     pub fn toggle_pause(&mut self) {
@@ -1579,7 +1602,7 @@ impl App {
             MediaRequest::Stop => self.stop(),
             MediaRequest::SeekBy(seconds) => self.seek_by(seconds),
             MediaRequest::SetPosition(position) => self.player.seek(position),
-            MediaRequest::SetVolume(volume) => self.player.set_volume(volume as f32),
+            MediaRequest::SetVolume(volume) => self.set_volume(volume as f32),
             // Added to Up Next and played, as for an address: what is queued stays.
             MediaRequest::OpenUri(uri) => match playlist_file::file_url_path(&uri) {
                 Some(path) => {
@@ -1640,6 +1663,7 @@ impl App {
             &self.playlist,
             self.player.volume(),
         );
+        values.push(("muted", Value::Bool(self.muted.is_some())));
         values.push(("error", skin_state::string(&self.error)));
         view.player_out.write(ui, values);
         if let Some(media) = &mut self.system_media {
@@ -1910,7 +1934,8 @@ impl App {
     }
 
     pub fn save(&mut self) {
-        self.settings.volume = self.player.volume();
+        // Muted, the volume from before: the next start plays.
+        self.settings.volume = self.muted.unwrap_or_else(|| self.player.volume());
         let window = self.view.ui.window();
         // In full screen the window has the screen's size, not its own.
         if !window.is_fullscreen() {

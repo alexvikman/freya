@@ -40,17 +40,21 @@ global Theme {
 }
 
 // Icons are SVG path data in a 24×24 box, so they stay sharp at any size. Filled icons are
-// drawn with `fill`, outlined ones (marked "stroked") with a 1.8 px stroke.
+// drawn with `fill`, outlined ones (marked "stroked") with a 1.8 px stroke. A filled shape
+// goes counter-clockwise (up the left side first): FemtoVG takes a clockwise one for a hole,
+// and smooths its edge outwards, which at 1x fills the gaps between the grid's squares.
 global Icons {
-    out property <string> play: "M8 5 L19 12 L8 19 Z";
-    out property <string> pause: "M6 5 H10 V19 H6 Z M14 5 H18 V19 H14 Z";
-    out property <string> stop: "M6 6 H18 V18 H6 Z";
-    out property <string> next: "M5 6 L14 12 L5 18 Z M16 6 H19 V18 H16 Z";
-    out property <string> previous: "M19 6 L10 12 L19 18 Z M5 6 H8 V18 H5 Z";
-    out property <string> speaker: "M4 9 H8 L13 5 V19 L8 15 H4 Z";
+    out property <string> play: "M8 5 L8 19 L19 12 Z";
+    out property <string> pause: "M6 5 V19 H10 V5 Z M14 5 V19 H18 V5 Z";
+    out property <string> stop: "M6 6 V18 H18 V6 Z";
+    out property <string> next: "M5 6 L5 18 L14 12 Z M16 6 V18 H19 V6 Z";
+    out property <string> previous: "M19 6 L10 12 L19 18 Z M5 6 V18 H8 V6 Z";
+    out property <string> speaker: "M4 9 V15 H8 L13 19 V5 L8 9 Z";
     out property <string> more: "M5 10.5 A1.5 1.5 0 1 0 5 13.5 A1.5 1.5 0 1 0 5 10.5 Z M12 10.5 A1.5 1.5 0 1 0 12 13.5 A1.5 1.5 0 1 0 12 10.5 Z M19 10.5 A1.5 1.5 0 1 0 19 13.5 A1.5 1.5 0 1 0 19 10.5 Z";
     // Stroked:
     out property <string> waves: "M16 9 C17.3 10.2 17.3 13.8 16 15 M18.5 6.5 C21.2 9 21.2 15 18.5 17.5";
+    // In the waves' place, while muted.
+    out property <string> muted: "M16 9.5 L21 14.5 M21 9.5 L16 14.5";
     out property <string> shuffle: "M16 3 H21 V8 M4 20 L21 3 M21 16 V21 H16 M15 15 L21 21 M4 4 L9 9";
     out property <string> repeat: "M17 2 L21 6 L17 10 M3 12 V10 C3 7.8 4.8 6 7 6 H21 M7 22 L3 18 L7 14 M21 12 V14 C21 16.2 19.2 18 17 18 H3";
     out property <string> plus: "M12 5 V19 M5 12 H19";
@@ -64,8 +68,8 @@ global Icons {
     out property <string> chevron: "M9 5 L16 12 L9 19";
     // Filled, for 16 pixels: every edge falls on a whole pixel (1.5 units each), so they stay
     // sharp where an outline at that size blurs.
-    out property <string> grid: "M1.5 1.5 H10.5 V10.5 H1.5 Z M13.5 1.5 H22.5 V10.5 H13.5 Z M1.5 13.5 H10.5 V22.5 H1.5 Z M13.5 13.5 H22.5 V22.5 H13.5 Z";
-    out property <string> list: "M1.5 4.5 H4.5 V7.5 H1.5 Z M7.5 4.5 H22.5 V7.5 H7.5 Z M1.5 10.5 H4.5 V13.5 H1.5 Z M7.5 10.5 H22.5 V13.5 H7.5 Z M1.5 16.5 H4.5 V19.5 H1.5 Z M7.5 16.5 H22.5 V19.5 H7.5 Z";
+    out property <string> grid: "M1.5 1.5 V10.5 H10.5 V1.5 Z M13.5 1.5 V10.5 H22.5 V1.5 Z M1.5 13.5 V22.5 H10.5 V13.5 Z M13.5 13.5 V22.5 H22.5 V13.5 Z";
+    out property <string> list: "M1.5 4.5 V7.5 H4.5 V4.5 Z M7.5 4.5 V7.5 H22.5 V4.5 Z M1.5 10.5 V13.5 H4.5 V10.5 Z M7.5 10.5 V13.5 H22.5 V10.5 Z M1.5 16.5 V19.5 H4.5 V16.5 Z M7.5 16.5 V19.5 H22.5 V16.5 Z";
     out property <string> search: "M10.5 4 A6.5 6.5 0 1 0 10.5 17 A6.5 6.5 0 1 0 10.5 4 Z M15.5 15.5 L20 20";
     out property <string> close: "M6 6 L18 18 M18 6 L6 18";
     out property <string> sidebar: "M4 4 H20 C21.1 4 22 4.9 22 6 V18 C22 19.1 21.1 20 20 20 H4 C2.9 20 2 19.1 2 18 V6 C2 4.9 2.9 4 4 4 Z M9 4 V20";
@@ -229,6 +233,47 @@ component IconButton inherits Rectangle {
 
     Tooltip {
         TooltipBox { text: root.tooltip; }
+    }
+}
+
+/// The speaker before the volume: a click mutes, another brings the volume back.
+component MuteButton inherits Rectangle {
+    in property <length> icon-size: 20px;
+
+    width: root.icon-size + 8px;
+    accessible-role: button;
+    accessible-label: "Mute";
+    accessible-checkable: true;
+    accessible-checked: Player.muted;
+    accessible-action-default => { Player.toggle-mute(); }
+
+    Rectangle {
+        width: root.width;
+        height: self.width;
+        border-radius: self.width / 2;
+        background: touch.pressed ? Theme.pressed : (touch.has-hover ? Theme.hover : transparent);
+
+        Icon {
+            width: root.icon-size;
+            height: root.icon-size;
+            data: Icons.speaker;
+            color: Theme.text-secondary;
+        }
+        Icon {
+            width: root.icon-size;
+            height: root.icon-size;
+            data: Player.muted ? Icons.muted : Icons.waves;
+            stroked: true;
+            color: Theme.text-secondary;
+        }
+
+        touch := TouchArea {
+            clicked => { Player.toggle-mute(); }
+        }
+    }
+
+    Tooltip {
+        TooltipBox { text: Player.muted ? "Unmute (M)" : "Mute (M)"; }
     }
 }
 
@@ -508,23 +553,7 @@ component PlayerBar inherits Rectangle {
             alignment: end;
             spacing: 6px;
 
-            Rectangle {
-                width: 24px;
-
-                Icon {
-                    width: 20px;
-                    height: 20px;
-                    data: Icons.speaker;
-                    color: Theme.text-secondary;
-                }
-                Icon {
-                    width: 20px;
-                    height: 20px;
-                    data: Icons.waves;
-                    stroked: true;
-                    color: Theme.text-secondary;
-                }
-            }
+            MuteButton { }
             VerticalLayout {
                 alignment: center;
 
@@ -7080,22 +7109,8 @@ component StageBar inherits Rectangle {
                 HorizontalLayout {
                     spacing: 8px;
 
-                    Rectangle {
-                        width: 24px;
-
-                        Icon {
-                            width: 22px;
-                            height: 22px;
-                            data: Icons.speaker;
-                            color: Theme.text-secondary;
-                        }
-                        Icon {
-                            width: 22px;
-                            height: 22px;
-                            data: Icons.waves;
-                            stroked: true;
-                            color: Theme.text-secondary;
-                        }
+                    MuteButton {
+                        icon-size: 22px;
                     }
                     VerticalLayout {
                         alignment: center;

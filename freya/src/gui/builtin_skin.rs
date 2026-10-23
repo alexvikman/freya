@@ -971,6 +971,7 @@ skin_api! {
         Player."length-text" => set_length_text, get_length_text;
         Player."remaining-text" => set_remaining_text, get_remaining_text;
         Player."volume" => set_volume, get_volume;
+        Player."muted" => set_muted, get_muted;
         Player."cover" => set_cover, get_cover;
         Player."has-cover" => set_has_cover, get_has_cover;
 
@@ -1150,6 +1151,7 @@ skin_api! {
         Player."seek" => on_seek, invoke_seek(fraction: f32);
         Player."seek-by" => on_seek_by, invoke_seek_by(seconds: f32);
         Player."set-volume" => on_set_volume, invoke_set_volume(volume: f32);
+        Player."toggle-mute" => on_toggle_mute, invoke_toggle_mute();
         Player."open-files" => on_open_files, invoke_open_files();
 
         Playlist."activate" => on_activate, invoke_activate(row: i32);

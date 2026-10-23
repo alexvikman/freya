@@ -123,7 +123,8 @@ Only `Player` is required. `Playlist`, `Playlists`, `Library`, `Radio`, `Equaliz
 | `state` | `PlaybackState` | `stopped`, `playing` or `paused` |
 | `position`, `length` | float | Seconds; `length` is 0 when unknown. Position updates twice a second |
 | `position-text`, `length-text`, `remaining-text` | string | "1:23", "3:45", "-2:22" |
-| `volume` | float | 0 to 1 |
+| `volume` | float | 0 to 1; 0 while muted |
+| `muted` | bool | Whether the sound is muted |
 | `cover`, `has-cover` | image, bool | Cover art of the current track, if any |
 
 | Callback | |
@@ -131,7 +132,8 @@ Only `Player` is required. `Playlist`, `Playlists`, `Library`, `Radio`, `Equaliz
 | `play()`, `pause()`, `toggle-pause()`, `stop()`, `next()`, `previous()` | |
 | `seek(fraction)` | 0 to 1 of the track |
 | `seek-by(seconds)` | Relative; may be negative |
-| `set-volume(value)` | 0 to 1 |
+| `set-volume(value)` | 0 to 1; unmutes |
+| `toggle-mute()` | Mutes, or brings back the volume from before |
 | `open-files()` | Asks the user for files to play |
 
 ### `Playlist`
@@ -469,7 +471,7 @@ Updates to Freya. Freya looks at launch and once a day while `check-automaticall
 
 ### `Shortcuts`
 
-A `FocusScope` with Freya's standard keys: Space play/pause, ←/→ seek 5 s, ↑/↓ volume, N/P next/previous, S stop, O open files, F1 about, F2 skins. Put your window's content inside it and give it focus with `forward-focus`, as in the first example. Inner focus scopes (like a playlist that uses the arrow keys) get keys first and can let the rest through by returning `reject`.
+A `FocusScope` with Freya's standard keys: Space play/pause, ←/→ seek 5 s, ↑/↓ volume, M mute, N/P next/previous, S stop, O open files, F1 about, F2 skins. Put your window's content inside it and give it focus with `forward-focus`, as in the first example. Inner focus scopes (like a playlist that uses the arrow keys) get keys first and can let the rest through by returning `reject`.
 
 ### `AboutFreya`
 

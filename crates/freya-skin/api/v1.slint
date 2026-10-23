@@ -49,8 +49,10 @@ export global Player {
     in property <string> length-text: "0:00";
     in property <string> remaining-text: "-0:00";
 
-    /// 0.0 to 1.0.
+    /// 0.0 to 1.0; 0 while muted.
     in property <float> volume: 1.0;
+    /// Whether the sound is muted: `toggle-mute` or `set-volume` brings it back.
+    in property <bool> muted;
 
     /// Cover art of the current track, if it has any.
     in property <image> cover;
@@ -68,6 +70,8 @@ export global Player {
     /// Seek relative to the current position, in seconds (may be negative).
     callback seek-by(float);
     callback set-volume(float);
+    /// Mute, or bring back the volume from before.
+    callback toggle-mute();
     /// Ask the user for files to play.
     callback open-files();
 }
@@ -1306,8 +1310,8 @@ export component AboutFreya inherits Rectangle {
 /// Freya's standard keyboard shortcuts. Put one in the skin's window, filling it, so the
 /// shortcuts work the same in every skin:
 ///
-///     Space play/pause, ←/→ seek 5 s, ↑/↓ volume, N/P next/previous, S stop, O open files,
-///     F1 about, F2 skins.
+///     Space play/pause, ←/→ seek 5 s, ↑/↓ volume, M mute, N/P next/previous, S stop,
+///     O open files, F1 about, F2 skins.
 export component Shortcuts inherits FocusScope {
     key-pressed(event) => {
         if (event.modifiers.control || event.modifiers.meta || event.modifiers.alt) {
@@ -1323,6 +1327,8 @@ export component Shortcuts inherits FocusScope {
             Player.set-volume(min(1.0, Player.volume + 0.05));
         } else if (event.text == Key.DownArrow) {
             Player.set-volume(max(0.0, Player.volume - 0.05));
+        } else if (event.text == "m" || event.text == "M") {
+            Player.toggle-mute();
         } else if (event.text == "n" || event.text == "N") {
             Player.next();
         } else if (event.text == "p" || event.text == "P") {

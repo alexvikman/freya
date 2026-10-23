@@ -259,6 +259,18 @@ fn skin_callbacks_drive_the_app() {
     // Volume and playback.
     call(&ui, "Player", "set-volume", &[num(0.25)]);
     assert_eq!(global(&ui, "Player", "volume"), num(0.25));
+    // Muted, it plays at 0 until unmuted, or a volume is chosen.
+    call(&ui, "Player", "toggle-mute", &[]);
+    assert_eq!(global(&ui, "Player", "muted"), Value::Bool(true));
+    assert_eq!(global(&ui, "Player", "volume"), num(0.0));
+    call(&ui, "Player", "toggle-mute", &[]);
+    assert_eq!(global(&ui, "Player", "muted"), Value::Bool(false));
+    assert_eq!(global(&ui, "Player", "volume"), num(0.25));
+    call(&ui, "Player", "toggle-mute", &[]);
+    call(&ui, "Player", "set-volume", &[num(0.5)]);
+    assert_eq!(global(&ui, "Player", "muted"), Value::Bool(false));
+    assert_eq!(global(&ui, "Player", "volume"), num(0.5));
+    call(&ui, "Player", "set-volume", &[num(0.25)]);
     call(&ui, "Playlist", "activate", &[num(0.0)]);
     let deadline = Instant::now() + Duration::from_secs(5);
     let playing = Value::EnumerationValue("PlaybackState".into(), "playing".into());

@@ -85,10 +85,12 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     bind(
         "Player",
         "set-volume",
-        Box::new(|app, args| {
-            app.player
-                .set_volume((number(args, 0) as f32).clamp(0.0, 1.0))
-        }),
+        Box::new(|app, args| app.set_volume((number(args, 0) as f32).clamp(0.0, 1.0))),
+    );
+    bind(
+        "Player",
+        "toggle-mute",
+        Box::new(|app, _| app.toggle_mute()),
     );
     bind_dialog("Player", "open-files", pick_audio, |app, paths| {
         app.replace_and_play(&paths);
