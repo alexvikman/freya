@@ -286,8 +286,10 @@ pub struct LibraryPanel {
     /// The same for the covers and pictures, and whether they are lined up to be made then.
     asking_pictures: Option<std::sync::mpsc::Receiver<()>>,
     prepare_after: bool,
-    /// The same for the album of the track playing.
+    /// The same for the album of the track playing, and for the playlist shown: its name and
+    /// entries.
     asking_playing: Option<Receiver<()>>,
+    asking_playlist: Option<(Receiver<()>, String, Vec<Entry>)>,
     /// Whether the row of the track playing is to be shown once the rows are read, and in its
     /// album.
     reveal_playing: Option<bool>,
@@ -720,6 +722,7 @@ impl LibraryPanel {
             asking_pictures: None,
             prepare_after: false,
             asking_playing: None,
+            asking_playlist: None,
             reveal_playing: None,
             typed: None,
             searched: Instant::now() - TYPING_PAUSE,
@@ -1015,10 +1018,31 @@ impl LibraryPanel {
 
     /// Tells the server the settings as they are now.
     fn tell_settings(&self) {
-        if let Some(server) = &self.server
-            && let Err(e) = server.set_settings(&self.settings)
-        {
-            log::warn!("could not change the server's settings: {e}");
+        let settings = self.settings.clone();
+        self.tell("change the server's settings", move |server| {
+            server.set_settings(&settings)
+        });
+    }
+
+    /// Tells the server to do something: for one reached over the network on the errands'
+    /// thread, the window not waiting for it, after what it was told before.
+    fn tell(
+        &self,
+        what: &'static str,
+        tell: impl FnOnce(&dyn Server) -> freya_protocol::ApiResult<()> + Send + 'static,
+    ) {
+        let Some(server) = self.server.clone() else {
+            return;
+        };
+        let told = move || {
+            if let Err(e) = tell(server.as_ref()) {
+                log::warn!("could not {what}: {e}");
+            }
+        };
+        if self.remote.is_some() {
+            crate::errands::run(told);
+        } else {
+            told();
         }
     }
 
@@ -1123,21 +1147,13 @@ impl LibraryPanel {
     /// for what artists lack.
     pub fn rescan(&mut self, folders: &[PathBuf]) {
         self.set_folders(folders);
-        if let Some(server) = &self.server
-            && let Err(e) = server.rescan()
-        {
-            log::warn!("could not scan: {e}");
-        }
+        self.tell("scan", |server| server.rescan());
     }
 
     /// Reads every file in `folders` again and makes every cover again, changed or not.
     pub fn rescan_files(&mut self, folders: &[PathBuf]) {
         self.set_folders(folders);
-        if let Some(server) = &self.server
-            && let Err(e) = server.rescan_files()
-        {
-            log::warn!("could not scan: {e}");
-        }
+        self.tell("scan", |server| server.rescan_files());
     }
 
     /// Looks through the `index`th of `folders` only.
@@ -1150,20 +1166,12 @@ impl LibraryPanel {
     /// Looks through `added`, folders new in `folders`, only.
     pub fn scan_added(&mut self, folders: &[PathBuf], added: Vec<PathBuf>) {
         self.set_folders(folders);
-        if let Some(server) = &self.server
-            && let Err(e) = server.scan_only(&added)
-        {
-            log::warn!("could not scan: {e}");
-        }
+        self.tell("scan", move |server| server.scan_only(&added));
     }
 
     /// Stops the scan running; what it did so far is kept.
     pub fn stop_scan(&mut self) {
-        if let Some(server) = &self.server
-            && let Err(e) = server.stop_scan()
-        {
-            log::warn!("could not stop the scan: {e}");
-        }
+        self.tell("stop the scan", |server| server.stop_scan());
     }
 
     /// Handles scan progress and covers made. Returns true when the rows changed.
@@ -1203,6 +1211,12 @@ impl LibraryPanel {
         if answered(&self.asking_playing) {
             self.asking_playing = None;
             self.find_playing_album();
+        }
+        let playlist_answered = self.asking_playlist.as_ref().is_some_and(|(asking, ..)| {
+            !matches!(asking.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty))
+        });
+        if playlist_answered && let Some((_, name, entries)) = self.asking_playlist.take() {
+            self.show_playlist_now(&name, &entries);
         }
         // Made again: what was read of them is old.
         for key in self
@@ -1419,11 +1433,9 @@ impl LibraryPanel {
     /// Asks the internet what `artists` lack, every artist when none, once no scan runs:
     /// after the user matched them to another artist.
     fn fetch(&mut self, artists: Option<Vec<String>>) {
-        if let Some(server) = &self.server
-            && let Err(e) = server.fetch(artists.as_deref())
-        {
-            log::warn!("could not ask the server to look: {e}");
-        }
+        self.tell("ask the server to look", move |server| {
+            server.fetch(artists.as_deref())
+        });
     }
 
     /// The artist's MusicBrainz id as Freya knows it: the user's match, the tags', or what
@@ -2833,14 +2845,66 @@ impl LibraryPanel {
     ) -> Option<Receiver<()>> {
         let api = Arc::clone(self.db.as_ref().filter(|_| self.remote.is_some())?);
         let (done, answered) = std::sync::mpsc::sync_channel(1);
-        std::thread::Builder::new()
-            .name("freya-ask-ahead".into())
-            .spawn(move || {
-                ask(api.as_ref());
-                let _ = done.send(());
-            })
-            .ok()?;
+        // On the errands' thread, after what the window changed: read as it is now.
+        crate::errands::run(move || {
+            ask(api.as_ref());
+            let _ = done.send(());
+        });
         Some(answered)
+    }
+
+    /// Writes to the library with `write`: for a server reached over the network on the
+    /// errands' thread, the window not waiting for it, before what is read after.
+    fn write(
+        &self,
+        what: &'static str,
+        write: impl FnOnce(&dyn LibraryApi) -> freya_protocol::ApiResult<()> + Send + 'static,
+    ) {
+        let Some(db) = self.db.clone() else {
+            return;
+        };
+        let written = move || {
+            if let Err(e) = write(db.as_ref()) {
+                log::warn!("could not {what}: {e}");
+            }
+        };
+        if self.remote.is_some() {
+            crate::errands::run(written);
+        } else {
+            written();
+        }
+    }
+
+    /// Changes the library with `write`, then reads the rows anew: for a server reached over
+    /// the network, both on the errands' thread, the window not waiting for them.
+    fn change(
+        &mut self,
+        what: &'static str,
+        write: impl FnOnce(&dyn LibraryApi) -> freya_protocol::ApiResult<()> + Send + 'static,
+    ) {
+        let Some(db) = self.db.clone() else {
+            return;
+        };
+        let written = move |api: &dyn LibraryApi| {
+            if let Err(e) = write(api) {
+                log::warn!("could not {what}: {e}");
+            }
+        };
+        if self.remote.is_none() {
+            written(db.as_ref());
+            self.reload();
+            return;
+        }
+        let calls = self.calls_ahead();
+        let level = self.level().clone();
+        let (list, searching) = (self.album_list, self.searching());
+        self.asking = self.ask_on_thread(move |api| {
+            written(api);
+            api.prefetch(&calls);
+            if !searching {
+                api.prefetch(&calls_after(api, &level, list));
+            }
+        });
     }
 
     /// Reads the rows anew. A server is asked for all they need on a thread of its own, the
@@ -3923,20 +3987,11 @@ impl LibraryPanel {
 
     /// Makes the album `artist` / `album` a favourite, or not one any longer.
     fn set_favorite(&mut self, artist: Option<String>, album: Option<String>) {
-        let Some(db) = &self.db else {
-            return;
-        };
         let favorite = !self.is_favorite(artist.as_deref(), album.as_deref());
-        let kept = db.set_album_favorite(
-            artist.as_deref(),
-            album.as_deref(),
-            favorite,
-            SystemTime::now(),
-        );
-        if let Err(e) = kept {
-            log::warn!("could not keep the favourite: {e}");
-        }
-        self.reload();
+        let at = SystemTime::now();
+        self.change("keep the favourite", move |api| {
+            api.set_album_favorite(artist.as_deref(), album.as_deref(), favorite, at)
+        });
     }
 
     /// Makes the album, artist or playlist in the `row`th row a favourite, or not one any
@@ -3966,23 +4021,19 @@ impl LibraryPanel {
     /// Makes the artist `name` a favourite, or not one any longer.
     fn set_artist_favorite(&mut self, name: &str) {
         let favorite = !self.artist_favorites.contains_key(name);
-        if let Some(db) = &self.db
-            && let Err(e) = db.set_artist_favorite(name, favorite, SystemTime::now())
-        {
-            log::warn!("could not keep the favourite: {e}");
-        }
-        self.reload();
+        let (name, at) = (name.to_owned(), SystemTime::now());
+        self.change("keep the favourite", move |api| {
+            api.set_artist_favorite(&name, favorite, at)
+        });
     }
 
     /// Makes the playlist `name` a favourite, or not one any longer.
     pub fn set_playlist_favorite(&mut self, name: &str) {
         let favorite = !self.playlist_favorites.contains_key(name);
-        if let Some(db) = &self.db
-            && let Err(e) = db.set_playlist_favorite(name, favorite, SystemTime::now())
-        {
-            log::warn!("could not keep the favourite: {e}");
-        }
-        self.reload();
+        let (name, at) = (name.to_owned(), SystemTime::now());
+        self.change("keep the favourite", move |api| {
+            api.set_playlist_favorite(&name, favorite, at)
+        });
     }
 
     /// Whether the playlist `name` is a favourite.
@@ -4708,6 +4759,17 @@ mod tests {
         let tracks = panel.db.as_ref().unwrap().all_tracks().unwrap();
         assert!(!tracks.is_empty());
         assert_eq!(panel.items.len(), tracks.len());
+
+        // A favourite made is kept on the errands' thread, then the rows read again.
+        panel.show("albums");
+        answered(&mut panel);
+        let Some(Item::Album(album)) = panel.items.first().cloned() else {
+            panic!("an album row");
+        };
+        panel.toggle_favorite(0);
+        assert!(panel.asking.is_some(), "the window does not wait");
+        answered(&mut panel);
+        assert!(panel.is_favorite(album.artist.as_deref(), album.name.as_deref()));
 
         // What is done once the rows are read waits for them.
         let playing = dir.join("sine.ogg");

@@ -123,11 +123,12 @@ impl Playlists {
             return Err("No such playlist".to_owned());
         }
         let mut playlist = self.list.remove(index);
-        if let Some(server) = &self.server
-            && let Err(e) = server.rename_saved_playlist(&playlist.name, &name)
-        {
-            log::warn!("could not rename the playlist {}: {e}", playlist.name);
-        }
+        let (from, to) = (playlist.name.clone(), name.clone());
+        self.tell(move |server| {
+            if let Err(e) = server.rename_saved_playlist(&from, &to) {
+                log::warn!("could not rename the playlist {from}: {e}");
+            }
+        });
         playlist.name = name;
         Ok(self.insert(playlist))
     }
@@ -138,11 +139,11 @@ impl Playlists {
         }
         self.version += 1;
         let playlist = self.list.remove(index);
-        if let Some(server) = &self.server
-            && let Err(e) = server.delete_playlist(&playlist.name)
-        {
-            log::warn!("could not delete the playlist {}: {e}", playlist.name);
-        }
+        self.tell(move |server| {
+            if let Err(e) = server.delete_playlist(&playlist.name) {
+                log::warn!("could not delete the playlist {}: {e}", playlist.name);
+            }
+        });
     }
 
     /// Adds `entries` at the end of a playlist.
@@ -233,12 +234,20 @@ impl Playlists {
     }
 
     fn save(&self, playlist: &SavedPlaylist) {
-        let Some(server) = &self.server else {
-            return;
-        };
         let entries: Vec<PlaylistEntry> = playlist.entries.iter().map(to_wire).collect();
-        if let Err(e) = server.save_playlist(&playlist.name, &entries) {
-            log::warn!("could not save the playlist {}: {e}", playlist.name);
+        let name = playlist.name.clone();
+        self.tell(move |server| {
+            if let Err(e) = server.save_playlist(&name, &entries) {
+                log::warn!("could not save the playlist {name}: {e}");
+            }
+        });
+    }
+
+    /// Tells the server what changed, the window not waiting for it: the list here is
+    /// changed already, and the server is told in order.
+    fn tell(&self, tell: impl FnOnce(&dyn Server) + Send + 'static) {
+        if let Some(server) = self.server.clone() {
+            crate::errands::run(move || tell(server.as_ref()));
         }
     }
 }

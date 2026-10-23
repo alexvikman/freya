@@ -122,26 +122,58 @@ impl LibraryPanel {
     }
 
     /// Shows the playlist `name` with its `entries`, or none; and notes when the tracks not
-    /// noted before were added: now.
+    /// noted before were added: now. A server reached over the network is told, and asked
+    /// what the page shows, on the errands' thread, and the page shown once it answered.
     pub fn show_playlist(&mut self, name: Option<&str>, entries: &[Entry]) {
         let Some(name) = name else {
             self.playlist_page = None;
             self.playlist_rows.sync(Vec::new());
+            self.asking_playlist = None;
             return;
         };
         let tracks: Vec<PlaylistTrack> = entries.iter().map(track_of).collect();
-        let (info, mut added) = match &mut self.db {
-            Some(db) => {
-                if let Err(e) = db.note_playlist_added(name, &tracks, SystemTime::now()) {
-                    log::warn!("could not note when tracks were added to {name}: {e}");
-                }
-                (
-                    db.playlist_info(name).unwrap_or_default(),
-                    db.playlist_added(name)
-                        .map(|added| added.into_iter().collect::<HashMap<_, _>>())
-                        .unwrap_or_default(),
-                )
+        let at = SystemTime::now();
+        let mut calls = vec![
+            ("playlist_info", freya_protocol::args(&(name,))),
+            ("playlist_added", freya_protocol::args(&(name,))),
+        ];
+        calls.extend(entries.iter().map(|entry| {
+            let start = entry.part.map_or(Duration::ZERO, |p| p.start);
+            ("track_at", freya_protocol::args(&(&entry.path, start)))
+        }));
+        let noted = name.to_owned();
+        let asked = self.ask_on_thread(move |api| {
+            if let Err(e) = api.note_playlist_added(&noted, &tracks, at) {
+                log::warn!("could not note when tracks were added to {noted}: {e}");
             }
+            api.prefetch(&calls);
+        });
+        match asked {
+            Some(answered) => {
+                self.asking_playlist = Some((answered, name.to_owned(), entries.to_vec()));
+            }
+            None => {
+                if let Some(db) = &self.db {
+                    let tracks: Vec<PlaylistTrack> = entries.iter().map(track_of).collect();
+                    if let Err(e) = db.note_playlist_added(name, &tracks, at) {
+                        log::warn!("could not note when tracks were added to {name}: {e}");
+                    }
+                }
+                self.show_playlist_now(name, entries);
+            }
+        }
+    }
+
+    /// Shows the playlist `name` with its `entries` now, from what was asked ahead.
+    pub(super) fn show_playlist_now(&mut self, name: &str, entries: &[Entry]) {
+        let tracks: Vec<PlaylistTrack> = entries.iter().map(track_of).collect();
+        let (info, mut added) = match &mut self.db {
+            Some(db) => (
+                db.playlist_info(name).unwrap_or_default(),
+                db.playlist_added(name)
+                    .map(|added| added.into_iter().collect::<HashMap<_, _>>())
+                    .unwrap_or_default(),
+            ),
             None => Default::default(),
         };
         let known = self.known_tracks(entries);
@@ -326,11 +358,10 @@ impl LibraryPanel {
     /// Notes that the tracks of the playlist `name` not noted before were added now.
     pub fn note_playlist_added(&mut self, name: &str, entries: &[Entry]) {
         let tracks: Vec<PlaylistTrack> = entries.iter().map(track_of).collect();
-        if let Some(db) = &mut self.db
-            && let Err(e) = db.note_playlist_added(name, &tracks, SystemTime::now())
-        {
-            log::warn!("could not note when tracks were added to {name}: {e}");
-        }
+        let (name, at) = (name.to_owned(), SystemTime::now());
+        self.write("note when tracks were added", move |api| {
+            api.note_playlist_added(&name, &tracks, at)
+        });
     }
 
     /// The page's wide picture, and a color from it or from its picture, once made; asked of a
@@ -504,11 +535,10 @@ impl LibraryPanel {
             picture: draft.picture,
             backdrop: draft.backdrop,
         };
-        if let Some(db) = &self.db
-            && let Err(e) = db.set_playlist_info(name, &info)
-        {
-            log::warn!("could not keep what was changed about {name}: {e}");
-        }
+        let kept = name.to_owned();
+        self.write("keep what was changed about a playlist", move |api| {
+            api.set_playlist_info(&kept, &info)
+        });
         Some(draft.name)
     }
 

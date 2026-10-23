@@ -306,8 +306,11 @@ for them. A play noted, what plays now and a scrobble go on an errands' thread, 
 and quitting waits a moment for them. Two forms asked for an artist's id with no artist
 being changed. The window against its own server 100 ms away each way, through a proxy:
 nothing held it up in its first 30 seconds, where before every call would have, 475 of
-them. What still waits on the window's thread: the user's own changes, a favourite made or
-an artist matched, a round trip each.
+them. Since: a favourite made, a playlist saved, renamed or taken away, the settings changed,
+a scan started or stopped, and a playlist shown (when its tracks were added is noted, then
+read) go on the errands' thread too, in order, and every read asked ahead waits behind them,
+so it sees them. What still waits a round trip: saving the forms that change an artist, an
+album's match or a genre, which read back what they wrote.
 
 #### P6
 
