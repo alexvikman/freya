@@ -109,9 +109,10 @@ fn from_wire(entry: &PlaylistEntry) -> Entry {
 mod tests {
     use super::*;
 
-    fn entry(path: &str, title: &str) -> PlaylistEntry {
+    /// The entry for the file `name` in a music folder, a path absolute on every system.
+    fn entry(name: &str, title: &str) -> PlaylistEntry {
         PlaylistEntry {
-            path: path.into(),
+            path: std::env::temp_dir().join("m").join(name),
             part: None,
             title: Some(title.into()),
             artist: Some("Freya".into()),
@@ -127,14 +128,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let playlists = Playlists::new(dir.clone());
         assert!(playlists.all().is_empty());
-        playlists.save("road", &[entry("/m/a.flac", "A")]).unwrap();
+        playlists.save("road", &[entry("a.flac", "A")]).unwrap();
         playlists
-            .save("Calm", &[entry("/m/b.flac", "B"), entry("/m/c.flac", "C")])
+            .save("Calm", &[entry("b.flac", "B"), entry("c.flac", "C")])
             .unwrap();
         let all = playlists.all();
         let names: Vec<&str> = all.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["Calm", "road"]);
-        assert_eq!(all[1].entries, [entry("/m/a.flac", "A")]);
+        assert_eq!(all[1].entries, [entry("a.flac", "A")]);
         assert!(all[0].created.is_some());
         assert!(dir.join("Calm.m3u8").is_file());
 

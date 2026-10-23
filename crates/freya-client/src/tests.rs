@@ -534,7 +534,8 @@ fn only_a_device_with_a_token_is_answered() {
         .http_status_as_error(false)
         .build()
         .into();
-    let track = dir.join("music/sine.flac");
+    // As the scan names it, on Windows too.
+    let track = dir.join("music").join("sine.flac");
     let audio = agent.get(&audio_url(&address, &track)).call().unwrap();
     assert_eq!(audio.status().as_u16(), 401);
 

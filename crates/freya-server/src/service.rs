@@ -907,7 +907,8 @@ mod tests {
             "an empty library is read at once"
         );
         // Noted while the scan writes: it waits for it.
-        let track = dir.join("music/sine.flac");
+        // As the scan names it, on Windows too.
+        let track = dir.join("music").join("sine.flac");
         let written = service
             .record_play(&track, None, SystemTime::now())
             .unwrap();
