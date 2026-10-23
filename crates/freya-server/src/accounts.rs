@@ -164,6 +164,25 @@ struct User {
     /// Admin for a user from before roles: the owner, the only one there was.
     #[serde(default)]
     role: Role,
+    /// How often the password was set while the server ran: a login's code or a password
+    /// page given before holds no longer once it was.
+    #[serde(skip)]
+    changed: u64,
+}
+
+impl User {
+    fn set_password(&mut self, password: &str) {
+        self.password = Some(Password::new(password));
+        self.changed += 1;
+    }
+}
+
+/// Whether the password of `user` is still the one it was when it had been set `changed`
+/// times.
+fn unchanged(kept: &Kept, user: u32, changed: u64) -> bool {
+    kept.users
+        .iter()
+        .any(|u| u.id == user && u.changed == changed)
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -230,6 +249,8 @@ struct Grant {
     user: u32,
     challenge: String,
     redirect: String,
+    /// How often the password had been set when the code was given.
+    changed: u64,
     until: Instant,
 }
 
@@ -240,6 +261,8 @@ struct Ticket {
     user: u32,
     /// The device it was asked from, which stays logged in when the others are logged out.
     device: String,
+    /// How often the password had been set when the ticket was given.
+    changed: u64,
     until: Instant,
 }
 
@@ -425,6 +448,7 @@ impl Accounts {
                 name: owner_name(),
                 password: None,
                 role: Role::Admin,
+                changed: 0,
             });
         }
         if unhex(&kept.secret).is_none_or(|secret| secret.len() < 32) {
@@ -522,7 +546,7 @@ impl Accounts {
         self.kept()
             .devices
             .retain(|d| !(d.joined == Some(Joined::Paired) && d.name == name));
-        self.add_device(OWNER, &name, Joined::Paired)
+        self.add_device(OWNER, &name, Joined::Paired, None)
     }
 
     /// The user `name` is, given their password, tried from `from`. A wrong one holds the
@@ -530,13 +554,23 @@ impl Accounts {
     ///
     /// Whether the name is a user's does not show: a made-up one is counted and waited for as
     /// a user's, and a password is checked against a hash of nothing for it, as long.
-    fn check(&self, name: &str, password: &str, from: Option<IpAddr>) -> Result<u32, Refused> {
+    /// With the user, how often their password had been set when it was checked.
+    fn check(
+        &self,
+        name: &str,
+        password: &str,
+        from: Option<IpAddr>,
+    ) -> Result<(u32, u64), Refused> {
         // A name is counted by its first characters, so a long one fills nothing.
         let typed: String = name.trim().to_lowercase().chars().take(MAX_NAME).collect();
-        let (id, hashed) = {
+        let (id, hashed, changed) = {
             let kept = self.kept();
             let user = kept.users.iter().find(|u| u.name.to_lowercase() == typed);
-            (user.map(|u| u.id), user.and_then(|u| u.password.clone()))
+            (
+                user.map(|u| u.id),
+                user.and_then(|u| u.password.clone()),
+                user.map_or(0, |u| u.changed),
+            )
         };
         let network = from.map(network);
         let known = |id: u32, network: &String| {
@@ -617,7 +651,7 @@ impl Accounts {
                     }
                     known.insert((id, network));
                 }
-                Ok(id)
+                Ok((id, changed))
             }
             _ => {
                 std::thread::sleep(WRONG_PASSWORD_WAIT);
@@ -666,6 +700,7 @@ impl Accounts {
             name: name.to_owned(),
             password: Some(Password::new(password)),
             role,
+            changed: 0,
         });
         self.save(&kept);
         Ok(id)
@@ -681,7 +716,7 @@ impl Accounts {
         redirect: &str,
         from: Option<IpAddr>,
     ) -> Result<String, Refused> {
-        let user = self.check(name, password, from)?;
+        let (user, changed) = self.check(name, password, from)?;
         let code = random_hex(32);
         let mut grants = self.grants.lock().unwrap_or_else(|e| e.into_inner());
         grants.retain(|g| g.until > Instant::now());
@@ -690,6 +725,7 @@ impl Accounts {
             user,
             challenge: challenge.to_owned(),
             redirect: redirect.to_owned(),
+            changed,
             until: Instant::now() + CODE_LASTS,
         });
         Ok(code)
@@ -715,7 +751,7 @@ impl Accounts {
             && grant.redirect == redirect
             && challenge(verifier) == grant.challenge;
         if fits {
-            self.add_device(grant.user, device, Joined::LoggedIn)
+            self.add_device(grant.user, device, Joined::LoggedIn, Some(grant.changed))
         } else {
             None
         }
@@ -982,7 +1018,7 @@ impl Accounts {
         }
         // Whether a password was replaced: what was given for the old one goes too.
         let mut reset = false;
-        let user = match (claimed, claim) {
+        let (user, changed) = match (claimed, claim) {
             (Claimed::Adopt, Claim::Adopt) => {
                 let name = user_name(name)?;
                 let taken = kept
@@ -998,9 +1034,9 @@ impl Accounts {
                     .find(|u| u.id == OWNER)
                     .ok_or(out_of_date)?;
                 owner.name = name;
-                owner.password = Some(Password::new(password));
+                owner.set_password(password);
                 log::info!("the server was adopted by {}", owner.name);
-                OWNER
+                (OWNER, owner.changed)
             }
             (Claimed::Join(user), _) => {
                 let joined = kept
@@ -1010,21 +1046,23 @@ impl Accounts {
                     .ok_or(out_of_date)?;
                 // A new password for one who had one: their devices log in again with it.
                 let had_one = joined.password.is_some();
-                joined.password = Some(Password::new(password));
+                joined.set_password(password);
                 log::info!("{} joined the server", joined.name);
+                let changed = joined.changed;
                 kept.invites.retain(|i| i.user != user);
                 if had_one {
                     kept.devices.retain(|d| d.user != user);
                     reset = true;
                 }
-                user
+                (user, changed)
             }
             _ => return Err(out_of_date.into()),
         };
         self.save(&kept);
         drop(kept);
         // The other tickets for the same claim are out of date now; and for a password
-        // replaced, the codes and password pages given while the old one held.
+        // replaced, the codes and password pages given while the old one held (those given
+        // as it is replaced do not hold either, as their password changed).
         self.claims
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -1040,6 +1078,7 @@ impl Accounts {
             user,
             challenge: challenge.to_owned(),
             redirect: redirect.to_owned(),
+            changed,
             until: Instant::now() + CODE_LASTS,
         });
         Ok(code)
@@ -1070,6 +1109,7 @@ impl Accounts {
                 name,
                 password: None,
                 role,
+                changed: 0,
             });
             self.save(&kept);
             id
@@ -1203,12 +1243,19 @@ impl Accounts {
     /// the server's own computer.
     pub fn ticket(&self, caller: &Caller) -> String {
         let ticket = random_hex(32);
+        let changed = self
+            .kept()
+            .users
+            .iter()
+            .find(|u| u.id == caller.user)
+            .map_or(0, |u| u.changed);
         let mut tickets = self.tickets.lock().unwrap_or_else(|e| e.into_inner());
         tickets.retain(|t| t.until > Instant::now());
         tickets.push(Ticket {
             ticket: sha256(ticket.as_bytes()),
             user: caller.user,
             device: caller.device.clone(),
+            changed,
             until: Instant::now() + TICKET_LASTS,
         });
         ticket
@@ -1216,16 +1263,19 @@ impl Accounts {
 
     /// Whose password page `ticket` opens, while it does.
     pub fn password_page(&self, ticket: &str) -> Option<PasswordPage> {
-        let user = {
+        let (user, changed) = {
             let tickets = self.tickets.lock().unwrap_or_else(|e| e.into_inner());
             let hash = sha256(ticket.as_bytes());
-            tickets
+            let ticket = tickets
                 .iter()
-                .find(|t| t.ticket == hash && t.until > Instant::now())?
-                .user
+                .find(|t| t.ticket == hash && t.until > Instant::now())?;
+            (ticket.user, ticket.changed)
         };
         let kept = self.kept();
-        let user = kept.users.iter().find(|u| u.id == user)?;
+        let user = kept
+            .users
+            .iter()
+            .find(|u| u.id == user && u.changed == changed)?;
         Some(PasswordPage {
             user: user.name.clone(),
             asks_current: user.password.is_some(),
@@ -1285,7 +1335,7 @@ impl Accounts {
                 .ok_or("This page is out of date. Open it again from Freya's settings.")?;
             tickets.swap_remove(at)
         };
-        self.set_password(used.user, new)?;
+        self.set_password(used.user, new, used.changed)?;
         if let Some(name) = name {
             let mut kept = self.kept();
             if let Some(owner) = kept.users.iter_mut().find(|u| u.id == OWNER) {
@@ -1309,14 +1359,16 @@ impl Accounts {
     }
 
     /// Sets the password `user` logs in with on other devices.
-    fn set_password(&self, user: u32, password: &str) -> Result<(), String> {
+    /// Sets the password of `user` while it is the one it was when it had been set `changed`
+    /// times.
+    fn set_password(&self, user: u32, password: &str, changed: u64) -> Result<(), String> {
         let mut kept = self.kept();
         let user = kept
             .users
             .iter_mut()
-            .find(|u| u.id == user)
-            .ok_or("no such user")?;
-        user.password = Some(Password::new(password));
+            .find(|u| u.id == user && u.changed == changed)
+            .ok_or("This page is out of date. Open it again from Freya's settings.")?;
+        user.set_password(password);
         self.save(&kept);
         Ok(())
     }
@@ -1359,7 +1411,14 @@ impl Accounts {
         revoked
     }
 
-    fn add_device(&self, user: u32, name: &str, joined: Joined) -> Option<Granted> {
+    /// With `changed`, only while the user's password is the one it was then.
+    fn add_device(
+        &self,
+        user: u32,
+        name: &str,
+        joined: Joined,
+        changed: Option<u64>,
+    ) -> Option<Granted> {
         let device = Device {
             id: random_hex(8),
             user,
@@ -1371,8 +1430,11 @@ impl Accounts {
             used: now(),
             joined: Some(joined),
         };
-        log::info!("a device was connected: {}", device.name);
         let mut kept = self.kept();
+        if changed.is_some_and(|changed| !unchanged(&kept, user, changed)) {
+            return None;
+        }
+        log::info!("a device was connected: {}", device.name);
         kept.devices.push(device);
         let at = kept.devices.len() - 1;
         let granted = issue(&mut kept, at);
@@ -2114,6 +2176,11 @@ mod tests {
             tokens
         };
         let (phone, pad) = (device("Phone"), device("Pad"));
+        // A login checked with the old password, and a page opened for it, as it is changed.
+        let late = accounts
+            .grant("Kim", "correct horse", &challenge(verifier), redirect, None)
+            .unwrap();
+        let other = accounts.ticket(&accounts.caller(&pad.access).unwrap());
         let ticket = accounts.ticket(&accounts.caller(&phone.access).unwrap());
         accounts
             .change_password(&ticket, "correct horse", "battery staple", None, true, "")
@@ -2123,6 +2190,13 @@ mod tests {
             "the one it was changed on"
         );
         assert_eq!(accounts.caller(&pad.access), None);
+        assert_eq!(accounts.redeem(&late, verifier, redirect, "Laptop"), None);
+        assert_eq!(accounts.password_page(&other), None);
+        assert!(
+            accounts
+                .change_password(&other, "battery staple", "staple battery", None, false, "")
+                .is_err()
+        );
     }
 
     #[test]
