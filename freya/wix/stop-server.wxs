@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Freya's server stopped before the files are checked, so installing, upgrading or removing
+     Freya never finds freya-server.exe in use. The server has no window, so Windows' Restart
+     Manager cannot close it, and asked the user to; it is stopped here instead, quietly,
+     through the WiX utility extension's quiet exec, which shows no console window. Freya starts
+     it again when it opens. Run as the user, whose server it is; nothing to stop is fine. -->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <Property Id="WixQuietExec64CmdLine"
+              Value="&quot;[System64Folder]taskkill.exe&quot; /F /IM freya-server.exe"/>
+    <CustomAction Id="StopFreyaServer" BinaryKey="WixCA" DllEntry="WixQuietExec64"
+                  Execute="immediate" Return="ignore"/>
+    <InstallExecuteSequence>
+      <Custom Action="StopFreyaServer" Before="InstallValidate"/>
+    </InstallExecuteSequence>
+  </Fragment>
+</Wix>

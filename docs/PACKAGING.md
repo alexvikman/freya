@@ -8,6 +8,8 @@ Installers are made with [cargo-packager](https://github.com/crabnebula-dev/carg
 | Windows | `.msi` (WiX) | `cargo packager -p freya --release --formats wix` |
 | Linux | `.AppImage`, `.deb` | `cargo packager -p freya --release --formats appimage,deb` |
 
+The `.msi` adds two WiX fragments of Freya's own, in `freya/wix/`: `freya-cli.wxs` installs `freya-cli.exe` and puts Freya's folder on the PATH; `stop-server.wxs` stops Freya's server before the files are checked, as Windows cannot close a program without a window and would ask the user to.
+
 Install the tool once with `cargo install cargo-packager --locked`. Packages land in `target/packages/`. The [Release workflow](../.github/workflows/release.yml) builds and signs all of them on GitHub: run by hand it keeps them as downloadable artifacts, and for a version tag it publishes them as a release (see [RELEASING.md](RELEASING.md)).
 
 Building needs CMake (for the Opus decoder) besides Rust; on Linux also the ALSA, fontconfig and xkbcommon headers, and FUSE to build the AppImage (see the workflow).

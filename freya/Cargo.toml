@@ -40,10 +40,12 @@ icons = [
     "../assets/icons/icon.ico",
 ]
 
-# Windows: freya-cli.exe, for terminals, and Freya's folder on the PATH (see wix/freya-cli.wxs).
+# Windows: freya-cli.exe, for terminals, and Freya's folder on the PATH (see wix/freya-cli.wxs);
+# Freya's server stopped before files are replaced (see wix/stop-server.wxs).
 [package.metadata.packager.wix]
-fragment-paths = ["wix/freya-cli.wxs"]
+fragment-paths = ["wix/freya-cli.wxs", "wix/stop-server.wxs"]
 component-refs = ["FreyaCli"]
+custom-action-refs = ["StopFreyaServer"]
 
 [package.metadata.packager.macos]
 minimum-system-version = "11.0"
