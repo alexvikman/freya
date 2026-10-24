@@ -335,7 +335,7 @@ jobs:
             echo
             echo "## Install"
             echo
-            echo "Freya plays the library of a Freya Server. Install \`FreyaServer\` on the computer that keeps your music, and \`Freya\` on each one you play it on; on one computer, both. Freya 0.3 had its server built in: uninstall it first."
+            echo "Freya plays the library of a Freya Server. Install \`FreyaServer\` on the computer that keeps your music, and \`Freya\` on each one you play it on; on one computer, both."
             echo
             echo "- **macOS:** the \`.dmg\` (Apple Silicon: \`aarch64\`, Intel: \`x86_64\`). Not notarized yet: the first time, right-click the app and choose Open."
             echo "- **Windows:** the \`.msi\`. Not signed yet, so SmartScreen asks first."

@@ -6,7 +6,8 @@
 //!
 //! `freya-server [--address HOST:PORT] [--data FOLDER] [--forget-password]`, or `--version`.
 //! `--forget-password` forgets the owner's password, with the server stopped, for one who
-//! forgot it to set anew. It keeps its library, pictures,
+//! forgot it to set anew. For Windows' installer, `--stop` stops the user's running server, and
+//! `--forget-login` takes away its starting at login, as it is uninstalled. It keeps its library, pictures,
 //! settings and log in its own folder, the first time taking in what Freya kept in its folder
 //! before the server was its own. It runs until stopped: Ctrl-C, SIGTERM, or `POST /quit` from
 //! a device paired on this computer. It serves this computer over TLS too, with the
@@ -35,6 +36,8 @@ fn main() {
     let mut data = None;
     let mut forget_password = false;
     let mut show_code = false;
+    let mut stop = false;
+    let mut forget_login = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         if arg == "--version" {
@@ -49,16 +52,28 @@ fn main() {
             show_code = true;
             continue;
         }
+        if arg == "--stop" {
+            stop = true;
+            continue;
+        }
+        if arg == "--forget-login" {
+            forget_login = true;
+            continue;
+        }
         match (arg.as_str(), args.next()) {
             ("--address", Some(value)) => address = value,
             ("--data", Some(value)) => data = Some(PathBuf::from(value)),
             _ => {
                 eprintln!(
-                    "usage: freya-server [--address HOST:PORT] [--data FOLDER] [--forget-password | --code] | --version"
+                    "usage: freya-server [--address HOST:PORT] [--data FOLDER] [--forget-password | --code] | --stop [--forget-login] | --version"
                 );
                 std::process::exit(2);
             }
         }
+    }
+    // For the installer, and nothing else: no server starts.
+    if stop || forget_login {
+        std::process::exit(installing(stop, forget_login));
     }
     let freya = directories::ProjectDirs::from("", "", "Freya");
     let Some(data) = data.or_else(|| freya.as_ref().map(|dirs| dirs.data_dir().join("server")))
@@ -83,6 +98,25 @@ fn main() {
         std::process::exit(1);
     }
     std::process::exit(exit_code());
+}
+
+/// What Windows' installer asks before replacing or removing the server's files: `stop` the
+/// user's running server; `forget_login`, as it is uninstalled, its starting at login.
+fn installing(stop: bool, forget_login: bool) -> i32 {
+    #[cfg(windows)]
+    if stop {
+        freya_server::stop::stop();
+    }
+    #[cfg(not(windows))]
+    if stop {
+        eprintln!("freya-server: --stop is for Windows' installer");
+        return 2;
+    }
+    if forget_login && let Err(e) = freya_server::autostart::uninstall() {
+        eprintln!("freya-server: {e}");
+        return 1;
+    }
+    0
 }
 
 /// What the server ends with: 0, or after an update, what has launchd or systemd start it

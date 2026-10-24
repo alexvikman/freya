@@ -19,7 +19,9 @@ category = "Music"
 description = "The music library Freya plays from"
 long-description = "Freya Server keeps a music library, its pictures, playlists and plays, for Freya on this computer and on others on the network. It starts when you log in, and runs without a screen too."
 copyright = "Freya contributors. MIT OR Apache-2.0."
-before-packaging-command = "cargo build --locked --release -p freya-server"
+# Both programs in one build, for either package: their shared crates are built once, with
+# the same features, and the other package finds its program built already.
+before-packaging-command = "cargo build --locked --release -p freya -p freya-server"
 out-dir = "../../target/packages"
 binaries-dir = "../../target/release"
 binaries = [{ path = "freya-server", main = true }]
@@ -72,8 +74,8 @@ toml = "1.1.8"
 [target.'cfg(windows)'.dependencies]
 # Last.fm's session in the Credential Manager (see src/scrobbler/session.rs), starting the
 # server at login, in the Run key (see src/autostart.rs), and its icon in the notification area
-# (see src/menu/windows.rs).
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security_Credentials", "Win32_Storage_FileSystem", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# (see src/menu/windows.rs), and stopping it for the installer (see src/stop.rs).
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security_Credentials", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [build-dependencies]
 # Freya's icon and the server's name in freya-server.exe (see build.rs), as Freya builds its

@@ -46,6 +46,11 @@ if $build; then
     cargo packager -p "$package" --release --formats app
 fi
 
+# What an earlier run left of this product goes, an older version's too; the other product's
+# packages stay.
+mkdir -p "$dist"
+rm -f "$dist/$prefix"-* "$dist/notarize.zip"
+
 # The bundle signs its program and seals its resources.
 xattr -cr "$app"
 sign() {
@@ -71,8 +76,6 @@ if [ "$identity" != "-" ] && { [ -n "${FREYA_NOTARY_PROFILE:-}" ] || [ -n "${APP
     can_notarize=true
 fi
 
-mkdir -p "$dist"
-rm -f "$dist/$name.app.zip" "$dist/$name.dmg"
 if $can_notarize; then
     ditto -c -k --keepParent "$app" "$dist/notarize.zip"
     notarize "$dist/notarize.zip"
@@ -98,4 +101,4 @@ if [ "$identity" != "-" ]; then
     fi
 fi
 
-echo "package-macos: $(cd "$dist" && ls)"
+echo "package-macos: $(cd "$dist" && ls "$prefix"-*)"

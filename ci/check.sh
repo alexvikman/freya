@@ -56,7 +56,9 @@ windows='cargo clippy --locked --all-targets --target x86_64-pc-windows-gnu -- -
          for program in freya freya-server; do
              file /target/x86_64-pc-windows-gnu/release/$program.exe
              x86_64-w64-mingw32-objdump -h /target/x86_64-pc-windows-gnu/release/$program.exe |
-                 grep -q " .rsrc " && echo "$program.exe has its icon and version resources"
+                 grep -q " .rsrc " ||
+                 { echo "$program.exe has no icon and version resources"; exit 1; }
+             echo "$program.exe has its icon and version resources"
          done'
 # The tools are pinned and built once into the volume. cargo-vet reads a copy of the
 # checked-in supply-chain/ folder (it takes a lock file there, and the source is read-only);

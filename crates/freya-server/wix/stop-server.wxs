@@ -1,16 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Freya Server asked to stop before the files are checked, so installing, upgrading or
-     removing it never finds freya-server.exe in use: taskkill without /F closes its window, the
-     one of its icon in the notification area, which stops it as logging out does. Through the
-     WiX utility extension's quiet exec, which shows no console window; run as the user, whose
-     server it is; nothing to stop is fine. Opened again, or at the next login, it starts. -->
+<!-- Freya Server stopped before the files are checked, so installing, upgrading or removing it
+     never finds freya-server.exe in use: the installed server, told to stop (see src/stop.rs),
+     asks the running one to end through the window of its icon, waits for it, and ends it at
+     once if it has not, or has no window yet. Removed for good, not as an upgrade replaces it,
+     it also takes away its starting at login. Through the WiX utility extension's quiet exec,
+     which shows no console window; run as the user, whose server it is. On a first install
+     there is nothing to stop, and the failure is passed over. -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Fragment>
-    <Property Id="WixQuietExec64CmdLine"
-              Value="&quot;[System64Folder]taskkill.exe&quot; /IM freya-server.exe"/>
+    <CustomAction Id="StopFreyaServerCommand" Property="WixQuietExec64CmdLine"
+                  Value="&quot;[INSTALLDIR]freya-server.exe&quot; --stop"/>
+    <CustomAction Id="RemoveFreyaServerCommand" Property="WixQuietExec64CmdLine"
+                  Value="&quot;[INSTALLDIR]freya-server.exe&quot; --stop --forget-login"/>
     <CustomAction Id="StopFreyaServer" BinaryKey="WixCA" DllEntry="WixQuietExec64"
                   Execute="immediate" Return="ignore"/>
     <InstallExecuteSequence>
+      <Custom Action="StopFreyaServerCommand" Before="RemoveFreyaServerCommand"/>
+      <Custom Action="RemoveFreyaServerCommand" Before="StopFreyaServer">
+        REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE
+      </Custom>
       <Custom Action="StopFreyaServer" Before="InstallValidate"/>
     </InstallExecuteSequence>
   </Fragment>
