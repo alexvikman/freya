@@ -14,6 +14,10 @@ pub struct Settings {
     pub repeat: bool,
     /// Window size in logical pixels.
     pub window_size: Option<(f32, f32)>,
+    /// Where the window was last, its outer top left in pixels, and whether it was maximized:
+    /// it opens there again.
+    pub window_position: Option<(i32, i32)>,
+    pub window_maximized: bool,
     /// Skin file, folder or package; `None` is the built-in skin.
     pub skin: Option<PathBuf>,
     /// "system", "light" or "dark".
@@ -120,6 +124,8 @@ impl Default for Settings {
             shuffle: false,
             repeat: false,
             window_size: None,
+            window_position: None,
+            window_maximized: false,
             skin: None,
             theme: "system".to_owned(),
             equalizer_visible: false,

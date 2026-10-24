@@ -17,6 +17,7 @@ mod page_proxy;
 mod picture_finder;
 mod playlists;
 mod radio;
+mod screen;
 mod server_panel;
 mod skin_state;
 mod skin_window;
@@ -124,9 +125,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
     };
     player.set_volume(settings.volume);
     player.set_equalizer(&settings.equalizer.engine());
-    if let Some((w, h)) = settings.window_size {
-        ui.window().set_size(slint::LogicalSize::new(w, h));
-    }
+    let make_large = screen::place(ui.window(), &settings);
 
     // The server on another computer the user chose, else this computer's if chosen; with
     // neither, the welcome view.
@@ -159,6 +158,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
         app.borrow_mut().unloaded_skin = saved_skin;
     }
     app.borrow_mut().skin_error = skin_error;
+    app.borrow_mut().settle_window = Some(make_large);
     if let Some(error) = audio_error {
         app.borrow_mut().error = error;
     }

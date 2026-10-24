@@ -133,7 +133,7 @@ x11rb = { version = "0.13.2", features = ["shape"] }
 # drawn into the title bar (see gui/title_bar/mac.rs).
 block2 = { version = "0.6.2", default-features = false, features = ["alloc"] }
 objc2 = "0.6.5"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSButton", "NSControl", "NSEvent", "NSImage", "NSResponder", "NSView", "NSWindow", "objc2-quartz-core"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSButton", "NSControl", "NSEvent", "NSImage", "NSResponder", "NSScreen", "NSView", "NSWindow", "objc2-quartz-core"] }
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFCGTypes", "CFData", "CFDictionary", "CFNumber", "CFString"] }
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGColor", "CGPath"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSBundle", "NSData", "NSDictionary", "NSKeyValueObserving", "NSObject", "NSProcessInfo", "NSString", "NSUserDefaults", "NSValue"] }

@@ -240,6 +240,9 @@ pub struct App {
     /// the welcome view and the Server tab, while the library is not this computer's.
     server_here: bool,
     here_looked: Option<Instant>,
+    /// Until the window is open: whether to make it large then, as on its first start where
+    /// the screen was not known before (see [`super::screen`]).
+    pub settle_window: Option<bool>,
     pub playlist: Playlist,
     pub settings: Settings,
     tags: TagLoader,
@@ -371,6 +374,7 @@ impl App {
             muted: None,
             server_here: false,
             here_looked: None,
+            settle_window: None,
             playlist: Playlist::new(),
             settings,
             tags: TagLoader::new(),
@@ -451,6 +455,12 @@ impl App {
     pub fn tick(&mut self) {
         self.player.rest_device_when_idle();
         self.look_for_server_here();
+        if let Some(make_large) = self.settle_window
+            && self.view.ui.window().with_winit_window(|_| ()).is_some()
+        {
+            super::screen::settle(self.view.ui.window(), make_large);
+            self.settle_window = None;
+        }
         while let Ok(event) = self.player.events().try_recv() {
             match event {
                 Event::TrackStarted(track) => {
@@ -652,12 +662,18 @@ impl App {
         // Muted, the volume from before: the next start plays.
         self.settings.volume = self.muted.unwrap_or_else(|| self.player.volume());
         let window = self.view.ui.window();
-        // In full screen the window has the screen's size, not its own.
+        // In full screen the window has the screen's size, not its own; maximized, the size and
+        // place it had before stay, which it goes back to when no longer maximized.
         if !window.is_fullscreen() {
-            let size = window.size().to_logical(window.scale_factor());
-            // Restored as the size under the system's title bar.
-            let (width, height) = self.view.title_bar.added();
-            self.settings.window_size = Some((size.width - width, size.height - height));
+            self.settings.window_maximized = window.is_maximized();
+            if !window.is_maximized() && !window.is_minimized() {
+                let size = window.size().to_logical(window.scale_factor());
+                // Restored as the size under the system's title bar.
+                let (width, height) = self.view.title_bar.added();
+                self.settings.window_size = Some((size.width - width, size.height - height));
+                let at = window.position();
+                self.settings.window_position = Some((at.x, at.y));
+            }
         }
         self.settings.skin = self
             .skin
