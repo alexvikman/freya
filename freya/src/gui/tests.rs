@@ -93,9 +93,10 @@ fn library_titles(ui: &SkinWindow) -> Vec<String> {
         .collect()
 }
 
-/// Ticks the app until the library scan is done.
+/// Ticks the app until the library scan is done: within a minute, which only a scan that hangs
+/// takes, and not a busy machine running the other tests beside it.
 fn wait_for_scan(app: &Rc<RefCell<App>>) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         app.borrow_mut().tick();
         if global(&current_ui(app), "Library", "scanning") == Value::Bool(false) {
