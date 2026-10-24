@@ -370,6 +370,7 @@ mod tests {
             accounts: Some(Arc::new(Accounts::open(None, Some(pairing.clone())))),
             certificate: None,
             callback_port: here.rsplit_once(':').unwrap().1.parse().unwrap(),
+            updates: None,
         };
         let server = Server::start("127.0.0.1:0", freya_server::handler(served)).unwrap();
         let address = format!("http://{}", server.address());

@@ -45,6 +45,8 @@ enum Done {
     Invited(Result<(String, String, SystemTime), String>),
     /// A user taken away, or why not.
     Removed(Result<(), String>),
+    /// How updating the server goes, for an admin.
+    Update(Result<freya_protocol::ServerUpdate, String>),
 }
 
 /// A server the user logged in to, for the app to show the library of.
@@ -75,6 +77,9 @@ pub struct ServerPanel {
     users: Vec<UserInfo>,
     invite: Option<(String, String, SystemTime)>,
     invite_error: String,
+    /// How updating the server goes, for an admin, and when that was read.
+    update: Option<freya_protocol::ServerUpdate>,
+    update_read: Option<std::time::Instant>,
     /// The connection code shown on this computer, for a new device, and until when; why
     /// none could be made.
     connection_code: Option<(String, SystemTime)>,
@@ -115,6 +120,8 @@ impl ServerPanel {
             users: Vec::new(),
             invite: None,
             invite_error: String::new(),
+            update: None,
+            update_read: None,
             connection_code: None,
             connection_code_error: String::new(),
             login_waiting: false,
@@ -340,6 +347,11 @@ impl ServerPanel {
                     self.invite_error.clear();
                     self.refresh_wanted = true;
                 }
+                Done::Update(Ok(update)) => self.update = Some(update),
+                Done::Update(Err(e)) => {
+                    log::debug!("could not read how updating the server goes: {e}");
+                    self.update = None;
+                }
             }
         }
         while let Ok(heard) = self.heard.1.try_recv() {
@@ -386,6 +398,65 @@ impl ServerPanel {
             return;
         };
         self.spawn(move || Done::Users(remote.0.users().map_err(|e| e.to_string())));
+    }
+
+    /// Reads how updating the server goes, on a thread, when the account is an admin's: once a
+    /// minute, and every two seconds while the server looks or downloads.
+    pub fn load_update(&mut self, remote: Option<Arc<Remote<Http>>>) {
+        let admin = self.account.as_ref().is_some_and(|a| a.role == Role::Admin);
+        let Some(remote) = remote.filter(|_| admin) else {
+            self.update = None;
+            return;
+        };
+        let busy = self
+            .update
+            .as_ref()
+            .is_some_and(|u| matches!(u.state.as_str(), "checking" | "downloading" | "installed"));
+        let every = std::time::Duration::from_secs(if busy { 2 } else { 60 });
+        if self.update_read.is_some_and(|at| at.elapsed() < every) {
+            return;
+        }
+        self.update_read = Some(std::time::Instant::now());
+        self.spawn(move || Done::Update(remote.0.server_update().map_err(|e| e.to_string())));
+    }
+
+    /// Has the server look for an update, or install the one available; where it cannot
+    /// install itself, its page opens here instead.
+    pub fn check_update(&mut self, remote: Option<Arc<Remote<Http>>>) {
+        let Some(remote) = remote else {
+            return;
+        };
+        self.update_read = None;
+        self.spawn(move || {
+            let asked = remote.0.check_server_update();
+            Done::Update(
+                asked
+                    .and_then(|()| remote.0.server_update())
+                    .map_err(|e| e.to_string()),
+            )
+        });
+    }
+
+    pub fn install_update(&mut self, remote: Option<Arc<Remote<Http>>>) {
+        let Some(update) = &self.update else {
+            return;
+        };
+        if !update.can_install {
+            crate::update::open_page(&update.page);
+            return;
+        }
+        let Some(remote) = remote else {
+            return;
+        };
+        self.update_read = None;
+        self.spawn(move || {
+            let asked = remote.0.install_server_update();
+            Done::Update(
+                asked
+                    .and_then(|()| remote.0.server_update())
+                    .map_err(|e| e.to_string()),
+            )
+        });
     }
 
     /// Invites a user named `name`, an admin or a listener, showing the code they join with.
@@ -681,6 +752,30 @@ impl ServerPanel {
             (
                 "admin",
                 Value::Bool(account.is_some_and(|a| a.role == Role::Admin)),
+            ),
+            (
+                "update-state",
+                string(self.update.as_ref().map_or("", |u| u.state.as_str())),
+            ),
+            (
+                "update-version",
+                string(self.update.as_ref().map_or("", |u| u.version.as_str())),
+            ),
+            (
+                "update-current",
+                string(self.update.as_ref().map_or("", |u| u.current.as_str())),
+            ),
+            (
+                "update-progress",
+                Value::Number(self.update.as_ref().map_or(0.0, |u| f64::from(u.progress))),
+            ),
+            (
+                "update-error",
+                string(self.update.as_ref().map_or("", |u| u.error.as_str())),
+            ),
+            (
+                "update-can-install",
+                Value::Bool(self.update.as_ref().is_some_and(|u| u.can_install)),
             ),
             (
                 "invite-code",

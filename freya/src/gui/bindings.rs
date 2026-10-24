@@ -979,6 +979,31 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     );
     bind(
         "Server",
+        "set-start-at-login",
+        Box::new(|app, args| {
+            if let Some(Value::Bool(on)) = args.first() {
+                app.library.set_start_at_login(*on);
+            }
+        }),
+    );
+    bind(
+        "Server",
+        "check-update",
+        Box::new(|app, _| {
+            let remote = app.library.remote();
+            app.server.check_update(remote);
+        }),
+    );
+    bind(
+        "Server",
+        "install-update",
+        Box::new(|app, _| {
+            let remote = app.library.remote();
+            app.server.install_update(remote);
+        }),
+    );
+    bind(
+        "Server",
         "set-server-name",
         Box::new(|app, args| {
             app.library.set_server_name(&text_arg(args, 0));

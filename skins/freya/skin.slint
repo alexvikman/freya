@@ -7716,7 +7716,7 @@ component ServerForm inherits MenuSurface {
                 }
                 Text {
                     text: !Server.login-verified
-                        ? "Type the code Freya shows on that computer, under Settings, Server, Add a Device, or the code you were invited with. It proves that computer answered, and not another in its place."
+                        ? "Type the code Freya Server shows on that computer, in its menu under Show Connection Code, or the code you were invited with. It proves that computer answered, and not another in its place."
                         : Server.login-kind == "adopt" ? "Nobody owns this server yet. You become its owner, with the name and password you choose."
                         : Server.login-kind == "join" ? "You were invited as " + Server.login-user + ". You choose your own password."
                         : "It is the server whose computer showed the code, or the one this computer used before.";
@@ -8302,6 +8302,53 @@ component SettingsView inherits Rectangle {
                                 text: "Use This Computer";
                                 clicked => { Server.use-this-computer(); }
                             }
+                        }
+                    }
+                }
+            }
+
+            if root.tab == "server" && Server.admin: SettingsSection {
+                title: "Freya Server";
+
+                SettingsRow {
+                    label: Server.remote ? "Start when its user logs in" : "Start when you log in";
+                    detail: Server.start-at-login ? "Freya Server keeps the library up to date, and other computers can use it, without anyone starting it."
+                        : "Freya Server runs only when someone starts it.";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        Toggle {
+                            label: "Start Freya Server at login";
+                            checked: Server.start-at-login;
+                            toggled => { Server.set-start-at-login(!Server.start-at-login); }
+                        }
+                    }
+                }
+                if Server.update-state != "": SettingsRow {
+                    label: Server.update-state == "available" ? "Freya Server " + Server.update-version + " is available"
+                        : "Freya Server " + Server.update-current;
+                    detail: Server.update-state == "available"
+                        ? (Server.update-can-install ? "It is running " + Server.update-current + ". Updated, it starts again, and Freya connects again by itself."
+                            : "It is running " + Server.update-current + ". Download the new version for its computer, and install it there.")
+                        : Server.update-state == "downloading" ? "Downloading " + Server.update-version + "… " + round(Server.update-progress * 100) + " %"
+                        : Server.update-state == "installed" ? "Starting again as " + Server.update-version + "…"
+                        : Server.update-state == "checking" ? "Looking for an update…"
+                        : Server.update-state == "up-to-date" ? "It is the newest version."
+                        : Server.update-state == "failed" ? Server.update-error
+                        : "It looks for updates once a day, and installs them only when you say so.";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        if Server.update-state == "available": TextButton {
+                            text: Server.update-can-install ? "Update Server" : "Download…";
+                            primary: true;
+                            clicked => { Server.install-update(); }
+                        }
+                        if Server.update-state != "available" && Server.update-state != "downloading" && Server.update-state != "installed": TextButton {
+                            text: Server.update-state == "checking" ? "Looking…" : "Check for Updates";
+                            clicked => { Server.check-update(); }
                         }
                     }
                 }

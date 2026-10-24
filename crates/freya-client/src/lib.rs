@@ -917,6 +917,32 @@ impl Http {
         }
     }
 
+    /// How updating the server goes; only for an admin.
+    pub fn server_update(&self) -> ApiResult<freya_protocol::ServerUpdate> {
+        let answer = self.send(|http| http.get("/server/update").call())?;
+        match read_at_most(answer, MAX_SMALL)? {
+            (200, body) => serde_json::from_slice(&body).map_err(failed),
+            (status, body) => Err(error(status, &body)),
+        }
+    }
+
+    /// Has the server look for an update now, or install the one available and restart into
+    /// it; only for an admin.
+    pub fn check_server_update(&self) -> ApiResult<()> {
+        self.server_update_asked("/server/update/check")
+    }
+
+    pub fn install_server_update(&self) -> ApiResult<()> {
+        self.server_update_asked("/server/update/install")
+    }
+
+    fn server_update_asked(&self, path: &str) -> ApiResult<()> {
+        match self.send_json(path, &serde_json::Value::Null)? {
+            (200, _) => Ok(()),
+            (status, body) => Err(error(status, &body)),
+        }
+    }
+
     /// A new connection code for a device to type, shown on this server's computer, and how
     /// long it lasts; only for an admin.
     pub fn connection_code(&self) -> ApiResult<(String, Duration)> {

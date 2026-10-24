@@ -2,12 +2,13 @@
 //! LaunchAgent on macOS, a systemd user service on Linux, and the Run key on Windows. Each is
 //! the user's own and starts the server as them, with their music folders and drives. It is
 //! started again only if it fails: a server that finds another one on its port, or was told
-//! to stop, ends for good.
+//! to stop, ends for good. The server registers itself, as its settings say; one running is
+//! never stopped by it.
 
 use std::path::{Path, PathBuf};
 
 /// What starts the server: a program, its arguments, and the home folder it keeps its data
-/// under: the one of the Freya that asked for it, as what starts it at login may not know it.
+/// under: the running server's, as what starts it at login may not know it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Launch {
     pub program: PathBuf,
@@ -16,41 +17,48 @@ pub struct Launch {
 }
 
 impl Launch {
-    /// The server `server` beside Freya: run as it is, or from an AppImage, through
-    /// `freya server`, so the image stays mounted while the server runs.
-    pub fn of(server: &Path) -> Self {
+    /// The running server: its program, or the AppImage it runs from, so the image is
+    /// mounted while it runs.
+    pub fn own() -> Option<Self> {
+        let exe = std::env::current_exe().ok()?;
+        Some(Self::of(
+            &exe,
+            std::env::var_os("APPIMAGE").map(PathBuf::from),
+            std::env::var_os("APPDIR").map(PathBuf::from),
+        ))
+    }
+
+    /// The server `exe`, run as it is, or from the AppImage `image` mounted at `mounted` when
+    /// it runs from inside it: another AppImage that started it passes its variables on.
+    fn of(exe: &Path, image: Option<PathBuf>, mounted: Option<PathBuf>) -> Self {
         let home = std::env::var_os("HOME").map(PathBuf::from);
-        match std::env::var_os("APPIMAGE") {
-            Some(image) => Self {
-                program: PathBuf::from(image),
-                args: vec!["server".into()],
-                home,
-            },
-            None => Self {
-                program: server.to_owned(),
-                args: Vec::new(),
-                home,
-            },
+        let program = match (image, mounted) {
+            (Some(image), Some(mounted)) if exe.starts_with(&mounted) => image,
+            _ => exe.to_owned(),
+        };
+        Self {
+            program,
+            args: Vec::new(),
+            home,
         }
     }
 }
 
 /// What the server is called where the system keeps what starts at login.
 #[cfg(target_os = "macos")]
-const LABEL: &str = "io.github.alexvikman.freya.server";
+pub const LABEL: &str = "io.github.alexvikman.freya.server";
 
 /// Whether the server starts when the user logs in.
 pub fn is_installed() -> bool {
     platform::file().is_some_and(|file| file.exists()) || platform::registered()
 }
 
-/// Makes the server start, as `launch` says, when the user logs in; and now, if it does not
-/// run yet.
+/// Makes the server start, as `launch` says, when the user logs in.
 pub fn install(launch: &Launch) -> Result<(), String> {
     platform::install(launch)
 }
 
-/// The server no longer starts when the user logs in; one running now is stopped.
+/// The server no longer starts when the user logs in; one running now goes on.
 pub fn uninstall() -> Result<(), String> {
     platform::uninstall()
 }
@@ -124,12 +132,13 @@ mod platform {
         .map_err(|e| format!("launchd did not take the server: {e}"))
     }
 
+    /// Only the file goes: launchd forgets the agent at logout, and the server running now
+    /// goes on.
     pub fn uninstall() -> Result<(), String> {
         let file = file().ok_or("no home folder")?;
         if !file.exists() {
             return Ok(());
         }
-        let _ = run("launchctl", &["bootout", &format!("{}/{LABEL}", domain()?)]);
         std::fs::remove_file(&file).map_err(|e| e.to_string())
     }
 
@@ -202,20 +211,20 @@ mod platform {
 
     pub fn install(launch: &Launch) -> Result<(), String> {
         let file = file().ok_or("no settings folder")?;
-        if !write_if_changed(&file, &unit(launch))? {
-            return Ok(());
+        if write_if_changed(&file, &unit(launch))? {
+            run("systemctl", &["--user", "daemon-reload"])?;
         }
-        run("systemctl", &["--user", "daemon-reload"])?;
-        run("systemctl", &["--user", "enable", "--now", UNIT])
+        run("systemctl", &["--user", "enable", UNIT])
             .map_err(|e| format!("systemd did not take the server: {e}"))
     }
 
+    /// The server running now goes on, under systemd or not.
     pub fn uninstall() -> Result<(), String> {
         let file = file().ok_or("no settings folder")?;
         if !file.exists() {
             return Ok(());
         }
-        let _ = run("systemctl", &["--user", "disable", "--now", UNIT]);
+        let _ = run("systemctl", &["--user", "disable", UNIT]);
         std::fs::remove_file(&file).map_err(|e| e.to_string())?;
         run("systemctl", &["--user", "daemon-reload"])
     }
@@ -331,10 +340,6 @@ mod platform {
         if status != 0 {
             return Err(format!("Windows did not take the server ({status})"));
         }
-        // Started now too, as Windows does only at the next login.
-        let mut start = std::process::Command::new(&launch.program);
-        start.args(&launch.args);
-        let _ = start.spawn();
         Ok(())
     }
 
@@ -352,12 +357,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_appimage_starts_the_server_through_freya() {
-        // Only this test reads APPIMAGE, set as an AppImage sets it.
-        let server = Path::new("/opt/freya/freya-server");
-        if std::env::var_os("APPIMAGE").is_none() {
-            assert_eq!(Launch::of(server).program, server);
-        }
+    fn an_appimage_is_started_as_the_image() {
+        let mounted = PathBuf::from("/tmp/.mount_FreyaSAbC");
+        let inside = mounted.join("usr/bin/freya-server");
+        let image = PathBuf::from("/home/a/FreyaServer.AppImage");
+        let launch = Launch::of(&inside, Some(image.clone()), Some(mounted.clone()));
+        assert_eq!((launch.program, launch.args), (image.clone(), Vec::new()));
+        // Started from another AppImage, whose variables it inherited.
+        let elsewhere = Path::new("/opt/freya/freya-server");
+        assert_eq!(
+            Launch::of(elsewhere, Some(image), Some(mounted)).program,
+            elsewhere
+        );
     }
 
     #[cfg(target_os = "macos")]

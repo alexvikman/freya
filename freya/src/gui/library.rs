@@ -987,6 +987,11 @@ impl LibraryPanel {
         self.tell_settings();
     }
 
+    pub fn set_start_at_login(&mut self, on: bool) {
+        self.settings.start_at_login = on;
+        self.tell_settings();
+    }
+
     pub fn set_server_name(&mut self, name: &str) {
         self.settings.name = name.trim().to_owned();
         self.tell_settings();
@@ -4731,6 +4736,7 @@ mod tests {
             accounts: None,
             certificate: None,
             callback_port: freya_protocol::CALLBACK_PORT,
+            updates: None,
         };
         let server =
             freya_server::http::Server::start("127.0.0.1:0", freya_server::handler(served))

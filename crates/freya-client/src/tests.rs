@@ -40,6 +40,7 @@ fn served(name: &str) -> (Server, Arc<dyn LibraryApi>, Arc<dyn LibraryApi>, Path
         accounts: None,
         certificate: None,
         callback_port: freya_protocol::CALLBACK_PORT,
+        updates: None,
     };
     let server = Server::start("127.0.0.1:0", freya_server::handler(served)).unwrap();
     let remote = connect(&format!("http://{}", server.address()), None, None);
@@ -182,6 +183,7 @@ fn the_server_is_told_what_to_do_and_tells_what_happens() {
         accounts: None,
         certificate: None,
         callback_port: freya_protocol::CALLBACK_PORT,
+        updates: None,
     };
     let server = Server::start("127.0.0.1:0", freya_server::handler(served)).unwrap();
     let remote = connect(&format!("http://{}", server.address()), None, None);
@@ -331,6 +333,7 @@ fn answers_kept_are_never_out_of_date() {
         accounts: None,
         certificate: None,
         callback_port: freya_protocol::CALLBACK_PORT,
+        updates: None,
     };
     let server = Server::start("127.0.0.1:0", freya_server::handler(served)).unwrap();
     let address = format!("http://{}", server.address());
@@ -482,6 +485,28 @@ fn a_track_plays_from_the_server() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// An update of the server always available, counting how often it was asked for anew.
+#[derive(Default)]
+struct Offered(std::sync::atomic::AtomicUsize);
+
+impl freya_server::Updating for Offered {
+    fn status(&self) -> freya_protocol::ServerUpdate {
+        freya_protocol::ServerUpdate {
+            state: "available".into(),
+            version: "9.0.0".into(),
+            ..Default::default()
+        }
+    }
+
+    fn check(&self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn install(&self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 #[test]
 fn only_a_device_with_a_token_is_answered() {
     let dir = std::env::temp_dir().join(format!("freya-client-tokens-{}", std::process::id()));
@@ -512,6 +537,7 @@ fn only_a_device_with_a_token_is_answered() {
         Some(dir.join("accounts.json")),
         Some(pairing_key.clone()),
     ));
+    let offered = Arc::new(Offered::default());
     let served = Served {
         library: service.api(),
         server: Some(Arc::clone(&service) as _),
@@ -519,6 +545,7 @@ fn only_a_device_with_a_token_is_answered() {
         accounts: Some(Arc::clone(&accounts)),
         certificate: None,
         callback_port: freya_protocol::CALLBACK_PORT,
+        updates: Some(Arc::clone(&offered) as _),
     };
     let server = Server::start("127.0.0.1:0", freya_server::handler(served)).unwrap();
     let address = format!("http://{}", server.address());
@@ -545,6 +572,11 @@ fn only_a_device_with_a_token_is_answered() {
     assert!(Http::new(&address).pair(&key, "Mac again").is_err());
     let mac = connect(&address, Some(token.clone()), None);
     assert_eq!(mac.stats().unwrap().tracks, 1);
+    // The owner, an admin, sees the server's update and asks for one.
+    assert_eq!(mac.0.server_update().unwrap().version, "9.0.0");
+    mac.0.check_server_update().unwrap();
+    assert_eq!(offered.0.load(std::sync::atomic::Ordering::Relaxed), 1);
+    assert!(stranger.0.server_update().is_err());
     assert!(mac.events().is_ok());
     let audio = agent
         .get(&audio_url(&address, &track))
@@ -691,6 +723,9 @@ fn only_a_device_with_a_token_is_answered() {
     assert!(phone.save_playlist("Kim's", &[]).is_err());
     let refused = phone.settings().unwrap_err();
     assert!(refused.0.contains("admin"), "{refused:?}");
+    assert!(phone.0.server_update().is_err());
+    assert!(phone.0.install_server_update().is_err());
+    assert_eq!(offered.0.load(std::sync::atomic::Ordering::Relaxed), 1);
     assert!(phone.set_settings(&ServerSettings::default()).is_err());
     assert!(phone.rescan().is_err());
     assert!(phone.server_folders(None).is_err());
@@ -741,6 +776,7 @@ fn a_server_elsewhere_is_reached_over_tls_with_its_certificate_pinned() {
         accounts: None,
         certificate: Some(identity.certificate.clone()),
         callback_port: freya_protocol::CALLBACK_PORT,
+        updates: None,
     };
     let server = Server::start_tls(
         "127.0.0.1:0",
@@ -870,6 +906,7 @@ fn a_server_is_adopted_and_joined_with_codes() {
         accounts: Some(Arc::clone(&accounts)),
         certificate: Some(identity.certificate.clone()),
         callback_port: freya_protocol::CALLBACK_PORT,
+        updates: None,
     };
     let server = Server::start_tls(
         "127.0.0.1:0",
@@ -967,6 +1004,7 @@ fn a_new_device_knows_the_server_by_its_connection_code() {
         accounts: Some(Arc::clone(&accounts)),
         certificate: Some(identity.certificate.clone()),
         callback_port: freya_protocol::CALLBACK_PORT,
+        updates: None,
     };
     let server = Server::start_tls(
         "127.0.0.1:0",
@@ -1027,6 +1065,7 @@ fn a_program_in_the_local_servers_place_is_given_nothing() {
         accounts: None,
         certificate: Some(theirs.certificate.clone()),
         callback_port: freya_protocol::CALLBACK_PORT,
+        updates: None,
     };
     let impostor = Server::start_tls(
         "127.0.0.1:0",
@@ -1162,6 +1201,7 @@ fn measure_a_real_library() {
         accounts: None,
         certificate: Some(identity.certificate.clone()),
         callback_port: freya_protocol::CALLBACK_PORT,
+        updates: None,
     };
     let server = Server::start_tls(
         "127.0.0.1:0",

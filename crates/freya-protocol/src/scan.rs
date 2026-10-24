@@ -100,6 +100,9 @@ pub struct ServerSettings {
     pub network: bool,
     /// What the server is called where clients find it; the computer's name when empty.
     pub name: String,
+    /// Whether the server starts when its user logs in to its computer, so the library is
+    /// there without anyone starting it.
+    pub start_at_login: bool,
 }
 
 impl Default for ServerSettings {
@@ -115,8 +118,31 @@ impl Default for ServerSettings {
             fanart_key: None,
             network: true,
             name: String::new(),
+            start_at_login: true,
         }
     }
+}
+
+/// How updating the server goes, for its admins: Freya Server looks for a newer release of
+/// itself, and installs it only when an admin says so.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub struct ServerUpdate {
+    /// "idle", "checking", "up-to-date", "available", "downloading", "installed" (the server
+    /// restarts into it) or "failed".
+    pub state: String,
+    /// The running server's version, and the newer one while one is available.
+    pub current: String,
+    pub version: String,
+    /// The new version's release notes, as plain text.
+    pub notes: String,
+    /// 0 to 1 while downloading.
+    pub progress: f32,
+    pub error: String,
+    /// Whether the server installs it itself; otherwise `page` is where to get it, as for a
+    /// Windows installer or a `.deb`.
+    pub can_install: bool,
+    pub page: String,
 }
 
 /// Where a server takes clients on other computers, over TLS, and answers those looking for

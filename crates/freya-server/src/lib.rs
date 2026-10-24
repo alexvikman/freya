@@ -11,8 +11,8 @@ mod folders;
 mod hostile;
 pub mod http;
 mod lastfm;
-#[cfg(target_os = "macos")]
-pub mod menu_bar;
+#[cfg(any(target_os = "macos", windows))]
+pub mod menu;
 mod pages;
 mod playlists;
 mod scrobbler;
@@ -21,9 +21,10 @@ mod service;
 pub mod settings;
 pub mod take_in;
 pub mod tls;
+pub mod updates;
 
 pub use lastfm::lastfm;
-pub use serve::{Served, admit, found, handler};
+pub use serve::{Served, Updating, admit, found, handler};
 pub use service::{LocalLibrary, Service, ServiceConfig};
 
 /// Where a server on this computer listens.

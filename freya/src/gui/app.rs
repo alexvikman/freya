@@ -1496,6 +1496,7 @@ impl App {
         if let Some(chosen) = self.server.poll() {
             self.use_remote_server(chosen);
         }
+        self.server.load_update(self.library.remote());
         if self.server.take_refresh_wanted() {
             let remote = self.library.remote();
             self.server.refresh(remote.as_deref());
@@ -1808,6 +1809,14 @@ impl App {
                 Value::Bool(self.library.server_settings().is_none_or(|s| s.network)),
             ),
             ("chosen", Value::Bool(chosen)),
+            (
+                "start-at-login",
+                Value::Bool(
+                    self.library
+                        .server_settings()
+                        .is_none_or(|s| s.start_at_login),
+                ),
+            ),
             ("here", Value::Bool(self.server_here)),
         ];
         server.extend(self.server.values());

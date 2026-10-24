@@ -1115,6 +1115,13 @@ skin_api! {
         Server."network" => set_network, get_network;
         Server."chosen" => set_chosen, get_chosen;
         Server."here" => set_here, get_here;
+        Server."start-at-login" => set_start_at_login, get_start_at_login;
+        Server."update-state" => set_update_state, get_update_state;
+        Server."update-version" => set_update_version, get_update_version;
+        Server."update-current" => set_update_current, get_update_current;
+        Server."update-progress" => set_update_progress, get_update_progress;
+        Server."update-error" => set_update_error, get_update_error;
+        Server."update-can-install" => set_update_can_install, get_update_can_install;
         Server."user" => set_user, get_user;
         Server."has-password" => set_has_password, get_has_password;
         Server."devices" => set_devices, get_devices;
@@ -1315,6 +1322,9 @@ skin_api! {
         Server."show-connection-code" => on_show_connection_code, invoke_show_connection_code();
         Server."set-network" => on_set_network, invoke_set_network(on: bool);
         Server."set-server-name" => on_set_server_name, invoke_set_server_name(name: SharedString);
+        Server."set-start-at-login" => on_set_start_at_login, invoke_set_start_at_login(on: bool);
+        Server."check-update" => on_check_update, invoke_check_update();
+        Server."install-update" => on_install_update, invoke_install_update();
         Server."browse-start" => on_browse_start, invoke_browse_start();
         Server."browse-into" => on_browse_into, invoke_browse_into(index: i32);
         Server."browse-up" => on_browse_up, invoke_browse_up();

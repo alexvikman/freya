@@ -1156,6 +1156,19 @@ export global Server {
     in property <string> fingerprint;
     in property <string> server-name;
     in property <bool> network: true;
+    /// Whether the server starts when its user logs in to its computer, so the library is
+    /// there without anyone starting it.
+    in property <bool> start-at-login: true;
+    /// Updating the server, for an admin: "" while unknown, "idle", "checking", "up-to-date",
+    /// "available", "downloading", "installed" (the server restarts into it) or "failed"; the
+    /// version available and the running one; 0 to 1 while downloading; why it failed; and
+    /// whether the server installs it itself, or `install-update` opens its page here.
+    in property <string> update-state;
+    in property <string> update-version;
+    in property <string> update-current;
+    in property <float> update-progress;
+    in property <string> update-error;
+    in property <bool> update-can-install;
 
     /// The account this device is connected to: its user, whether they set a password (only then
     /// can they log in on other devices), and the devices connected to it.
@@ -1238,6 +1251,10 @@ export global Server {
     callback hide-invite-code();
     callback set-network(bool);
     callback set-server-name(string);
+    callback set-start-at-login(bool);
+    /// Have the server look for an update now, or install the one available, for an admin.
+    callback check-update();
+    callback install-update();
 
     /// While choosing a music folder among the server's, from another computer: the folder
     /// shown ("" where to start: the home folder and the drives) and the folders in it.

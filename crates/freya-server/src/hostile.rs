@@ -85,6 +85,7 @@ fn served() -> (Served, Arc<Accounts>) {
         accounts: Some(Arc::clone(&accounts)),
         certificate: Some(crate::tls::Identity::make().unwrap().certificate),
         callback_port: freya_protocol::CALLBACK_PORT,
+        updates: None,
     };
     (served, accounts)
 }

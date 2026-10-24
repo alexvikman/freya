@@ -1781,6 +1781,7 @@ dependencies = [
  "freya-lastfm",
  "freya-library",
  "freya-protocol",
+ "freya-update",
  "httparse",
  "image",
  "libc",
@@ -1795,6 +1796,7 @@ dependencies = [
  "serde_json",
  "toml",
  "windows-sys 0.61.2",
+ "winresource",
 ]
 
 [[package]]

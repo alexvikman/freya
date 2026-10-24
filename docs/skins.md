@@ -430,6 +430,8 @@ The server that keeps the library: Freya Server on this computer, or on another 
 | `error` | string | Why it is unreachable, or must be logged in to |
 | `fingerprint` | string | The server's certificate's fingerprint |
 | `server-name`, `network` | string, bool | For the server on this computer: what others find it as, and whether they may connect |
+| `start-at-login` | bool | Whether the server starts when its user logs in to its computer |
+| `update-state`, `update-version`, `update-current`, `update-progress`, `update-error`, `update-can-install` | string, string, string, float, string, bool | Updating the server, for an admin: "" while unknown, "idle", "checking", "up-to-date", "available", "downloading", "installed" (it restarts into it) or "failed"; the version available and the running one; 0 to 1 while downloading; why it failed; whether it installs itself, or `install-update()` opens its page |
 | `user`, `has-password` | string, bool | The account this computer is connected to, and whether it has a password; only then can other computers log in |
 | `devices` | [`ServerDevice`] | The devices connected to the account: `id`, `name`, `connected` and `used` (dates; `used` is "" when not known), `joined` ("paired" on the server's own computer, "logged-in" in the browser, or ""), `this` |
 | `password-waiting`, `password-error` | bool, string | While the page the password is set or changed on is open in the browser; why it could not be opened |
@@ -456,6 +458,8 @@ The server that keeps the library: Freya Server on this computer, or on another 
 | `log-out()` | Logs this computer out of the server elsewhere: the server takes its token back, and no server is chosen until one is again |
 | `invite-user(name, admin)`, `invite-again(name)`, `remove-user(name)`, `hide-invite-code()` | For an admin: invites a user, an admin or a listener, showing the code they join with; invites one again with a new code (for one who joined, it lets them choose a new password); takes one away with their devices; stops showing the code |
 | `set-network(on)`, `set-server-name(name)` | For the server on this computer |
+| `set-start-at-login(on)` | Whether the server starts when its user logs in |
+| `check-update()`, `install-update()` | Has the server look for an update now, or install the one available, for an admin |
 | `browse-start()`, `browse-into(index)`, `browse-up()`, `browse-add()`, `browse-cancel()` | Choosing a music folder among a server's on another computer: `browsing`, `browse-folder` ("" where to start: the home folder and the drives) and `browse-folders` say what is shown; `browse-add` adds the folder shown to `Library.folders-draft` |
 
 ### `Updates`

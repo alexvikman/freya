@@ -82,6 +82,13 @@ fn main() {
         eprintln!("freya-server: {e}");
         std::process::exit(1);
     }
+    std::process::exit(exit_code());
+}
+
+/// What the server ends with: 0, or after an update, what has launchd or systemd start it
+/// again.
+fn exit_code() -> i32 {
+    freya_server::updates::EXIT_CODE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> Result<(), String> {
@@ -135,8 +142,10 @@ fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> 
         config,
     )?);
     let (stop, stopped) = channel();
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     let menu_stop = stop.clone();
+    let updates = freya_server::updates::Updates::start(stop.clone());
+    follow_autostart(Arc::clone(&service));
     let quit = {
         let stop = stop.clone();
         Arc::new(move || {
@@ -152,6 +161,8 @@ fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> 
         Some(data.join(PAIRING_KEY)),
     ));
     keep_adoption_code(Arc::clone(&accounts), data.join(ADOPTION_CODE));
+    #[cfg(any(target_os = "macos", windows))]
+    let menu_accounts = Arc::clone(&accounts);
     let served = Served {
         library: service.api(),
         server: Some(Arc::clone(&service) as _),
@@ -159,6 +170,7 @@ fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> 
         accounts: Some(accounts),
         certificate: Some(identity.certificate.clone()),
         callback_port: freya_protocol::CALLBACK_PORT,
+        updates: Some(Arc::clone(&updates) as _),
     };
     // TLS on this computer too, with the certificate the client here pins from this folder.
     let server = Server::serve_on(
@@ -168,6 +180,8 @@ fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> 
         admit(served.clone()),
     )
     .map_err(|e| format!("could not listen on {address}: {e}"))?;
+    #[cfg(any(target_os = "macos", windows))]
+    let menu_service = Arc::clone(&service);
     let network = Network::follow(served, Arc::clone(&service), identity);
     log::info!(
         "Freya's server {} serves {} on {}",
@@ -182,24 +196,66 @@ fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> 
         drop(server);
         drop(service);
     };
-    // AppKit runs on the main thread until the process ends, so stopping is another thread's.
-    #[cfg(target_os = "macos")]
+    // The menu bar's or the notification area's icon runs on the main thread until the process
+    // ends, so stopping is another thread's.
+    #[cfg(any(target_os = "macos", windows))]
     {
         let closing = std::thread::spawn(move || {
             close();
-            std::process::exit(0)
+            std::process::exit(exit_code())
         });
-        let actions = freya_server::menu_bar::Actions {
+        let actions = freya_server::menu::Actions {
             stop: menu_stop,
             log: data.join("server.log"),
+            service: menu_service,
+            accounts: menu_accounts,
+            updates,
         };
-        if freya_server::menu_bar::run(actions).is_none() {
+        if freya_server::menu::run(actions).is_none() {
             let _ = closing.join();
         }
     }
-    #[cfg(not(target_os = "macos"))]
-    close();
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        let _ = updates;
+        close();
+    }
     Ok(())
+}
+
+/// Keeps the server starting at login as its settings say, pointing at this program, which
+/// moves with an update; looked at every few seconds, so a change takes at once. Never from a
+/// development build, which is not the program to start.
+fn follow_autostart(service: Arc<Service>) {
+    use freya_server::autostart;
+    if cfg!(debug_assertions) {
+        return;
+    }
+    let _ = std::thread::Builder::new()
+        .name("freya-autostart".into())
+        .spawn(move || {
+            let mut applied = None;
+            loop {
+                if let Ok(settings) = service.settings() {
+                    let wanted = settings.start_at_login;
+                    if applied != Some(wanted) {
+                        let done = if wanted {
+                            autostart::Launch::own()
+                                .ok_or_else(|| "the server's program is unknown".to_owned())
+                                .and_then(|launch| autostart::install(&launch))
+                        } else {
+                            autostart::uninstall()
+                        };
+                        if let Err(e) = done {
+                            log::warn!("could not change how the server starts: {e}");
+                        }
+                        // Not tried again and again: once a change asks for it.
+                        applied = Some(wanted);
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_secs(2));
+            }
+        });
 }
 
 /// Raises how many files the server may hold open to as many as the system lets it: started by

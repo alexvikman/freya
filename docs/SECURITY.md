@@ -174,7 +174,12 @@ Nobody can wear it out before logging in:
   `tls-certificate.der` and `server.log`, all 0600, written as new files and renamed into place.
   Started at login, the server makes files for the user alone (launchd's `Umask`, systemd's
   `UMask=0077`); on Linux its unit gains no privileges, and seccomp lets it make only a
-  service's system calls; it retries every ten seconds, never giving up.
+  service's system calls; it retries every ten seconds, never giving up. The server registers
+  itself to start at login, as its settings say; Freya never starts, stops or registers it.
+- The server updates itself as Freya does, only when an admin says so: in its menu, on its
+  own computer, or from Freya by an admin's device (`/server/…`, kept from listeners). A
+  release is installed only if its `SHA256SUMS` carries a signature with a key built in, and
+  the file matches its line there.
 - Accounts, the certificate or the key that cannot be read stop the server rather than being
   made anew, which would lose the users or break every device's pin.
 - No secret is logged; names lose control characters before they are.

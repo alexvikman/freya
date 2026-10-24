@@ -77,6 +77,18 @@ pub struct Served {
     /// The port of Freya's callback on a browser's computer, which login codes are sent to:
     /// [`freya_protocol::CALLBACK_PORT`], or another in tests.
     pub callback_port: u16,
+    /// Updating the server, for its admins; none in tests.
+    pub updates: Option<Arc<dyn Updating>>,
+}
+
+/// Updating the server: what admins see of it, and ask of it.
+pub trait Updating: Send + Sync {
+    fn status(&self) -> freya_protocol::ServerUpdate;
+    /// Looks for a newer release now.
+    fn check(&self);
+    /// Installs the available one, and restarts into it; where the server cannot install
+    /// itself, nothing, and `status().page` is where to get it.
+    fn install(&self);
 }
 
 /// Answers requests to the API as `served` says.
@@ -334,6 +346,25 @@ fn answer(served: &Served, answers: &Answers, request: Request) -> Response {
             200,
             &serde_json::json!({ "version": env!("CARGO_PKG_VERSION") }),
         ),
+        // Updating the server, by an admin: listeners are kept from it above.
+        ("GET", "/server/update") => match &served.updates {
+            Some(updates) => match serde_json::to_value(updates.status()) {
+                Ok(status) => Response::json(200, &status),
+                Err(e) => Response::error(500, e),
+            },
+            None => Response::error(404, "this server is not updated from here"),
+        },
+        ("POST", "/server/update/check" | "/server/update/install") => match &served.updates {
+            Some(updates) => {
+                if path.ends_with("/check") {
+                    updates.check();
+                } else {
+                    updates.install();
+                }
+                Response::json(200, &serde_json::Value::Null)
+            }
+            None => Response::error(404, "this server is not updated from here"),
+        },
         // From this computer, and with accounts by an admin's device paired there.
         ("POST", "/quit") => match &served.quit {
             Some(quit)
@@ -361,6 +392,8 @@ fn listener_may(request: &Request, path: &str) -> bool {
         ("POST", call) if call.starts_with("/call/") => {
             LISTENER_CALLS.contains(&&call["/call/".len()..])
         }
+        // The server itself, as updating it, is its admins'.
+        (_, server) if server.starts_with("/server/") => false,
         _ => true,
     }
 }
@@ -1071,6 +1104,7 @@ mod tests {
             accounts: Some(Arc::clone(&accounts)),
             certificate: None,
             callback_port: freya_protocol::CALLBACK_PORT,
+            updates: None,
         };
         let limit = admit(served);
         let mut asked = request(&[], b"");
