@@ -77,9 +77,6 @@ pub struct Settings {
     pub scan_at_start: bool,
     /// The server on another computer the library is on.
     pub server: Option<SavedServer>,
-    /// Whether the library is this computer's server's, when none elsewhere is chosen. With
-    /// neither, Freya shows only its welcome view, to connect to one.
-    pub here: bool,
     /// Whose library Up Next was saved from: the certificate of the server elsewhere, in hex,
     /// or none for this computer's. Restored only for the same.
     pub queue_from: Option<String>,
@@ -152,7 +149,6 @@ impl Default for Settings {
             scan_every_hours: 24,
             scan_at_start: false,
             server: None,
-            here: false,
             queue_from: None,
             damaged: false,
         }
@@ -177,13 +173,13 @@ pub fn cache_dir() -> Option<PathBuf> {
     dirs().map(|d| d.cache_dir().to_owned())
 }
 
-/// The key a client on this computer pairs with Freya's server through, where a server started
-/// from here writes it.
-pub fn pairing_key_path() -> Option<PathBuf> {
+/// The code Freya Server on this computer is adopted with, in its folder while it is not
+/// adopted yet: readable by its user alone, as Freya here is.
+pub fn adoption_code_path() -> Option<PathBuf> {
     dirs().map(|d| {
         d.data_dir()
             .join("server")
-            .join(freya_protocol::PAIRING_KEY)
+            .join(freya_protocol::ADOPTION_CODE)
     })
 }
 

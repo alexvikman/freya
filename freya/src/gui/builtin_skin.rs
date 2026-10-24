@@ -1131,6 +1131,7 @@ skin_api! {
         Server."found" => set_found, get_found;
         Server."logging-in" => set_logging_in, get_logging_in;
         Server."login-address" => set_login_address, get_login_address;
+        Server."login-name" => set_login_name, get_login_name;
         Server."login-fingerprint" => set_login_fingerprint, get_login_fingerprint;
         Server."login-busy" => set_login_busy, get_login_busy;
         Server."login-waiting" => set_login_waiting, get_login_waiting;

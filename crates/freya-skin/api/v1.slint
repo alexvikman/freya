@@ -1189,6 +1189,9 @@ export global Server {
     /// browser, and what went wrong.
     in property <bool> logging-in;
     in property <string> login-address;
+    /// What the server chosen is called: as it was found, as it was typed, or this computer's
+    /// name for Freya Server on this computer.
+    in property <string> login-name;
     in property <string> login-fingerprint;
     in property <bool> login-busy;
     in property <bool> login-waiting;
@@ -1234,7 +1237,8 @@ export global Server {
     /// Freya uses the server once the user logged in there.
     callback log-in();
     callback cancel-login();
-    /// Use the library of Freya Server on this computer.
+    /// Log in to Freya Server on this computer, as to any server, without a code: adopting it
+    /// first while nobody has (`logging-in` and the rest follow as for a server chosen).
     callback use-this-computer();
     /// Open the page the account's password is set or changed on in the browser.
     callback change-password();

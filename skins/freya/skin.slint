@@ -4209,7 +4209,7 @@ component LibraryPanel inherits FocusScope {
 
     property <bool> server-lost: Server.chosen && (Server.state == "unreachable" || Server.state == "log-in" || Server.state == "version");
     /// What the library's server is called here: its name, or this computer's.
-    property <string> server-called: Server.remote ? Server.name : "Freya Server on this computer";
+    property <string> server-called: Server.name;
 
     if Library.rows.length == 0: VerticalLayout {
         alignment: center;
@@ -4234,7 +4234,7 @@ component LibraryPanel inherits FocusScope {
         Text {
             text: root.server-lost && Server.state == "log-in" ? "The library is on " + Server.name + ", which wants you to log in again."
                 : root.server-lost && Server.state == "version" ? Server.error
-                : root.server-lost && Server.remote ? "The library is on " + Server.name + ". Freya tries again by itself, and shows the music once it is back."
+                : root.server-lost && Server.state == "unreachable" ? "The library is on " + Server.name + ". Freya tries again by itself, and shows the music once it is back."
                 : root.server-lost ? Server.error + " Freya tries again by itself, and shows the music once it answers."
                 : Library.folders.length == 0 ? "Choose the folder your music is in. Freya lists it by artist and album, and checks it for changes each time it starts."
                 : Library.scanning ? Library.status
@@ -5467,14 +5467,8 @@ component FoldersForm inherits MenuSurface {
 
             TextButton {
                 text: "Add Folder…";
-                // A server on another computer: among its folders, not this computer's.
-                clicked => {
-                    if (Server.remote) {
-                        Server.browse-start();
-                    } else {
-                        Library.add-draft-folder();
-                    }
-                }
+                // Among the server's folders, wherever it runs.
+                clicked => { Server.browse-start(); }
             }
         }
         if Server.browsing: VerticalLayout {
@@ -7642,10 +7636,10 @@ component ServerForm inherits MenuSurface {
 
             Text {
                 text: !Server.logging-in ? "Servers on your network"
-                    : !Server.login-verified ? "Connect to " + Server.login-address
-                    : Server.login-kind == "adopt" ? "Adopt " + Server.login-address
-                    : Server.login-kind == "join" ? "Join " + Server.login-address
-                    : "Log in to " + Server.login-address;
+                    : !Server.login-verified ? "Connect to " + Server.login-name
+                    : Server.login-kind == "adopt" ? "Adopt " + Server.login-name
+                    : Server.login-kind == "join" ? "Join " + Server.login-name
+                    : "Log in to " + Server.login-name;
                 font-size: 17px;
                 font-weight: 600;
                 color: Theme.text;
@@ -7820,7 +7814,7 @@ component WelcomeView inherits Rectangle {
                                 color: Theme.text;
                             }
                             Text {
-                                text: Server.here ? "Use its library, with the music folders it keeps."
+                                text: Server.here ? "Use its library. Nobody has adopted it yet? You become its owner, with the name and password you choose."
                                     : "No Freya Server runs here. Install it to keep your library on this computer, or connect to one on another.";
                                 font-size: 13px;
                                 color: Theme.text-secondary;
@@ -7988,7 +7982,7 @@ component SettingsView inherits Rectangle {
                 title: "Library";
 
                 if Library.folders.length == 0: SettingsRow {
-                    label: Server.remote && Server.state != "connected" ? "The music folders show once Freya reaches " + Server.name + "."
+                    label: Server.state != "connected" ? "The music folders show once Freya reaches " + Server.name + "."
                         : "No music folders yet. Freya lists the music in them by artist and album.";
                 }
                 for folder[i] in Library.folders: SettingsRow {
@@ -8179,8 +8173,7 @@ component SettingsView inherits Rectangle {
                 title: "Server";
 
                 SettingsRow {
-                    label: "Connected to " + (Server.remote ? Server.name : Server.server-name)
-                        + (Server.remote ? " (" + Server.address + ")" : "");
+                    label: "Connected to " + Server.name;
                     detail: Server.state == "unreachable" ? "Freya cannot reach it, and tries again by itself. " + Server.error
                         : Server.state == "log-in" || Server.state == "version" ? Server.error
                         : Server.state == "connecting" ? "Connecting…"
@@ -8238,7 +8231,6 @@ component SettingsView inherits Rectangle {
                     label: "Let other computers connect";
                     detail: Server.network
                         ? "They find it on the network, prove it with a code, and log in with a password."
-                        : Server.remote ? "Turned off, this computer cannot reach it either."
                         : "Only its own computer can use it.";
 
                     VerticalLayout {
@@ -8333,7 +8325,6 @@ component SettingsView inherits Rectangle {
                     detail: Server.password-error != "" ? Server.password-error
                         : Server.password-waiting ? "Set it on the page that opened in your browser."
                         : Server.has-password ? "Other computers log in with your password, in the browser."
-                        : !Server.remote ? "Nobody has adopted this server yet. Choose your name and password to own it, and to use it from other computers."
                         : "Set a password to use this library from other computers.";
 
                     VerticalLayout {
@@ -8343,9 +8334,7 @@ component SettingsView inherits Rectangle {
                             spacing: 8px;
 
                             TextButton {
-                                text: Server.has-password ? "Change Password…"
-                                    : !Server.remote ? "Adopt This Server…"
-                                    : "Set a Password…";
+                                text: Server.has-password ? "Change Password…" : "Set a Password…";
                                 primary: !Server.has-password;
                                 clicked => { Server.change-password(); }
                             }
@@ -9106,11 +9095,10 @@ component Toolbar inherits HorizontalLayout {
         badge: true;
         label: Server.state == "log-in" ? "Log in to " + Server.name
             : Server.state == "version" ? "Freya and its server differ"
-            : Server.remote ? Server.name + " cannot be reached" : "Freya Server is not running";
+            : Server.name + " cannot be reached";
         tooltip: Server.state == "log-in" ? "Log in to " + Server.name + " again"
             : Server.state == "version" ? Server.error
-            : Server.remote ? "Freya cannot reach " + Server.name + ". It tries again by itself."
-            : Server.error + " Freya tries again by itself.";
+            : "Freya cannot reach " + Server.name + ". It tries again by itself.";
         clicked => { root.show-server(); }
     }
     activity := IconButton {

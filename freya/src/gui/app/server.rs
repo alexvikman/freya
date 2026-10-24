@@ -59,7 +59,6 @@ impl App {
             );
         }
         self.settings.server = Some(settings::SavedServer::new(&chosen.name, &chosen.pin));
-        self.settings.here = false;
         self.settings.save();
         self.server.set_known(Some(chosen.pin.certificate.clone()));
         self.leave_queue();
@@ -69,8 +68,8 @@ impl App {
         });
     }
 
-    /// Logs this computer out of the server elsewhere the library is on: the server takes its
-    /// token back, this computer forgets it, and no server is chosen: the welcome view shows.
+    /// Logs this computer out of the server the library is on: the server takes its token back,
+    /// this computer forgets it, and no server is chosen: the welcome view shows.
     pub fn log_out(&mut self) {
         let remote = self.library.remote();
         self.server.log_out(remote.as_deref());
@@ -79,30 +78,22 @@ impl App {
             store.remove(&freya_client::token_key(&pin));
         }
         self.settings.server = None;
-        self.settings.here = false;
         self.server.set_known(None);
         self.leave_queue();
         self.settings.save();
         self.show_no_library();
     }
 
-    /// Shows the library of Freya Server on this computer.
+    /// Logs in to Freya Server on this computer, as to any server: adopting it first, while
+    /// nobody has.
     pub fn use_this_computer(&mut self) {
-        self.settings.server = None;
-        self.settings.here = true;
-        self.server.set_known(None);
-        self.leave_queue();
-        self.settings.save();
-        if let Some(source) = crate::gui::local_source() {
-            self.show_library_of(source);
-        }
+        self.server.choose_this_computer();
     }
 
-    /// Looks every few seconds whether Freya Server answers on this computer, unless its
-    /// library is the one shown.
+    /// Looks every few seconds whether Freya Server answers on this computer, for the welcome
+    /// view, while no server is chosen.
     pub(super) fn look_for_server_here(&mut self) {
-        if self.settings.here && self.settings.server.is_none() {
-            self.server_here = true;
+        if self.settings.server.is_some() {
             return;
         }
         if self
@@ -114,10 +105,9 @@ impl App {
         }
     }
 
-    /// Whether a server is chosen, here or elsewhere; until one is, the skin shows only how to
-    /// connect to one.
+    /// Whether a server is chosen; until one is, the skin shows only how to connect to one.
     pub(super) fn server_chosen(&self) -> bool {
-        self.settings.server.is_some() || self.settings.here
+        self.settings.server.is_some()
     }
 
     /// Whose library is shown: the certificate of the server elsewhere, in hex, or none for this

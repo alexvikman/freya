@@ -127,18 +127,13 @@ pub fn run(options: Options) -> anyhow::Result<()> {
     player.set_equalizer(&settings.equalizer.engine());
     let make_large = screen::place(ui.window(), &settings);
 
-    // The server on another computer the user chose, else this computer's if chosen; with
-    // neither, the welcome view.
-    let source = settings
-        .server
-        .as_ref()
-        .and_then(|server| {
-            Some(library::LibrarySource::Remote {
-                pin: server.pin()?,
-                name: server.name.clone(),
-            })
+    // The server the user chose, on this computer or another; without one, the welcome view.
+    let source = settings.server.as_ref().and_then(|server| {
+        Some(library::LibrarySource::Remote {
+            pin: server.pin()?,
+            name: server.name.clone(),
         })
-        .or_else(|| local_source().filter(|_| settings.here));
+    });
     let app = Rc::new(RefCell::new(App::new(
         ui.clone(),
         skin,
@@ -290,12 +285,6 @@ fn select_backend(requested: Option<String>, events: &WindowEvents) -> anyhow::R
 /// [`freya_media::decode_picture`]).
 pub fn decode_picture(bytes: &[u8]) -> image::ImageResult<image::DynamicImage> {
     freya_media::decode_picture(bytes)
-}
-
-/// The library of Freya Server on this computer.
-pub fn local_source() -> Option<library::LibrarySource> {
-    let address = freya_protocol::LOCAL_ADDRESS.parse().ok()?;
-    Some(library::LibrarySource::Local { address })
 }
 
 /// Whether Freya Server answers on this computer, for the welcome view.

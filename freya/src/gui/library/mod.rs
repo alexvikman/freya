@@ -214,9 +214,7 @@ impl Item {
 /// Where the library comes from.
 #[derive(Clone, Debug)]
 pub enum LibrarySource {
-    /// Freya Server on this computer, at `address`.
-    Local { address: std::net::SocketAddr },
-    /// A server on another computer, its certificate pinned, called `name`.
+    /// A server, on this computer or another, its certificate pinned, called `name`.
     Remote {
         pin: freya_client::Pin,
         name: String,

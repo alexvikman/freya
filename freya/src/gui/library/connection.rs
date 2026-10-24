@@ -336,31 +336,6 @@ pub(super) fn connect(
         )
     };
     let (api, server, remote): (Arc<dyn LibraryApi>, Arc<dyn Server>, _) = match source {
-        LibrarySource::Local { address } => {
-            let (Some(pairing_key), Some(certificate), Some(store)) = (
-                crate::settings::pairing_key_path(),
-                crate::settings::server_certificate_path(),
-                crate::settings::token_store(),
-            ) else {
-                return Err(no_folder());
-            };
-            let remote = freya_client::connect_locally(
-                address,
-                &pairing_key,
-                &certificate,
-                &store,
-                &crate::settings::device_name(),
-            )
-            .map_err(|e| {
-                log::warn!("no library: {e}");
-                ("unreachable", e)
-            })?;
-            (
-                Arc::clone(&remote) as _,
-                Arc::clone(&remote) as _,
-                Some(remote),
-            )
-        }
         LibrarySource::Remote { pin, .. } => {
             let store = crate::settings::token_store().ok_or_else(no_folder)?;
             let remote = freya_client::connect_pinned(pin, store, crate::settings::cache_dir());

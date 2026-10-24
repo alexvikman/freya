@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::channel;
 
-use freya_protocol::{NETWORK_PORT, ServerControl};
+use freya_protocol::{ADOPTION_CODE, NETWORK_PORT, ServerControl};
 use freya_server::accounts::Accounts;
 use freya_server::discovery::Discovery;
 use freya_server::http::Server;
@@ -321,10 +321,6 @@ fn more_open_files() {
 
 #[cfg(not(unix))]
 fn more_open_files() {}
-
-/// Where a server not adopted yet keeps the code a device adopts it with, for
-/// `freya-server --code`: its folder, readable by its user alone.
-const ADOPTION_CODE: &str = "adoption-code";
 
 /// Keeps a connection code while the server is not adopted, written to `file` with until when
 /// it lasts, a new one as each runs out; the file goes once the server is adopted. The code

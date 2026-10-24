@@ -32,6 +32,10 @@ struct Pending {
     name: String,
 }
 
+/// Freya Server on this computer, to log in to: the server, its certificate's fingerprint,
+/// and, while it is not adopted, the ticket of its claim.
+type ThisComputer = (Pending, String, Option<(String, Claim)>);
+
 /// What a thread came back with.
 enum Done {
     Found(Vec<Found>),
@@ -47,6 +51,9 @@ enum Done {
     Removed(Result<(), String>),
     /// How updating the server goes, for an admin.
     Update(Result<freya_protocol::ServerUpdate, String>),
+    /// Freya Server on this computer, as its folder makes it known: proved, and what this
+    /// device may do with it.
+    ThisComputer(Result<ThisComputer, String>),
 }
 
 /// A server the user logged in to, for the app to show the library of.
@@ -203,6 +210,18 @@ impl ServerPanel {
         self.spawn(move || Done::Certificate(certificate(address, name, claimed)));
     }
 
+    /// Starts logging in to Freya Server on this computer, as to any other, without a code
+    /// typed: its certificate, and while it is not adopted the code it is adopted with, are read
+    /// from its folder, which only its computer's user can read.
+    pub fn choose_this_computer(&mut self) {
+        if self.login_busy {
+            return;
+        }
+        self.login_busy = true;
+        self.login_error.clear();
+        self.spawn(|| Done::ThisComputer(this_computer()));
+    }
+
     /// The certificate of the server this computer uses, once it knew it: one that gives the
     /// same is known without a code, at whatever address.
     pub fn set_known(&mut self, certificate: Option<Vec<u8>>) {
@@ -346,6 +365,17 @@ impl ServerPanel {
                 Done::Removed(Ok(())) => {
                     self.invite_error.clear();
                     self.refresh_wanted = true;
+                }
+                Done::ThisComputer(Ok((pending, fingerprint, claim))) => {
+                    self.login_busy = false;
+                    self.login_fingerprint = fingerprint;
+                    self.login_verified = true;
+                    self.claim = claim;
+                    self.login = Some(pending);
+                }
+                Done::ThisComputer(Err(e)) => {
+                    self.login_busy = false;
+                    self.login_error = e;
                 }
                 Done::Update(Ok(update)) => self.update = Some(update),
                 Done::Update(Err(e)) => {
@@ -719,6 +749,15 @@ impl ServerPanel {
                         .unwrap_or_default(),
                 ),
             ),
+            (
+                "login-name",
+                string(
+                    self.login
+                        .as_ref()
+                        .map(|l| l.name.clone())
+                        .unwrap_or_default(),
+                ),
+            ),
             ("login-fingerprint", string(&self.login_fingerprint)),
             ("login-busy", Value::Bool(self.login_busy)),
             ("login-waiting", Value::Bool(self.login_waiting)),
@@ -859,6 +898,45 @@ fn certificate(
         certificate,
     };
     Ok((Pending { pin, name }, fingerprint))
+}
+
+/// Freya Server on this computer, proved by the certificate in its folder, named as the
+/// computer is; with what this device may do while it is not adopted, by the code there.
+fn this_computer() -> Result<ThisComputer, String> {
+    let address: SocketAddr = freya_protocol::LOCAL_ADDRESS
+        .parse()
+        .map_err(|_| "Freya Server's address on this computer is not one.".to_owned())?;
+    let certificate = crate::settings::server_certificate_path()
+        .and_then(|file| std::fs::read(file).ok())
+        .ok_or("Freya Server on this computer is not this user's: Freya here cannot use it.")?;
+    let pin = Pin {
+        address,
+        certificate,
+    };
+    // With that certificate: else another program answers in its place.
+    Http::pinned(pin.clone())
+        .version()
+        .map_err(|_| "Freya Server on this computer did not answer as itself.".to_owned())?;
+    let fingerprint = freya_protocol::fingerprint(&pin.certificate);
+    let claim = match adoption_code() {
+        Some(code) => freya_client::verify_server(&pin, &code)?,
+        None => None,
+    };
+    let name = crate::settings::device_name();
+    Ok((Pending { pin, name }, fingerprint, claim))
+}
+
+/// The code Freya Server on this computer is adopted with, while it is not adopted and the code
+/// lasts.
+fn adoption_code() -> Option<String> {
+    let kept = std::fs::read_to_string(crate::settings::adoption_code_path()?).ok()?;
+    let mut lines = kept.lines();
+    let code = lines.next()?.trim().to_owned();
+    let until: u64 = lines.next()?.trim().parse().ok()?;
+    let now = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    (until > now && !code.is_empty()).then_some(code)
 }
 
 fn device_row(device: &freya_protocol::DeviceInfo) -> Value {
