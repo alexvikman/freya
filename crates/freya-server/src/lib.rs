@@ -9,7 +9,7 @@ mod folder_watch;
 mod folders;
 #[cfg(test)]
 mod hostile;
-pub mod http;
+pub use freya_http as http;
 mod lastfm;
 #[cfg(any(target_os = "macos", windows))]
 pub mod menu;
@@ -29,8 +29,4 @@ pub use lastfm::lastfm;
 pub use serve::{Served, Updating, admit, found, handler};
 pub use service::{LocalLibrary, Service, ServiceConfig};
 
-/// Where a server on this computer listens.
-pub const LOCAL_ADDRESS: &str = "127.0.0.1:47474";
-
-/// The file in the server's folder that the pairing key is written to (see [`accounts`]).
-pub const PAIRING_KEY: &str = "pairing.key";
+pub use freya_protocol::{LOCAL_ADDRESS, PAIRING_KEY};

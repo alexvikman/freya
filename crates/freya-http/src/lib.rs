@@ -30,17 +30,17 @@ const MAX_HEADERS: usize = 64;
 /// How long a connection may wait for its next request, and a request's head take to arrive
 /// once it began; its body may take that and a second for each [`BODY_RATE`] bytes. An answer
 /// not taken in [`WRITE_TIME`] ends the connection.
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "quick")))]
 const IDLE: Duration = Duration::from_secs(15);
-#[cfg(test)]
+#[cfg(any(test, feature = "quick"))]
 const IDLE: Duration = Duration::from_secs(2);
 /// How long a known device's connection may wait for its next request, so going back to the
 /// library after a while needs no new connection.
 const IDLE_KNOWN: Duration = Duration::from_secs(120);
-#[cfg(not(test))]
-const HEAD_TIME: Duration = Duration::from_secs(10);
-#[cfg(test)]
-const HEAD_TIME: Duration = Duration::from_secs(1);
+#[cfg(not(any(test, feature = "quick")))]
+pub const HEAD_TIME: Duration = Duration::from_secs(10);
+#[cfg(any(test, feature = "quick"))]
+pub const HEAD_TIME: Duration = Duration::from_secs(1);
 const BODY_RATE: usize = 32 * 1024;
 const WRITE_TIME: Duration = Duration::from_secs(30);
 /// The most connections of strangers served at once, and from one address; and of all.
@@ -981,38 +981,6 @@ mod tests {
             answer.ends_with("3\r\none\r\n3\r\ntwo\r\n0\r\n\r\n"),
             "{answer}"
         );
-    }
-
-    #[test]
-    fn a_byte_now_and_then_inside_tls_is_let_go() {
-        let identity = crate::tls::Identity::make().unwrap();
-        let server = Server::start_tls(
-            "127.0.0.1:0",
-            Arc::new(|_| Response::bytes(200, "text/plain", Vec::new())),
-            identity.server_config().unwrap(),
-        )
-        .unwrap();
-        // A TLS record that never ends, a byte at a time, well within each read's wait.
-        let mut slow = TcpStream::connect(server.address()).unwrap();
-        slow.set_read_timeout(Some(Duration::from_millis(100)))
-            .unwrap();
-        let started = Instant::now();
-        let mut closed = false;
-        let record = [0x16, 0x03, 0x01, 0x40, 0x00];
-        for byte in record.iter().cycle().take(200) {
-            if slow.write_all(&[*byte]).is_err() {
-                closed = true;
-                break;
-            }
-            let mut answer = [0; 64];
-            if matches!(slow.read(&mut answer), Ok(0)) {
-                closed = true;
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(200));
-        }
-        assert!(closed, "still held");
-        assert!(started.elapsed() < HEAD_TIME + Duration::from_secs(3));
     }
 
     #[test]

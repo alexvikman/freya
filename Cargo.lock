@@ -1664,6 +1664,7 @@ dependencies = [
  "env_logger",
  "freya-audio",
  "freya-client",
+ "freya-http",
  "freya-library",
  "freya-protocol",
  "freya-server",
@@ -1738,6 +1739,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "freya-http"
+version = "0.3.0"
+dependencies = [
+ "httparse",
+ "log",
+ "rustls",
+ "serde_json",
+]
+
+[[package]]
 name = "freya-lastfm"
 version = "0.3.0"
 dependencies = [
@@ -1778,11 +1789,11 @@ dependencies = [
  "directories",
  "env_logger",
  "flate2",
+ "freya-http",
  "freya-lastfm",
  "freya-library",
  "freya-protocol",
  "freya-update",
- "httparse",
  "image",
  "libc",
  "log",

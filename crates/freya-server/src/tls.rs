@@ -22,7 +22,7 @@ use crate::accounts::write_private;
 /// What a client calls the server in TLS, whatever its address.
 pub const TLS_NAME: &str = "freya-server.invalid";
 /// The files in the server's folder that hold its certificate and its key.
-pub const CERTIFICATE_FILE: &str = "tls-certificate.der";
+pub use freya_protocol::CERTIFICATE_FILE;
 const KEY_FILE: &str = "tls-key.pk8";
 
 /// The server's certificate, in DER, and its private key, in PKCS #8.
@@ -201,16 +201,7 @@ impl rustls::client::danger::ServerCertVerifier for Pinned {
     }
 }
 
-/// The SHA-256 of a certificate in DER, in groups of four hex digits.
-pub fn fingerprint(certificate: &[u8]) -> String {
-    let digest = ring::digest::digest(&ring::digest::SHA256, certificate);
-    let hex: Vec<String> = digest
-        .as_ref()
-        .chunks(2)
-        .map(|pair| pair.iter().map(|b| format!("{b:02X}")).collect())
-        .collect();
-    hex.join(" ")
-}
+pub use freya_protocol::fingerprint;
 
 /// The certificate's contents, as RFC 5280 lays them out.
 fn tbs_certificate(serial: &[u8], public_key: &[u8]) -> Vec<u8> {
@@ -317,6 +308,40 @@ fn der(tag: u8, content: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The HTTP server's, over TLS made as the server makes it.
+    #[test]
+    fn a_byte_now_and_then_inside_tls_is_let_go() {
+        use std::io::{Read, Write};
+        let identity = Identity::make().unwrap();
+        let server = freya_http::Server::start_tls(
+            "127.0.0.1:0",
+            Arc::new(|_| freya_http::Response::bytes(200, "text/plain", Vec::new())),
+            identity.server_config().unwrap(),
+        )
+        .unwrap();
+        // A TLS record that never ends, a byte at a time, well within each read's wait.
+        let mut slow = std::net::TcpStream::connect(server.address()).unwrap();
+        slow.set_read_timeout(Some(std::time::Duration::from_millis(100)))
+            .unwrap();
+        let started = std::time::Instant::now();
+        let mut closed = false;
+        let record = [0x16, 0x03, 0x01, 0x40, 0x00];
+        for byte in record.iter().cycle().take(200) {
+            if slow.write_all(&[*byte]).is_err() {
+                closed = true;
+                break;
+            }
+            let mut answer = [0; 64];
+            if matches!(slow.read(&mut answer), Ok(0)) {
+                closed = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        assert!(closed, "still held");
+        assert!(started.elapsed() < freya_http::HEAD_TIME + std::time::Duration::from_secs(3));
+    }
 
     #[test]
     fn an_identity_is_not_made_anew_over_one_unreadable() {

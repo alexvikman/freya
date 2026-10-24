@@ -294,13 +294,13 @@ pub fn decode_picture(bytes: &[u8]) -> image::ImageResult<image::DynamicImage> {
 
 /// The library of Freya Server on this computer.
 pub fn local_source() -> Option<library::LibrarySource> {
-    let address = freya_server::LOCAL_ADDRESS.parse().ok()?;
+    let address = freya_protocol::LOCAL_ADDRESS.parse().ok()?;
     Some(library::LibrarySource::Local { address })
 }
 
 /// Whether Freya Server answers on this computer, for the welcome view.
 pub fn server_here() -> bool {
-    freya_server::LOCAL_ADDRESS.parse().is_ok_and(|address| {
+    freya_protocol::LOCAL_ADDRESS.parse().is_ok_and(|address| {
         std::net::TcpStream::connect_timeout(&address, Duration::from_millis(200)).is_ok()
     })
 }

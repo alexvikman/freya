@@ -155,23 +155,7 @@ fn track_from_row(row: &Row<'_>) -> rusqlite::Result<Track> {
     })
 }
 
-/// Size and modification time of a file, to tell whether it changed since it was read.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FileStamp {
-    pub size: i64,
-    /// Milliseconds since 1970.
-    pub modified: i64,
-}
-
-impl FileStamp {
-    pub fn of(metadata: &std::fs::Metadata) -> Self {
-        let modified = metadata.modified().map_or(0, epoch_millis);
-        Self {
-            size: metadata.len() as i64,
-            modified,
-        }
-    }
-}
+pub use crate::files::FileStamp;
 
 pub struct Library {
     db: Connection,

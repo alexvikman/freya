@@ -546,7 +546,7 @@ impl ServerPanel {
         self.fingerprint = remote
             .0
             .certificate()
-            .map(freya_server::tls::fingerprint)
+            .map(freya_protocol::fingerprint)
             .unwrap_or_default();
     }
 
@@ -847,7 +847,7 @@ fn certificate(
     let address = address?;
     let certificate = freya_client::certificate_of(address)
         .map_err(|e| format!("Could not reach the server at {address}: {e}"))?;
-    let fingerprint = freya_server::tls::fingerprint(&certificate);
+    let fingerprint = freya_protocol::fingerprint(&certificate);
     if claimed.is_some_and(|claimed| claimed != fingerprint) {
         return Err(format!(
             "The computer at {address} gave another certificate than it said when it was found: \

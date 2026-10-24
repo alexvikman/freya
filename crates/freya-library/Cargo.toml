@@ -14,6 +14,11 @@ image = { version = "0.25.10", default-features = false, features = ["jpeg", "pn
 lofty = "0.25.4"
 log = "0.4.34"
 ring = "0.17.14"
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"], optional = true }
 serde_json = "1.0.152"
 ureq = "3"
+
+[features]
+# The library's database and scans (see src/library): the server's, not a client's.
+default = ["db"]
+db = ["dep:rusqlite"]

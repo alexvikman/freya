@@ -88,10 +88,12 @@ env_logger = "0.11.11"
 # Local time in the log (see src/log_capture.rs), as env_logger already brings it.
 jiff = "0.2.38"
 freya-skin = { path = "../crates/freya-skin" }
-freya-library = { path = "../crates/freya-library" }
+# Tags, playlists, files, covers and pictures; the library's database is the server's.
+freya-library = { path = "../crates/freya-library", default-features = false }
 freya-client = { path = "../crates/freya-client" }
+# The login proxy's HTTP server (see src/gui/page_proxy.rs), as Freya Server's.
+freya-http = { path = "../crates/freya-http" }
 freya-protocol = { path = "../crates/freya-protocol" }
-freya-server = { path = "../crates/freya-server" }
 freya-update = { path = "../crates/freya-update" }
 slint = { version = "1.18.1", features = ["unstable-winit-030"] }
 slint-interpreter = "1.18.1"
@@ -169,6 +171,13 @@ windows = { version = "0.62.2", features = [
     "Win32_System_WinRT_Composition",
 ] }
 windows-numerics = "0.3.1"
+
+# The tests run a library and its server in this process (see src/gui/library.rs), with the
+# HTTP server's short waits.
+[dev-dependencies]
+freya-http = { path = "../crates/freya-http", features = ["quick"] }
+freya-library = { path = "../crates/freya-library" }
+freya-server = { path = "../crates/freya-server" }
 
 [build-dependencies]
 slint-build = "1.18.1"

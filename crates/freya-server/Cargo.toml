@@ -54,11 +54,11 @@ directories = "6.0.0"
 env_logger = "0.11.11"
 # Large answers gzipped (see src/serve.rs), with the zlib in Rust Freya already uses.
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] }
+freya-http = { path = "../freya-http" }
 freya-lastfm = { path = "../freya-lastfm" }
 freya-library = { path = "../freya-library" }
 freya-protocol = { path = "../freya-protocol" }
 freya-update = { path = "../freya-update" }
-httparse = "1.10.1"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 log = "0.4.34"
 # Watching the music folders for changes (see src/folder_watch.rs).
@@ -76,6 +76,10 @@ toml = "1.1.8"
 # server at login, in the Run key (see src/autostart.rs), and its icon in the notification area
 # (see src/menu/windows.rs), and stopping it for the installer (see src/stop.rs).
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security_Credentials", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
+[dev-dependencies]
+# The short waits of tests, as the HTTP server's own tests have them.
+freya-http = { path = "../freya-http", features = ["quick"] }
 
 [build-dependencies]
 # Freya's icon and the server's name in freya-server.exe (see build.rs), as Freya builds its

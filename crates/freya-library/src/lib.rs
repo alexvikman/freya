@@ -6,6 +6,9 @@ pub mod cover;
 pub mod cue;
 pub mod eq_presets;
 pub mod files;
+/// The media library itself, in SQLite, and its scans: the server's. A client goes without
+/// (`default-features = false`).
+#[cfg(feature = "db")]
 pub mod library;
 pub mod pictures;
 pub mod playlist;
@@ -15,6 +18,7 @@ pub mod tags;
 pub mod thumbnails;
 pub mod wikipedia;
 
+#[cfg(feature = "db")]
 pub use library::{Library, ScanEvent, Scanner};
 pub use playlist::{Entry, Playlist, SelectMode, SortKey};
 pub use tags::{TagInfo, TagLoader, read_tags};

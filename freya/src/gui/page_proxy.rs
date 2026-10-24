@@ -16,8 +16,8 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use freya_client::{Http, Login, Pages};
+use freya_http::{Request, Response, Server};
 use freya_protocol::PAGES_PATH;
-use freya_server::http::{Request, Response, Server};
 
 /// Where the browser opens the server's pages.
 pub const ADDRESS: &str = "127.0.0.1:47477";

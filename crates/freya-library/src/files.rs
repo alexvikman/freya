@@ -6,7 +6,27 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::channel;
 
 use crate::cue;
-use crate::library::FileStamp;
+
+/// Size and modification time of a file, to tell whether it changed since it was read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileStamp {
+    pub size: i64,
+    /// Milliseconds since 1970.
+    pub modified: i64,
+}
+
+impl FileStamp {
+    pub fn of(metadata: &std::fs::Metadata) -> Self {
+        let modified = metadata.modified().map_or(0, |time| {
+            time.duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis() as i64)
+        });
+        Self {
+            size: metadata.len() as i64,
+            modified,
+        }
+    }
+}
 
 pub const AUDIO_EXTENSIONS: &[&str] = &[
     "mp3", "mp2", "flac", "wav", "aif", "aiff", "ogg", "oga", "opus", "m4a", "mp4", "aac", "caf",

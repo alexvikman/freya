@@ -174,7 +174,11 @@ pub fn cache_dir() -> Option<PathBuf> {
 /// The key a client on this computer pairs with Freya's server through, where a server started
 /// from here writes it.
 pub fn pairing_key_path() -> Option<PathBuf> {
-    dirs().map(|d| d.data_dir().join("server").join(freya_server::PAIRING_KEY))
+    dirs().map(|d| {
+        d.data_dir()
+            .join("server")
+            .join(freya_protocol::PAIRING_KEY)
+    })
 }
 
 /// The certificate Freya's server on this computer keeps in its folder, which the client here
@@ -183,7 +187,7 @@ pub fn server_certificate_path() -> Option<PathBuf> {
     dirs().map(|d| {
         d.data_dir()
             .join("server")
-            .join(freya_server::tls::CERTIFICATE_FILE)
+            .join(freya_protocol::CERTIFICATE_FILE)
     })
 }
 
