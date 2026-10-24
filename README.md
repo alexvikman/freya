@@ -81,14 +81,17 @@ freya skin pack path/to/my-skin     # make my-skin.freyaskin for sharing
 
 | Path | Contents |
 |---|---|
-| `freya/` | The application binary |
+| `freya/` | Freya, the player: its window, Up Next, the equalizer's presets and `.eqf` files, and the terminal player |
 | `crates/freya-audio/` | Audio engine: decoding, resampling, 10-band equalizer, output, gapless playback |
 | `crates/freya-client/` | The client's side of the library: a Freya server's library, called over HTTP |
+| `crates/freya-http/` | A small HTTP/1.1 server, over TLS or not: Freya Server's, and Freya's login proxy |
 | `crates/freya-lastfm/` | Last.fm's web service: what it says of artists and genres, signing in and scrobbles |
-| `crates/freya-library/` | Playlist model, M3U/PLS files, CUE sheets, tag reading, EQ presets and `.eqf` files, the media library (SQLite) |
+| `crates/freya-library/` | Freya Server's media library: the tracks, albums, artists, plays and playlists in SQLite, the scans, and what is fetched online for it |
+| `crates/freya-media/` | Music files, for both: finding them, tags, CUE sheets, playlist entries and M3U/PLS files, covers, pictures of artists |
 | `crates/freya-protocol/` | What client and server say to each other: the library's tracks, artists, albums, genres and playlists, and how scans go |
 | `crates/freya-server/` | `freya-server`: the library as a service over HTTP, with the scans that keep it in line with the music's folders, the folders' watch and the schedule |
 | `crates/freya-skin/` | Skin API, skin folders and packages, the skin picker, headless rendering for previews and tests |
+| `crates/freya-update/` | Finding, verifying and installing releases, for Freya and Freya Server |
 | `skins/` | The built-in skin (`freya/`) and an example skin (`mini/`) |
 | `docs/` | Plan, design notes, the skin authoring guide, packaging and dependency policy |
 | `deny.toml`, `supply-chain/` | Dependency checks: cargo-deny rules and cargo-vet audits |

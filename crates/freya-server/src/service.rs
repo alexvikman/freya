@@ -11,7 +11,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use freya_library::Library;
 use freya_library::library::{LastFm, Online, ScanOptions, Scanner};
-use freya_library::pictures::Pictures;
+use freya_media::pictures::Pictures;
 use freya_protocol::{
     ApiError, ApiResult, FolderListing, LastFmStatus, LastFmTrack, LibraryApi, LibraryData,
     LibraryPictures, Part, PlaylistEntry, SavedPlaylist, ScanEvent, Scrobble, ServerControl,
@@ -520,7 +520,7 @@ impl LibraryPictures for LocalLibrary {
         if !self.connection().knows_file(track).map_err(api_error)? {
             return Ok(None);
         }
-        let Some(picture) = freya_library::cover::album_art_large(track, largest) else {
+        let Some(picture) = freya_media::cover::album_art_large(track, largest) else {
             return Ok(None);
         };
         // Shown whole and large: a high quality.

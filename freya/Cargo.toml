@@ -88,8 +88,8 @@ env_logger = "0.11.11"
 # Local time in the log (see src/log_capture.rs), as env_logger already brings it.
 jiff = "0.2.38"
 freya-skin = { path = "../crates/freya-skin" }
-# Tags, playlists, files, covers and pictures; the library's database is the server's.
-freya-library = { path = "../crates/freya-library", default-features = false }
+# Tags, CUE sheets, playlist files, covers and pictures; the library itself is the server's.
+freya-media = { path = "../crates/freya-media" }
 freya-client = { path = "../crates/freya-client" }
 # The login proxy's HTTP server (see src/gui/page_proxy.rs), as Freya Server's.
 freya-http = { path = "../crates/freya-http" }

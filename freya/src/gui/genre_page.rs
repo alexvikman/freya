@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use freya_library::thumbnails::{ArtistSource, Thumbnails};
+use freya_media::thumbnails::{ArtistSource, Thumbnails};
 use freya_protocol::GenreInfo;
 use slint::Image;
 use slint_interpreter::{Struct, Value};

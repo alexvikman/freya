@@ -287,9 +287,9 @@ fn select_backend(requested: Option<String>, events: &WindowEvents) -> anyhow::R
 }
 
 /// A picture in `bytes` from a server or the internet, decoded within bounds (see
-/// [`freya_library::decode_picture`]).
+/// [`freya_media::decode_picture`]).
 pub fn decode_picture(bytes: &[u8]) -> image::ImageResult<image::DynamicImage> {
-    freya_library::decode_picture(bytes)
+    freya_media::decode_picture(bytes)
 }
 
 /// The library of Freya Server on this computer.

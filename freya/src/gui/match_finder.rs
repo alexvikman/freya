@@ -5,7 +5,7 @@
 use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use freya_library::artist_image;
+use freya_media::artist_image;
 use freya_protocol::{AlbumCandidate, ArtistMatch};
 use slint::{Rgba8Pixel, SharedPixelBuffer};
 

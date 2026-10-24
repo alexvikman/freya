@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 
 use freya_library::Library;
-use freya_library::pictures::Pictures;
+use freya_media::pictures::Pictures;
 use freya_protocol::{
     AlbumOrder, ArtistEdit, LibraryApi, LibraryData, LibraryPictures, ServerControl, ServerEvents,
     ServerSettings, ServiceEvent,

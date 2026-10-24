@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use freya_library::eq_presets::builtin_presets;
+use crate::eq_presets::builtin_presets;
 use freya_skin::SkinSource;
 use slint::Model;
 use slint_interpreter::{Struct, Value};

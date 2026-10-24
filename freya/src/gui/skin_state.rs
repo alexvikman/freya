@@ -5,7 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use freya_audio::{PlaybackState, Status, TrackInfo};
-use freya_library::{Entry, Playlist};
+use freya_media::Entry;
+
+use crate::playlist::Playlist;
 use slint::{Model, ModelRc, VecModel};
 use slint_interpreter::{SharedString, Struct, Value};
 
@@ -425,7 +427,7 @@ mod tests {
         rows.sync(&p);
         assert_eq!(rows.rows.model.row_count(), 3);
         let before = rows.rows.model.row_data(0);
-        p.click(1, freya_library::SelectMode::Single);
+        p.click(1, crate::playlist::SelectMode::Single);
         rows.sync(&p);
         assert_eq!(rows.rows.model.row_data(0), before);
         let Some(Value::Struct(row)) = rows.rows.model.row_data(1) else {

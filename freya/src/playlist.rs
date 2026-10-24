@@ -4,142 +4,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::cue::Part;
-use crate::tags::TagInfo;
-
-#[derive(Clone, Debug)]
-pub struct Entry {
-    /// Names this entry in its playlist, unique there and kept through every edit, so a track
-    /// that plays can be told from another entry for the same file. Given by
-    /// [`Playlist::insert`]; 0 outside a playlist. Not part of what makes entries equal.
-    pub id: u64,
-    pub path: PathBuf,
-    /// The part of the file this entry plays, for a track of a CUE sheet.
-    pub part: Option<Part>,
-    pub title: Option<String>,
-    pub artist: Option<String>,
-    pub album: Option<String>,
-    pub duration: Option<Duration>,
-    pub selected: bool,
-    /// Whether tags have been read from the file (as opposed to coming from a playlist file).
-    pub tags_loaded: bool,
-}
-
-impl PartialEq for Entry {
-    fn eq(&self, other: &Self) -> bool {
-        // Everything but `id`.
-        let Self {
-            id: _,
-            path,
-            part,
-            title,
-            artist,
-            album,
-            duration,
-            selected,
-            tags_loaded,
-        } = self;
-        (
-            path,
-            part,
-            title,
-            artist,
-            album,
-            duration,
-            selected,
-            tags_loaded,
-        ) == (
-            &other.path,
-            &other.part,
-            &other.title,
-            &other.artist,
-            &other.album,
-            &other.duration,
-            &other.selected,
-            &other.tags_loaded,
-        )
-    }
-}
-
-impl Entry {
-    pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self {
-            id: 0,
-            path: path.into(),
-            part: None,
-            title: None,
-            artist: None,
-            album: None,
-            duration: None,
-            selected: false,
-            tags_loaded: false,
-        }
-    }
-
-    /// An entry whose tags are known already: a library track, or a track of a CUE sheet.
-    pub fn with_tags(path: impl Into<PathBuf>, part: Option<Part>, tags: &TagInfo) -> Self {
-        let duration = tags
-            .duration
-            .or_else(|| part.and_then(|p| p.duration(None)));
-        Self {
-            part,
-            title: tags.title.clone(),
-            artist: tags.artist.clone(),
-            album: tags.album.clone(),
-            duration,
-            // The last track of a CUE sheet learns its length from the file.
-            tags_loaded: part.is_none() || duration.is_some(),
-            ..Self::new(path)
-        }
-    }
-
-    /// Where in the file the entry starts: zero for a whole file.
-    pub fn start(&self) -> Duration {
-        self.part.map_or(Duration::ZERO, |p| p.start)
-    }
-
-    /// Whether this entry plays `path` from `start`.
-    pub fn plays(&self, path: &Path, start: Duration) -> bool {
-        self.path == path && self.start() == start
-    }
-
-    /// "Artist - Title" if known, otherwise the file name without extension.
-    pub fn display_title(&self) -> String {
-        match (&self.artist, &self.title) {
-            (Some(artist), Some(title)) => format!("{artist} - {title}"),
-            (None, Some(title)) => title.clone(),
-            _ => self
-                .path
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| self.path.to_string_lossy().into_owned()),
-        }
-    }
-
-    /// Takes the tags read from the entry's file.
-    pub fn apply_tags(&mut self, tags: &TagInfo) {
-        match self.part {
-            // The file's tags describe the whole disc. Only its length is of use, for the
-            // length of its last track.
-            Some(part) => {
-                if self.duration.is_none() {
-                    self.duration = part.duration(tags.duration);
-                }
-            }
-            None => {
-                if tags.title.is_some() {
-                    self.title.clone_from(&tags.title);
-                    self.artist.clone_from(&tags.artist);
-                    self.album.clone_from(&tags.album);
-                }
-                if tags.duration.is_some() {
-                    self.duration = tags.duration;
-                }
-            }
-        }
-        self.tags_loaded = true;
-    }
-}
+use freya_media::Entry;
+use freya_media::tags::TagInfo;
 
 /// How a click on a row should change the selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -150,13 +16,6 @@ pub enum SelectMode {
     Toggle,
     /// Select from the last clicked row to this one (Shift-click).
     Range,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SortKey {
-    Title,
-    FileName,
-    Path,
 }
 
 #[derive(Default)]
@@ -195,10 +54,6 @@ impl Playlist {
 
     pub fn len(&self) -> usize {
         self.entries.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
     }
 
     pub fn entries(&self) -> &[Entry] {
@@ -306,15 +161,6 @@ impl Playlist {
         self.retain(|e| !e.selected);
     }
 
-    pub fn crop(&mut self) {
-        self.retain(|e| e.selected);
-    }
-
-    /// Removes entries whose files no longer exist.
-    pub fn remove_missing(&mut self) {
-        self.retain(|e| e.path.exists());
-    }
-
     pub fn cursor(&self) -> Option<usize> {
         self.cursor
     }
@@ -406,59 +252,12 @@ impl Playlist {
         self.entries.iter_mut().for_each(|e| e.selected = false);
     }
 
-    pub fn invert_selection(&mut self) {
-        self.entries
-            .iter_mut()
-            .for_each(|e| e.selected = !e.selected);
-    }
-
     pub fn selected_indices(&self) -> impl Iterator<Item = usize> + '_ {
         self.entries
             .iter()
             .enumerate()
             .filter(|(_, e)| e.selected)
             .map(|(i, _)| i)
-    }
-
-    pub fn sort(&mut self, key: SortKey) {
-        let current = self.current_entry().map(|e| (e.path.clone(), e.start()));
-        let sort_key = |e: &Entry| -> String {
-            match key {
-                SortKey::Title => e.display_title().to_lowercase(),
-                SortKey::FileName => e
-                    .path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_lowercase())
-                    .unwrap_or_default(),
-                SortKey::Path => e.path.to_string_lossy().to_lowercase(),
-            }
-        };
-        self.entries.sort_by_cached_key(sort_key);
-        self.after_reorder(current);
-    }
-
-    pub fn reverse(&mut self) {
-        let current = self.current_entry().map(|e| (e.path.clone(), e.start()));
-        self.entries.reverse();
-        self.after_reorder(current);
-    }
-
-    /// Shuffles the list itself (Winamp's "Randomize list").
-    pub fn randomize(&mut self) {
-        let current = self.current_entry().map(|e| (e.path.clone(), e.start()));
-        for i in (1..self.entries.len()).rev() {
-            let j = (self.next_random() % (i as u64 + 1)) as usize;
-            self.entries.swap(i, j);
-        }
-        self.after_reorder(current);
-    }
-
-    fn after_reorder(&mut self, current: Option<(PathBuf, Duration)>) {
-        self.current = current
-            .and_then(|(path, start)| self.entries.iter().position(|e| e.plays(&path, start)));
-        self.anchor = None;
-        self.cursor = None;
-        self.shuffle_order.clear();
     }
 
     /// Applies tags read from a file to every entry with that path.
@@ -493,11 +292,6 @@ impl Playlist {
         Self::duration_of(self.entries.iter())
     }
 
-    pub fn selected_duration(&self) -> (Duration, bool) {
-        Self::duration_of(self.entries.iter().filter(|e| e.selected))
-    }
-
-    /// The entry that follows the current one, without changing anything.
     pub fn peek_next(&mut self, shuffle: bool, repeat: bool) -> Option<usize> {
         self.step(1, shuffle, repeat)
     }
@@ -583,6 +377,7 @@ impl Playlist {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use freya_media::cue::Part;
 
     fn list(n: usize) -> Playlist {
         let mut p = Playlist::with_seed(42);
@@ -686,12 +481,12 @@ mod tests {
     }
 
     #[test]
-    fn range_selection_and_crop() {
+    fn range_selection_and_removal() {
         let mut p = list(6);
         p.click(1, SelectMode::Single);
         p.click(3, SelectMode::Range);
         assert_eq!(p.selected_indices().collect::<Vec<_>>(), [1, 2, 3]);
-        p.crop();
+        p.remove_selected();
         assert_eq!(p.len(), 3);
     }
 
@@ -701,15 +496,6 @@ mod tests {
         p.set_current(Some(1));
         p.insert(Some(0), [Entry::new("/a.mp3"), Entry::new("/b.mp3")]);
         assert_eq!(p.current(), Some(3));
-    }
-
-    #[test]
-    fn sort_follows_current_entry() {
-        let mut p = Playlist::with_seed(1);
-        p.insert(None, ["/c.mp3", "/a.mp3", "/b.mp3"].map(Entry::new));
-        p.set_current(Some(0));
-        p.sort(SortKey::FileName);
-        assert_eq!(p.current(), Some(2));
     }
 
     fn paths(p: &Playlist) -> Vec<String> {
@@ -796,7 +582,6 @@ mod tests {
 
         p.set_current_track(Path::new("/disc.flac"), Duration::from_secs(100));
         assert_eq!(p.current(), Some(1));
-        p.sort(SortKey::Title);
         assert_eq!(p.current_entry().unwrap().start(), Duration::from_secs(100));
 
         // The whole file's tags give the last track its length, and nothing else.
@@ -807,7 +592,7 @@ mod tests {
         };
         p.apply_tags(Path::new("/disc.flac"), &file);
         let titles: Vec<_> = p.entries().iter().map(|e| e.title.as_deref()).collect();
-        assert_eq!(titles, [Some("A"), Some("B"), None]);
+        assert_eq!(titles, [Some("B"), None, Some("A")]);
         let last = p.current_entry().unwrap();
         assert_eq!(last.duration, Some(Duration::from_secs(150)));
     }

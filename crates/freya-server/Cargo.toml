@@ -57,6 +57,7 @@ flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] 
 freya-http = { path = "../freya-http" }
 freya-lastfm = { path = "../freya-lastfm" }
 freya-library = { path = "../freya-library" }
+freya-media = { path = "../freya-media" }
 freya-protocol = { path = "../freya-protocol" }
 freya-update = { path = "../freya-update" }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }

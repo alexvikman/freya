@@ -7,9 +7,9 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant, SystemTime};
 
 use freya_audio::{Event, Media, MediaTags, PlaybackState, Player, TrackInfo};
-use freya_library::cover::{Cover, cover_from, read_cover};
-use freya_library::cue::{self, Found};
-use freya_library::{Entry, Playlist, TagLoader, playlist_file};
+use freya_media::cover::{Cover, cover_from, read_cover};
+use freya_media::cue::{self, Found};
+use freya_media::{Entry, TagLoader, playlist_file};
 use freya_protocol::{LibraryApi, Part, Track};
 use freya_skin::SkinSource;
 use slint::winit_030::WinitWindowAccessor;
@@ -31,6 +31,7 @@ use super::title_bar::TitleBar;
 use super::visualizer::{self, Visualizer};
 use super::window_events::{WindowEvent, WindowEvents};
 use crate::lastfm::{self, LastFm};
+use crate::playlist::Playlist;
 use crate::settings::{self, Settings};
 use crate::update::{self, Updater};
 
@@ -249,7 +250,7 @@ impl Covers {
 /// scan makes them: the server reads nothing, and a client that had it before has it here.
 fn kept_cover(library: &dyn LibraryApi, path: &Path) -> Option<Vec<u8>> {
     let track = library.track_at(path, Duration::ZERO).ok()??;
-    let key = freya_library::thumbnails::Thumbnails::key(
+    let key = freya_media::thumbnails::Thumbnails::key(
         track.album_artist.as_deref(),
         track.album.as_deref(),
     );
@@ -677,7 +678,7 @@ impl App {
                 }
                 continue;
             }
-            let found = freya_library::files::collect_with_sheets(std::slice::from_ref(path));
+            let found = freya_media::files::collect_with_sheets(std::slice::from_ref(path));
             for item in cue::apply_sheets(found) {
                 match item {
                     Found::File(path) => entries.push(Entry::new(path)),
@@ -1402,7 +1403,7 @@ impl App {
             }
         }
 
-        let tags: HashMap<PathBuf, freya_library::TagInfo> = self.tags.poll().collect();
+        let tags: HashMap<PathBuf, freya_media::TagInfo> = self.tags.poll().collect();
         if !tags.is_empty() {
             self.playlist.apply_all_tags(&tags);
             self.playlist_dirty = true;
@@ -1648,7 +1649,7 @@ impl App {
             .iter()
             .any(|e| e.path == track.path && e.title.is_none());
         if untitled {
-            let tags = freya_library::TagInfo {
+            let tags = freya_media::TagInfo {
                 title: Some(station.clone()),
                 ..Default::default()
             };

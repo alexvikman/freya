@@ -1,0 +1,20 @@
+[package]
+name = "freya-media"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# Music files and what is in and around them, for Freya and Freya Server alike: tags, CUE
+# sheets, playlist files, covers, and pictures of artists.
+[dependencies]
+freya-protocol = { path = "../freya-protocol" }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
+lofty = "0.25.4"
+log = "0.4.34"
+ring = "0.17.14"
+serde_json = "1.0.152"
+ureq = "3"

@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use freya_library::Entry;
+use freya_media::Entry;
 use freya_protocol::{PlaylistEntry, Server};
 use slint_interpreter::{Struct, Value};
 

@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use freya_library::Entry;
-use freya_library::thumbnails::{ArtistSource, Thumbnail, Thumbnails};
+use freya_media::Entry;
+use freya_media::thumbnails::{ArtistSource, Thumbnail, Thumbnails};
 use freya_protocol::LibraryApi;
 use freya_protocol::{PlaylistInfo, PlaylistTrack};
 use slint::Image;
@@ -440,7 +440,7 @@ impl LibraryPanel {
         let page = self.playlist_page.as_ref();
         let [r, g, b] = page
             .and_then(|p| p.color)
-            .unwrap_or(freya_library::cover::page_color(&[]));
+            .unwrap_or(freya_media::cover::page_color(&[]));
         let text = |f: fn(&PlaylistPage) -> String| string(page.map(f).unwrap_or_default());
         Value::Struct(Struct::from_iter([
             ("name".to_owned(), text(|p| p.name.clone())),

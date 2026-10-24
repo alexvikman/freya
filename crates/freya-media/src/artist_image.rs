@@ -280,7 +280,7 @@ fn album_candidates(answer: &serde_json::Value) -> Vec<AlbumCandidate> {
 }
 
 /// The JSON answer at `address` with the `query` given, asked again while the service is busy.
-pub(crate) fn get_json(address: &str, query: &[(&str, &str)]) -> Result<serde_json::Value, String> {
+pub fn get_json(address: &str, query: &[(&str, &str)]) -> Result<serde_json::Value, String> {
     let agent = agent();
     let text = call_patiently(|| {
         let mut request = agent.get(address);

@@ -13,7 +13,7 @@ const SEEK_STEP: Duration = Duration::from_secs(5);
 const VOLUME_STEP: f32 = 0.05;
 
 pub fn run(paths: &[PathBuf]) -> anyhow::Result<()> {
-    let files = freya_library::files::collect(paths);
+    let files = freya_media::files::collect(paths);
     if files.is_empty() {
         bail!("no playable files found");
     }

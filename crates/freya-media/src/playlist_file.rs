@@ -4,8 +4,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::Entry;
 use crate::cue::Part;
-use crate::playlist::Entry;
 
 /// Playlists downloaded from radio directories are small; anything bigger is not one.
 const MAX_DOWNLOAD: u64 = 1024 * 1024;

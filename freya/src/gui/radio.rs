@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use freya_library::{Entry, playlist_file};
+use freya_media::{Entry, playlist_file};
 use slint_interpreter::{Struct, Value};
 
 use super::skin_state::string;

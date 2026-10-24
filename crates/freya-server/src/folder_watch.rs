@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 
-use freya_library::files::{is_audio, is_image};
+use freya_media::files::{is_audio, is_image};
 use notify::{EventKind, RecursiveMode, Watcher};
 
 /// How long the folders must be still before what changed is scanned: copying an album in

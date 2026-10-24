@@ -3,8 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
-use freya_library::Entry;
-use freya_library::playlist_file;
+use freya_media::Entry;
+use freya_media::playlist_file;
 use freya_protocol::{PlaylistEntry, SavedPlaylist};
 
 /// Characters a file name cannot hold on some system, so a playlist's name cannot either.

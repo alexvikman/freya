@@ -4,8 +4,10 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 
-use freya_library::eq_presets::{builtin_presets, read_eqf, write_eqf};
-use freya_library::{Playlist, SelectMode, playlist_file};
+use crate::eq_presets::{builtin_presets, read_eqf, write_eqf};
+use freya_media::playlist_file;
+
+use crate::playlist::{Playlist, SelectMode};
 use slint::Model;
 use slint_interpreter::Value;
 
@@ -1343,7 +1345,7 @@ fn numbers(args: &[Value], i: usize) -> Vec<f32> {
 fn pick_audio() -> Option<Vec<PathBuf>> {
     // CUE sheets too: they open as the tracks of the disc they cut.
     let extensions = [
-        freya_library::files::AUDIO_EXTENSIONS,
+        freya_media::files::AUDIO_EXTENSIONS,
         &["cue", "m3u", "m3u8", "pls"],
     ]
     .concat();

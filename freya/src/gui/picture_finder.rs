@@ -8,7 +8,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use freya_library::artist_image;
+use freya_media::artist_image;
 use freya_protocol::LibraryApi;
 use freya_protocol::PictureKind;
 use slint::{Rgba8Pixel, SharedPixelBuffer};
@@ -371,7 +371,7 @@ fn preview(bytes: &[u8]) -> Result<(u32, u32, SharedPixelBuffer<Rgba8Pixel>), St
 
 #[cfg(test)]
 mod tests {
-    use freya_library::pictures::Pictures;
+    use freya_media::pictures::Pictures;
 
     use super::*;
 

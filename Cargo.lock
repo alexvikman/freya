@@ -1666,6 +1666,7 @@ dependencies = [
  "freya-client",
  "freya-http",
  "freya-library",
+ "freya-media",
  "freya-protocol",
  "freya-server",
  "freya-skin",
@@ -1726,6 +1727,7 @@ dependencies = [
  "base64",
  "freya-audio",
  "freya-library",
+ "freya-media",
  "freya-protocol",
  "freya-server",
  "image",
@@ -1761,12 +1763,26 @@ dependencies = [
 name = "freya-library"
 version = "0.3.0"
 dependencies = [
+ "freya-media",
  "freya-protocol",
  "image",
  "lofty",
  "log",
  "ring",
  "rusqlite",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
+name = "freya-media"
+version = "0.3.0"
+dependencies = [
+ "freya-protocol",
+ "image",
+ "lofty",
+ "log",
+ "ring",
  "serde_json",
  "ureq",
 ]
@@ -1792,6 +1808,7 @@ dependencies = [
  "freya-http",
  "freya-lastfm",
  "freya-library",
+ "freya-media",
  "freya-protocol",
  "freya-update",
  "image",

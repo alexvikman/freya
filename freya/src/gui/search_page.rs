@@ -2,14 +2,14 @@
 //! search field; given, a page of them all: the best match of all, the songs, and rows of the
 //! artists, albums, playlists and genres, or all of one kind. Names match as wholes first, then
 //! at their start, then word by word, without case or accents (see
-//! [`freya_library::search`]); the more tracks, the higher among equals.
+//! [`crate::search`]); the more tracks, the higher among equals.
 
 use std::cmp::Reverse;
 use std::time::Instant;
 
-use freya_library::Entry;
-use freya_library::search::{Rank, fold, rank};
-use freya_library::thumbnails::{ArtistSource, Thumbnails};
+use crate::search::{Rank, fold, rank};
+use freya_media::Entry;
+use freya_media::thumbnails::{ArtistSource, Thumbnails};
 use freya_protocol::{Album, Artist, Genre, Track, plain_name};
 use slint_interpreter::{Struct, Value};
 

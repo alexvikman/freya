@@ -1,7 +1,7 @@
 //! Equalizer state as shown to skins: band labels, preset names and the response curve.
 
+use crate::eq_presets::{EqPreset, builtin_presets};
 use freya_audio::{BAND_FREQUENCIES, EqSettings, MAX_GAIN_DB};
-use freya_library::eq_presets::{EqPreset, builtin_presets};
 use serde::{Deserialize, Serialize};
 
 /// Gains closer to 0 dB than this snap to exactly 0, so a band is easy to flatten by hand.

@@ -3,10 +3,13 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod cli_player;
+mod eq_presets;
 mod errands;
 mod gui;
 mod lastfm;
 mod log_capture;
+mod playlist;
+mod search;
 mod settings;
 mod update;
 

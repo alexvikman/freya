@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant, SystemTime};
 
-use freya_library::Entry;
-use freya_library::thumbnails::{ArtistSource, Thumbnail, Thumbnails};
+use freya_media::Entry;
+use freya_media::thumbnails::{ArtistSource, Thumbnail, Thumbnails};
 use freya_protocol::{
     Album, AlbumKey, AlbumMatch, AlbumOrder, Artist, ArtistEdit, ArtistOrder, CHOSEN, Genre,
     Header, LibraryApi, Part, PictureKind, PictureRow, Played, ScanEvent, Server, ServerSettings,
@@ -221,7 +221,7 @@ pub fn covers_dir(source: Option<&LibrarySource>) -> Option<PathBuf> {
     let cache = crate::settings::cache_dir()?;
     Some(match source {
         Some(LibrarySource::Remote { pin, .. }) => {
-            let server = freya_library::pictures::Pictures::checksum(&pin.certificate);
+            let server = freya_media::pictures::Pictures::checksum(&pin.certificate);
             cache.join(format!("covers-{}", &server[..16]))
         }
         _ => cache.join("covers"),
@@ -604,7 +604,7 @@ type MadePage = (String, PagePictures);
 impl PagePictures {
     fn make((banner, portrait): &PageFiles) -> Self {
         let color = |picture: &image::DynamicImage| {
-            freya_library::cover::page_color(picture.thumbnail(64, 64).to_rgb8().as_raw())
+            freya_media::cover::page_color(picture.thumbnail(64, 64).to_rgb8().as_raw())
         };
         let rgb = |picture: &image::DynamicImage| {
             let rgb = picture.to_rgb8();
@@ -1957,7 +1957,7 @@ impl LibraryPanel {
             .made_covers
             .get(&page.cover)
             .and_then(|made| made.color)
-            .unwrap_or_else(|| freya_library::cover::page_color(&[]));
+            .unwrap_or_else(|| freya_media::cover::page_color(&[]));
         if let Some(page) = &mut self.album_page {
             page.color = Some(color);
         }
@@ -3816,7 +3816,7 @@ impl LibraryPanel {
         let page = self.artist_page.as_ref().filter(|_| !self.searching());
         let [r, g, b] = page
             .and_then(|p| p.color)
-            .unwrap_or(freya_library::cover::page_color(&[]));
+            .unwrap_or(freya_media::cover::page_color(&[]));
         let text = |f: fn(&ArtistPage) -> String| string(page.map(f).unwrap_or_default());
         Value::Struct(Struct::from_iter([
             ("shown".to_owned(), Value::Bool(page.is_some())),
@@ -3899,7 +3899,7 @@ impl LibraryPanel {
         let [r, g, b] = page
             .as_ref()
             .and_then(|p| p.color)
-            .unwrap_or(freya_library::cover::page_color(&[]));
+            .unwrap_or(freya_media::cover::page_color(&[]));
         let page = page.unwrap_or(AlbumPage {
             title: String::new(),
             artist: String::new(),
@@ -4604,7 +4604,7 @@ fn display_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use freya_library::Library;
-    use freya_library::pictures::Pictures;
+    use freya_media::pictures::Pictures;
 
     use super::*;
 
