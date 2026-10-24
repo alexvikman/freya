@@ -8173,45 +8173,90 @@ component SettingsView inherits Rectangle {
                 }
             }
 
+            // The server is a server wherever it runs: what Freya is connected to, and, for its
+            // admins, the server's own settings.
             if root.tab == "server": SettingsSection {
                 title: "Server";
 
-                if !Server.remote: SettingsRow {
-                    label: "The library is on this computer";
-                    detail: Server.state == "unreachable" || Server.state == "version" ? Server.error
-                        : "Freya Server here keeps it, with its pictures, playlists and plays.";
+                SettingsRow {
+                    label: "Connected to " + (Server.remote ? Server.name : Server.server-name)
+                        + (Server.remote ? " (" + Server.address + ")" : "");
+                    detail: Server.state == "unreachable" ? "Freya cannot reach it, and tries again by itself. " + Server.error
+                        : Server.state == "log-in" || Server.state == "version" ? Server.error
+                        : Server.state == "connecting" ? "Connecting…"
+                        : "Its certificate's fingerprint: " + Server.fingerprint;
 
                     VerticalLayout {
                         alignment: center;
 
-                        TextButton {
-                            text: "Use Another Computer's…";
-                            clicked => { root.find-servers(); }
+                        HorizontalLayout {
+                            spacing: 8px;
+
+                            if Server.state == "log-in": TextButton {
+                                text: "Log In…";
+                                primary: true;
+                                clicked => {
+                                    Server.choose-address(Server.address);
+                                    root.find-servers();
+                                }
+                            }
+                            TextButton {
+                                text: "Another Server…";
+                                clicked => { root.find-servers(); }
+                            }
+                            TextButton {
+                                text: "Log Out";
+                                clicked => { Server.log-out(); }
+                            }
                         }
                     }
                 }
-                if !Server.remote: SettingsRow {
-                    label: "Let other computers use this library";
+            }
+
+            if root.tab == "server" && Server.admin: SettingsSection {
+                title: "Freya Server";
+
+                SettingsRow {
+                    label: "Name on the network";
+                    detail: "Other computers find it as " + Server.server-name + ".";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        FormField {
+                            width: 220px;
+                            placeholder: Server.server-name;
+                            text <=> root.server-name;
+                            accepted => {
+                                Server.set-server-name(root.server-name);
+                                root.server-name = "";
+                            }
+                        }
+                    }
+                }
+                SettingsRow {
+                    label: "Let other computers connect";
                     detail: Server.network
-                        ? "They find it on your network as " + Server.server-name + ", prove it with a code shown here, and log in with your password. Its certificate's fingerprint: " + Server.fingerprint
-                        : "Only this computer uses it.";
+                        ? "They find it on the network, prove it with a code, and log in with a password."
+                        : Server.remote ? "Turned off, this computer cannot reach it either."
+                        : "Only its own computer can use it.";
 
                     VerticalLayout {
                         alignment: center;
 
                         Toggle {
-                            label: "Let other computers use this library";
+                            label: "Let other computers connect";
                             checked: Server.network;
                             toggled => { Server.set-network(!Server.network); }
                         }
                     }
                 }
-                if !Server.remote && Server.network: SettingsRow {
+                if Server.network: SettingsRow {
                     label: "Add a device";
                     detail: Server.connection-code-error != "" ? Server.connection-code-error
                         : Server.connection-code != ""
                         ? "Type the code on the other device. It works until " + Server.connection-code-until + "."
-                        : "A new device proves it reached this computer with a code shown here.";
+                        : "A new device proves it reached this server with a code shown here.";
 
                     HorizontalLayout {
                         spacing: 16px;
@@ -8236,64 +8281,10 @@ component SettingsView inherits Rectangle {
                         }
                     }
                 }
-                if !Server.remote && Server.network: SettingsRow {
-                    label: "Name on the network";
-
-                    VerticalLayout {
-                        alignment: center;
-
-                        FormField {
-                            width: 220px;
-                            placeholder: Server.server-name;
-                            text <=> root.server-name;
-                            accepted => {
-                                Server.set-server-name(root.server-name);
-                                root.server-name = "";
-                            }
-                        }
-                    }
-                }
-                if Server.remote: SettingsRow {
-                    label: "The library is on " + Server.name + " (" + Server.address + ")";
-                    detail: Server.state == "unreachable" ? "Freya cannot reach it, and tries again by itself. " + Server.error
-                        : Server.state == "log-in" || Server.state == "version" ? Server.error
-                        : Server.state == "connecting" ? "Connecting…"
-                        : "Its certificate's fingerprint: " + Server.fingerprint;
-
-                    VerticalLayout {
-                        alignment: center;
-
-                        HorizontalLayout {
-                            spacing: 8px;
-
-                            if Server.state == "log-in": TextButton {
-                                text: "Log In…";
-                                primary: true;
-                                clicked => {
-                                    Server.choose-address(Server.address);
-                                    root.find-servers();
-                                }
-                            }
-                            TextButton {
-                                text: "Another Server…";
-                                clicked => { root.find-servers(); }
-                            }
-                            if Server.here: TextButton {
-                                text: "Use This Computer";
-                                clicked => { Server.use-this-computer(); }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if root.tab == "server" && Server.admin: SettingsSection {
-                title: "Freya Server";
-
                 SettingsRow {
-                    label: Server.remote ? "Start when its user logs in" : "Start when you log in";
-                    detail: Server.start-at-login ? "Freya Server keeps the library up to date, and other computers can use it, without anyone starting it."
-                        : "Freya Server runs only when someone starts it.";
+                    label: "Start at login";
+                    detail: Server.start-at-login ? "It starts when its computer's user logs in, and keeps the library up to date without anyone starting it."
+                        : "It runs only when someone starts it.";
 
                     VerticalLayout {
                         alignment: center;
@@ -8358,7 +8349,7 @@ component SettingsView inherits Rectangle {
                                 primary: !Server.has-password;
                                 clicked => { Server.change-password(); }
                             }
-                            if Server.remote: TextButton {
+                            TextButton {
                                 text: "Log Out";
                                 clicked => { Server.log-out(); }
                             }
