@@ -238,7 +238,12 @@ are never installed by themselves, the server's no more than Freya's.
 |---|---|---|
 | **D1** ✓ | **Freya connects first**: a welcome view on the first start, and whenever no server is chosen: this computer's server when one answers, the servers found on the network, or one typed in, with its connection code; nothing in Freya works before. Freya never starts, quits or replaces a server; one of another version is refused with which side to update; why a server cannot be reached shows in the Server tab and the welcome view, not only in the log | Freya with no server shows only the welcome view, and gets to the library of a server here or elsewhere through it |
 | **D2** ✓ | **Freya Server on its own**: it registers itself to start at login (launchd, systemd user unit, Run entry), switched on and off in its own menu; a menu bar icon on macOS as now, and the same in the notification area on Windows; "Open Freya" only when Freya is installed; it finds its own updates with the signed updater and installs them when its owner says so, in its menu or from Freya's Server tab | Freya Server installed alone starts at login, is adopted from another computer, and updates itself when told to |
-| **D3** | **Packages and releases**: `Freya-*` and `FreyaServer-*` for each system (`.app`/`.dmg`, `.msi`, `.deb`/`.AppImage`), built, smoke-tested and signed by the release workflow under one `SHA256SUMS`; Windows' installer closes the server through its window, as it does Freya; the release notes say to uninstall 0.3 first | A release publishes both, and each installs, upgrades and uninstalls without the other |
+| **D3** ✓ | **Packages and releases**: `Freya-*` and `FreyaServer-*` for each system (`.app`/`.dmg`, `.msi`, `.deb`/`.AppImage`), built, smoke-tested and signed by the release workflow under one `SHA256SUMS`; Windows' installer closes the server through its window, as it does Freya; the release notes say to uninstall 0.3 first | A release publishes both, and each installs, upgrades and uninstalls without the other |
+
+Checked before the first release of the two: `Freya Server.app` built, signed and packaged
+on macOS (a menu bar app, without a Dock icon); both AppImages and `.deb`s built for Linux
+(arm64, in Docker); both Windows programs cross-compiled with their icons. The `.msi`s, and
+installing, upgrading and uninstalling each without the other, are first seen in that release.
 
 ### Speed between server and client (from 2026-10-22)
 

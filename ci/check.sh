@@ -52,10 +52,12 @@ linux='cargo fmt --all --check
        cargo test --locked --all
        shellcheck /src/ci/*.sh /src/.githooks/pre-commit'
 windows='cargo clippy --locked --all-targets --target x86_64-pc-windows-gnu -- -D warnings
-         cargo build --locked --release -p freya --target x86_64-pc-windows-gnu
-         file /target/x86_64-pc-windows-gnu/release/freya.exe
-         x86_64-w64-mingw32-objdump -h /target/x86_64-pc-windows-gnu/release/freya.exe | grep -q " .rsrc " &&
-             echo "freya.exe has its icon and version resources"'
+         cargo build --locked --release -p freya -p freya-server --target x86_64-pc-windows-gnu
+         for program in freya freya-server; do
+             file /target/x86_64-pc-windows-gnu/release/$program.exe
+             x86_64-w64-mingw32-objdump -h /target/x86_64-pc-windows-gnu/release/$program.exe |
+                 grep -q " .rsrc " && echo "$program.exe has its icon and version resources"
+         done'
 # The tools are pinned and built once into the volume. cargo-vet reads a copy of the
 # checked-in supply-chain/ folder (it takes a lock file there, and the source is read-only);
 # cargo-deny downloads the current RustSec advisory database.
@@ -91,9 +93,11 @@ package='cargo install cargo-packager --locked --version 0.11.8 --root /target/t
          ln -s /target /tmp/freya/target && cd /tmp/freya
          rm -rf /target/packages
          sh /src/ci/appimage-tools.sh
-         APPIMAGE_EXTRACT_AND_RUN=1 /target/tools/bin/cargo-packager -p freya --release \
-             --formats appimage,deb
-         file /target/release/freya
+         for package in freya freya-server; do
+             APPIMAGE_EXTRACT_AND_RUN=1 /target/tools/bin/cargo-packager -p $package --release \
+                 --formats appimage,deb
+         done
+         file /target/release/freya /target/release/freya-server
          ls -la /target/packages'
 
 case "${1:-all}" in

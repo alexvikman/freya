@@ -1,8 +1,10 @@
 #!/bin/sh
-# Packages Freya for macOS, for this Mac's architecture, into target/dist/:
+# Packages Freya, or Freya Server, for macOS, for this Mac's architecture, into target/dist/:
 #
-#   Freya-<version>-macos-<arch>.app.zip   what Freya's updater installs
-#   Freya-<version>-macos-<arch>.dmg       for installing by hand
+#   Freya-<version>-macos-<arch>.app.zip         what Freya's updater installs
+#   Freya-<version>-macos-<arch>.dmg             for installing by hand
+#   FreyaServer-<version>-macos-<arch>.app.zip   the same for Freya Server
+#   FreyaServer-<version>-macos-<arch>.dmg
 #
 # The app is signed with the hardened runtime: ad hoc by default, which is enough for an app
 # that Freya's updater installs (it is never quarantined) but makes Gatekeeper warn about a
@@ -15,9 +17,20 @@
 #   APPLE_API_KEY_ID, APPLE_API_ISSUER, APPLE_API_KEY_PATH
 #                          an App Store Connect API key (as in CI)
 #
-# Usage: ci/package-macos.sh [--skip-build]
+# Usage: ci/package-macos.sh [--skip-build] [freya | server]
 set -eu
 cd "$(dirname "$0")/.."
+
+build=true
+if [ "${1:-}" = "--skip-build" ]; then
+    build=false
+    shift
+fi
+case "${1:-freya}" in
+    freya) package=freya product=Freya prefix=Freya ;;
+    server) package=freya-server product="Freya Server" prefix=FreyaServer ;;
+    *) echo "usage: ci/package-macos.sh [--skip-build] [freya | server]" >&2; exit 2 ;;
+esac
 
 identity="${FREYA_MACOS_IDENTITY:--}"
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
@@ -25,16 +38,15 @@ case "$(uname -m)" in
     arm64) arch=aarch64 ;;
     *) arch=$(uname -m) ;;
 esac
-app=target/packages/Freya.app
+app="target/packages/$product.app"
 dist=target/dist
-name="Freya-$version-macos-$arch"
+name="$prefix-$version-macos-$arch"
 
-if [ "${1:-}" != "--skip-build" ]; then
-    cargo packager -p freya --release --formats app
+if $build; then
+    cargo packager -p "$package" --release --formats app
 fi
 
-# Inside out: the server beside Freya first, then the bundle, which signs Freya itself and
-# seals the bundle's resources.
+# The bundle signs its program and seals its resources.
 xattr -cr "$app"
 sign() {
     if [ "$identity" = "-" ]; then
@@ -43,7 +55,6 @@ sign() {
         codesign --force --options runtime --timestamp --sign "$identity" "$1"
     fi
 }
-sign "$app/Contents/MacOS/freya-server"
 sign "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 
@@ -60,7 +71,8 @@ if [ "$identity" != "-" ] && { [ -n "${FREYA_NOTARY_PROFILE:-}" ] || [ -n "${APP
     can_notarize=true
 fi
 
-rm -rf "$dist" && mkdir -p "$dist"
+mkdir -p "$dist"
+rm -f "$dist/$name.app.zip" "$dist/$name.dmg"
 if $can_notarize; then
     ditto -c -k --keepParent "$app" "$dist/notarize.zip"
     notarize "$dist/notarize.zip"
@@ -74,9 +86,9 @@ ditto -c -k --keepParent "$app" "$dist/$name.app.zip"
 # The disk image: the app and a link to Applications, to drag it onto.
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
-ditto "$app" "$stage/Freya.app"
+ditto "$app" "$stage/$product.app"
 ln -s /Applications "$stage/Applications"
-hdiutil create -quiet -volname "Freya $version" -srcfolder "$stage" -fs HFS+ -format UDZO \
+hdiutil create -quiet -volname "$product $version" -srcfolder "$stage" -fs HFS+ -format UDZO \
     -ov "$dist/$name.dmg"
 if [ "$identity" != "-" ]; then
     codesign --force --timestamp --sign "$identity" "$dist/$name.dmg"

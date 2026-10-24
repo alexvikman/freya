@@ -8,7 +8,7 @@
 
 A cross-platform music player written in Rust, with its own skin format. Readability and efficiency come first: the interface is drawn at the screen's physical resolution and stays crisp at any size.
 
-Status: early, but in use. [Download the latest release](https://github.com/alexvikman/freya/releases/latest) for macOS, Windows or Linux; Freya then finds and installs its updates itself, when you say so. The interface is built with [Slint](https://slint.dev). See [docs/PLAN.md](docs/PLAN.md) for the architecture and milestones.
+Status: early, but in use. [Download the latest release](https://github.com/alexvikman/freya/releases/latest) for macOS, Windows or Linux. It comes in two packages: **Freya Server** keeps your music library, on the computer the music is on, with or without a screen; **Freya** plays it, on that computer and on others on the network, and connects to a server first. Both find and install their updates themselves, when you say so. The interface is built with [Slint](https://slint.dev). See [docs/PLAN.md](docs/PLAN.md) for the architecture and milestones.
 
 ## Building
 
@@ -20,7 +20,7 @@ cargo build --release
 
 `ci/check.sh` runs the checks for Linux and cross-compiles for Windows in Docker, so other systems can be checked from a Mac: `ci/check.sh linux`, `ci/check.sh windows`, `ci/check.sh deps` (dependency checks), `ci/check.sh secrets` (credentials in any commit), `ci/check.sh workflows` (the GitHub workflows, with actionlint), or all five without an argument. `ci/check.sh gui` runs Freya on virtual X11 and Wayland screens and saves screenshots and CPU use in `target/ci-gui/`.
 
-Installers for macOS (`.dmg`), Windows (`.msi`) and Linux (`.AppImage`, `.deb`) are made with cargo-packager; see [docs/PACKAGING.md](docs/PACKAGING.md).
+Installers of Freya and of Freya Server for macOS (`.dmg`), Windows (`.msi`) and Linux (`.AppImage`, `.deb`) are made with cargo-packager; see [docs/PACKAGING.md](docs/PACKAGING.md).
 
 Commits are checked for credentials before they are made: after cloning, turn the hook on with `git config core.hooksPath .githooks` (it needs [gitleaks](https://github.com/gitleaks/gitleaks), e.g. `brew install gitleaks`). See [docs/RELEASING.md](docs/RELEASING.md).
 
@@ -29,8 +29,11 @@ Dependencies are pinned, checked against the RustSec database and recorded as au
 ## Usage
 
 ```sh
-cargo run --release -- ~/Music/some-album
+cargo run --release -p freya-server &   # the library, in the background
+cargo run --release -p freya
 ```
+
+The first time, Freya asks which server to use: this computer's, one found on the network, or one typed in, proved by the code its computer shows.
 
 Drop files, folders or playlists (M3U, M3U8, PLS) on the window to add them. In the playlist, click, Shift-click and Cmd/Ctrl-click to select, double-click or Enter to play, drag rows to reorder, Delete to remove. Cover art is read from the files' tags or from a `cover.jpg`/`folder.jpg` next to them. The equalizer (the sliders button) has ten bands from 60 Hz to 16 kHz and a preamp, ±12 dB each: drag across several bands in one sweep, double-click a band to reset it, pick one of Winamp's presets, or load and save Winamp `.eqf` files. The visualizer shows a spectrum, an oscilloscope or the hologram. Its full-screen button, `F` or a double-click fills the screen with it, for a TV: what plays shows below it in large letters, and moving the mouse brings up the controls, the visualizations and Up Next. It runs at 30 frames per second (`visualizer_fps` in `settings.toml`), at most 15 while another app is in front, and not at all while the window is hidden; turn it off to save the rest of its CPU. The built-in skin's spectrum is drawn by Freya in its own layer on top of the window, so it costs almost nothing (set `FREYA_NATIVE_SPECTRUM=off` to have the skin draw it instead). Appearance follows the system, or can be set to light or dark in the playlist's "more" menu. The playlist, volume, shuffle, repeat, equalizer, appearance, music folders and window size are kept between runs.
 
@@ -40,7 +43,7 @@ The **Library** tab lists the music in the folders you choose ("Add music folder
 
 Freya shows what plays in the system's media controls (Now Playing on macOS, the media overlay on Windows, MPRIS on Linux), with cover art, and the keyboard's media keys control it.
 
-Keys: `space` play/pause, `←`/`→` seek 5 s, `↑`/`↓` volume, `N`/`P` next/previous, `S` stop, `O` open files, `F` full-screen visualizer (`Esc` leaves it), `F1` about, `F2` skins. In the playlist: arrows, Page Up/Down, Home/End, Enter, Delete, `Esc`, `Cmd/Ctrl+A`. In the library: arrows, Page Up/Down, Enter, `Esc` to go back, `Cmd/Ctrl+F` to search.
+Keys: `space` play/pause, `←`/`→` seek 5 s, `↑`/`↓` volume, `M` mute, `N`/`P` next/previous, `S` stop, `O` open files, `F` full-screen visualizer (`Esc` leaves it), `F1` about, `F2` skins. In the playlist: arrows, Page Up/Down, Home/End, Enter, Delete, `Esc`, `Cmd/Ctrl+A`. In the library: arrows, Page Up/Down, Enter, `Esc` to go back, `Cmd/Ctrl+F` to search.
 
 Options: `--skin path` loads a skin (a `.slint` file, a skin folder or a `.freyaskin` package) and remembers it; `--renderer femtovg|software` picks the renderer (the default is software on macOS, where it keeps the window steady while it is resized, and FemtoVG on the GPU elsewhere).
 

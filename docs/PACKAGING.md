@@ -1,14 +1,15 @@
 # Packaging Freya
 
-Installers are made with [cargo-packager](https://github.com/crabnebula-dev/cargo-packager), configured under `[package.metadata.packager]` in [`freya/Cargo.toml`](../freya/Cargo.toml). Each system builds its own:
+Freya and Freya Server are packaged apart, each installed and updated without the other.
+Installers are made with [cargo-packager](https://github.com/crabnebula-dev/cargo-packager), configured under `[package.metadata.packager]` in [`freya/Cargo.toml`](../freya/Cargo.toml) and [`crates/freya-server/Cargo.toml`](../crates/freya-server/Cargo.toml). Each system builds its own, with `-p freya` or `-p freya-server`:
 
 | System | Formats | Command |
 |---|---|---|
-| macOS | `Freya.app`, `.dmg`, `.app.zip` (signed) | `ci/package-macos.sh` (see [RELEASING.md](RELEASING.md)); unsigned: `cargo packager -p freya --release --formats app,dmg` |
+| macOS | `Freya.app` or `Freya Server.app`, `.dmg`, `.app.zip` (signed) | `ci/package-macos.sh [freya \| server]` (see [RELEASING.md](RELEASING.md)); unsigned: `cargo packager -p freya --release --formats app,dmg` |
 | Windows | `.msi` (WiX) | `cargo packager -p freya --release --formats wix` |
 | Linux | `.AppImage`, `.deb` | `cargo packager -p freya --release --formats appimage,deb` |
 
-The `.msi` adds two WiX fragments of Freya's own, in `freya/wix/`: `freya-cli.wxs` installs `freya-cli.exe` and puts Freya's folder on the PATH; `stop-server.wxs` stops Freya's server before the files are checked, as Windows cannot close a program without a window and would ask the user to.
+Freya's `.msi` adds `freya/wix/freya-cli.wxs`, which installs `freya-cli.exe` and puts Freya's folder on the PATH. Freya Server's adds `crates/freya-server/wix/stop-server.wxs`, which asks a running server to stop before the files are checked, through the window of its icon in the notification area. `Freya Server.app` is a menu bar app, with no icon in the Dock; on Linux the server has no menu, and its `.deb` needs nothing beyond the system's own libraries.
 
 Install the tool once with `cargo install cargo-packager --locked`. Packages land in `target/packages/`. The [Release workflow](../.github/workflows/release.yml) builds and signs all of them on GitHub: run by hand it keeps them as downloadable artifacts, and for a version tag it publishes them as a release (see [RELEASING.md](RELEASING.md)).
 

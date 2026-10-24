@@ -63,7 +63,7 @@ the repository token, and only the release job may write.
 ### Checking a release by hand
 
 ```sh
-# allowed_signers: the key from freya/src/update/signing.rs
+# allowed_signers: the key from crates/freya-update/src/signing.rs
 echo 'freya-release namespaces="freya-release" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGb2PDcF4r6PkdFcm4pzbCxzZPZuDls5ZJSICMFe91Bd' > allowed_signers
 ssh-keygen -Y verify -f allowed_signers -I freya-release -n freya-release -s SHA256SUMS.sig < SHA256SUMS
 sha256sum --check --ignore-missing SHA256SUMS      # macOS: shasum -a 256 --check --ignore-missing
@@ -117,13 +117,14 @@ or rotate it first, then remove it from the history.
 
 ### macOS
 
-`ci/package-macos.sh` builds `Freya.app` with cargo-packager, signs it with the hardened
-runtime, checks the signature (`codesign --verify --deep --strict`) and writes, into
-`target/dist/`:
+`ci/package-macos.sh` builds `Freya.app`, or with `server` `Freya Server.app`, with
+cargo-packager, signs it with the hardened runtime, checks the signature
+(`codesign --verify --deep --strict`) and writes, into `target/dist/`:
 
 - `Freya-<version>-macos-<arch>.app.zip`, which Freya's updater installs;
 - `Freya-<version>-macos-<arch>.dmg`, the app and a link to Applications, for installing by
-  hand.
+  hand;
+- `FreyaServer-<version>-macos-<arch>.app.zip` and `.dmg`, the same for Freya Server.
 
 Today the signature is **ad hoc** (`FREYA_MACOS_IDENTITY` unset). That is enough for an app
 Freya's updater installs: it is downloaded by Freya, not a browser, so it is never quarantined
@@ -160,11 +161,14 @@ Packages are not signed one by one. Like every release file, they are covered by
 
 ## Updates
 
-Freya reads its releases from GitHub (`api.github.com/repos/alexvikman/freya/releases`),
-passing over drafts, pre-releases and tags that are not `vX.Y.Z`, and offers the newest when it
-is newer than itself. It looks at launch (after ten seconds) and then once a day, unless the
-user turns that off; a version the user skipped is only offered again when they ask. Nothing is
-installed without the user's click. The code is in `freya/src/update/`.
+Freya and Freya Server are released together, as two packages of each release, and each
+updates itself. They read their releases from GitHub
+(`api.github.com/repos/alexvikman/freya/releases`), passing over drafts, pre-releases and tags
+that are not `vX.Y.Z`, and offer the newest when it is newer than themselves. Freya looks at
+launch (after ten seconds) and then once a day, unless the user turns that off; a version the
+user skipped is only offered again when they ask. Freya Server looks a minute after it starts
+and then once a day, and offers the update in its menu and, to its admins, in Freya's Server
+tab. Nothing is installed without the user's click. The code is in `crates/freya-update/`.
 
 ### What Freya trusts
 
@@ -172,7 +176,8 @@ Every release carries `SHA256SUMS`, the checksums of all its files, and `SHA256S
 signature over it made with `ssh-keygen -Y sign -n freya-release`. Before installing, Freya
 
 1. checks the signature against the public keys built into it (`RELEASE_KEYS` in
-   `freya/src/update/signing.rs`, verified with `ring`), and refuses a release without one;
+   `crates/freya-update/src/signing.rs`, verified with `ring`), and refuses a release without
+   one;
 2. downloads its package and checks it against its line in `SHA256SUMS`;
 3. on macOS, also checks the new app's code signature, which seals the whole bundle.
 
@@ -188,14 +193,14 @@ only then sign with the new key; remove the old key a release later.
 
 | Installed as | Package | What Freya does |
 |---|---|---|
-| macOS app bundle | `Freya-<version>-macos-<arch>.app.zip` | Unpacks it next to the app, checks its signature, moves the running app aside and the new one into its place (moving the old one back if that fails), and restarts |
-| Linux AppImage | `Freya-<version>-linux-<arch>.AppImage` | Writes it next to the running image and renames it over it |
+| macOS app bundle | `Freya-<version>-macos-<arch>.app.zip` (`FreyaServer-…` for the server) | Unpacks it next to the app, checks its signature, moves the running app aside and the new one into its place (moving the old one back if that fails), and restarts |
+| Linux AppImage | `Freya-<version>-linux-<arch>.AppImage` (`FreyaServer-…`) | Writes it next to the running image and renames it over it |
 | `.deb`, Windows, or run from a build | — | Shows the update; *Download* opens the release page |
 
-The new Freya is started once the old one has quit, with the old one's environment, and
-removes what the update left beside the app. Freya's server, `freya-server`, comes in every
-package beside Freya; the new Freya finds the old server still running, stops it, and starts
-its own. A list of releases at the address in `FREYA_UPDATE_FEED`
+The new version is started once the old one has ended, with the old one's environment, and
+removes what the update left beside the app. Freya Server started at login by launchd or
+systemd ends with a failure instead, which has them start the new one. A list of releases at
+the address in `FREYA_UPDATE_FEED`
 takes the place of GitHub's, to try a release before publishing it; its files must still carry
 a valid signature.
 

@@ -8,6 +8,42 @@ publish.workspace = true
 [lints]
 workspace = true
 
+# Freya Server's own packages: the library Freya plays from, on this computer or another, with
+# or without a screen (see docs/PACKAGING.md).
+[package.metadata.packager]
+product-name = "Freya Server"
+authors = ["Freya contributors"]
+# Its LaunchAgent's label too (see src/autostart.rs).
+identifier = "io.github.alexvikman.freya.server"
+category = "Music"
+description = "The music library Freya plays from"
+long-description = "Freya Server keeps a music library, its pictures, playlists and plays, for Freya on this computer and on others on the network. It starts when you log in, and runs without a screen too."
+copyright = "Freya contributors. MIT OR Apache-2.0."
+before-packaging-command = "cargo build --locked --release -p freya-server"
+out-dir = "../../target/packages"
+binaries-dir = "../../target/release"
+binaries = [{ path = "freya-server", main = true }]
+# The licenses of what is built into it, which go with it (see docs/DEPENDENCIES.md).
+resources = ["../../licenses/THIRD-PARTY.html"]
+icons = [
+    "../../assets/icons/32x32.png",
+    "../../assets/icons/64x64.png",
+    "../../assets/icons/128x128.png",
+    "../../assets/icons/256x256.png",
+    "../../assets/icons/icon.png",
+    "../../assets/icons/icon.ico",
+]
+
+# Windows: the server asked to stop before its files are replaced (see wix/stop-server.wxs).
+[package.metadata.packager.wix]
+fragment-paths = ["wix/stop-server.wxs"]
+custom-action-refs = ["StopFreyaServer"]
+
+# An icon in the menu bar, not in the Dock (see src/menu/mac.rs).
+[package.metadata.packager.macos]
+minimum-system-version = "11.0"
+background-app = true
+
 [dependencies]
 base64 = "0.23.1"
 # Stopped by Ctrl-C, SIGTERM and SIGHUP alike.

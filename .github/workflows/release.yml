@@ -91,7 +91,9 @@ jobs:
         env:
           FREYA_LASTFM_API_KEY: ${{ secrets.FREYA_LASTFM_API_KEY }}
           FREYA_LASTFM_SECRET: ${{ secrets.FREYA_LASTFM_SECRET }}
-        run: cargo packager -p freya --release --formats app
+        run: |
+          cargo packager -p freya --release --formats app
+          cargo packager -p freya-server --release --formats app
       - name: Developer ID certificate, into a keychain of its own
         if: env.HAS_APPLE_CERTIFICATE == 'true'
         env:
@@ -121,13 +123,16 @@ jobs:
         env:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-        run: ci/package-macos.sh --skip-build
+        run: |
+          ci/package-macos.sh --skip-build freya
+          ci/package-macos.sh --skip-build server
       - name: Smoke test
         run: |
           target/packages/Freya.app/Contents/MacOS/freya --version | grep -qx "freya $VERSION"
-          target/packages/Freya.app/Contents/MacOS/freya-server --version |
+          "target/packages/Freya Server.app/Contents/MacOS/freya-server" --version |
             grep -qx "freya-server $VERSION"
           test -f "target/dist/Freya-$VERSION-macos-${{ matrix.arch }}.app.zip"
+          test -f "target/dist/FreyaServer-$VERSION-macos-${{ matrix.arch }}.app.zip"
       - name: Remove signing material
         if: always()
         run: |
@@ -168,19 +173,23 @@ jobs:
         run: cargo install cargo-packager --locked --version "$CARGO_PACKAGER_VERSION"
       - name: AppImage tools, pinned and checked
         run: ci/appimage-tools.sh
-      - name: Package
+      - name: Package, smoke test and name the packages
         # Freya's Last.fm API key, for scrobbling (see docs/RELEASING.md); only this step sees it.
         env:
           FREYA_LASTFM_API_KEY: ${{ secrets.FREYA_LASTFM_API_KEY }}
           FREYA_LASTFM_SECRET: ${{ secrets.FREYA_LASTFM_SECRET }}
-        run: cargo packager -p freya --release --formats appimage,deb
-      - name: Smoke test and name the packages
+        # One at a time: each is named before the next is made beside it.
         run: |
-          target/release/freya --version | grep -qx "freya $VERSION"
-          target/release/freya-server --version | grep -qx "freya-server $VERSION"
           mkdir -p dist
+          cargo packager -p freya --release --formats appimage,deb
+          target/release/freya --version | grep -qx "freya $VERSION"
           mv target/packages/*.AppImage "dist/Freya-$VERSION-linux-${{ matrix.arch }}.AppImage"
           mv target/packages/*.deb "dist/Freya-$VERSION-linux-${{ matrix.arch }}.deb"
+          cargo packager -p freya-server --release --formats appimage,deb
+          target/release/freya-server --version | grep -qx "freya-server $VERSION"
+          mv target/packages/*.AppImage \
+            "dist/FreyaServer-$VERSION-linux-${{ matrix.arch }}.AppImage"
+          mv target/packages/*.deb "dist/FreyaServer-$VERSION-linux-${{ matrix.arch }}.deb"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-${{ matrix.arch }}
@@ -209,18 +218,25 @@ jobs:
         env:
           FREYA_LASTFM_API_KEY: ${{ secrets.FREYA_LASTFM_API_KEY }}
           FREYA_LASTFM_SECRET: ${{ secrets.FREYA_LASTFM_SECRET }}
-        run: cargo packager -p freya --release --formats wix
-      - name: Smoke test and name the package
+        # One at a time: each is named before the next is made beside it.
+        run: |
+          mkdir -p dist
+          cargo packager -p freya --release --formats wix
+          mv target/packages/*.msi "dist/Freya-$VERSION-windows-x86_64.msi"
+          cargo packager -p freya-server --release --formats wix
+          mv target/packages/*.msi "dist/FreyaServer-$VERSION-windows-x86_64.msi"
+      - name: Smoke test
         run: |
           # A window app prints nothing here; its version resource says which version it is.
-          powershell -NoProfile -Command \
-            "(Get-Item target/release/freya.exe).VersionInfo.ProductVersion" |
-            tr -d '\r' | grep -qx "$VERSION"
+          for program in freya freya-server; do
+            powershell -NoProfile -Command \
+              "(Get-Item target/release/$program.exe).VersionInfo.ProductVersion" |
+              tr -d '\r' | grep -qx "$VERSION"
+          done
           # The terminal launcher, a console program, prints it and passes the exit code on.
           target/release/freya-cli.exe --version | tr -d '\r' | grep -qx "freya $VERSION"
-          target/release/freya-server.exe --version | tr -d '\r' | grep -qx "freya-server $VERSION"
-          mkdir -p dist
-          mv target/packages/*.msi "dist/Freya-$VERSION-windows-x86_64.msi"
+          test -f "dist/Freya-$VERSION-windows-x86_64.msi"
+          test -f "dist/FreyaServer-$VERSION-windows-x86_64.msi"
       # Signing goes here, once there is a certificate or a signing service (e.g. Azure Trusted
       # Signing): sign target/release/freya.exe before packaging and the .msi after. Until then
       # SmartScreen warns on first start.
@@ -296,10 +312,13 @@ jobs:
             ssh-keygen -Y verify -f "$RUNNER_TEMP/allowed_signers" -I freya-release \
               -n freya-release -s dist/SHA256SUMS.sig < dist/SHA256SUMS
           }
-          check < freya/src/update/signing.rs
+          check < crates/freya-update/src/signing.rs
           previous=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
-          if [ -n "$previous" ] &&
-            git show "$previous:freya/src/update/signing.rs" > "$RUNNER_TEMP/previous.rs"; then
+          # Where the keys were in the release before: freya/src/update/ until 0.3.
+          if [ -n "$previous" ] && {
+            git show "$previous:crates/freya-update/src/signing.rs" ||
+              git show "$previous:freya/src/update/signing.rs"
+          } > "$RUNNER_TEMP/previous.rs" 2>/dev/null; then
             check < "$RUNNER_TEMP/previous.rs"
           fi
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -316,11 +335,13 @@ jobs:
             echo
             echo "## Install"
             echo
-            echo "- **macOS:** the \`.dmg\` (Apple Silicon: \`aarch64\`, Intel: \`x86_64\`). Freya is not notarized yet: the first time, right-click the app and choose Open."
-            echo "- **Windows:** the \`.msi\`. It is not signed yet, so SmartScreen asks first."
+            echo "Freya plays the library of a Freya Server. Install \`FreyaServer\` on the computer that keeps your music, and \`Freya\` on each one you play it on; on one computer, both. Freya 0.3 had its server built in: uninstall it first."
+            echo
+            echo "- **macOS:** the \`.dmg\` (Apple Silicon: \`aarch64\`, Intel: \`x86_64\`). Not notarized yet: the first time, right-click the app and choose Open."
+            echo "- **Windows:** the \`.msi\`. Not signed yet, so SmartScreen asks first."
             echo "- **Linux:** the \`.AppImage\` (which updates itself) or the \`.deb\`."
             echo
-            echo "Freya finds later releases itself and installs them when you say so. Every file is listed in \`SHA256SUMS\`, signed with Freya's release key; see [RELEASING.md](https://github.com/${GITHUB_REPOSITORY}/blob/$TAG/docs/RELEASING.md) to check it by hand."
+            echo "Freya and Freya Server find later releases themselves and install them when you say so. Every file is listed in \`SHA256SUMS\`, signed with Freya's release key; see [RELEASING.md](https://github.com/${GITHUB_REPOSITORY}/blob/$TAG/docs/RELEASING.md) to check it by hand."
           } > "$RUNNER_TEMP/notes.md"
           cat "$RUNNER_TEMP/notes.md"
       - name: Publish
