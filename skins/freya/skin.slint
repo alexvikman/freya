@@ -4207,7 +4207,9 @@ component LibraryPanel inherits FocusScope {
         }
     }
 
-    property <bool> server-lost: Server.remote && (Server.state == "unreachable" || Server.state == "log-in");
+    property <bool> server-lost: Server.chosen && (Server.state == "unreachable" || Server.state == "log-in" || Server.state == "version");
+    /// What the library's server is called here: its name, or this computer's.
+    property <string> server-called: Server.remote ? Server.name : "Freya Server on this computer";
 
     if Library.rows.length == 0: VerticalLayout {
         alignment: center;
@@ -4217,7 +4219,8 @@ component LibraryPanel inherits FocusScope {
 
         Text {
             text: root.server-lost && Server.state == "log-in" ? "Log in to " + Server.name
-                : root.server-lost ? "Freya cannot reach " + Server.name
+                : root.server-lost && Server.state == "version" ? "Freya and its server differ"
+                : root.server-lost ? "Freya cannot reach " + root.server-called
                 : Library.folders.length == 0 ? "Build your music library"
                 : Library.scanning ? "Reading your music…"
                 : Library.query != "" ? "No matches"
@@ -4230,7 +4233,9 @@ component LibraryPanel inherits FocusScope {
         }
         Text {
             text: root.server-lost && Server.state == "log-in" ? "The library is on " + Server.name + ", which wants you to log in again."
-                : root.server-lost ? "The library is on " + Server.name + ". Freya tries again by itself, and shows the music once it is back."
+                : root.server-lost && Server.state == "version" ? Server.error
+                : root.server-lost && Server.remote ? "The library is on " + Server.name + ". Freya tries again by itself, and shows the music once it is back."
+                : root.server-lost ? Server.error + " Freya tries again by itself, and shows the music once it answers."
                 : Library.folders.length == 0 ? "Choose the folder your music is in. Freya lists it by artist and album, and checks it for changes each time it starts."
                 : Library.scanning ? Library.status
                 : Library.query != "" ? "Nothing in the library matches “" + Library.query + "”."
@@ -7614,6 +7619,8 @@ component FoundServerView inherits Rectangle {
 /// Finds servers on the network, or takes one's name or address, and logs in to the one
 /// chosen, after showing its certificate's fingerprint.
 component ServerForm inherits MenuSurface {
+    /// Whether it can be closed without a server: not in the welcome view.
+    in property <bool> cancellable: true;
     callback closed();
 
     property <string> typed;
@@ -7641,7 +7648,7 @@ component ServerForm inherits MenuSurface {
                     color: Theme.text;
                 }
                 Text {
-                    text: "Freya on another computer takes this one once you log in with the password set there.";
+                    text: "Freya Server on another computer lets this one in once you prove it with a code and log in.";
                     font-size: 13px;
                     color: Theme.text-secondary;
                     wrap: word-wrap;
@@ -7681,7 +7688,7 @@ component ServerForm inherits MenuSurface {
                     clicked => { Server.find(); }
                 }
                 Rectangle { horizontal-stretch: 1; }
-                TextButton {
+                if root.cancellable: TextButton {
                     text: "Cancel";
                     clicked => { root.closed(); }
                 }
@@ -7762,6 +7769,101 @@ component ServerForm inherits MenuSurface {
                         : "Log In in Browser…";
                     primary: !Server.login-waiting;
                     clicked => { Server.log-in(); }
+                }
+            }
+        }
+    }
+}
+
+/// What Freya shows until a server is chosen. Freya plays the library of a Freya Server, on
+/// this computer or another, so connecting to one comes first.
+component WelcomeView inherits Rectangle {
+    background: Theme.background;
+
+    // What is under it takes no clicks meanwhile.
+    TouchArea { }
+
+    VerticalLayout {
+        // The top bar, when the skin draws into the title bar: it moves the window, with the
+        // window buttons.
+        Rectangle {
+            height: App.window-buttons-width > 0 || App.window-controls ? App.title-bar-height : 0px;
+
+            TitleBarArea { }
+            if App.window-controls: HorizontalLayout {
+                alignment: end;
+
+                WindowControls { }
+            }
+        }
+        ScrollView {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                alignment: center;
+                padding-top: 48px;
+                padding-bottom: 48px;
+                padding-left: max(24px, (root.width - 520px) / 2);
+                padding-right: max(24px, (root.width - 520px) / 2);
+                spacing: 20px;
+
+                VerticalLayout {
+                    spacing: 8px;
+
+                    Text {
+                        text: "Welcome to Freya";
+                        font-size: 32px;
+                        font-weight: 800;
+                        color: Theme.text;
+                    }
+                    Text {
+                        text: "Freya plays the music of a Freya Server, on this computer or another. Connect to one to begin.";
+                        font-size: 15px;
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
+                    }
+                }
+                MenuSurface {
+                    HorizontalLayout {
+                        padding: 20px;
+                        spacing: 16px;
+
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            alignment: center;
+                            spacing: 4px;
+
+                            Text {
+                                text: Server.here ? "Freya Server runs on this computer" : "This computer";
+                                font-size: 17px;
+                                font-weight: 600;
+                                color: Theme.text;
+                            }
+                            Text {
+                                text: Server.here ? "Use its library, with the music folders it keeps."
+                                    : "No Freya Server runs here. Install it to keep your library on this computer, or connect to one on another.";
+                                font-size: 13px;
+                                color: Theme.text-secondary;
+                                wrap: word-wrap;
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+
+                            if Server.here: TextButton {
+                                text: "Use This Computer";
+                                primary: true;
+                                clicked => { Server.use-this-computer(); }
+                            }
+                            if !Server.here: TextButton {
+                                text: "Get Freya Server…";
+                                clicked => { App.open-link("server"); }
+                            }
+                        }
+                    }
+                }
+                ServerForm {
+                    cancellable: false;
                 }
             }
         }
@@ -8096,7 +8198,8 @@ component SettingsView inherits Rectangle {
 
                 if !Server.remote: SettingsRow {
                     label: "The library is on this computer";
-                    detail: "Freya's server here keeps it, with its pictures, playlists and plays.";
+                    detail: Server.state == "unreachable" || Server.state == "version" ? Server.error
+                        : "Freya Server here keeps it, with its pictures, playlists and plays.";
 
                     VerticalLayout {
                         alignment: center;
@@ -8120,21 +8223,6 @@ component SettingsView inherits Rectangle {
                             label: "Let other computers use this library";
                             checked: Server.network;
                             toggled => { Server.set-network(!Server.network); }
-                        }
-                    }
-                }
-                if !Server.remote: SettingsRow {
-                    label: "Start the server when you log in";
-                    detail: Server.autostart ? "It keeps the library up to date, and other computers can use it, while Freya is closed."
-                        : "It runs while Freya is open.";
-
-                    VerticalLayout {
-                        alignment: center;
-
-                        Toggle {
-                            label: "Start the server when you log in";
-                            checked: Server.autostart;
-                            toggled => { Server.set-autostart(!Server.autostart); }
                         }
                     }
                 }
@@ -8188,7 +8276,7 @@ component SettingsView inherits Rectangle {
                 if Server.remote: SettingsRow {
                     label: "The library is on " + Server.name + " (" + Server.address + ")";
                     detail: Server.state == "unreachable" ? "Freya cannot reach it, and tries again by itself. " + Server.error
-                        : Server.state == "log-in" ? Server.error
+                        : Server.state == "log-in" || Server.state == "version" ? Server.error
                         : Server.state == "connecting" ? "Connecting…"
                         : "Its certificate's fingerprint: " + Server.fingerprint;
 
@@ -8210,7 +8298,7 @@ component SettingsView inherits Rectangle {
                                 text: "Another Server…";
                                 clicked => { root.find-servers(); }
                             }
-                            TextButton {
+                            if Server.here: TextButton {
                                 text: "Use This Computer";
                                 clicked => { Server.use-this-computer(); }
                             }
@@ -8991,16 +9079,20 @@ component Toolbar inherits HorizontalLayout {
             accepted => { root.search-accepted(); }
         }
     }
-    // A server on another computer that cannot be reached, or wants logging in again: marked
-    // here until it is back, without hiding anything.
-    if Server.remote && (Server.state == "unreachable" || Server.state == "log-in"): IconButton {
+    // A server that cannot be reached, is of another version, or wants logging in again:
+    // marked here until it is back, without hiding anything.
+    if Server.chosen && (Server.state == "unreachable" || Server.state == "log-in" || Server.state == "version"): IconButton {
         icon: Icons.server;
         stroked: true;
         size: 36px;
         badge: true;
-        label: Server.state == "log-in" ? "Log in to " + Server.name : Server.name + " cannot be reached";
+        label: Server.state == "log-in" ? "Log in to " + Server.name
+            : Server.state == "version" ? "Freya and its server differ"
+            : Server.remote ? Server.name + " cannot be reached" : "Freya Server is not running";
         tooltip: Server.state == "log-in" ? "Log in to " + Server.name + " again"
-            : "Freya cannot reach " + Server.name + ". It tries again by itself.";
+            : Server.state == "version" ? Server.error
+            : Server.remote ? "Freya cannot reach " + Server.name + ". It tries again by itself."
+            : Server.error + " Freya tries again by itself.";
         clicked => { root.show-server(); }
     }
     activity := IconButton {
@@ -9790,6 +9882,9 @@ export component FreyaSkin inherits Window {
             closed => { update-popup.close(); }
         }
     }
+
+    // Until a server is chosen, only how to connect to one.
+    if !Server.chosen: WelcomeView { }
 
     if Playlist.drop-hover: Rectangle {
         border-width: 3px;

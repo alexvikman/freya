@@ -38,6 +38,9 @@ use crate::update::{self, Updater};
 const COVER_SIZE: u32 = 512;
 /// How often the files of a skin in use are checked for changes.
 const SKIN_WATCH_INTERVAL: Duration = Duration::from_secs(1);
+/// How often Freya looks whether Freya Server answers on this computer, while its library is
+/// not the one shown.
+const LOOK_HERE_EVERY: Duration = Duration::from_secs(2);
 
 /// A downloaded station playlist, or why it could not be read.
 /// `path` from the root, as the working folder makes it; addresses are kept as they are.
@@ -328,6 +331,10 @@ pub struct App {
     pub player: Player,
     /// While muted, the volume to go back to; the player plays at 0.
     muted: Option<f32>,
+    /// Whether Freya Server answers on this computer, and when that was last looked at: for
+    /// the welcome view and the Server tab, while the library is not this computer's.
+    server_here: bool,
+    here_looked: Option<Instant>,
     pub playlist: Playlist,
     pub settings: Settings,
     tags: TagLoader,
@@ -457,6 +464,8 @@ impl App {
         let mut app = Self {
             player,
             muted: None,
+            server_here: false,
+            here_looked: None,
             playlist: Playlist::new(),
             settings,
             tags: TagLoader::new(),
@@ -507,10 +516,6 @@ impl App {
         };
         app.watch_skin();
         app.attach_library();
-        // Only this computer's server: with the library elsewhere, it is not needed.
-        if app.settings.server.is_none() {
-            app.keep_server_starting();
-        }
         app
     }
 
@@ -847,6 +852,7 @@ impl App {
             );
         }
         self.settings.server = Some(settings::SavedServer::new(&chosen.name, &chosen.pin));
+        self.settings.here = false;
         self.settings.save();
         self.server.set_known(Some(chosen.pin.certificate.clone()));
         self.leave_queue();
@@ -856,39 +862,8 @@ impl App {
         });
     }
 
-    /// Whether this computer's server starts when the user logs in. Release builds make it so
-    /// the first time; a development build's server is only started when asked.
-    pub fn set_start_server_at_login(&mut self, on: bool) {
-        let Some(program) = super::server_program() else {
-            return;
-        };
-        let done = if on {
-            freya_server::autostart::install(&freya_server::autostart::Launch::of(&program))
-        } else {
-            freya_server::autostart::uninstall()
-        };
-        match done {
-            Ok(()) => self.settings.start_server_at_login = Some(on),
-            Err(e) => log::warn!("could not change how the server starts: {e}"),
-        }
-    }
-
-    /// Keeps the server starting at login as the user decided, pointing at this Freya's
-    /// server, which moves with an update; and decides it the first time.
-    fn keep_server_starting(&mut self) {
-        let wanted = match self.settings.start_server_at_login {
-            Some(wanted) => wanted,
-            None if cfg!(debug_assertions) => return,
-            None => true,
-        };
-        if wanted {
-            self.set_start_server_at_login(true);
-        }
-    }
-
-    /// Shows the library of the server on this computer again.
     /// Logs this computer out of the server elsewhere the library is on: the server takes its
-    /// token back, this computer forgets it, and the library is this computer's again.
+    /// token back, this computer forgets it, and no server is chosen: the welcome view shows.
     pub fn log_out(&mut self) {
         let remote = self.library.remote();
         self.server.log_out(remote.as_deref());
@@ -896,17 +871,46 @@ impl App {
         if let (Some(pin), Some(store)) = (pin, settings::token_store()) {
             store.remove(&freya_client::token_key(&pin));
         }
-        self.use_this_computer();
+        self.settings.server = None;
+        self.settings.here = false;
+        self.server.set_known(None);
+        self.leave_queue();
+        self.settings.save();
+        self.show_no_library();
     }
 
+    /// Shows the library of Freya Server on this computer.
     pub fn use_this_computer(&mut self) {
         self.settings.server = None;
+        self.settings.here = true;
         self.server.set_known(None);
         self.leave_queue();
         self.settings.save();
         if let Some(source) = super::local_source() {
             self.show_library_of(source);
         }
+    }
+
+    /// Looks every few seconds whether Freya Server answers on this computer, unless its
+    /// library is the one shown.
+    fn look_for_server_here(&mut self) {
+        if self.settings.here && self.settings.server.is_none() {
+            self.server_here = true;
+            return;
+        }
+        if self
+            .here_looked
+            .is_none_or(|at| at.elapsed() >= LOOK_HERE_EVERY)
+        {
+            self.here_looked = Some(Instant::now());
+            self.server_here = super::server_here();
+        }
+    }
+
+    /// Whether a server is chosen, here or elsewhere; until one is, the skin shows only how to
+    /// connect to one.
+    fn server_chosen(&self) -> bool {
+        self.settings.server.is_some() || self.settings.here
     }
 
     /// Whose library is shown: the certificate of the server elsewhere, in hex, or none for this
@@ -920,6 +924,14 @@ impl App {
     fn leave_queue(&mut self) {
         self.edit(Playlist::clear);
         self.settings.queue_from = self.library_from();
+    }
+
+    /// Shows no library, as no server is chosen.
+    fn show_no_library(&mut self) {
+        let mut library = LibraryPanel::new(None, library::covers_dir(None));
+        configure_library(&mut library, &self.settings);
+        self.library = library;
+        self.attach_library();
     }
 
     /// Shows the library from `source` in place of the one shown.
@@ -1312,6 +1324,7 @@ impl App {
 
     pub fn tick(&mut self) {
         self.player.rest_device_when_idle();
+        self.look_for_server_here();
         while let Ok(event) = self.player.events().try_recv() {
             match event {
                 Event::TrackStarted(track) => {
@@ -1645,6 +1658,7 @@ impl App {
 
     /// Writes current state into the skin.
     pub fn refresh(&mut self) {
+        let chosen = self.server_chosen();
         let station_rows = self.stations.rows(self.playing_station().as_deref());
         let view = &mut self.view;
         let ui = &view.ui;
@@ -1793,10 +1807,8 @@ impl App {
                 "network",
                 Value::Bool(self.library.server_settings().is_none_or(|s| s.network)),
             ),
-            (
-                "autostart",
-                Value::Bool(self.settings.start_server_at_login == Some(true)),
-            ),
+            ("chosen", Value::Bool(chosen)),
+            ("here", Value::Bool(self.server_here)),
         ];
         server.extend(self.server.values());
         view.server_out.write(ui, server);

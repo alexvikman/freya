@@ -55,6 +55,7 @@ fn main() {
             match panel.as_str() {
                 "radio" => freya_skin::sample::fill_radio(ui),
                 "error" => freya_skin::sample::fill_error(ui),
+                "welcome" => freya_skin::sample::fill_welcome(ui),
                 _ => {}
             }
         })

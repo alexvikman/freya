@@ -199,12 +199,8 @@ impl Item {
 /// Where the library comes from.
 #[derive(Clone, Debug)]
 pub enum LibrarySource {
-    /// Freya's server on this computer, at `address`, started from `program` when none answers
-    /// there.
-    Local {
-        address: std::net::SocketAddr,
-        program: PathBuf,
-    },
+    /// Freya Server on this computer, at `address`.
+    Local { address: std::net::SocketAddr },
     /// A server on another computer, its certificate pinned, called `name`.
     Remote {
         pin: freya_client::Pin,
@@ -976,7 +972,7 @@ impl LibraryPanel {
     /// Whether to connect again now: the server could not be reached, a while ago.
     pub fn wants_reconnect(&mut self) -> bool {
         // Once connected, the events follow the server again by themselves.
-        let due = self.server_state == "unreachable"
+        let due = matches!(self.server_state, "unreachable" | "version")
             && self.db.is_none()
             && self.tried.is_none_or(|at| at.elapsed() >= RECONNECT_EVERY);
         if due {
@@ -4207,7 +4203,7 @@ fn connect(
         )
     };
     let (api, server, remote): (Arc<dyn LibraryApi>, Arc<dyn Server>, _) = match source {
-        LibrarySource::Local { address, program } => {
+        LibrarySource::Local { address } => {
             let (Some(pairing_key), Some(certificate), Some(store)) = (
                 crate::settings::pairing_key_path(),
                 crate::settings::server_certificate_path(),
@@ -4217,7 +4213,6 @@ fn connect(
             };
             let remote = freya_client::connect_locally(
                 address,
-                &program,
                 &pairing_key,
                 &certificate,
                 &store,
@@ -4273,6 +4268,14 @@ fn connect(
             (service.api(), service as _, None)
         }
     };
+    // For now only a server of Freya's own version: the API still changes between versions.
+    if let Some(remote) = &remote {
+        let version = remote
+            .0
+            .version()
+            .map_err(|e| ("unreachable", e.to_string()))?;
+        freya_client::same_version(&version).map_err(|e| ("version", e))?;
+    }
     let audio = remote.as_ref().map(|remote| {
         let (audio, agent) = remote.0.audio();
         (audio, Arc::new(agent))

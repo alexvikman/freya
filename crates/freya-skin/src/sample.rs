@@ -30,6 +30,9 @@ pub fn fill(ui: &ComponentInstance) {
     set("Player", "position-text", text("1:23"));
     set("Player", "remaining-text", text("-0:42"));
     set("Player", "volume", Value::Number(0.7));
+    // Connected to a server: without one, the skin shows only its welcome view.
+    set("Server", "chosen", Value::Bool(true));
+    set("Server", "state", text("connected"));
 
     let tracks = [
         ("Kraftwerk - Computer Love", "7:15"),
@@ -256,6 +259,12 @@ pub fn fill(ui: &ComponentInstance) {
         "tracks",
         Value::Model(ModelRc::new(VecModel::from(road))),
     );
+}
+
+/// No server chosen yet, and none on this computer: the welcome view.
+pub fn fill_welcome(ui: &ComponentInstance) {
+    let _ = ui.set_global_property("Server", "chosen", Value::Bool(false));
+    let _ = ui.set_global_property("Server", "here", Value::Bool(false));
 }
 
 /// Internet radio: a station with a song, no length.

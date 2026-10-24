@@ -23,8 +23,6 @@ pub use session::{Bearer, Granted, Session, TokenStore};
 /// that stopped saying anything is given up on.
 const RECONNECT: Duration = Duration::from_secs(2);
 const STREAM_LASTS: Duration = Duration::from_secs(70);
-/// How long a server started here may take to answer.
-const STARTING: Duration = Duration::from_secs(15);
 /// The most the picture cache keeps; beyond it, the pictures used longest ago go.
 const CACHE_LIMIT: u64 = 1024 * 1024 * 1024;
 
@@ -1483,16 +1481,15 @@ fn follow_events(http: &Http, mut stream: ureq::BodyReader<'static>, tell: &Send
     }
 }
 
-/// Freya's server on this computer at `address`, connected to as this device, named
-/// `device`, over TLS with the certificate the server keeps in `certificate`, a file of the
-/// user's own: so a program of another user listening there in the server's place is found
-/// out, and given nothing. The server is started from `program` when nothing answers there,
-/// and one of another version stopped first, so an update does not leave the old one running.
-/// A client without a refresh token for it, or with one it no longer takes, pairs with the key
-/// the server keeps in `pairing_key`; the refresh token is kept in `store`.
+/// Freya Server on this computer at `address`, connected to as this device, named `device`,
+/// over TLS with the certificate the server keeps in `certificate`, a file of the user's own:
+/// so a program of another user listening there in the server's place is found out, and given
+/// nothing. Freya never starts or stops a server: one that is not running is said so, and
+/// its version is for the caller to check (see [`same_version`]). A client without a refresh token for it, or with one it no longer
+/// takes, pairs with the key the server keeps in `pairing_key`; the refresh token is kept in
+/// `store`.
 pub fn connect_locally(
     address: std::net::SocketAddr,
-    program: &Path,
     pairing_key: &Path,
     certificate: &Path,
     store: &TokenStore,
@@ -1500,65 +1497,52 @@ pub fn connect_locally(
 ) -> Result<Arc<Remote<Http>>, String> {
     // Kept by the address it had before it was reached over TLS, so the token stays.
     let key = format!("http://{address}");
-    let pinned = || -> Result<Pin, String> {
-        let certificate = std::fs::read(certificate).map_err(|_| foreign(address))?;
-        Ok(Pin {
-            address,
-            certificate,
-        })
+    if !answers(address) {
+        return Err(NOT_RUNNING.into());
+    }
+    // What answers there without this user's certificate is someone else's, given nothing.
+    let certificate = std::fs::read(certificate).map_err(|_| foreign(address))?;
+    let pin = Pin {
+        address,
+        certificate,
     };
-    let pair = |http: &Http| -> Result<Granted, String> {
+    Http::pinned(pin.clone())
+        .version()
+        .map_err(|_| foreign(address))?;
+    let kept = Some((store.clone(), key.clone()));
+    let refresh = store.get(&key).unwrap_or_default();
+    let mut http = Http::pinned(pin.clone()).with_session(refresh, None, kept.clone());
+    if http.account().map_err(|e| e.to_string())?.is_none() {
         let key_now = std::fs::read_to_string(pairing_key)
             .map_err(|e| format!("could not read the pairing key: {e}"))?;
-        let granted = http
+        let granted = Http::pinned(pin.clone())
             .pair(&key_now, device)
             .map_err(|e| format!("could not pair with the server: {e}"))?;
         store.set(&key, &granted.refresh);
-        Ok(granted)
-    };
-    let kept = || Some((store.clone(), key.clone()));
-    let as_kept = |pin: &Pin| {
-        let refresh = store.get(&key).unwrap_or_default();
-        Http::pinned(pin.clone()).with_session(refresh, None, kept())
-    };
-    if !answers(address) {
-        start(address, program, certificate)?;
-    }
-    // What answers there without this user's certificate is someone else's, given nothing.
-    let mut pin = pinned()?;
-    if Http::pinned(pin.clone()).version().is_err() {
-        return Err(foreign(address));
-    }
-    let mut paired = None;
-    let version = Http::pinned(pin.clone())
-        .version()
-        .map_err(|_| foreign(address))?;
-    if version != env!("CARGO_PKG_VERSION") {
-        log::info!("the server here is version {version}; starting this version's");
-        if as_kept(&pin).quit().is_err() {
-            // It does not take this client's token: paired anew to stop it.
-            let granted = pair(&Http::pinned(pin.clone()))?;
-            Http::pinned(pin.clone())
-                .with_session(granted.refresh.clone(), Some(&granted), kept())
-                .quit()
-                .map_err(|e| format!("could not stop the server: {e}"))?;
-            paired = Some(granted);
-        }
-        wait_until_gone(address)?;
-        start(address, program, certificate)?;
-        pin = pinned()?;
-    }
-    let mut http = match &paired {
-        Some(granted) => {
-            Http::pinned(pin.clone()).with_session(granted.refresh.clone(), Some(granted), kept())
-        }
-        None => as_kept(&pin),
-    };
-    if http.account().map_err(|e| e.to_string())?.is_none() {
-        let granted = pair(&Http::pinned(pin.clone()))?;
-        http = Http::pinned(pin).with_session(granted.refresh.clone(), Some(&granted), kept());
+        http = Http::pinned(pin).with_session(granted.refresh.clone(), Some(&granted), kept);
     }
     Ok(Arc::new(Remote(http)))
+}
+
+/// Why this computer's server cannot be used when nothing answers in its place.
+pub const NOT_RUNNING: &str = "Freya Server is not running on this computer.";
+
+/// Whether a server of `version` can be used: for now only one of Freya's own version, as
+/// the API still changes between versions. Otherwise, which of the two to update.
+pub fn same_version(version: &str) -> Result<(), String> {
+    let ours = env!("CARGO_PKG_VERSION");
+    if version == ours {
+        return Ok(());
+    }
+    let parts = |v: &str| -> Vec<u64> { v.split('.').map(|p| p.parse().unwrap_or(0)).collect() };
+    let update = if parts(version) < parts(ours) {
+        "Update Freya Server to match."
+    } else {
+        "Update Freya to match."
+    };
+    Err(format!(
+        "The server is version {version}, and Freya {ours}. {update}"
+    ))
 }
 
 /// What is said of a program answering at `address` that is not this user's server.
@@ -1572,59 +1556,6 @@ fn foreign(address: std::net::SocketAddr) -> String {
 /// Whether anything takes connections at `address`.
 fn answers(address: std::net::SocketAddr) -> bool {
     std::net::TcpStream::connect_timeout(&address, Duration::from_secs(1)).is_ok()
-}
-
-/// Waits until nothing answers at `address`.
-fn wait_until_gone(address: std::net::SocketAddr) -> Result<(), String> {
-    let gone = Instant::now() + STARTING;
-    while answers(address) {
-        if Instant::now() > gone {
-            return Err("the server did not stop".into());
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    Ok(())
-}
-
-/// Starts the server `program`, and waits until it answers at `address` with the certificate
-/// it keeps in `certificate`.
-fn start(address: std::net::SocketAddr, program: &Path, certificate: &Path) -> Result<(), String> {
-    log::info!("starting {}", program.display());
-    let mut command = std::process::Command::new(program);
-    command
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        // A console program, started without a console window of its own.
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-    command
-        .spawn()
-        .map_err(|e| format!("could not start {}: {e}", program.display()))?;
-    let deadline = Instant::now() + STARTING;
-    loop {
-        if let Ok(certificate) = std::fs::read(certificate) {
-            let pin = Pin {
-                address,
-                certificate,
-            };
-            if Http::pinned(pin).version().is_ok() {
-                return Ok(());
-            }
-        }
-        if Instant::now() > deadline {
-            return Err(if answers(address) {
-                foreign(address)
-            } else {
-                format!("{} did not answer", program.display())
-            });
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
 }
 
 /// Writes `bytes` to `file` through a new file renamed over it, readable and writable by the

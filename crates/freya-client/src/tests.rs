@@ -1038,7 +1038,6 @@ fn a_program_in_the_local_servers_place_is_given_nothing() {
     store.set(&format!("http://{}", impostor.address()), "a refresh token");
     let refused = connect_locally(
         impostor.address(),
-        &dir.join("no such program"),
         &pairing_key,
         &certificate,
         &store,
@@ -1474,4 +1473,34 @@ mod erased {
             serde_json::to_vec(self).map_or(0, |v| v.len())
         }
     }
+}
+
+#[test]
+fn only_a_server_of_freyas_own_version_is_used() {
+    assert!(same_version(env!("CARGO_PKG_VERSION")).is_ok());
+    let older = same_version("0.0.1").unwrap_err();
+    assert!(older.contains("Update Freya Server"), "{older}");
+    let newer = same_version("999.0.0").unwrap_err();
+    assert!(newer.contains("Update Freya to"), "{newer}");
+}
+
+#[test]
+fn no_server_is_started_where_none_runs() {
+    let address = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let dir = std::env::temp_dir().join(format!("freya-none-here-{}", std::process::id()));
+    let store = TokenStore::new(dir.join("servers.json"), false);
+    let refused = connect_locally(
+        address,
+        &dir.join("pairing.key"),
+        &dir.join("certificate.der"),
+        &store,
+        "Mac",
+    )
+    .err()
+    .unwrap();
+    assert_eq!(refused, NOT_RUNNING);
+    let _ = std::fs::remove_dir_all(&dir);
 }

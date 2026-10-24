@@ -369,7 +369,7 @@ Her poses are pictures in `assets/hologram/` (JPEG or PNG, built into Freya), sh
 | `set-theme(name)`, `toggle-equalizer()` | |
 | `drag-window()` | Call on a mouse press in an empty part of the top bar: the window follows the mouse, and a double click zooms or minimizes it, as the system's settings say |
 | `minimize-window()`, `toggle-maximize-window()`, `close-window()` | The window buttons, for a skin that draws them; closing quits Freya |
-| `open-link(name)` | Opens one of Freya's own pages in the browser: "github", "releases", "issues", "license", or "licenses", the third-party licenses built into Freya; or "fanart-key", fanart.tv's page for a personal API key. Other names are ignored: a skin cannot open other addresses |
+| `open-link(name)` | Opens one of Freya's own pages in the browser: "github", "releases", "server" (where Freya Server is downloaded), "issues", "license", or "licenses", the third-party licenses built into Freya; or "fanart-key", fanart.tv's page for a personal API key. Other names are ignored: a skin cannot open other addresses |
 
 A settings page in a skin can be built from what the API already offers: `App.set-theme`, `App.show-skins`, the library's `folders`, `add-folder`, `remove-folder(index)` and `rescan`, the visualizer's `set-mode` and `set-fps`, and `Updates`. The built-in skin opens its Settings and About views from the "⋯" menu at the top right (Cmd+, or Ctrl+, opens Settings).
 
@@ -419,15 +419,17 @@ Scrobbling to the user's Last.fm profile. Optional, and off until the user conne
 
 ### `Server`
 
-The server that keeps the library: Freya's own on this computer, or one on another computer on the network, which the user finds or types in and logs in to. The first time, Freya takes the other server's certificate, and the user types the connection code Settings shows on that computer: the server proves it knows the code with that certificate, so another computer answering in its place is found out. After, Freya trusts that certificate only. Logging in and setting the password happen in the user's browser, on the server's own pages, which Freya opens at `http://127.0.0.1:47477`. Optional: without it, a skin always shows this computer's library.
+The server that keeps the library: Freya Server on this computer, or on another computer on the network, which the user finds or types in and logs in to. The first time, Freya takes the other server's certificate, and the user types the connection code Settings shows on that computer: the server proves it knows the code with that certificate, so another computer answering in its place is found out. After, Freya trusts that certificate only. Logging in and setting the password happen in the user's browser, on the server's own pages, which Freya opens at `http://127.0.0.1:47477`. Optional for a skin, though Freya has no library without a server: a skin without it shows none until the user chooses one in another skin.
 
 | Property | Type | |
 |---|---|---|
+| `chosen` | bool | Whether a server is chosen, on this computer or another. Freya does nothing without one: until it is, show only a welcome view to connect to one, with `here`, `found`, `find()`, `choose-found(i)`, `choose-address(text)` and `use-this-computer()` |
+| `here` | bool | Whether Freya Server answers on this computer |
 | `remote`, `name`, `address` | bool, string, string | Whether the library is on another computer, what that server is called and where it is |
-| `state` | string | "connecting", "connected", "unreachable" (Freya tries again by itself) or "log-in" (the server no longer takes this computer: log in again) |
+| `state` | string | "connecting", "connected", "unreachable" (Freya tries again by itself), "version" (the server is of another version than Freya: `error` says which to update) or "log-in" (the server no longer takes this computer: log in again) |
 | `error` | string | Why it is unreachable, or must be logged in to |
 | `fingerprint` | string | The server's certificate's fingerprint |
-| `server-name`, `network`, `autostart` | string, bool, bool | For the server on this computer: what others find it as, whether they may connect, and whether it starts when the user logs in |
+| `server-name`, `network` | string, bool | For the server on this computer: what others find it as, and whether they may connect |
 | `user`, `has-password` | string, bool | The account this computer is connected to, and whether it has a password; only then can other computers log in |
 | `devices` | [`ServerDevice`] | The devices connected to the account: `id`, `name`, `connected` and `used` (dates; `used` is "" when not known), `joined` ("paired" on the server's own computer, "logged-in" in the browser, or ""), `this` |
 | `password-waiting`, `password-error` | bool, string | While the page the password is set or changed on is open in the browser; why it could not be opened |
@@ -448,12 +450,12 @@ The server that keeps the library: Freya's own on this computer, or one on anoth
 | `verify-code(code)` | Checks the connection code typed with the server chosen; `login-verified` turns on when it matches |
 | `show-connection-code()` | On the server's computer: shows a new connection code, in place of any before |
 | `log-in()`, `cancel-login()` | Opens the server's login page in the browser, where a password manager fills it in, or, as `login-kind` says, the page adopting or joining the server; once the user is done there, the library is that server's |
-| `use-this-computer()` | The library is this computer's server's again |
+| `use-this-computer()` | The library is Freya Server's on this computer |
 | `change-password()` | Opens the page the password is set or changed on in the browser; for the owner of a server not adopted yet, the name too, adopting it |
 | `revoke(id)` | Takes a device's token back: it has to log in again |
-| `log-out()` | Logs this computer out of the server elsewhere: the server takes its token back, and the library is this computer's again |
+| `log-out()` | Logs this computer out of the server elsewhere: the server takes its token back, and no server is chosen until one is again |
 | `invite-user(name, admin)`, `invite-again(name)`, `remove-user(name)`, `hide-invite-code()` | For an admin: invites a user, an admin or a listener, showing the code they join with; invites one again with a new code (for one who joined, it lets them choose a new password); takes one away with their devices; stops showing the code |
-| `set-network(on)`, `set-server-name(name)`, `set-autostart(on)` | For the server on this computer |
+| `set-network(on)`, `set-server-name(name)` | For the server on this computer |
 | `browse-start()`, `browse-into(index)`, `browse-up()`, `browse-add()`, `browse-cancel()` | Choosing a music folder among a server's on another computer: `browsing`, `browse-folder` ("" where to start: the home folder and the drives) and `browse-folders` say what is shown; `browse-add` adds the folder shown to `Library.folders-draft` |
 
 ### `Updates`

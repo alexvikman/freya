@@ -292,6 +292,8 @@ pub fn page(name: &str) -> Option<String> {
     Some(match name {
         "github" => base,
         "releases" => format!("{base}/releases"),
+        // Where Freya Server is downloaded: the latest release carries it for every system.
+        "server" => format!("{base}/releases/latest"),
         "issues" => format!("{base}/issues"),
         "license" => format!("{base}/blob/main/README.md#license"),
         // Where users get the personal key Freya asks fanart.tv with.

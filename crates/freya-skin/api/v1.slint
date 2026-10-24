@@ -1056,8 +1056,9 @@ export global App {
     callback navigated();
     callback go-back();
     callback go-forward();
-    /// Open one of Freya's own pages in the browser: "github", "releases", "issues",
-    /// "license", or "licenses", the third-party licenses built into Freya; or "fanart-key",
+    /// Open one of Freya's own pages in the browser: "github", "releases", "server" (where
+    /// Freya Server is downloaded), "issues", "license", or "licenses", the third-party
+    /// licenses built into Freya; or "fanart-key",
     /// fanart.tv's page for getting a personal API key. Other names are ignored; skins cannot
     /// open other addresses.
     callback open-link(string);
@@ -1133,12 +1134,20 @@ export struct FoundServer {
 /// on the network, which the user finds or types in and logs in to. Optional: without it, a
 /// skin always shows this computer's library.
 export global Server {
+    /// Whether a server is chosen, on this computer or another. Freya does nothing without
+    /// one: until one is chosen, show only how to connect to one, as a welcome view, with
+    /// `here`, `find`, `choose-found`, `choose-address` and `use-this-computer`.
+    in property <bool> chosen;
+    /// Whether Freya Server answers on this computer, so its library can be used.
+    in property <bool> here;
     /// Whether the library is on another computer, what that server is called and where it is.
     in property <bool> remote;
     in property <string> name;
     in property <string> address;
-    /// "connecting", "connected", "unreachable" (Freya tries again by itself) or "log-in" (the
-    /// server no longer takes this device's token: log in again).
+    /// "connecting", "connected", "unreachable" (Freya tries again by itself), "version" (the
+    /// server is of another version than Freya: `error` says which to update; Freya tries
+    /// again by itself) or "log-in" (the server no longer takes this device's token: log in
+    /// again).
     in property <string> state: "connecting";
     in property <string> error;
     /// The server's certificate's fingerprint, to compare with what another computer shows
@@ -1147,9 +1156,6 @@ export global Server {
     in property <string> fingerprint;
     in property <string> server-name;
     in property <bool> network: true;
-    /// Whether the server on this computer starts when the user logs in, so it runs without
-    /// Freya open.
-    in property <bool> autostart;
 
     /// The account this device is connected to: its user, whether they set a password (only then
     /// can they log in on other devices), and the devices connected to it.
@@ -1215,14 +1221,14 @@ export global Server {
     /// Freya uses the server once the user logged in there.
     callback log-in();
     callback cancel-login();
-    /// Use the server on this computer again.
+    /// Use the library of Freya Server on this computer.
     callback use-this-computer();
     /// Open the page the account's password is set or changed on in the browser.
     callback change-password();
     /// Take a device's token back: it has to log in again.
     callback revoke(string /* id */);
-    /// Log this computer out of the server elsewhere: the server takes its token back, and the
-    /// library is this computer's again.
+    /// Log this computer out of the server elsewhere: the server takes its token back, and no
+    /// server is chosen until one is again.
     callback log-out();
     /// Invite a user named so, an admin or a listener, showing the code they join with; invite
     /// one again with a new code; take one away with their devices; stop showing the code.
@@ -1232,7 +1238,6 @@ export global Server {
     callback hide-invite-code();
     callback set-network(bool);
     callback set-server-name(string);
-    callback set-autostart(bool);
 
     /// While choosing a music folder among the server's, from another computer: the folder
     /// shown ("" where to start: the home folder and the drives) and the folders in it.

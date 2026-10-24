@@ -128,7 +128,8 @@ pub fn run(options: Options) -> anyhow::Result<()> {
         ui.window().set_size(slint::LogicalSize::new(w, h));
     }
 
-    // The server on another computer the user chose, else this computer's.
+    // The server on another computer the user chose, else this computer's if chosen; with
+    // neither, the welcome view.
     let source = settings
         .server
         .as_ref()
@@ -138,7 +139,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 name: server.name.clone(),
             })
         })
-        .or_else(local_source);
+        .or_else(|| local_source().filter(|_| settings.here));
     let app = Rc::new(RefCell::new(App::new(
         ui.clone(),
         skin,
@@ -285,20 +286,21 @@ fn select_backend(requested: Option<String>, events: &WindowEvents) -> anyhow::R
     }
 }
 
-/// Freya's server, beside this program.
-pub fn server_program() -> Option<std::path::PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    Some(exe.with_file_name(format!("freya-server{}", std::env::consts::EXE_SUFFIX)))
-}
-
 /// A picture in `bytes` from a server or the internet, decoded within bounds (see
 /// [`freya_library::decode_picture`]).
 pub fn decode_picture(bytes: &[u8]) -> image::ImageResult<image::DynamicImage> {
     freya_library::decode_picture(bytes)
 }
 
-/// The library of Freya's server on this computer, started from beside this program.
+/// The library of Freya Server on this computer.
 pub fn local_source() -> Option<library::LibrarySource> {
     let address = freya_server::LOCAL_ADDRESS.parse().ok()?;
-    server_program().map(|program| library::LibrarySource::Local { address, program })
+    Some(library::LibrarySource::Local { address })
+}
+
+/// Whether Freya Server answers on this computer, for the welcome view.
+pub fn server_here() -> bool {
+    freya_server::LOCAL_ADDRESS.parse().is_ok_and(|address| {
+        std::net::TcpStream::connect_timeout(&address, Duration::from_millis(200)).is_ok()
+    })
 }

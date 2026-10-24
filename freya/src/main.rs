@@ -44,13 +44,6 @@ enum Command {
     /// Tools for skin authors.
     #[command(subcommand)]
     Skin(SkinCommand),
-    /// Run Freya's server, beside this program, until it stops: as a service starts it from an
-    /// AppImage, so the image stays mounted.
-    Server {
-        /// Passed on to the server.
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
-    },
 }
 
 #[derive(Subcommand)]
@@ -77,21 +70,12 @@ fn main() -> anyhow::Result<()> {
     match args.command {
         Some(Command::Play { paths }) => cli_player::run(&paths),
         Some(Command::Skin(command)) => skin_command(command),
-        Some(Command::Server { args }) => run_server(&args),
         None => gui::run(gui::Options {
             files: args.files,
             skin: args.skin,
             renderer: args.renderer,
         }),
     }
-}
-
-/// Runs the server beside this program with `args`, and ends as it does.
-fn run_server(args: &[String]) -> anyhow::Result<()> {
-    let program =
-        gui::server_program().ok_or_else(|| anyhow::anyhow!("no server beside this program"))?;
-    let status = std::process::Command::new(&program).args(args).status()?;
-    std::process::exit(status.code().unwrap_or(1));
 }
 
 fn skin_command(command: SkinCommand) -> anyhow::Result<()> {

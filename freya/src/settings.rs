@@ -71,11 +71,11 @@ pub struct Settings {
     /// Whether the whole library is scanned each time Freya starts; it is the first time
     /// anyway.
     pub scan_at_start: bool,
-    /// The server on another computer the library is on; none for this computer's.
+    /// The server on another computer the library is on.
     pub server: Option<SavedServer>,
-    /// Whether this computer's server starts when the user logs in; none until decided, when
-    /// a release build makes it so.
-    pub start_server_at_login: Option<bool>,
+    /// Whether the library is this computer's server's, when none elsewhere is chosen. With
+    /// neither, Freya shows only its welcome view, to connect to one.
+    pub here: bool,
     /// Whose library Up Next was saved from: the certificate of the server elsewhere, in hex,
     /// or none for this computer's. Restored only for the same.
     pub queue_from: Option<String>,
@@ -146,7 +146,7 @@ impl Default for Settings {
             scan_every_hours: 24,
             scan_at_start: false,
             server: None,
-            start_server_at_login: None,
+            here: false,
             queue_from: None,
             damaged: false,
         }
