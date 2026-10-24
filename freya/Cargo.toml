@@ -92,6 +92,7 @@ freya-library = { path = "../crates/freya-library" }
 freya-client = { path = "../crates/freya-client" }
 freya-protocol = { path = "../crates/freya-protocol" }
 freya-server = { path = "../crates/freya-server" }
+freya-update = { path = "../crates/freya-update" }
 slint = { version = "1.18.1", features = ["unstable-winit-030"] }
 slint-interpreter = "1.18.1"
 rfd = "0.17.2"
@@ -101,11 +102,9 @@ toml = "1.1.8"
 directories = "6.0.0"
 # With `termination`, SIGTERM and SIGHUP too (logging out, shutting down, a closed terminal).
 ctrlc = { version = "3.5.2", features = ["termination"] }
-# Updates (see src/update): the release list, its signature and checksums, with the HTTP and
-# TLS stack Freya's radio already uses.
-base64 = "0.23.1"
+# The browser's login through Freya's page proxy (see src/gui/page_proxy.rs), and streams,
+# with the HTTP and TLS stack the client already uses.
 ring = "0.17.14"
-serde_json = "1.0.152"
 ureq = "3"
 # Freya's icon on its windows (see gui/app_icon.rs) and the hologram's poses (see
 # gui/hologram), with the decoders the library and skin loader already use.

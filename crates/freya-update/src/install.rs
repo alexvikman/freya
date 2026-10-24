@@ -1,7 +1,7 @@
-//! Puts a downloaded release in place of the running Freya, and starts the new one once this
-//! one has quit.
+//! Puts a downloaded release in place of the running program, Freya or Freya Server, and
+//! starts the new one once this one has ended.
 //!
-//! Freya replaces itself where that is one file or folder it can write: the app bundle on
+//! A program replaces itself where that is one file or folder it can write: the app bundle on
 //! macOS and the AppImage on Linux. A `.deb` belongs to the package manager and the Windows
 //! installer to Windows, so those are only told about an update.
 
@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
+
+use crate::Product;
 
 /// The AppImage this Freya runs from, if any. The AppImage runtime sets `APPIMAGE` to the
 /// image's path and `APPDIR` to where it mounted it; but both pass on to every program started
@@ -19,50 +21,59 @@ fn appimage(image: Option<PathBuf>, mounted: Option<PathBuf>, exe: &Path) -> Opt
     (exe.starts_with(&mounted) && image.is_file()).then_some(image)
 }
 
-/// What this Freya can replace itself as.
+/// Where the running program is, as one thing it can replace.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Target {
+pub enum Place {
     /// An app bundle, e.g. `/Applications/Freya.app`.
     MacApp(PathBuf),
     /// An AppImage file.
     AppImage(PathBuf),
 }
 
+/// What the running program can replace itself as.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Target {
+    pub product: Product,
+    pub place: Place,
+}
+
 impl Target {
-    /// The running Freya's, if it can replace itself.
-    pub fn current() -> Option<Self> {
-        if cfg!(target_os = "macos") {
+    /// The running program's, `product`, if it can replace itself.
+    pub fn current(product: Product) -> Option<Self> {
+        let place = if cfg!(target_os = "macos") {
             let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
             // …/Freya.app/Contents/MacOS/freya
             let app = exe.parent()?.parent()?.parent()?;
             let bundled = app.extension().is_some_and(|ext| ext == "app")
                 && exe.parent()?.ends_with("Contents/MacOS");
-            return bundled.then(|| Self::MacApp(app.to_owned()));
-        }
-        if cfg!(target_os = "linux") {
+            bundled.then(|| Place::MacApp(app.to_owned()))?
+        } else if cfg!(target_os = "linux") {
             let exe = std::env::current_exe().ok()?;
-            return appimage(
+            appimage(
                 std::env::var_os("APPIMAGE").map(PathBuf::from),
                 std::env::var_os("APPDIR").map(PathBuf::from),
                 &exe,
             )
-            .map(Self::AppImage);
-        }
-        None
+            .map(Place::AppImage)?
+        } else {
+            return None;
+        };
+        Some(Self { product, place })
     }
 
     /// The release file this target is replaced with.
     pub fn asset(&self, version: &str) -> String {
         let arch = std::env::consts::ARCH;
-        match self {
-            Self::MacApp(_) => format!("Freya-{version}-macos-{arch}.app.zip"),
-            Self::AppImage(_) => format!("Freya-{version}-linux-{arch}.AppImage"),
+        let product = self.product.asset_prefix();
+        match self.place {
+            Place::MacApp(_) => format!("{product}-{version}-macos-{arch}.app.zip"),
+            Place::AppImage(_) => format!("{product}-{version}-linux-{arch}.AppImage"),
         }
     }
 
     fn path(&self) -> &Path {
-        match self {
-            Self::MacApp(path) | Self::AppImage(path) => path,
+        match &self.place {
+            Place::MacApp(path) | Place::AppImage(path) => path,
         }
     }
 
@@ -77,9 +88,9 @@ impl Target {
     /// Puts `package`, the downloaded release file, in place of the running Freya. The running
     /// Freya keeps running; the new one starts with `restart`.
     pub fn install(&self, package: &[u8]) -> Result<()> {
-        match self {
-            Self::MacApp(app) => self.install_app(app, package),
-            Self::AppImage(image) => self.install_image(image, package),
+        match &self.place {
+            Place::MacApp(app) => self.install_app(app, package),
+            Place::AppImage(image) => self.install_image(image, package),
         }
     }
 
@@ -99,7 +110,8 @@ impl Target {
         let _ = std::fs::remove_file(&archive);
         unpacked.context("could not unpack the update")?;
 
-        let new = staging.join("Freya.app");
+        // The bundle in the release, "Freya.app" or "Freya Server.app".
+        let new = staging.join(format!("{}.app", self.product.name()));
         // The signature seals the whole bundle: anything changed or missing shows here.
         run(Command::new("codesign")
             .args(["--verify", "--deep", "--strict"])
@@ -131,13 +143,13 @@ impl Target {
     /// Starts the installed Freya once this process has ended. The program is started directly,
     /// not through `open`, so it runs with this one's environment.
     pub fn restart(&self) -> Result<()> {
-        let program = match self {
-            Self::MacApp(app) => {
+        let program = match &self.place {
+            Place::MacApp(app) => {
                 let exe = std::env::current_exe()?;
-                let name = exe.file_name().context("Freya's program has no name")?;
+                let name = exe.file_name().context("the program has no name")?;
                 app.join("Contents/MacOS").join(name)
             }
-            Self::AppImage(image) => image.clone(),
+            Place::AppImage(image) => image.clone(),
         };
         let script = r#"while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; exec "$2""#;
         Command::new("/bin/sh")
@@ -150,7 +162,7 @@ impl Target {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .context("could not start the new Freya")?;
+            .context("could not start the new version")?;
         Ok(())
     }
 
@@ -256,7 +268,10 @@ mod tests {
 
         let installed = temp_dir("installed");
         let app = make_app(&installed, "old");
-        let target = Target::MacApp(app.clone());
+        let target = Target {
+            product: Product::Freya,
+            place: Place::MacApp(app.clone()),
+        };
         assert_eq!(
             target.asset("0.2.0"),
             format!("Freya-0.2.0-macos-{}.app.zip", std::env::consts::ARCH)

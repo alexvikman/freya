@@ -4,7 +4,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -136,7 +136,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// signed by `signer`; next to a draft, a pre-release and other tags that must be passed over.
 /// Returns the list's URL.
 fn release_server(package: &[u8], listed: &[u8], signer: &Key) -> String {
-    let file = Target::AppImage(PathBuf::from("/x/Freya.AppImage")).asset("9.0.0");
+    let file = image_target(Path::new("/x/Freya.AppImage")).asset("9.0.0");
     let sums = format!("{}  {file}\n", sha256_hex(listed));
     let signature = signer.sign(sums.as_bytes());
     let server = Server::new();
@@ -177,9 +177,22 @@ fn temp_image(name: &str) -> PathBuf {
     image
 }
 
-fn test_updater(feed: String, key: &Key, image: &std::path::Path) -> Updater {
+fn image_target(image: &Path) -> Target {
+    Target {
+        product: Product::Freya,
+        place: Place::AppImage(image.to_owned()),
+    }
+}
+
+fn test_updater(feed: String, key: &Key, image: &Path) -> Updater {
     let keys: &'static [&'static str] = Box::leak(vec![key.line].into_boxed_slice());
-    Updater::with(feed, keys, Some(Target::AppImage(image.to_owned())))
+    Updater::with(
+        Product::Freya,
+        env!("CARGO_PKG_VERSION"),
+        feed,
+        keys,
+        Some(image_target(image)),
+    )
 }
 
 #[test]
@@ -260,30 +273,16 @@ fn checks_once_a_day() {
 }
 
 #[test]
-fn opens_only_plain_https_pages_and_freyas_own() {
-    assert!(is_openable(
-        "https://www.last.fm/api/auth/?api_key=k&token=t"
-    ));
-    assert!(is_openable(
-        "http://127.0.0.1:47477/web/password?start=ab12"
-    ));
-    assert!(!is_openable("http://example.com/"));
-    assert!(!is_openable("http://127.0.0.1:5555/"));
-    assert!(!is_openable("file:///etc/passwd"));
-    assert!(!is_openable("https://example.com/a b"));
-    assert!(!is_openable("https://example.com/a,b"));
-    assert!(!is_openable("https://example.com/\"--args"));
-}
-
-#[test]
-fn the_licenses_built_in_name_what_freya_is_made_with() {
-    assert!(THIRD_PARTY.starts_with("<!doctype html>"));
-    // Slint under the license Freya uses it with, and libopus' copyright.
-    assert!(THIRD_PARTY.contains("LicenseRef-Slint-Royalty-free-2.0"));
-    assert!(THIRD_PARTY.contains("Xiph.Org"));
-    for krate in ["symphonia", "rustls", "rusqlite", "ureq"] {
-        assert!(THIRD_PARTY.contains(&format!(">{krate} ")), "{krate}");
-    }
-    // Freya's own crates are not third parties.
-    assert!(!THIRD_PARTY.contains(">freya-server "));
+fn the_server_is_released_as_freya_server() {
+    let target = Target {
+        product: Product::Server,
+        place: Place::AppImage("/x/FreyaServer.AppImage".into()),
+    };
+    assert_eq!(
+        target.asset("9.0.0"),
+        format!(
+            "FreyaServer-9.0.0-linux-{}.AppImage",
+            std::env::consts::ARCH
+        )
+    );
 }

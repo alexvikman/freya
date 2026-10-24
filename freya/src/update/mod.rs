@@ -1,252 +1,52 @@
-//! Updates: Freya looks for a newer release, tells the user, and installs it only when they
-//! say so. Checking and downloading run on a thread of their own; the app polls for news.
-//!
-//! A release is only installed if its `SHA256SUMS` carries a signature made with a key built
-//! into Freya, and the downloaded file matches its line there.
-
-mod install;
-mod release;
-mod signing;
-
-use std::sync::mpsc::{Receiver, channel};
-use std::time::{Duration, SystemTime};
+//! Updates of Freya itself, through `freya-update`, shown in the skin's `Updates` global; and
+//! the pages Freya opens in the browser.
 
 use slint_interpreter::Value;
 
-pub use install::Target;
-pub use release::Release;
+pub use freya_update::{Release, State, due};
 
-/// How often Freya looks for an update on its own, when the user lets it.
-pub const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
-
-#[derive(Clone, Debug)]
-pub enum State {
-    Idle,
-    Checking {
-        /// Asked for by the user, who wants to hear the answer either way.
-        asked: bool,
-    },
-    UpToDate,
-    Available(Release),
-    Downloading {
-        release: Release,
-        /// 0 to 1, as far as known.
-        progress: f32,
-    },
-    /// Installed; Freya restarts into it.
-    Installed(Release),
-    Failed(String),
-}
-
-/// What happened on the thread.
-enum News {
-    Checked(anyhow::Result<Option<Release>>),
-    Progress(f32),
-    Installed(anyhow::Result<()>),
-}
-
-pub struct Updater {
-    state: State,
-    current: &'static str,
-    keys: &'static [&'static str],
-    feed: String,
-    target: Option<Target>,
-    news: Option<Receiver<News>>,
-}
+/// Freya's own updater: it finds Freya's releases, and installs them when the user says so.
+pub struct Updater(freya_update::Updater);
 
 impl Updater {
     pub fn new() -> Self {
-        let target = Target::current();
-        if let Some(target) = &target {
-            target.clean_up();
-        }
-        Self::with(release::feed_url(), signing::RELEASE_KEYS, target)
-    }
-
-    fn with(feed: String, keys: &'static [&'static str], target: Option<Target>) -> Self {
-        Self {
-            state: State::Idle,
-            current: env!("CARGO_PKG_VERSION"),
-            keys,
-            feed,
-            target,
-            news: None,
-        }
+        Self(freya_update::Updater::new(
+            freya_update::Product::Freya,
+            env!("CARGO_PKG_VERSION"),
+        ))
     }
 
     pub fn state(&self) -> &State {
-        &self.state
+        self.0.state()
     }
 
-    fn busy(&self) -> bool {
-        self.news.is_some()
-    }
-
-    /// Looks for a newer release. `asked` when the user asked: then the answer is shown even
-    /// when there is nothing new, and a skipped version is offered again.
     pub fn check(&mut self, asked: bool, skipped: Option<&str>) {
-        if self.busy() {
-            return;
-        }
-        self.state = State::Checking { asked };
-        let (send, news) = channel();
-        let feed = self.feed.clone();
-        let current = self.current;
-        let skipped = if asked {
-            None
-        } else {
-            skipped.map(str::to_owned)
-        };
-        std::thread::Builder::new()
-            .name("freya-update".into())
-            .spawn(move || {
-                let found = release::latest(&release::agent(), &feed).map(|latest| {
-                    latest.filter(|r| {
-                        release::is_newer(r.version(), current)
-                            && skipped.as_deref() != Some(r.version())
-                    })
-                });
-                let _ = send.send(News::Checked(found));
-            })
-            .expect("spawn update thread");
-        self.news = Some(news);
-    }
-
-    /// Whether Freya can install the update itself; otherwise `install` opens the release's
-    /// page.
-    pub fn can_install(&self) -> bool {
-        self.target.is_some() && !self.keys.is_empty()
+        self.0.check(asked, skipped);
     }
 
     /// Installs the available update, or opens its page where Freya cannot.
     pub fn install(&mut self) {
-        let State::Available(release) = &self.state else {
-            return;
-        };
-        let release = release.clone();
-        let Some(target) = self.target.clone().filter(|_| !self.keys.is_empty()) else {
-            open_page(&release.html_url);
-            return;
-        };
-        if self.busy() {
-            return;
+        if let Some(page) = self.0.install() {
+            open_page(&page);
         }
-        self.state = State::Downloading {
-            release: release.clone(),
-            progress: 0.0,
-        };
-        let (send, news) = channel();
-        let keys = self.keys;
-        std::thread::Builder::new()
-            .name("freya-update".into())
-            .spawn(move || {
-                let file = target.asset(release.version());
-                let progress = send.clone();
-                let result = release::download_verified(
-                    &release::agent(),
-                    &release,
-                    &file,
-                    keys,
-                    move |done, size| {
-                        if let Some(size) = size.filter(|&s| s > 0) {
-                            let _ = progress.send(News::Progress(done as f32 / size as f32));
-                        }
-                    },
-                )
-                .and_then(|package| target.install(&package));
-                let _ = send.send(News::Installed(result));
-            })
-            .expect("spawn update thread");
-        self.news = Some(news);
     }
 
-    /// Hides the update until Freya looks again.
     pub fn later(&mut self) {
-        if !self.busy() {
-            self.state = State::Idle;
-        }
+        self.0.later();
     }
 
-    /// Takes in what the thread found. Returns true when the state changed.
     pub fn poll(&mut self) -> bool {
-        let Some(news) = &self.news else {
-            return false;
-        };
-        let mut changed = false;
-        while let Ok(item) = news.try_recv() {
-            changed = true;
-            let asked = matches!(self.state, State::Checking { asked: true });
-            match item {
-                News::Checked(Ok(Some(release))) => {
-                    log::info!("Freya {} is available", release.version());
-                    self.state = State::Available(release);
-                }
-                News::Checked(Ok(None)) => {
-                    self.state = if asked { State::UpToDate } else { State::Idle };
-                }
-                News::Checked(Err(e)) => {
-                    log::info!("could not look for updates: {e:#}");
-                    self.state = if asked {
-                        State::Failed(format!("Could not look for updates: {e:#}"))
-                    } else {
-                        State::Idle
-                    };
-                }
-                News::Progress(progress) => {
-                    if let State::Downloading {
-                        progress: shown, ..
-                    } = &mut self.state
-                    {
-                        *shown = progress.clamp(0.0, 1.0);
-                    }
-                }
-                News::Installed(result) => {
-                    let release = match &self.state {
-                        State::Downloading { release, .. } => release.clone(),
-                        _ => continue,
-                    };
-                    self.state = match result {
-                        Ok(()) => State::Installed(release),
-                        Err(e) => {
-                            log::warn!("the update failed: {e:#}");
-                            State::Failed(format!("The update failed: {e:#}"))
-                        }
-                    };
-                }
-            }
-            if matches!(
-                self.state,
-                State::Available(_)
-                    | State::UpToDate
-                    | State::Idle
-                    | State::Installed(_)
-                    | State::Failed(_)
-            ) {
-                self.news = None;
-                break;
-            }
-        }
-        changed
+        self.0.poll()
     }
 
-    /// Starts the installed Freya once this one has quit. Returns false if it could not.
     pub fn restart(&mut self) -> bool {
-        let Some(target) = &self.target else {
-            return false;
-        };
-        match target.restart() {
-            Ok(()) => true,
-            Err(e) => {
-                self.state = State::Failed(format!("{e:#}"));
-                false
-            }
-        }
+        self.0.restart()
     }
 
     /// Values for the skin's `Updates` global, except `check-automatically`.
     pub fn values(&self) -> Vec<(&'static str, Value)> {
         let text = |s: &str| Value::String(s.into());
-        let (state, release, progress, error) = match &self.state {
+        let (state, release, progress, error) = match self.0.state() {
             State::Idle => ("idle", None, 0.0, ""),
             State::Checking { asked } => (if *asked { "checking" } else { "idle" }, None, 0.0, ""),
             State::UpToDate => ("up-to-date", None, 0.0, ""),
@@ -259,36 +59,27 @@ impl Updater {
         };
         vec![
             ("state", text(state)),
-            ("current-version", text(self.current)),
+            ("current-version", text(self.0.current())),
             ("version", text(release.map_or("", Release::version))),
             (
                 "notes",
                 text(
                     &release
                         .and_then(|r| r.body.as_deref())
-                        .map(release::plain_notes)
+                        .map(freya_update::plain_notes)
                         .unwrap_or_default(),
                 ),
             ),
             ("progress", Value::Number(f64::from(progress))),
             ("error", text(error)),
-            ("can-install", Value::Bool(self.can_install())),
+            ("can-install", Value::Bool(self.0.can_install())),
         ]
     }
 }
 
-/// Whether it is time to look for an update on Freya's own, last done at `last` (seconds since
-/// 1970).
-pub fn due(last: Option<u64>, now: SystemTime) -> bool {
-    let now = now
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    last.is_none_or(|last| now.saturating_sub(last) >= CHECK_INTERVAL.as_secs())
-}
-
 /// The address of one of Freya's own pages, by the name skins use (`App.open-link`).
 pub fn page(name: &str) -> Option<String> {
-    let base = format!("https://github.com/{}", release::REPOSITORY);
+    let base = format!("https://github.com/{}", freya_update::REPOSITORY);
     Some(match name {
         "github" => base,
         "releases" => format!("{base}/releases"),
@@ -409,4 +200,35 @@ fn is_openable(url: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opens_only_plain_https_pages_and_freyas_own() {
+        assert!(is_openable(
+            "https://www.last.fm/api/auth/?api_key=k&token=t"
+        ));
+        assert!(is_openable(
+            "http://127.0.0.1:47477/web/password?start=ab12"
+        ));
+        assert!(!is_openable("http://example.com/"));
+        assert!(!is_openable("http://127.0.0.1:5555/"));
+        assert!(!is_openable("file:///etc/passwd"));
+        assert!(!is_openable("https://example.com/a b"));
+        assert!(!is_openable("https://example.com/a,b"));
+        assert!(!is_openable("https://example.com/\"--args"));
+    }
+
+    #[test]
+    fn the_licenses_built_in_name_what_freya_is_made_with() {
+        assert!(THIRD_PARTY.starts_with("<!doctype html>"));
+        // Slint under the license Freya uses it with, and libopus' copyright.
+        assert!(THIRD_PARTY.contains("LicenseRef-Slint-Royalty-free-2.0"));
+        assert!(THIRD_PARTY.contains("Xiph.Org"));
+        for krate in ["symphonia", "rustls", "rusqlite", "ureq"] {
+            assert!(THIRD_PARTY.contains(&format!(">{krate} ")), "{krate}");
+        }
+        // Freya's own crates are not third parties.
+        assert!(!THIRD_PARTY.contains(">freya-server "));
+    }
+}

@@ -1656,7 +1656,6 @@ name = "freya"
 version = "0.3.0"
 dependencies = [
  "anyhow",
- "base64",
  "block2 0.6.2",
  "clap",
  "crossterm",
@@ -1669,6 +1668,7 @@ dependencies = [
  "freya-protocol",
  "freya-server",
  "freya-skin",
+ "freya-update",
  "image",
  "jiff",
  "libc",
@@ -1687,7 +1687,6 @@ dependencies = [
  "ring",
  "rustix 1.1.5",
  "serde",
- "serde_json",
  "slint",
  "slint-build",
  "slint-interpreter",
@@ -1812,6 +1811,19 @@ dependencies = [
  "thiserror 2.0.21",
  "toml",
  "zip",
+]
+
+[[package]]
+name = "freya-update"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "log",
+ "ring",
+ "serde",
+ "serde_json",
+ "ureq",
 ]
 
 [[package]]
