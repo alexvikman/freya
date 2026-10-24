@@ -157,6 +157,7 @@ fn run(address: &str, data: &Path) -> Result<(), String> {
         scans_allowed: !damaged,
         lastfm: freya_server::lastfm(),
         playlists: Some(data.join("playlists")),
+        stations: Some(data.join("stations.m3u8")),
         scrobbles: Some(scrobbles),
     };
     let service = Arc::new(Service::start(

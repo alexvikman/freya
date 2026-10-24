@@ -701,7 +701,8 @@ export struct StationRow {
     playing: bool,
 }
 
-/// Saved internet radio stations. Optional. New users start with a few well-known ones.
+/// Internet radio stations, which the server keeps for its users. Optional. A new server
+/// starts with a few well-known ones; its admins (`Server.admin`) add and remove them.
 export global Radio {
     in property <[StationRow]> stations;
     /// Why the last `add` failed, like "Not a web address: …"; empty after one that worked.

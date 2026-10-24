@@ -24,7 +24,8 @@ impl App {
     }
 
     /// Takes what connecting to the server found, once it is connected: the account and the
-    /// server, the playlists, how scrobbling goes, and the server's settings.
+    /// server, the playlists, the radio stations, how scrobbling goes, and the server's
+    /// settings.
     pub(super) fn take_connected(&mut self) {
         if let Some(connected) = self.library.take_connected() {
             let remote = self.library.remote();
@@ -33,6 +34,8 @@ impl App {
             self.server.load_users(remote);
             self.playlists
                 .connect(Arc::clone(&connected.server), connected.playlists);
+            self.stations
+                .connect(Arc::clone(&connected.server), connected.stations);
             self.lastfm.use_server(connected.server, connected.lastfm);
         }
     }

@@ -276,6 +276,8 @@ pub struct LibraryPanel {
     /// The server told that the playlists changed, and how scrobbling goes, since the app
     /// last asked.
     playlists_changed: bool,
+    /// Whether the server told that the radio stations changed, since this was last asked.
+    stations_changed: bool,
     lastfm_status: Option<freya_protocol::LastFmStatus>,
     /// Where thumbnails of covers and pictures are made, once the library is open.
     covers_dir: Option<PathBuf>,
@@ -482,6 +484,7 @@ impl LibraryPanel {
             server_error: String::new(),
             tried: None,
             playlists_changed: false,
+            stations_changed: false,
             lastfm_status: None,
             covers_dir: covers,
             opened: vec![Level::Artists],
@@ -775,6 +778,7 @@ impl LibraryPanel {
                 // Plays noted while the scan wrote.
                 ServiceEvent::PlaysWritten => self.stale |= self.shows_plays(),
                 ServiceEvent::PlaylistsChanged => self.playlists_changed = true,
+                ServiceEvent::StationsChanged => self.stations_changed = true,
                 ServiceEvent::LastFm(status) => self.lastfm_status = Some(status),
                 // The answers kept are forgotten by the client; the rows are read anew when
                 // the events above say what changed them.

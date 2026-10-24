@@ -194,6 +194,11 @@ impl LibraryPanel {
         std::mem::take(&mut self.playlists_changed)
     }
 
+    /// Whether the server told that the radio stations changed since this was last asked.
+    pub fn take_stations_changed(&mut self) -> bool {
+        std::mem::take(&mut self.stations_changed)
+    }
+
     /// How the server keeps the library, as the user set it; once it is open.
     pub fn server_settings(&self) -> Option<&ServerSettings> {
         self.server.as_ref().map(|_| &self.settings)
@@ -312,12 +317,13 @@ pub(super) struct Connection {
 }
 
 /// What connecting to a server found for the app: the account and the server as they say
-/// themselves, the playlists, and how scrobbling goes.
+/// themselves, the playlists, the radio stations, and how scrobbling goes.
 pub struct Connected {
     pub server: Arc<dyn Server>,
     pub account: Option<freya_protocol::AccountInfo>,
     pub info: Option<freya_protocol::ServerFound>,
     pub playlists: freya_protocol::ApiResult<Vec<freya_protocol::SavedPlaylist>>,
+    pub stations: freya_protocol::ApiResult<Vec<freya_protocol::RadioStation>>,
     pub lastfm: freya_protocol::ApiResult<freya_protocol::LastFmStatus>,
 }
 
@@ -366,6 +372,7 @@ pub(super) fn connect(
                 scans_allowed: true,
                 lastfm: freya_server::lastfm(),
                 playlists: database.parent().map(|dir| dir.join("playlists")),
+                stations: database.parent().map(|dir| dir.join("stations.m3u8")),
                 scrobbles: None,
             };
             let service = Service::start(database, pictures, config).map_err(|e| {
@@ -393,6 +400,7 @@ pub(super) fn connect(
         account: remote.as_ref().and_then(|r| r.0.account().ok().flatten()),
         info: remote.as_ref().and_then(|r| r.0.info().ok()),
         playlists: server.playlists(),
+        stations: server.stations(),
         lastfm: server.lastfm_status(),
     };
     Ok(Connection {

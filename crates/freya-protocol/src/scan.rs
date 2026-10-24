@@ -66,6 +66,8 @@ pub enum ServiceEvent {
     PlaysWritten,
     /// The user's playlists changed: one was made, changed, renamed or taken away.
     PlaylistsChanged,
+    /// The radio stations changed.
+    StationsChanged,
     /// What the library holds changed, by a scan, a client or a play: answers kept of
     /// [`crate::CACHED_CALLS`] are to be asked again.
     Changed,

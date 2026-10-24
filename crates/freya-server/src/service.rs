@@ -14,13 +14,14 @@ use freya_library::library::{LastFm, Online, ScanOptions, Scanner};
 use freya_media::pictures::Pictures;
 use freya_protocol::{
     ApiError, ApiResult, FolderListing, LastFmStatus, LastFmTrack, LibraryApi, LibraryData,
-    LibraryPictures, Part, PlaylistEntry, SavedPlaylist, ScanEvent, Scrobble, ServerControl,
-    ServerEvents, ServerSettings, ServiceEvent,
+    LibraryPictures, Part, PlaylistEntry, RadioStation, SavedPlaylist, ScanEvent, Scrobble,
+    ServerControl, ServerEvents, ServerSettings, ServiceEvent,
 };
 
 use crate::folder_watch::FolderWatch;
 use crate::playlists::Playlists;
 use crate::scrobbler::Scrobbler;
+use crate::stations::Stations;
 
 /// How often the service looks at the scan running, the folders' watch and the time.
 const TICK: Duration = Duration::from_millis(100);
@@ -42,6 +43,8 @@ pub struct ServiceConfig {
     pub lastfm: Option<Arc<dyn LastFm>>,
     /// Where the user's playlists are kept; without, there are none.
     pub playlists: Option<PathBuf>,
+    /// The file the radio stations are kept in; without, there are none.
+    pub stations: Option<PathBuf>,
     /// Where scrobbling to Last.fm keeps the session and the plays waiting; without, the server
     /// does not scrobble.
     pub scrobbles: Option<PathBuf>,
@@ -75,6 +78,7 @@ pub struct Service {
 struct Shared {
     state: Mutex<State>,
     playlists: Option<Playlists>,
+    stations: Option<Stations>,
     scrobbler: Option<Mutex<Scrobbler>>,
     stop: AtomicBool,
     listeners: Arc<Mutex<Listeners>>,
@@ -117,6 +121,7 @@ impl Service {
             outbox: Vec::new(),
         };
         let playlists = state.config.playlists.clone().map(Playlists::new);
+        let stations = state.config.stations.clone().map(Stations::new);
         let listeners: Arc<Mutex<Listeners>> = Arc::default();
         let scrobbler = state.config.scrobbles.clone().map(|dir| {
             let listeners = Arc::clone(&listeners);
@@ -128,6 +133,7 @@ impl Service {
         let shared = Arc::new(Shared {
             state: Mutex::new(state),
             playlists,
+            stations,
             scrobbler,
             stop: AtomicBool::new(false),
             listeners,
@@ -273,6 +279,26 @@ impl ServerControl for Service {
     fn delete_playlist(&self, name: &str) -> ApiResult<()> {
         self.playlists_changed(|playlists| playlists.delete(name))?;
         self.shared.api.with_db(|db| db.forget_playlist(name))
+    }
+
+    fn stations(&self) -> ApiResult<Vec<RadioStation>> {
+        Ok(self
+            .shared
+            .stations
+            .as_ref()
+            .map(Stations::all)
+            .unwrap_or_default())
+    }
+
+    fn save_stations(&self, stations: &[RadioStation]) -> ApiResult<()> {
+        self.shared
+            .stations
+            .as_ref()
+            .ok_or_else(|| ApiError("the server keeps no radio stations".into()))?
+            .save(stations)
+            .map_err(ApiError)?;
+        self.with(|state| state.outbox.push(ServiceEvent::StationsChanged));
+        Ok(())
     }
 
     fn server_folders(&self, folder: Option<&Path>) -> ApiResult<FolderListing> {

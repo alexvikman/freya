@@ -131,10 +131,11 @@ files, and with them Freya's.
 ## Roles
 
 An **admin** keeps the server. A **listener** may only make the calls
-`freya_protocol::LISTENER_CALLS` names: reading and playing the library everyone shares. A call
-not named there is refused, so one added later is too until named. Plays, favourites,
-playlists and Last.fm are the owner's until each user has their own, so a listener has none,
-and hears only how the shared library goes, not the folders a scan looks in. A listener does
+`freya_protocol::LISTENER_CALLS` names: reading and playing the library everyone shares, and
+the radio stations the admins keep. A call not named there is refused, so one added later is
+too until named. Plays, favourites, playlists and Last.fm are the owner's until each user has
+their own, so a listener has none, and hears only how the shared library goes, not the folders
+a scan looks in. A listener does
 see the tracks' paths, which `/audio` is asked by, and with them where the music is. A
 listener is not told when the library changes, which the owner's plays would show. No device
 stops the server: its menu, its computer's user and the system do.

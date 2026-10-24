@@ -31,7 +31,8 @@ pub fn delete(dir: &Path, user: &str) {
 }
 
 /// The file `user`'s session key is kept in, in `dir`, elsewhere than on Windows.
-pub fn file_name(user: &str) -> String {
+#[cfg(not(windows))]
+fn file_name(user: &str) -> String {
     let name: String = user
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })

@@ -189,11 +189,6 @@ pub fn playlist_path() -> Option<PathBuf> {
     dirs().map(|d| d.data_dir().join("playlist.m3u8"))
 }
 
-/// Saved radio stations, as an M3U playlist.
-pub fn stations_path() -> Option<PathBuf> {
-    dirs().map(|d| d.data_dir().join("stations.m3u8"))
-}
-
 impl Settings {
     pub fn load() -> Self {
         let Some(path) = settings_path() else {

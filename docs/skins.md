@@ -243,7 +243,7 @@ Playlists the user keeps in Freya, apart from the queue: `Playlist` is what play
 
 ### `Radio`
 
-Saved internet radio stations, kept by Freya in `stations.m3u8` next to the playlist. New users start with a few well-known stations.
+Internet radio stations, which the server keeps for its users; a new server starts with a few well-known stations. Its admins (`Server.admin`) add and remove them; its listeners play them.
 
 | Property | Type | |
 |---|---|---|

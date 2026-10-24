@@ -4325,7 +4325,7 @@ component StationRowView inherits Rectangle {
             color: Theme.accent-text;
             vertical-alignment: center;
         }
-        IconButton {
+        if Server.admin: IconButton {
             icon: Icons.trash;
             stroked: true;
             size: 32px;
@@ -4373,12 +4373,14 @@ component RadioView inherits Rectangle {
             horizontal-alignment: center;
         }
         Text {
-            text: "Save the stations you listen to, and play them from here.";
+            text: Server.admin
+                ? "Save the stations you listen to, and play them from here."
+                : "The stations the server keeps show here.";
             font-size: 14px;
             color: Theme.text-secondary;
             horizontal-alignment: center;
         }
-        HorizontalLayout {
+        if Server.admin: HorizontalLayout {
             alignment: center;
             padding-top: 8px;
 
@@ -8994,7 +8996,8 @@ component Toolbar inherits HorizontalLayout {
         tooltip: "Remove the selected tracks";
         clicked => { Playlist.remove-selected(); }
     }
-    if root.view == "radio": IconButton {
+    // The server's admins keep the stations; its listeners play them.
+    if root.view == "radio" && Server.admin: IconButton {
         icon: Icons.plus;
         stroked: true;
         size: 36px;

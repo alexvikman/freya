@@ -19,6 +19,7 @@ mod scrobbler;
 mod serve;
 mod service;
 pub mod settings;
+mod stations;
 #[cfg(windows)]
 pub mod stop;
 pub mod tls;

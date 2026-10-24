@@ -172,6 +172,7 @@ fn the_server_is_told_what_to_do_and_tells_what_happens() {
         scans_allowed: true,
         lastfm: None,
         playlists: Some(dir.join("playlists")),
+        stations: Some(dir.join("stations.m3u8")),
         scrobbles: None,
     };
     let service = Arc::new(Service::start(dir.join("library.db"), None, config).unwrap());
@@ -260,6 +261,18 @@ fn the_server_is_told_what_to_do_and_tells_what_happens() {
     remote.delete_playlist("Calm evenings").unwrap();
     assert!(remote.playlists().unwrap().is_empty());
     assert!(remote.save_playlist("../escape", &[]).is_err());
+
+    // Radio stations, kept by the server, which starts with some; every client is told of a
+    // change.
+    let mut stations = remote.stations().unwrap();
+    assert!(!stations.is_empty());
+    stations.push(freya_protocol::RadioStation {
+        name: "Night Jazz".into(),
+        url: "https://jazz.example.org/".into(),
+    });
+    remote.save_stations(&stations).unwrap();
+    while next() != ServiceEvent::StationsChanged {}
+    assert_eq!(remote.stations().unwrap(), stations);
     drop(server);
     drop(service);
     let _ = std::fs::remove_dir_all(&dir);
@@ -543,6 +556,7 @@ fn only_a_device_with_a_token_is_answered() {
             library_folders: vec![dir.join("music")],
             ..ServerSettings::default()
         },
+        stations: Some(dir.join("stations.m3u8")),
         ..ServiceConfig::default()
     };
     let service = Arc::new(Service::start(path, None, config).unwrap());
@@ -713,6 +727,10 @@ fn only_a_device_with_a_token_is_answered() {
     );
     let at = std::time::SystemTime::now();
     assert!(phone.set_artist_favorite("Sine", true, at).is_err());
+    // It plays the radio stations, but does not change them.
+    let stations = phone.stations().unwrap();
+    assert!(!stations.is_empty());
+    assert!(phone.save_stations(&[]).is_err());
     // Asked at once with what it may ask, it is still refused what it may not.
     phone.prefetch(&[
         ("most_played", freya_protocol::args(&(10usize,))),

@@ -143,6 +143,10 @@ macro_rules! with_server_control {
             fn rename_saved_playlist(from: &str, to: &str) -> ();
             /// Takes the playlist `name` away, with what the library keeps of it.
             fn delete_playlist(name: &str) -> ();
+            /// The internet radio stations the server keeps, in order.
+            fn stations() -> Vec<$crate::RadioStation>;
+            /// Keeps `stations`, in order, in place of those kept.
+            fn save_stations(stations: &[$crate::RadioStation]) -> ();
             /// The folders in `folder` on the server, or where to start looking when none.
             fn server_folders(folder: Option<&::std::path::Path>) -> $crate::FolderListing;
             /// How scrobbling to Last.fm goes.
@@ -227,10 +231,10 @@ with_server_control!(calls {
     trait ServerControl, dispatch_control, SERVER_CONTROL_CALLS
 });
 
-/// What a listener may call: reading the library everyone shares, to play it. Plays,
-/// favourites, playlists and Last.fm are kept for one user yet, the owner, so a listener
-/// neither reads nor changes them until each user has their own; nor the server's settings,
-/// which hold the admin's own keys. A call not named here is the admin's alone, so one added
+/// What a listener may call: reading the library everyone shares, and the radio stations, to
+/// play them. Plays, favourites, playlists and Last.fm are kept for one user yet, the owner,
+/// so a listener neither reads nor changes them until each user has their own; nor the
+/// server's settings, which hold the admin's own keys. A call not named here is the admin's alone, so one added
 /// later is too until it is named.
 pub const LISTENER_CALLS: &[&str] = &[
     "stats",
@@ -263,6 +267,7 @@ pub const LISTENER_CALLS: &[&str] = &[
     "artist_text",
     "artist_article",
     "is_scanning",
+    "stations",
 ];
 
 /// The calls that only read what the library's database holds, and answer every caller the
@@ -420,6 +425,13 @@ impl<'a> WireArg<'a> for &'a [crate::PlaylistEntry] {
 impl<'a> WireArg<'a> for &'a [crate::PlaylistTrack] {
     type Owned = Vec<crate::PlaylistTrack>;
     fn lend(owned: &'a Vec<crate::PlaylistTrack>) -> Self {
+        owned
+    }
+}
+
+impl<'a> WireArg<'a> for &'a [crate::RadioStation] {
+    type Owned = Vec<crate::RadioStation>;
+    fn lend(owned: &'a Vec<crate::RadioStation>) -> Self {
         owned
     }
 }
@@ -596,6 +608,7 @@ mod tests {
             "set_album_favorite",
             "playlists",
             "save_playlist",
+            "save_stations",
             "lastfm_connect",
         ];
         for admins in owners {

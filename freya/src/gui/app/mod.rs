@@ -645,6 +645,9 @@ impl App {
         if self.library.take_playlists_changed() {
             self.playlists.reload();
         }
+        if self.library.take_stations_changed() {
+            self.stations.reload();
+        }
         if let Some(status) = self.library.take_lastfm_status() {
             self.lastfm.set_status(status);
         }

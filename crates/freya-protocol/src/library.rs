@@ -217,6 +217,14 @@ pub struct PlaylistEntry {
     pub duration: Option<Duration>,
 }
 
+/// An internet radio station the server keeps for its users.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct RadioStation {
+    pub name: String,
+    /// The address of its stream, or of its .pls or .m3u file: "http://" or "https://".
+    pub url: String,
+}
+
 /// One of the user's playlists.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct SavedPlaylist {

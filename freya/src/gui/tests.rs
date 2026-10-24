@@ -173,7 +173,7 @@ fn skin_callbacks_drive_the_app() {
                 }),
                 Some(temp_dir("covers")),
             ),
-            stations: radio::Stations::load(Some(temp_dir("radio").join("stations.m3u8"))),
+            stations: radio::Stations::new(),
             playlists: playlists::Playlists::new(),
         },
     )));
@@ -607,7 +607,7 @@ export component W inherits Window { Text { text: Player.title; } }
 }
 
 /// An app on the built-in skin with a silent player, which plays in real time.
-fn silent_app(name: &str) -> Rc<RefCell<App>> {
+fn silent_app() -> Rc<RefCell<App>> {
     freya_skin::render::init_headless().unwrap();
     let ui = SkinWindow::load(&SkinSource::Builtin).unwrap();
     let app = Rc::new(RefCell::new(App::new(
@@ -618,7 +618,7 @@ fn silent_app(name: &str) -> Rc<RefCell<App>> {
         WindowEvents::default(),
         app::Collections {
             library: library::LibraryPanel::new(None, None),
-            stations: radio::Stations::load(Some(temp_dir(name).join("stations.m3u8"))),
+            stations: radio::Stations::new(),
             playlists: playlists::Playlists::new(),
         },
     )));
@@ -662,7 +662,7 @@ fn rows_played(app: &Rc<RefCell<App>>, limit: Duration) -> Vec<usize> {
 #[test]
 fn duplicate_entries_play_in_order() {
     // Once, the second A was taken for the first, and Up Next went A, B, A, B, ... for ever.
-    let app = silent_app("duplicates");
+    let app = silent_app();
     app.borrow_mut().add_paths(&[
         fixture("sine.flac"),
         fixture("mono-22k.wav"),
@@ -675,14 +675,14 @@ fn duplicate_entries_play_in_order() {
 #[test]
 fn an_unplayable_entry_is_skipped_and_hopeless_lists_stop() {
     // The entry queued next fails to open: playback goes on with the one after it.
-    let app = silent_app("unplayable");
+    let app = silent_app();
     let missing = temp_dir("unplayable").join("missing.flac");
     app.borrow_mut()
         .add_paths(&[fixture("sine.flac"), missing.clone(), fixture("sine.ogg")]);
     assert_eq!(rows_played(&app, Duration::from_secs(40)), [0, 2]);
 
     // Nothing can be played, repeat on: Freya tries each once, then stops.
-    let app = silent_app("hopeless");
+    let app = silent_app();
     app.borrow_mut().settings.repeat = true;
     app.borrow_mut().add_paths(&[missing.clone(), missing]);
     let started = std::time::Instant::now();
@@ -698,7 +698,7 @@ fn an_unplayable_entry_is_skipped_and_hopeless_lists_stop() {
 
 #[test]
 fn a_station_list_is_played_again_without_adding_it_again() {
-    let app = silent_app("station-list");
+    let app = silent_app();
     let base = radio_server(std::fs::read(fixture("sine.mp3")).unwrap());
     let list = format!("{base}/list.pls");
     app.borrow_mut().stations.add("Test", &list).unwrap();
@@ -741,7 +741,7 @@ fn a_station_list_is_played_again_without_adding_it_again() {
 fn relative_paths_are_kept_from_the_root() {
     // `freya song.mp3` saved "song.mp3", which a later start from another folder could not
     // find. Tests run in the crate's folder.
-    let app = silent_app("relative-paths");
+    let app = silent_app();
     let relative = PathBuf::from("../crates/freya-audio/tests/fixtures/sine.wav");
     app.borrow_mut().add_paths(std::slice::from_ref(&relative));
     let app = app.borrow();
@@ -757,7 +757,7 @@ fn relative_paths_are_kept_from_the_root() {
 fn a_file_opened_from_the_system_is_added_to_up_next() {
     // MPRIS OpenUri: the address was not decoded, so a name with a space was not found, and
     // Up Next was emptied all the same.
-    let app = silent_app("open-uri");
+    let app = silent_app();
     app.borrow_mut()
         .add_paths(&[fixture("sine.flac"), fixture("sine.ogg")]);
     let file = temp_dir("open-uri").join("with space.wav");
@@ -788,7 +788,7 @@ fn a_file_opened_from_the_system_is_added_to_up_next() {
 #[test]
 fn a_cleared_up_next_shows_nothing_of_what_played() {
     // The album of the track played last stayed, under an empty title.
-    let app = silent_app("cleared");
+    let app = silent_app();
     let ui = current_ui(&app);
     app.borrow_mut().add_paths(&[fixture("sine.ape")]);
     app.borrow_mut().play_index(0);
@@ -816,7 +816,7 @@ fn a_cleared_up_next_shows_nothing_of_what_played() {
 #[test]
 fn a_cue_sheet_opened_on_its_own_adds_its_tracks() {
     // The open dialog offers sheets now; one opened alone is the disc it cuts.
-    let app = silent_app("open-cue");
+    let app = silent_app();
     let dir = temp_dir("open-cue");
     std::fs::copy(fixture("sine.wav"), dir.join("disc.wav")).unwrap();
     let sheet = dir.join("disc.cue");
@@ -853,7 +853,7 @@ fn string_list(ui: &SkinWindow, global_name: &str, name: &str) -> Vec<String> {
 
 #[test]
 fn library_folders_change_only_when_saved() {
-    let app = silent_app("folders-draft");
+    let app = silent_app();
     let ui = current_ui(&app);
     let music = temp_dir("folders-draft-music");
     let (a, b) = (music.join("a"), music.join("b"));
@@ -891,7 +891,7 @@ fn library_folders_change_only_when_saved() {
 
 #[test]
 fn album_sort_and_view_are_kept_in_the_settings() {
-    let app = silent_app("album-options");
+    let app = silent_app();
     let ui = current_ui(&app);
     call(&ui, "Library", "set-album-view", &[text("list")]);
     call(&ui, "Library", "set-album-sort", &[text("name")]);
@@ -907,7 +907,7 @@ fn album_sort_and_view_are_kept_in_the_settings() {
 
 #[test]
 fn back_and_forward_retrace_the_views_and_their_scroll() {
-    let app = silent_app("history");
+    let app = silent_app();
     let ui = current_ui(&app);
     let go = |view: &str, scrolled_to: f64| {
         // Scrolled where the skin says, then somewhere else.
@@ -949,7 +949,7 @@ fn back_and_forward_retrace_the_views_and_their_scroll() {
 
 #[test]
 fn back_reopens_a_playlist_that_was_shown() {
-    let app = silent_app("history-playlists");
+    let app = silent_app();
     let ui = current_ui(&app);
     call(&ui, "App", "navigated", &[]);
     call(&ui, "Playlists", "create", &[text("First")]);
@@ -968,7 +968,7 @@ fn back_reopens_a_playlist_that_was_shown() {
 
 #[test]
 fn artist_order_view_and_pictures_are_kept_in_the_settings() {
-    let app = silent_app("artist-options");
+    let app = silent_app();
     let ui = current_ui(&app);
     assert_eq!(global(&ui, "Library", "artist-view"), text("grid"));
     call(&ui, "Library", "set-artist-sort", &[text("most-played")]);

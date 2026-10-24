@@ -1,24 +1,12 @@
-//! Saved internet radio stations. They are kept as an M3U playlist of stream addresses with
-//! the stations' names, so other players can read the file too.
+//! Internet radio stations, which the server keeps for its users (see
+//! `freya_server::stations`).
 
-use std::path::PathBuf;
+use std::sync::Arc;
 
-use freya_media::{Entry, playlist_file};
+use freya_protocol::{ApiResult, RadioStation, Server};
 use slint_interpreter::{Struct, Value};
 
 use super::skin_state::string;
-
-/// The stations a new user starts with: long-running, listener-supported stations.
-const STARTERS: [(&str, &str); 5] = [
-    ("SomaFM: Groove Salad", "https://somafm.com/groovesalad.pls"),
-    ("SomaFM: Drone Zone", "https://somafm.com/dronezone.pls"),
-    (
-        "Radio Paradise",
-        "https://www.radioparadise.com/m3u/mp3-128.m3u",
-    ),
-    ("FIP", "https://icecast.radiofrance.fr/fip-midfi.mp3"),
-    ("KEXP", "https://kexp.streamguys1.com/kexp160.aac"),
-];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Station {
@@ -27,41 +15,48 @@ pub struct Station {
 }
 
 pub struct Stations {
-    /// Where the stations are saved; `None` keeps them only while Freya runs.
-    path: Option<PathBuf>,
+    /// The server that keeps them; without one, they are kept only while Freya runs.
+    server: Option<Arc<dyn Server>>,
     list: Vec<Station>,
 }
 
 impl Stations {
-    /// The stations saved at `path`, or the starter stations when nothing is saved yet.
-    pub fn load(path: Option<PathBuf>) -> Self {
-        let saved = path.as_deref().filter(|p| p.exists()).map(|p| {
-            playlist_file::load(p).unwrap_or_else(|e| {
-                log::warn!(
-                    "could not read the radio stations from {}: {e}",
-                    p.display()
-                );
-                Vec::new()
-            })
-        });
-        let list = match saved {
-            Some(entries) => entries
-                .into_iter()
-                .map(|entry| {
-                    let url = entry.path.to_string_lossy().into_owned();
-                    let name = entry.title.unwrap_or_else(|| host(&url).to_owned());
-                    Station { name, url }
-                })
-                .collect(),
-            None => STARTERS
-                .iter()
-                .map(|(name, url)| Station {
-                    name: (*name).to_owned(),
-                    url: (*url).to_owned(),
-                })
-                .collect(),
+    /// None yet: they come from the server once connected.
+    pub fn new() -> Self {
+        Self {
+            server: None,
+            list: Vec::new(),
+        }
+    }
+
+    /// Keeps the stations of `server`, which are `saved`, as it said when connected to.
+    pub fn connect(&mut self, server: Arc<dyn Server>, saved: ApiResult<Vec<RadioStation>>) {
+        self.server = Some(server);
+        self.keep(saved);
+    }
+
+    /// Reads the stations from the server again: they changed.
+    pub fn reload(&mut self) {
+        let Some(server) = &self.server else {
+            return;
         };
-        Self { path, list }
+        let saved = server.stations();
+        self.keep(saved);
+    }
+
+    fn keep(&mut self, saved: ApiResult<Vec<RadioStation>>) {
+        match saved {
+            Ok(saved) => {
+                self.list = saved
+                    .into_iter()
+                    .map(|station| Station {
+                        name: station.name,
+                        url: station.url,
+                    })
+                    .collect();
+            }
+            Err(e) => log::warn!("could not read the radio stations: {e}"),
+        }
     }
 
     pub fn get(&self, index: usize) -> Option<&Station> {
@@ -109,28 +104,25 @@ impl Stations {
             .collect()
     }
 
+    /// Tells the server the stations, the window not waiting for it: the list here is changed
+    /// already, and the server is told in order.
     fn save(&self) {
-        let Some(path) = &self.path else {
+        let Some(server) = self.server.clone() else {
             return;
         };
-        let entries: Vec<Entry> = self
+        let stations: Vec<RadioStation> = self
             .list
             .iter()
-            .map(|station| {
-                let mut entry = Entry::new(&station.url);
-                entry.title = Some(station.name.clone());
-                entry
+            .map(|station| RadioStation {
+                name: station.name.clone(),
+                url: station.url.clone(),
             })
             .collect();
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        if let Err(e) = playlist_file::save(path, &entries) {
-            log::warn!(
-                "could not save the radio stations to {}: {e}",
-                path.display()
-            );
-        }
+        crate::errands::run(move || {
+            if let Err(e) = server.save_stations(&stations) {
+                log::warn!("could not save the radio stations: {e}");
+            }
+        });
     }
 }
 
@@ -167,23 +159,9 @@ fn host(url: &str) -> &str {
 mod tests {
     use super::*;
 
-    fn temp_file(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("freya-radio-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        dir.join("stations.m3u8")
-    }
-
-    fn names(stations: &Stations) -> Vec<&str> {
-        stations.list.iter().map(|s| s.name.as_str()).collect()
-    }
-
     #[test]
-    fn starts_with_starter_stations_and_keeps_changes() {
-        let path = temp_file("keep");
-        let mut stations = Stations::load(Some(path.clone()));
-        assert_eq!(stations.list.len(), STARTERS.len());
-
-        stations.remove(0);
+    fn adds_stations_by_address_and_shows_which_plays() {
+        let mut stations = Stations::new();
         stations.add("", "radio.example.com:8000/live").unwrap();
         stations
             .add("Night Jazz", "https://jazz.example.org/")
@@ -192,21 +170,10 @@ mod tests {
             stations.add("Nothing", "  ").unwrap_err(),
             "No address given"
         );
-
-        let again = Stations::load(Some(path));
-        assert_eq!(names(&again), names(&stations));
-        assert_eq!(again.list.len(), STARTERS.len() + 1);
-        let added = &again.list[STARTERS.len() - 1];
+        let added = &stations.list[0];
         assert_eq!(added.name, "radio.example.com:8000");
         assert_eq!(added.url, "http://radio.example.com:8000/live");
-    }
 
-    #[test]
-    fn rows_show_addresses_and_which_station_plays() {
-        let mut stations = Stations::load(None);
-        stations
-            .add("Night Jazz", "https://jazz.example.org/")
-            .unwrap();
         let rows = stations.rows(Some("https://jazz.example.org/"));
         let Some(Value::Struct(last)) = rows.last() else {
             panic!("a row per station");
@@ -214,5 +181,8 @@ mod tests {
         assert_eq!(last.get_field("address"), Some(&string("jazz.example.org")));
         assert_eq!(last.get_field("playing"), Some(&Value::Bool(true)));
         assert_eq!(host("https://somafm.com/groovesalad.pls"), "somafm.com");
+
+        stations.remove(0);
+        assert_eq!(stations.list.len(), 1);
     }
 }

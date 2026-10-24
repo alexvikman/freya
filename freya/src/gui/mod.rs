@@ -145,7 +145,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 source.clone(),
                 library::covers_dir(source.as_ref()),
             ),
-            stations: radio::Stations::load(crate::settings::stations_path()),
+            stations: radio::Stations::new(),
             playlists: playlists::Playlists::new(),
         },
     )));
