@@ -112,15 +112,8 @@ pub fn answer(served: &Served, request: &Request) -> Option<Response> {
             } else {
                 let from = request.peer.map(|peer| peer.ip());
                 let others = value(&values, "others") == "out";
-                let name = value(&values, "username");
-                match accounts.change_password(
-                    ticket,
-                    value(&values, "current"),
-                    new,
-                    from,
-                    others,
-                    name,
-                ) {
+                match accounts.change_password(ticket, value(&values, "current"), new, from, others)
+                {
                     Ok(()) => message(
                         200,
                         "The Password Is Changed",
@@ -389,7 +382,7 @@ fn password_page(
 <p>{user} logs in to the library on {server} with it, from other devices. At least {SHORTEST_PASSWORD} characters.</p>
 <form method="post" action="{PAGES_PATH}/password">
 <input type="hidden" name="ticket" value="{ticket}">
-<label>User<input name="username" autocomplete="username" value="{user}"{name}></label>
+<label>User<input name="username" autocomplete="username" value="{user}" readonly></label>
 {current}
 <label>New password<input name="password" type="password" autocomplete="new-password" minlength="{SHORTEST_PASSWORD}" required{focus}></label>
 <label>Again<input name="again" type="password" autocomplete="new-password" minlength="{SHORTEST_PASSWORD}" required></label>
@@ -399,8 +392,6 @@ fn password_page(
         user = escape(&page.user),
         server = escape(server),
         ticket = escape(ticket),
-        // Chosen by the owner adopting the server; else the user's name, as it is.
-        name = if page.names { " required" } else { " readonly" },
         focus = if page.asks_current { "" } else { " autofocus" },
         error = error_line(error),
     );

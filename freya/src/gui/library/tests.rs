@@ -129,7 +129,6 @@ fn a_server_is_asked_off_the_windows_thread() {
     let served = freya_server::Served {
         library: local(db, None),
         server: None,
-        quit: None,
         accounts: None,
         certificate: None,
         callback_port: freya_protocol::CALLBACK_PORT,

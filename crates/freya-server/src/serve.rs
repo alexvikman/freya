@@ -68,8 +68,6 @@ const STREAM_LASTS: Duration = Duration::from_secs(50);
 pub struct Served {
     pub library: Arc<dyn LibraryApi>,
     pub server: Option<Arc<dyn Server>>,
-    /// Stops the server, when it may be stopped from this computer.
-    pub quit: Option<Arc<dyn Fn() + Send + Sync>>,
     /// Who may call; without, anyone may, as in tests.
     pub accounts: Option<Arc<Accounts>>,
     /// The server's TLS certificate, in DER, when clients on other computers may connect.
@@ -184,12 +182,10 @@ fn answer(served: &Served, answers: &Answers, request: Request) -> Response {
             None => Response::error(404, "no certificate here"),
         };
     }
-    let local = request.peer.is_some_and(|peer| peer.ip().is_loopback());
     let caller = match &served.accounts {
         None => None,
         Some(accounts) => match (request.method.as_str(), path) {
             ("GET", "/version") => None,
-            ("POST", "/pair") => return pair(accounts, &request, local),
             ("POST", "/token") => return token(accounts, &request),
             ("POST", "/enroll") => return enroll(accounts, served, &request),
             ("POST", "/claim") => return claim(accounts, served, &request),
@@ -364,19 +360,6 @@ fn answer(served: &Served, answers: &Answers, request: Request) -> Response {
                 Response::json(200, &serde_json::Value::Null)
             }
             None => Response::error(404, "this server is not updated from here"),
-        },
-        // From this computer, and with accounts by an admin's device paired there.
-        ("POST", "/quit") => match &served.quit {
-            Some(quit)
-                if local
-                    && caller
-                        .as_ref()
-                        .is_none_or(|c| c.paired && c.role == Role::Admin) =>
-            {
-                quit();
-                Response::json(200, &serde_json::Value::Null)
-            }
-            _ => Response::error(403, "the server is not stopped from here"),
         },
         _ => Response::error(404, "no such page"),
     }
@@ -743,29 +726,6 @@ fn ask_computer_name() -> String {
         .unwrap_or_else(|| "Freya".into())
 }
 
-/// `{"key", "device"}`: a token for the device, given the pairing key; only from this computer.
-fn pair(accounts: &Accounts, request: &Request, local: bool) -> Response {
-    #[derive(serde::Deserialize)]
-    struct Pairing {
-        nonce: String,
-        proof: String,
-        device: String,
-    }
-    if !local {
-        return Response::error(403, "pairing is only from the server's computer");
-    }
-    let asked = serde_json::from_slice::<Pairing>(&request.body)
-        .ok()
-        .and_then(|asked| Some((unhex(&asked.nonce)?, unhex(&asked.proof)?, asked.device)));
-    let Some((nonce, proof, device)) = asked.filter(|(nonce, _, _)| nonce.len() == 32) else {
-        return Response::error(400, "a nonce, a proof and a device");
-    };
-    match accounts.pair(&nonce, &proof, &device) {
-        Some(granted) => Response::json(200, &granted.json()),
-        None => Response::error(403, "not the pairing key"),
-    }
-}
-
 /// `{"nonce"}`: the proof that this server knows the connection code its computer shows, over
 /// the nonce and the server's certificate.
 fn enroll(accounts: &Accounts, served: &Served, request: &Request) -> Response {
@@ -1093,14 +1053,13 @@ mod tests {
 
     #[test]
     fn bodies_are_as_large_as_the_caller_may_send() {
-        let accounts = Arc::new(Accounts::open(None, None));
+        let accounts = Arc::new(Accounts::open(None));
         let served = Served {
             library: Arc::new(crate::LocalLibrary::new(
                 freya_library::Library::open_in_memory().unwrap(),
                 None,
             )),
             server: None,
-            quit: None,
             accounts: Some(Arc::clone(&accounts)),
             certificate: None,
             callback_port: freya_protocol::CALLBACK_PORT,

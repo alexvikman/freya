@@ -29,4 +29,4 @@ pub use lastfm::lastfm;
 pub use serve::{Served, Updating, admit, found, handler};
 pub use service::{LocalLibrary, Service, ServiceConfig};
 
-pub use freya_protocol::{LOCAL_ADDRESS, PAIRING_KEY};
+pub use freya_protocol::LOCAL_ADDRESS;

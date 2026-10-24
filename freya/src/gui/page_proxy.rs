@@ -356,29 +356,46 @@ mod tests {
     fn logs_in_and_changes_the_password_in_the_browser() {
         let dir = std::env::temp_dir().join(format!("freya-page-proxy-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let pairing = dir.join("pairing.key");
         let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let here = free.local_addr().unwrap().to_string();
         drop(free);
+        let accounts = Arc::new(Accounts::open(None));
+        accounts
+            .add_user("Ada", freya_protocol::Role::Admin, "battery staple")
+            .unwrap();
         let served = Served {
             library: Arc::new(freya_server::LocalLibrary::new(
                 Library::open_in_memory().unwrap(),
                 None,
             )),
             server: None,
-            quit: None,
-            accounts: Some(Arc::new(Accounts::open(None, Some(pairing.clone())))),
+            accounts: Some(Arc::clone(&accounts)),
             certificate: None,
             callback_port: here.rsplit_once(':').unwrap().1.parse().unwrap(),
             updates: None,
         };
         let server = Server::start("127.0.0.1:0", freya_server::handler(served)).unwrap();
         let address = format!("http://{}", server.address());
-        let key = std::fs::read_to_string(&pairing).unwrap();
-        let mac = Http::new(&address)
-            .with_token(Some(Http::new(&address).pair(&key, "Mac").unwrap().access));
-        // Paired on the server's computer, as the owner of a server not adopted yet.
-        assert!(!mac.account().unwrap().unwrap().has_password);
+        let (redirect, verifier) = (
+            "http://127.0.0.1:1/callback",
+            "a secret long enough to be one",
+        );
+        let code = accounts
+            .grant(
+                "Ada",
+                "battery staple",
+                &freya_server::accounts::challenge(verifier),
+                redirect,
+                None,
+            )
+            .unwrap();
+        let mac = Http::new(&address).with_token(Some(
+            accounts
+                .redeem(&code, verifier, redirect, "Mac")
+                .unwrap()
+                .access,
+        ));
+        assert!(mac.account().unwrap().unwrap().has_password);
 
         let (tell, heard) = channel();
         let proxy = PageProxy::start_at(&here, tell).unwrap();
@@ -390,7 +407,7 @@ mod tests {
             .into();
         let wait = || heard.recv_timeout(Duration::from_secs(10)).unwrap();
 
-        // The password, set on the page Freya opened, as from the server's own computer.
+        // The password, changed on the page Freya opened.
         let ticket = mac.password_ticket().unwrap();
         let page = proxy.show_password(mac.pages(), ticket.clone());
         assert!(!page.contains(&ticket), "the ticket is in no URL");
@@ -416,9 +433,9 @@ mod tests {
             .call()
             .unwrap();
         assert_eq!(shown.status(), 200);
-        // The owner adopting the server from its computer names themselves too.
-        let form =
-            format!("ticket={ticket}&username=Ada&password=correct+horse&again=correct+horse");
+        let form = format!(
+            "ticket={ticket}&current=battery+staple&password=correct+horse&again=correct+horse"
+        );
         let unsent = browser
             .post(&format!("{origin}/web/password"))
             .header("Content-Type", FORM)

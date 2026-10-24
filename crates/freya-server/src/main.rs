@@ -9,9 +9,9 @@
 //! forgot it to set anew. For Windows' installer, `--stop` stops the user's running server, and
 //! `--forget-login` takes away its starting at login, as it is uninstalled. It keeps its library, pictures,
 //! settings and log in its own folder, the first time taking in what Freya kept in its folder
-//! before the server was its own. It runs until stopped: Ctrl-C, SIGTERM, or `POST /quit` from
-//! a device paired on this computer. It serves this computer over TLS too, with the
-//! certificate the client here pins from its folder. One that finds this user's server on its
+//! before the server was its own. It runs until stopped: Ctrl-C, SIGTERM, its menu, or Windows
+//! closing its window. It serves this computer over TLS too, with the certificate Freya here
+//! pins from its folder. One that finds this user's server on its
 //! address already ends at once, and without failing, so what starts it at login does not start
 //! it again and again; one that finds another program there says so, and fails. On macOS it shows an icon in the
 //! menu bar, to open Freya, show the log, or stop it.
@@ -26,9 +26,7 @@ use freya_server::discovery::Discovery;
 use freya_server::http::Server;
 use freya_server::take_in::{Folders, take_in};
 use freya_server::tls::Identity;
-use freya_server::{
-    LOCAL_ADDRESS, PAIRING_KEY, Served, Service, ServiceConfig, admit, handler, settings,
-};
+use freya_server::{LOCAL_ADDRESS, Served, Service, ServiceConfig, admit, handler, settings};
 
 fn main() {
     more_open_files();
@@ -180,27 +178,19 @@ fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> 
     let menu_stop = stop.clone();
     let updates = freya_server::updates::Updates::start(stop.clone());
     follow_autostart(Arc::clone(&service));
-    let quit = {
-        let stop = stop.clone();
-        Arc::new(move || {
-            let _ = stop.send(());
-        })
-    };
     ctrlc::set_handler(move || {
         let _ = stop.send(());
     })
     .map_err(|e| format!("could not listen for being stopped: {e}"))?;
-    let accounts = Arc::new(Accounts::open(
-        Some(data.join("accounts.json")),
-        Some(data.join(PAIRING_KEY)),
-    ));
+    let accounts = Arc::new(Accounts::open(Some(data.join("accounts.json"))));
+    // A key Freya on this computer paired with once: nothing takes it now.
+    let _ = std::fs::remove_file(data.join("pairing.key"));
     keep_adoption_code(Arc::clone(&accounts), data.join(ADOPTION_CODE));
     #[cfg(any(target_os = "macos", windows))]
     let menu_accounts = Arc::clone(&accounts);
     let served = Served {
         library: service.api(),
         server: Some(Arc::clone(&service) as _),
-        quit: Some(quit),
         accounts: Some(accounts),
         certificate: Some(identity.certificate.clone()),
         callback_port: freya_protocol::CALLBACK_PORT,

@@ -153,12 +153,6 @@ pub const DISCOVERY_PORT: u16 = 47476;
 /// network; a server answers with a [`ServerFound`] in JSON.
 pub const DISCOVERY_QUESTION: &[u8] = b"freya-server?";
 
-/// What a client on the server's computer signs with the pairing key, by HMAC-SHA256, to pair
-/// without sending the key: its nonce and the name it pairs as.
-pub fn pairing_message(nonce: &[u8], device: &str) -> Vec<u8> {
-    [b"freya pairing\0".as_slice(), nonce, device.as_bytes()].concat()
-}
-
 /// A connection code: what a new device types to know that the server it reached is the one
 /// whose computer shows the code. Crockford's base 32, which leaves out letters that look like
 /// digits, ten of them: 50 bits.
@@ -313,7 +307,8 @@ pub struct DeviceInfo {
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum Joined {
-    /// With the pairing key, on the server's own computer.
+    /// With the pairing key, on the server's own computer, as until 0.3: logged in without a
+    /// password. Such a device is logged out when the server starts.
     Paired,
     /// By logging in, in the browser.
     LoggedIn,

@@ -3,17 +3,13 @@
 //! server's folder that only the user can read; of the tokens only their SHA-256 is kept, and
 //! of the passwords their PBKDF2.
 //!
-//! A client on the server's own computer connects with the pairing key: a secret the server
-//! writes to a file of its own, readable only by the user it runs as, and makes anew once
-//! used, so only a program of that user, on that computer, connects so. The client does not
-//! send the key, only an HMAC with it over a nonce of its own; a wrong one leaves the key as it
-//! is, so nobody else can keep the user from pairing, and holds the answer up a moment.
+//! Every device logs in with a password, on the server's own computer as elsewhere: a server
+//! is adopted first, by whoever proves they know the code it shows, who chooses its owner's
+//! name and password. A password, once set, is changed only by giving it: on any device. One
+//! forgotten is forgotten on the server's computer, with the server stopped: `freya-server
+//! --forget-password`; the server is then adopted again.
 //!
-//! A password, once set, is changed only by giving it: on any device. One forgotten is
-//! forgotten on the server's computer, with the server stopped: `freya-server
-//! --forget-password`, and then set anew.
-//!
-//! Other devices log in in the browser, as OAuth's authorization code with PKCE has it: the
+//! Devices log in in the browser, as OAuth's authorization code with PKCE has it: the
 //! login page gives a code for the password, which only the client that asked for it can trade
 //! for tokens, having the secret its challenge was made from.
 //!
@@ -73,8 +69,6 @@ const USED_EVERY: u64 = 60 * 60;
 /// How long a connection code lasts, and how many proofs an address may ask before waiting.
 const CONNECTION_CODE_LASTS: Duration = Duration::from_secs(10 * 60);
 const PROOFS_FREE: u32 = 10;
-/// How long a wrong pairing proof holds up the answer.
-const WRONG_PAIRING_WAIT: Duration = Duration::from_millis(100);
 /// How long after it was renewed a refresh token renews once more, for a client whose answer
 /// was lost: a computer that slept the night through still does, one asking a day later not.
 const RENEWED_GRACE: u64 = 24 * 60 * 60;
@@ -272,9 +266,6 @@ pub struct PasswordPage {
     pub user: String,
     /// Whether the password now has to be given to change it.
     pub asks_current: bool,
-    /// Whether a name is chosen with it: by the owner of a server not adopted yet, adopting it
-    /// from its own computer.
-    pub names: bool,
 }
 
 /// A device a token was given to, as a request names it.
@@ -283,8 +274,6 @@ pub struct Caller {
     pub user: u32,
     pub device: String,
     pub role: Role,
-    /// Whether the device paired on the server's own computer.
-    pub paired: bool,
 }
 
 struct Connection {
@@ -411,9 +400,6 @@ pub struct Accounts {
     /// Where they are kept; nowhere in tests.
     file: Option<PathBuf>,
     kept: Mutex<Kept>,
-    /// The pairing key now, and where it is written.
-    pairing: Mutex<Option<String>>,
-    pairing_file: Option<PathBuf>,
     grants: Mutex<Vec<Grant>>,
     tickets: Mutex<Vec<Ticket>>,
     claims: Mutex<Vec<ClaimTicket>>,
@@ -428,9 +414,9 @@ pub struct Accounts {
 }
 
 impl Accounts {
-    /// The accounts kept in `file`, with the pairing key written to `pairing_file`; a server
-    /// without any starts with its owner, who has no password yet.
-    pub fn open(file: Option<PathBuf>, pairing_file: Option<PathBuf>) -> Self {
+    /// The accounts kept in `file`; a server without any starts with its owner, who has no
+    /// password yet: it is not adopted.
+    pub fn open(file: Option<PathBuf>) -> Self {
         let mut kept: Kept = file
             .as_deref()
             .and_then(|f| std::fs::read_to_string(f).ok())
@@ -454,11 +440,11 @@ impl Accounts {
         if unhex(&kept.secret).is_none_or(|secret| secret.len() < 32) {
             kept.secret = random_hex(32);
         }
+        // A device paired on the server's computer, as until 0.3, logged in without a password.
+        kept.devices.retain(|d| d.joined != Some(Joined::Paired));
         let accounts = Self {
             file,
             kept: Mutex::new(kept),
-            pairing: Mutex::new(None),
-            pairing_file,
             grants: Mutex::new(Vec::new()),
             tickets: Mutex::new(Vec::new()),
             claims: Mutex::new(Vec::new()),
@@ -469,7 +455,6 @@ impl Accounts {
             connection: Mutex::new(None),
         };
         accounts.save(&accounts.kept());
-        accounts.new_pairing_key();
         accounts
     }
 
@@ -513,7 +498,6 @@ impl Accounts {
             user,
             device: device.id.clone(),
             role: Role::Admin,
-            paired: device.joined == Some(Joined::Paired),
         };
         let now = now();
         if now >= device.used + USED_EVERY {
@@ -522,31 +506,6 @@ impl Accounts {
         }
         let role = kept.users.iter().find(|u| u.id == user)?.role;
         Some(Caller { role, ..caller })
-    }
-
-    /// Tokens for a device named `name` of the owner, given `proof`, the HMAC with the pairing
-    /// key over `nonce` and the name; none for another. The key is made anew once used; a
-    /// wrong proof leaves it, and a few a minute are tried.
-    pub fn pair(&self, nonce: &[u8], proof: &[u8], name: &str) -> Option<Granted> {
-        let right = {
-            let pairing = self.pairing.lock().unwrap_or_else(|e| e.into_inner());
-            pairing.as_ref().is_some_and(|key| {
-                let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key.as_bytes());
-                let message = freya_protocol::pairing_message(nonce, name);
-                ring::hmac::verify(&key, &message, proof).is_ok()
-            })
-        };
-        if !right {
-            // The key cannot be guessed; the wait only keeps a loop from heating the computer.
-            std::thread::sleep(WRONG_PAIRING_WAIT);
-            return None;
-        }
-        self.new_pairing_key();
-        let name = device_name(name);
-        self.kept()
-            .devices
-            .retain(|d| !(d.joined == Some(Joined::Paired) && d.name == name));
-        self.add_device(OWNER, &name, Joined::Paired, None)
     }
 
     /// The user `name` is, given their password, tried from `from`. A wrong one holds the
@@ -661,9 +620,9 @@ impl Accounts {
     }
 
     /// Forgets the password of the user the server started with, in the accounts kept in
-    /// `file`, while no server holds them: their name. They set one anew without it, on the
-    /// server's computer. The devices that logged in with it are logged out: one of them may be
-    /// whoever learned it.
+    /// `file`, while no server holds them: their name. The server is adopted again, by whoever
+    /// proves they know the code it shows. The devices that logged in with it are logged out:
+    /// one of them may be whoever learned it.
     pub fn forget_owner_password(file: &Path) -> Result<String, String> {
         let text = std::fs::read_to_string(file).map_err(|e| e.to_string())?;
         let mut kept: Kept = serde_json::from_str(&text).map_err(|e| e.to_string())?;
@@ -674,8 +633,7 @@ impl Accounts {
             .ok_or("no owner in the accounts")?;
         owner.password = None;
         let name = owner.name.clone();
-        kept.devices
-            .retain(|d| d.user != OWNER || d.joined == Some(Joined::Paired));
+        kept.devices.retain(|d| d.user != OWNER);
         let json = serde_json::to_vec_pretty(&kept).map_err(|e| e.to_string())?;
         write_private(file, &json).map_err(|e| e.to_string())?;
         Ok(name)
@@ -1279,7 +1237,6 @@ impl Accounts {
         Some(PasswordPage {
             user: user.name.clone(),
             asks_current: user.password.is_some(),
-            names: user.id == OWNER && user.password.is_none(),
         })
     }
 
@@ -1287,7 +1244,6 @@ impl Accounts {
     /// page asks for it; the ticket is used up once it did.
     /// With `log_out_others`, every other device of the user is logged out too, but the one the
     /// page was opened from.
-    /// When the page names, the owner is named `name` too: the server is adopted.
     pub fn change_password(
         &self,
         ticket: &str,
@@ -1295,7 +1251,6 @@ impl Accounts {
         new: &str,
         from: Option<IpAddr>,
         log_out_others: bool,
-        name: &str,
     ) -> Result<(), String> {
         let page = self
             .password_page(ticket)
@@ -1305,20 +1260,6 @@ impl Accounts {
                 "A password needs at least {SHORTEST_PASSWORD} characters."
             ));
         }
-        let name = if page.names {
-            let name = user_name(name)?;
-            let taken = self
-                .kept()
-                .users
-                .iter()
-                .any(|u| u.id != OWNER && u.name.eq_ignore_ascii_case(&name));
-            if taken {
-                return Err(format!("There is a user named {name} already."));
-            }
-            Some(name)
-        } else {
-            None
-        };
         if page.asks_current {
             match self.check(&page.user, current, from) {
                 Ok(_) => {}
@@ -1336,14 +1277,6 @@ impl Accounts {
             tickets.swap_remove(at)
         };
         self.set_password(used.user, new, used.changed)?;
-        if let Some(name) = name {
-            let mut kept = self.kept();
-            if let Some(owner) = kept.users.iter_mut().find(|u| u.id == OWNER) {
-                owner.name = name;
-                log::info!("the server was adopted by {}", owner.name);
-            }
-            self.save(&kept);
-        }
         if log_out_others {
             let mut kept = self.kept();
             let before = kept.devices.len();
@@ -1440,19 +1373,6 @@ impl Accounts {
         let granted = issue(&mut kept, at);
         self.save(&kept);
         granted
-    }
-
-    /// Makes a new pairing key and writes it where a client on this computer reads it.
-    fn new_pairing_key(&self) {
-        let key = random_hex(32);
-        // Written while held, so the file and the key taken never differ.
-        let mut pairing = self.pairing.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(file) = &self.pairing_file
-            && let Err(e) = write_private(file, key.as_bytes())
-        {
-            log::warn!("could not write the pairing key: {e}");
-        }
-        *pairing = Some(key);
     }
 
     fn save(&self, kept: &Kept) {
@@ -1687,13 +1607,35 @@ mod tests {
             user,
             device: String::new(),
             role,
-            paired: false,
         }
+    }
+
+    const REDIRECT: &str = "http://127.0.0.1:47477/callback";
+    const VERIFIER: &str = "a secret only the client knows, long enough";
+
+    /// Adopts the server, with the code it shows, as its owner `name` with `password`: the
+    /// tokens of the first device, `device`, as its login in the browser gives them.
+    fn adopt(accounts: &Accounts, name: &str, password: &str, device: &str) -> Granted {
+        let (code, _) = accounts.adoption_code().unwrap();
+        let (ticket, claim) = claim_with(accounts, &code, b"the server's certificate").unwrap();
+        assert!(matches!(claim, Claim::Adopt));
+        let code = accounts
+            .complete_claim(&ticket, name, password, &challenge(VERIFIER), REDIRECT)
+            .unwrap();
+        accounts.redeem(&code, VERIFIER, REDIRECT, device).unwrap()
+    }
+
+    /// `name`'s tokens for `device`, logged in with `password`.
+    fn log_in(accounts: &Accounts, name: &str, password: &str, device: &str) -> Granted {
+        let code = accounts
+            .grant(name, password, &challenge(VERIFIER), REDIRECT, None)
+            .unwrap();
+        accounts.redeem(&code, VERIFIER, REDIRECT, device).unwrap()
     }
 
     #[test]
     fn admins_take_neither_the_owners_account_nor_each_others() {
-        let accounts = Accounts::open(None, None);
+        let accounts = Accounts::open(None);
         let certificate = b"the server's certificate";
         let redirect = "http://127.0.0.1:47477/callback";
         let owner = caller(OWNER, Role::Admin);
@@ -1831,83 +1773,42 @@ mod tests {
         assert!(after > before);
     }
 
-    /// Pairs as `name` with the key in `file`, as a client on the server's computer does.
-    fn pair(accounts: &Accounts, file: &Path, name: &str) -> Option<Granted> {
-        let key = std::fs::read_to_string(file).unwrap();
-        pair_with(accounts, &key, name)
-    }
-
-    fn pair_with(accounts: &Accounts, key: &str, name: &str) -> Option<Granted> {
-        let nonce = [9; 32];
-        let signing = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key.as_bytes());
-        let proof = ring::hmac::sign(&signing, &freya_protocol::pairing_message(&nonce, name));
-        accounts.pair(&nonce, proof.as_ref(), name)
-    }
-
     #[test]
-    fn devices_pair_log_in_and_are_revoked() {
+    fn devices_log_in_and_are_revoked() {
         let dir = std::env::temp_dir().join(format!("freya-accounts-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let (file, pairing) = (dir.join("accounts.json"), dir.join("pairing.key"));
-        let accounts = Accounts::open(Some(file.clone()), Some(pairing.clone()));
-        let key = std::fs::read_to_string(&pairing).unwrap();
+        let file = dir.join("accounts.json");
+        let accounts = Accounts::open(Some(file.clone()));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let mode = |f: &Path| std::fs::metadata(f).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode(&pairing), 0o600);
             assert_eq!(mode(&file), 0o600);
         }
 
-        assert_eq!(pair_with(&accounts, "wrong", "Mac"), None);
+        // Not adopted: nobody logs in without a password, the owner neither.
+        let redirect = REDIRECT;
+        let verifier = VERIFIER;
+        let sent = challenge(verifier);
+        let unadopted = accounts.users()[0].name.clone();
         assert_eq!(
-            std::fs::read_to_string(&pairing).unwrap(),
-            key,
-            "a wrong one leaves the key"
+            accounts.grant(&unadopted, "", &sent, redirect, None).ok(),
+            None
         );
-        let old = pair(&accounts, &pairing, "Mac").unwrap();
-        assert_eq!(
-            pair_with(&accounts, &key, "Mac"),
-            None,
-            "a key is used once"
-        );
-        // Pairing again takes the place of the device paired before.
-        let paired = pair(&accounts, &pairing, "Mac").unwrap();
-        assert!(accounts.caller(&paired.access).unwrap().paired);
-        assert_eq!(accounts.caller(&old.access), None);
-        let mac = accounts.caller(&paired.access).unwrap();
+        let first = adopt(&accounts, "Alex", "correct horse", "Mac");
+        assert!(accounts.adoption_code().is_none(), "adopted once");
+        let mac = accounts.caller(&first.access).unwrap();
         assert_eq!(mac.user, OWNER);
         assert_eq!(accounts.caller("not a token"), None);
         assert_eq!(
-            accounts.caller(&paired.refresh),
+            accounts.caller(&first.refresh),
             None,
             "a refresh token is not called with"
         );
         let saved = std::fs::read_to_string(&file).unwrap();
-        assert!(!saved.contains(&paired.refresh) && !saved.contains(&paired.access));
-
-        // No password yet: nobody logs in.
+        assert!(!saved.contains(&first.refresh) && !saved.contains(&first.access));
         let owner = accounts.info(&mac).user;
-        let redirect = "http://127.0.0.1:47477/callback";
-        let verifier = "a secret only the client knows, long enough";
-        let sent = challenge(verifier);
-        assert_eq!(accounts.grant(&owner, "", &sent, redirect, None).ok(), None);
-
-        // The first one is set without one before it.
-        let ticket = accounts.ticket(&mac);
-        assert!(!accounts.password_page(&ticket).unwrap().asks_current);
-        assert!(
-            accounts
-                .change_password(&ticket, "", "short", None, false, &owner)
-                .is_err()
-        );
-        accounts
-            .change_password(&ticket, "", "correct horse", None, false, &owner)
-            .unwrap();
-        assert!(
-            accounts.password_page(&ticket).is_none(),
-            "a ticket is used once"
-        );
+        assert_eq!(owner, "Alex");
 
         // Logging in: a code for the password, traded once, by the client that asked.
         assert_eq!(
@@ -1951,31 +1852,40 @@ mod tests {
         assert!(accounts.password_page(&ticket).unwrap().asks_current);
         assert!(
             accounts
-                .change_password(&ticket, "wrong horse", "battery staple", None, false, "")
+                .change_password(&ticket, "wrong horse", "battery staple", None, false)
                 .is_err()
         );
         accounts
-            .change_password(&ticket, "correct horse", "battery staple", None, false, "")
+            .change_password(&ticket, "correct horse", "battery staple", None, false)
             .unwrap();
 
         // Kept across starts.
-        let again = Accounts::open(Some(file.clone()), Some(pairing.clone()));
+        let again = Accounts::open(Some(file.clone()));
         let info = again.info(&mac);
         assert!(info.has_password);
         let names: Vec<&str> = info.devices.iter().map(|d| d.name.as_str()).collect();
         assert_eq!(names, ["Mac", "PC"]);
         assert!(info.devices[0].this);
         // Access tokens outlast a restart.
-        assert_eq!(again.caller(&paired.access).as_ref(), Some(&mac));
+        assert_eq!(again.caller(&first.access).as_ref(), Some(&mac));
         assert!(again.revoke(&mac, &pc.device));
         assert_eq!(again.caller(&pc_tokens.access), None);
         assert_eq!(again.info(&mac).devices.len(), 1);
+        drop(again);
+
+        // A device paired on the server's computer, as until 0.3, logged in without a password:
+        // logged out as the server starts.
+        let kept = std::fs::read_to_string(&file).unwrap();
+        assert!(kept.contains("\"logged-in\""));
+        std::fs::write(&file, kept.replace("\"logged-in\"", "\"paired\"")).unwrap();
+        let again = Accounts::open(Some(file.clone()));
+        assert_eq!(again.caller(&first.access), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn wrong_passwords_wait_longer_and_longer() {
-        let accounts = Accounts::open(None, None);
+        let accounts = Accounts::open(None);
         let kim = accounts
             .add_user("Kim", Role::Listener, "correct horse")
             .unwrap();
@@ -2085,38 +1995,17 @@ mod tests {
     fn forgetting_the_password_logs_out_who_logged_in_with_it() {
         let dir = std::env::temp_dir().join(format!("freya-forget-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let (file, pairing) = (dir.join("accounts.json"), dir.join("pairing.key"));
-        let accounts = Accounts::open(Some(file.clone()), Some(pairing.clone()));
-        let mac = pair(&accounts, &pairing, "Mac").unwrap();
-        let ticket = accounts.ticket(&accounts.caller(&mac.access).unwrap());
-        let owner = accounts.info(&accounts.caller(&mac.access).unwrap()).user;
-        accounts
-            .change_password(&ticket, "", "correct horse", None, false, &owner)
-            .unwrap();
-        let redirect = "http://127.0.0.1:47477/callback";
-        let verifier = "a secret only the client knows, long enough";
-        let code = accounts
-            .grant(
-                &owner,
-                "correct horse",
-                &challenge(verifier),
-                redirect,
-                None,
-            )
-            .unwrap();
-        accounts.redeem(&code, verifier, redirect, "PC").unwrap();
+        let file = dir.join("accounts.json");
+        let accounts = Accounts::open(Some(file.clone()));
+        let mac = adopt(&accounts, "Alex", "correct horse", "Mac");
+        let pc = log_in(&accounts, "Alex", "correct horse", "PC");
         drop(accounts);
         Accounts::forget_owner_password(&file).unwrap();
-        let again = Accounts::open(Some(file), Some(pairing));
-        let mac = again.caller(&mac.access).unwrap();
-        let info = again.info(&mac);
-        assert!(!info.has_password);
-        let names: Vec<&str> = info.devices.iter().map(|d| d.name.as_str()).collect();
-        assert_eq!(
-            names,
-            ["Mac"],
-            "the PC logged in with it, and is logged out"
-        );
+        // Every device that logged in with it is logged out, and the server is adopted again.
+        let again = Accounts::open(Some(file));
+        assert_eq!(again.caller(&mac.access), None);
+        assert_eq!(again.caller(&pc.access), None);
+        assert!(again.adoption_code().is_some());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2161,7 +2050,7 @@ mod tests {
 
     #[test]
     fn changing_the_password_may_log_the_other_devices_out() {
-        let accounts = Accounts::open(None, None);
+        let accounts = Accounts::open(None);
         accounts
             .add_user("Kim", Role::Listener, "correct horse")
             .unwrap();
@@ -2183,7 +2072,7 @@ mod tests {
         let other = accounts.ticket(&accounts.caller(&pad.access).unwrap());
         let ticket = accounts.ticket(&accounts.caller(&phone.access).unwrap());
         accounts
-            .change_password(&ticket, "correct horse", "battery staple", None, true, "")
+            .change_password(&ticket, "correct horse", "battery staple", None, true)
             .unwrap();
         assert!(
             accounts.caller(&phone.access).is_some(),
@@ -2194,14 +2083,14 @@ mod tests {
         assert_eq!(accounts.password_page(&other), None);
         assert!(
             accounts
-                .change_password(&other, "battery staple", "staple battery", None, false, "")
+                .change_password(&other, "battery staple", "staple battery", None, false)
                 .is_err()
         );
     }
 
     #[test]
     fn a_connection_code_is_proved_while_it_lasts() {
-        let accounts = Accounts::open(None, None);
+        let accounts = Accounts::open(None);
         let (nonce, certificate) = ([7; 32], b"the server's certificate".as_slice());
         assert!(
             accounts.prove(&nonce, certificate).is_empty(),
@@ -2259,7 +2148,7 @@ mod tests {
 
     #[test]
     fn a_listener_logs_in_as_a_listener() {
-        let accounts = Accounts::open(None, None);
+        let accounts = Accounts::open(None);
         accounts
             .add_user("Kim", Role::Listener, "correct horse")
             .unwrap();
@@ -2276,11 +2165,8 @@ mod tests {
 
     #[test]
     fn refresh_tokens_change_and_a_copied_one_logs_the_device_out() {
-        let dir = std::env::temp_dir().join(format!("freya-renewing-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let pairing = dir.join("pairing.key");
-        let accounts = Accounts::open(None, Some(pairing.clone()));
-        let first = pair(&accounts, &pairing, "Mac").unwrap();
+        let accounts = Accounts::open(None);
+        let first = adopt(&accounts, "Alex", "correct horse", "Mac");
         let mac = accounts.caller(&first.access).unwrap();
 
         let second = accounts.renew(&first.refresh).unwrap();
@@ -2302,14 +2188,14 @@ mod tests {
         assert_eq!(accounts.renew(&fourth.refresh), None);
 
         // A lost answer is asked again once: twice, the token was copied.
-        let paired = pair(&accounts, &pairing, "Tablet").unwrap();
-        let renewed = accounts.renew(&paired.refresh).unwrap();
-        assert!(accounts.renew(&paired.refresh).is_some());
-        assert_eq!(accounts.renew(&paired.refresh), None);
+        let tablet = log_in(&accounts, "Alex", "correct horse", "Tablet");
+        let renewed = accounts.renew(&tablet.refresh).unwrap();
+        assert!(accounts.renew(&tablet.refresh).is_some());
+        assert_eq!(accounts.renew(&tablet.refresh), None);
         assert_eq!(accounts.caller(&renewed.access), None);
 
         // Forged or ended access tokens are not taken.
-        let fresh = pair(&accounts, &pairing, "Mac").unwrap();
+        let fresh = log_in(&accounts, "Alex", "correct horse", "Mac");
         let (signed, _) = fresh.access.rsplit_once('.').unwrap();
         assert_eq!(
             accounts.caller(&format!("{signed}.{}", "00".repeat(32))),
@@ -2320,6 +2206,5 @@ mod tests {
             accounts.caller(&format!("{id}.1.{}", "00".repeat(32))),
             None
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

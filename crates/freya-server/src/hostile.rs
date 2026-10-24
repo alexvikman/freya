@@ -74,14 +74,13 @@ impl Random {
 }
 
 fn served() -> (Served, Arc<Accounts>) {
-    let accounts = Arc::new(Accounts::open(None, None));
+    let accounts = Arc::new(Accounts::open(None));
     let served = Served {
         library: Arc::new(LocalLibrary::new(
             freya_library::Library::open_in_memory().unwrap(),
             None,
         )),
         server: None,
-        quit: None,
         accounts: Some(Arc::clone(&accounts)),
         certificate: Some(crate::tls::Identity::make().unwrap().certificate),
         callback_port: freya_protocol::CALLBACK_PORT,
@@ -93,7 +92,7 @@ fn served() -> (Served, Arc<Accounts>) {
 /// A request a stranger might send: to a route that is there, or near one, with headers and a
 /// body made up, many of them wrong.
 fn stranger(random: &mut Random) -> Request {
-    const ROUTES: [&str; 22] = [
+    const ROUTES: [&str; 21] = [
         "/claim",
         "/account/users",
         "/account/users/invite",
@@ -113,7 +112,6 @@ fn stranger(random: &mut Random) -> Request {
         "/account/connection-code",
         "/account/revoke",
         "/account/log-out",
-        "/quit",
         "/info",
         "/certificate",
     ];
@@ -190,14 +188,7 @@ fn let_in(request: &Request, response: &Response) -> bool {
     let Some(route) = request.path.strip_prefix(API_PATH) else {
         return false;
     };
-    let open = [
-        "/version",
-        "/certificate",
-        "/pair",
-        "/token",
-        "/enroll",
-        "/claim",
-    ];
+    let open = ["/version", "/certificate", "/token", "/enroll", "/claim"];
     let open = open.contains(&route);
     response.status < 300 && !open
 }

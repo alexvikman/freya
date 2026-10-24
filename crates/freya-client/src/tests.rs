@@ -36,7 +36,6 @@ fn served(name: &str) -> (Server, Arc<dyn LibraryApi>, Arc<dyn LibraryApi>, Path
     let served = Served {
         library: Arc::new(LocalLibrary::new(Library::open(&path).unwrap(), pictures())),
         server: None,
-        quit: None,
         accounts: None,
         certificate: None,
         callback_port: freya_protocol::CALLBACK_PORT,
@@ -179,7 +178,6 @@ fn the_server_is_told_what_to_do_and_tells_what_happens() {
     let served = Served {
         library: service.api(),
         server: Some(Arc::clone(&service) as _),
-        quit: None,
         accounts: None,
         certificate: None,
         callback_port: freya_protocol::CALLBACK_PORT,
@@ -329,7 +327,6 @@ fn answers_kept_are_never_out_of_date() {
     let served = Served {
         library: service.api(),
         server: Some(Arc::clone(&service) as _),
-        quit: None,
         accounts: None,
         certificate: None,
         callback_port: freya_protocol::CALLBACK_PORT,
@@ -507,6 +504,23 @@ impl freya_server::Updating for Offered {
     }
 }
 
+/// The tokens of the admin Alex's device `device`, logged in with their password as the
+/// browser's login does.
+fn logged_in(
+    accounts: &freya_server::accounts::Accounts,
+    device: &str,
+) -> freya_server::accounts::Granted {
+    let (redirect, verifier) = (
+        "http://127.0.0.1:47477/callback",
+        "a secret only the client knows, long enough",
+    );
+    let challenge = freya_server::accounts::challenge(verifier);
+    let code = accounts
+        .grant("Alex", "correct horse", &challenge, redirect, None)
+        .unwrap();
+    accounts.redeem(&code, verifier, redirect, device).unwrap()
+}
+
 #[test]
 fn only_a_device_with_a_token_is_answered() {
     let dir = std::env::temp_dir().join(format!("freya-client-tokens-{}", std::process::id()));
@@ -532,16 +546,16 @@ fn only_a_device_with_a_token_is_answered() {
         ..ServiceConfig::default()
     };
     let service = Arc::new(Service::start(path, None, config).unwrap());
-    let pairing_key = dir.join("pairing.key");
-    let accounts = Arc::new(freya_server::accounts::Accounts::open(
-        Some(dir.join("accounts.json")),
-        Some(pairing_key.clone()),
-    ));
+    let accounts = Arc::new(freya_server::accounts::Accounts::open(Some(
+        dir.join("accounts.json"),
+    )));
+    accounts
+        .add_user("Alex", freya_protocol::Role::Admin, "correct horse")
+        .unwrap();
     let offered = Arc::new(Offered::default());
     let served = Served {
         library: service.api(),
         server: Some(Arc::clone(&service) as _),
-        quit: None,
         accounts: Some(Arc::clone(&accounts)),
         certificate: None,
         callback_port: freya_protocol::CALLBACK_PORT,
@@ -566,13 +580,11 @@ fn only_a_device_with_a_token_is_answered() {
     let audio = agent.get(&audio_url(&address, &track)).call().unwrap();
     assert_eq!(audio.status().as_u16(), 401);
 
-    // Paired with the key in the file, once.
-    let key = std::fs::read_to_string(&pairing_key).unwrap();
-    let token = Http::new(&address).pair(&key, "Mac").unwrap().access;
-    assert!(Http::new(&address).pair(&key, "Mac again").is_err());
+    // Logged in with a password: there is no other way in.
+    let token = logged_in(&accounts, "Mac").access;
     let mac = connect(&address, Some(token.clone()), None);
     assert_eq!(mac.stats().unwrap().tracks, 1);
-    // The owner, an admin, sees the server's update and asks for one.
+    // An admin sees the server's update and asks for one.
     assert_eq!(mac.0.server_update().unwrap().version, "9.0.0");
     mac.0.check_server_update().unwrap();
     assert_eq!(offered.0.load(std::sync::atomic::Ordering::Relaxed), 1);
@@ -589,8 +601,7 @@ fn only_a_device_with_a_token_is_answered() {
     // the server does not take renews and asks again. A refresh token used up, coming again, was
     // copied: the device is logged out.
     let store = TokenStore::new(dir.join("servers.json"), false);
-    let key = std::fs::read_to_string(&pairing_key).unwrap();
-    let tablet = Http::new(&address).pair(&key, "Tablet").unwrap();
+    let tablet = logged_in(&accounts, "Tablet");
     let kept_in = || Some((store.clone(), address.clone()));
     let renewing =
         Remote(Http::new(&address).with_session(tablet.refresh.clone(), None, kept_in()));
@@ -611,28 +622,17 @@ fn only_a_device_with_a_token_is_answered() {
     store.remove(&address);
     assert_eq!(store.get(&address), None);
 
-    // Another device logs in in the browser once the user has a password, set on the page a
-    // ticket opens: without the password now, from the server's own computer.
+    // Another device logs in in the browser, with the password; the page a ticket opens to
+    // change it asks for the one now first.
     let user = mac.0.account().unwrap().unwrap().user;
     let pages = Http::new(&address).pages();
     let login = Login::new("http://127.0.0.1:47477/callback");
-    assert_eq!(log_in(&pages, &login, &user, "correct horse").status, 401);
+    assert_eq!(log_in(&pages, &login, &user, "wrong horse").status, 401);
     let ticket = mac.0.password_ticket().unwrap();
     let page = format!("/web/password?ticket={ticket}");
     let shown = pages.ask("GET", &page, None, Vec::new()).unwrap();
     assert_eq!(shown.status, 200);
-    assert!(!String::from_utf8_lossy(&shown.body).contains(r#"name="current""#));
-    let changed = pages
-        .ask(
-            "POST",
-            "/web/password",
-            Some(FORM),
-            // The owner adopting it from its computer keeps the name they have.
-            format!("ticket={ticket}&username={user}&password=correct+horse&again=correct+horse")
-                .into_bytes(),
-        )
-        .unwrap();
-    assert_eq!(changed.status, 200);
+    assert!(String::from_utf8_lossy(&shown.body).contains(r#"name="current""#));
 
     // The page sends the browser back with a code, which only this login trades for a token,
     // once.
@@ -772,7 +772,6 @@ fn a_server_elsewhere_is_reached_over_tls_with_its_certificate_pinned() {
     let served = Served {
         library: Arc::clone(&local),
         server: None,
-        quit: None,
         accounts: None,
         certificate: Some(identity.certificate.clone()),
         callback_port: freya_protocol::CALLBACK_PORT,
@@ -898,11 +897,10 @@ fn claim(pages: &Pages, login: &Login, ticket: &str, name: &str, password: &str)
 fn a_server_is_adopted_and_joined_with_codes() {
     let (_plain, _remote, local, dir) = served("adopt");
     let identity = freya_server::tls::Identity::make().unwrap();
-    let accounts = Arc::new(freya_server::accounts::Accounts::open(None, None));
+    let accounts = Arc::new(freya_server::accounts::Accounts::open(None));
     let served = Served {
         library: Arc::clone(&local),
         server: None,
-        quit: None,
         accounts: Some(Arc::clone(&accounts)),
         certificate: Some(identity.certificate.clone()),
         callback_port: freya_protocol::CALLBACK_PORT,
@@ -996,11 +994,10 @@ fn a_server_is_adopted_and_joined_with_codes() {
 fn a_new_device_knows_the_server_by_its_connection_code() {
     let (_plain, _remote, local, dir) = served("code");
     let identity = freya_server::tls::Identity::make().unwrap();
-    let accounts = Arc::new(freya_server::accounts::Accounts::open(None, None));
+    let accounts = Arc::new(freya_server::accounts::Accounts::open(None));
     let served = Served {
         library: Arc::clone(&local),
         server: None,
-        quit: None,
         accounts: Some(Arc::clone(&accounts)),
         certificate: Some(identity.certificate.clone()),
         callback_port: freya_protocol::CALLBACK_PORT,
@@ -1053,15 +1050,10 @@ fn a_program_in_the_local_servers_place_is_given_nothing() {
     // This user's server keeps its certificate in their folder; another program listens in its
     // place, with a certificate of its own.
     let ours = freya_server::tls::Identity::make().unwrap();
-    let certificate = dir.join("tls-certificate.der");
-    std::fs::write(&certificate, &ours.certificate).unwrap();
-    let pairing_key = dir.join("pairing.key");
-    std::fs::write(&pairing_key, "the key").unwrap();
     let theirs = freya_server::tls::Identity::make().unwrap();
     let served = Served {
         library: Arc::clone(&local),
         server: None,
-        quit: None,
         accounts: None,
         certificate: Some(theirs.certificate.clone()),
         callback_port: freya_protocol::CALLBACK_PORT,
@@ -1073,18 +1065,12 @@ fn a_program_in_the_local_servers_place_is_given_nothing() {
         theirs.server_config().unwrap(),
     )
     .unwrap();
-    let store = TokenStore::new(dir.join("servers.json"), false);
-    store.set(&format!("http://{}", impostor.address()), "a refresh token");
-    let refused = connect_locally(
-        impostor.address(),
-        &pairing_key,
-        &certificate,
-        &store,
-        "Mac",
-    )
-    .err()
-    .unwrap();
-    assert!(refused.contains("Another program answers"), "{refused}");
+    // Freya there pins the certificate in the server's folder: the program is given nothing.
+    let pin = Pin {
+        address: impostor.address(),
+        certificate: ours.certificate.clone(),
+    };
+    assert!(Http::pinned(pin).version().is_err());
     assert!(!freya_server::tls::answers_as(
         impostor.address(),
         &ours.certificate
@@ -1197,7 +1183,6 @@ fn measure_a_real_library() {
                 .watched_by(open()),
         ),
         server: None,
-        quit: None,
         accounts: None,
         certificate: Some(identity.certificate.clone()),
         callback_port: freya_protocol::CALLBACK_PORT,
@@ -1522,25 +1507,4 @@ fn only_a_server_of_freyas_own_version_is_used() {
     assert!(older.contains("Update Freya Server"), "{older}");
     let newer = same_version("999.0.0").unwrap_err();
     assert!(newer.contains("Update Freya to"), "{newer}");
-}
-
-#[test]
-fn no_server_is_started_where_none_runs() {
-    let address = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap();
-    let dir = std::env::temp_dir().join(format!("freya-none-here-{}", std::process::id()));
-    let store = TokenStore::new(dir.join("servers.json"), false);
-    let refused = connect_locally(
-        address,
-        &dir.join("pairing.key"),
-        &dir.join("certificate.der"),
-        &store,
-        "Mac",
-    )
-    .err()
-    .unwrap();
-    assert_eq!(refused, NOT_RUNNING);
-    let _ = std::fs::remove_dir_all(&dir);
 }

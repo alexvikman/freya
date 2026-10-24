@@ -762,25 +762,6 @@ impl Http {
         read_at_most(answer, MAX_SMALL)
     }
 
-    /// Tokens for this device, named `device`, given the pairing key a client on the server's
-    /// computer reads.
-    pub fn pair(&self, key: &str, device: &str) -> ApiResult<Granted> {
-        // The key is not sent: an HMAC with it over a nonce of this client's.
-        let mut nonce = [0; 32];
-        // The system's randomness failing leaves nothing safe to do.
-        ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut nonce)
-            .expect("the system's random numbers");
-        let signing = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key.trim().as_bytes());
-        let proof = ring::hmac::sign(&signing, &freya_protocol::pairing_message(&nonce, device));
-        let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
-        let asked = serde_json::json!({
-            "nonce": hex(&nonce),
-            "proof": hex(proof.as_ref()),
-            "device": device,
-        });
-        Granted::from_answer(self.send_json("/pair", &asked)?)
-    }
-
     /// Tokens for this device, named `device`, for the code the login page sent `login`'s
     /// browser back with.
     pub fn redeem(&self, login: &Login, code: &str, device: &str) -> ApiResult<Granted> {
@@ -977,12 +958,6 @@ impl Http {
         let answer = self.get("/version").call().map_err(failed)?;
         let version = small_json(answer)?;
         Ok(version["version"].as_str().unwrap_or_default().to_owned())
-    }
-
-    /// Asks the server to stop: one on this computer only.
-    pub fn quit(&self) -> ApiResult<()> {
-        let answer = self.send(|http| http.post("/quit").send_empty())?;
-        small_json(answer).map(drop)
     }
 
     /// The event stream, opened.
@@ -1507,52 +1482,6 @@ fn follow_events(http: &Http, mut stream: ureq::BodyReader<'static>, tell: &Send
     }
 }
 
-/// Freya Server on this computer at `address`, connected to as this device, named `device`,
-/// over TLS with the certificate the server keeps in `certificate`, a file of the user's own:
-/// so a program of another user listening there in the server's place is found out, and given
-/// nothing. Freya never starts or stops a server: one that is not running is said so, and
-/// its version is for the caller to check (see [`same_version`]). A client without a refresh token for it, or with one it no longer
-/// takes, pairs with the key the server keeps in `pairing_key`; the refresh token is kept in
-/// `store`.
-pub fn connect_locally(
-    address: std::net::SocketAddr,
-    pairing_key: &Path,
-    certificate: &Path,
-    store: &TokenStore,
-    device: &str,
-) -> Result<Arc<Remote<Http>>, String> {
-    // Kept by the address it had before it was reached over TLS, so the token stays.
-    let key = format!("http://{address}");
-    if !answers(address) {
-        return Err(NOT_RUNNING.into());
-    }
-    // What answers there without this user's certificate is someone else's, given nothing.
-    let certificate = std::fs::read(certificate).map_err(|_| foreign(address))?;
-    let pin = Pin {
-        address,
-        certificate,
-    };
-    Http::pinned(pin.clone())
-        .version()
-        .map_err(|_| foreign(address))?;
-    let kept = Some((store.clone(), key.clone()));
-    let refresh = store.get(&key).unwrap_or_default();
-    let mut http = Http::pinned(pin.clone()).with_session(refresh, None, kept.clone());
-    if http.account().map_err(|e| e.to_string())?.is_none() {
-        let key_now = std::fs::read_to_string(pairing_key)
-            .map_err(|e| format!("could not read the pairing key: {e}"))?;
-        let granted = Http::pinned(pin.clone())
-            .pair(&key_now, device)
-            .map_err(|e| format!("could not pair with the server: {e}"))?;
-        store.set(&key, &granted.refresh);
-        http = Http::pinned(pin).with_session(granted.refresh.clone(), Some(&granted), kept);
-    }
-    Ok(Arc::new(Remote(http)))
-}
-
-/// Why this computer's server cannot be used when nothing answers in its place.
-pub const NOT_RUNNING: &str = "Freya Server is not running on this computer.";
-
 /// Whether a server of `version` can be used: for now only one of Freya's own version, as
 /// the API still changes between versions. Otherwise, which of the two to update.
 pub fn same_version(version: &str) -> Result<(), String> {
@@ -1569,19 +1498,6 @@ pub fn same_version(version: &str) -> Result<(), String> {
     Err(format!(
         "The server is version {version}, and Freya {ours}. {update}"
     ))
-}
-
-/// What is said of a program answering at `address` that is not this user's server.
-fn foreign(address: std::net::SocketAddr) -> String {
-    format!(
-        "Another program answers at {address} in the place of Freya's server, perhaps another \
-         user's; Freya gives it nothing. Quit it, or log the other user out, and open Freya again."
-    )
-}
-
-/// Whether anything takes connections at `address`.
-fn answers(address: std::net::SocketAddr) -> bool {
-    std::net::TcpStream::connect_timeout(&address, Duration::from_secs(1)).is_ok()
 }
 
 /// Writes `bytes` to `file` through a new file renamed over it, readable and writable by the

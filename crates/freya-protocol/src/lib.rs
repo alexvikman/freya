@@ -17,9 +17,8 @@ pub use scan::*;
 /// Where a server on this computer listens.
 pub const LOCAL_ADDRESS: &str = "127.0.0.1:47474";
 
-/// In the server's folder, which a client on its computer reads: the file the pairing key is
-/// written to, and the server's TLS certificate, in DER, which the client pins.
-pub const PAIRING_KEY: &str = "pairing.key";
+/// In the server's folder, which Freya on its computer reads: the server's TLS certificate,
+/// in DER, which Freya pins.
 pub const CERTIFICATE_FILE: &str = "tls-certificate.der";
 /// In the server's folder while it is not adopted: the code it is adopted with, and until when
 /// it lasts in seconds since 1970, a line each. Freya on the server's computer reads it, so its
