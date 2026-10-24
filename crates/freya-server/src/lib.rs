@@ -21,7 +21,6 @@ mod service;
 pub mod settings;
 #[cfg(windows)]
 pub mod stop;
-pub mod take_in;
 pub mod tls;
 pub mod updates;
 

@@ -27,7 +27,6 @@ const MAX_RETRY: Duration = Duration::from_secs(30 * 60);
 pub const USER_FILE: &str = "lastfm-user";
 pub const QUEUE_FILE: &str = "lastfm-queue.json";
 
-pub use session::file_name as session_file;
 
 /// What tells clients how scrobbling goes, whenever that changes.
 pub type Tell = Arc<dyn Fn(Status) + Send + Sync>;

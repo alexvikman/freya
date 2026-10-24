@@ -7,14 +7,15 @@
 //! `freya-server [--address HOST:PORT] [--data FOLDER] [--forget-password]`, or `--version`.
 //! `--forget-password` forgets the owner's password, with the server stopped, for one who
 //! forgot it to set anew. For Windows' installer, `--stop` stops the user's running server, and
-//! `--forget-login` takes away its starting at login, as it is uninstalled. It keeps its library, pictures,
-//! settings and log in its own folder, the first time taking in what Freya kept in its folder
-//! before the server was its own. It runs until stopped: Ctrl-C, SIGTERM, its menu, or Windows
-//! closing its window. It serves this computer over TLS too, with the certificate Freya here
-//! pins from its folder. One that finds this user's server on its
-//! address already ends at once, and without failing, so what starts it at login does not start
-//! it again and again; one that finds another program there says so, and fails. On macOS it shows an icon in the
-//! menu bar, to open Freya, show the log, or stop it.
+//! `--forget-login` takes away its starting at login, as it is uninstalled.
+//!
+//! It keeps its library, pictures, users, settings and log in a folder of its own, apart from
+//! Freya's. It runs until stopped: Ctrl-C, SIGTERM, its menu, or Windows closing its window. It
+//! serves this computer over TLS too, with the certificate Freya here pins from its folder. One
+//! that finds this user's server on its address already ends at once, and without failing, so
+//! what starts it at login does not start it again and again; one that finds another program
+//! there says so, and fails. On macOS and Windows it shows an icon in the menu bar or the
+//! notification area, to open Freya, show a connection code or the log, or stop it.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -24,7 +25,6 @@ use freya_protocol::{ADOPTION_CODE, NETWORK_PORT, ServerControl};
 use freya_server::accounts::Accounts;
 use freya_server::discovery::Discovery;
 use freya_server::http::Server;
-use freya_server::take_in::{Folders, take_in};
 use freya_server::tls::Identity;
 use freya_server::{LOCAL_ADDRESS, Served, Service, ServiceConfig, admit, handler, settings};
 
@@ -73,9 +73,9 @@ fn main() {
     if stop || forget_login {
         std::process::exit(installing(stop, forget_login));
     }
-    let freya = directories::ProjectDirs::from("", "", "Freya");
-    let Some(data) = data.or_else(|| freya.as_ref().map(|dirs| dirs.data_dir().join("server")))
-    else {
+    // A folder of its own, apart from Freya's: Freya's taken away keeps the library.
+    let own = directories::ProjectDirs::from("", "", freya_protocol::SERVER_APP);
+    let Some(data) = data.or_else(|| own.map(|dirs| dirs.data_dir().to_owned())) else {
         eprintln!("freya-server: no folder to keep the library in");
         std::process::exit(1);
     };
@@ -90,7 +90,7 @@ fn main() {
         std::process::exit(print_adoption_code(&data));
     }
     start_log(&data.join("server.log"));
-    if let Err(e) = run(&address, &data, freya.as_ref()) {
+    if let Err(e) = run(&address, &data) {
         log::error!("{e}");
         eprintln!("freya-server: {e}");
         std::process::exit(1);
@@ -123,7 +123,7 @@ fn exit_code() -> i32 {
     freya_server::updates::EXIT_CODE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> Result<(), String> {
+fn run(address: &str, data: &Path) -> Result<(), String> {
     let identity = Identity::load_or_make(data)?;
     // Before the library is opened: two servers never share it. One already answering with
     // this certificate is this user's, and this one is not needed; another program holding the
@@ -150,15 +150,6 @@ fn run(address: &str, data: &Path, freya: Option<&directories::ProjectDirs>) -> 
     Accounts::readable(&data.join("accounts.json"))?;
     let settings_file = data.join("settings.toml");
     let scrobbles = data.join("lastfm");
-    if let Some(freya) = freya {
-        take_in(&Folders {
-            freya_data: freya.data_dir(),
-            freya_settings: freya.config_dir(),
-            data,
-            settings_file: &settings_file,
-            scrobbles: &scrobbles,
-        });
-    }
     let (settings, damaged) = settings::load(&settings_file);
     let config = ServiceConfig {
         settings,

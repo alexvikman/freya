@@ -171,7 +171,8 @@ Nobody can wear it out before logging in:
   within the track's folder, after links.
 - A scan follows no link out of the folders it walks, so one put in a shared music folder does
   not bring the rest of the computer into the library.
-- The server's folder holds `accounts.json`, `adoption-code` while it is not adopted,
+- The server's folder, its own apart from Freya's (`Freya Server` among the user's
+  application data), holds `accounts.json`, `adoption-code` while it is not adopted,
   `tls-key.pk8`, `tls-certificate.der` and `server.log`, all 0600, written as new files and renamed into place.
   Started at login, the server makes files for the user alone (launchd's `Umask`, systemd's
   `UMask=0077`); on Linux its unit gains no privileges, and seccomp lets it make only a

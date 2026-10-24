@@ -14,6 +14,10 @@ pub use lastfm::*;
 pub use library::*;
 pub use scan::*;
 
+/// What Freya Server's own folders are named after, apart from Freya's: its library, users and
+/// certificate, which Freya on its computer reads the certificate from.
+pub const SERVER_APP: &str = "Freya Server";
+
 /// Where a server on this computer listens.
 pub const LOCAL_ADDRESS: &str = "127.0.0.1:47474";
 

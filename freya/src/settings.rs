@@ -127,6 +127,11 @@ impl Default for Settings {
     }
 }
 
+/// Freya Server's folders, on this computer, apart from Freya's.
+fn server_dirs() -> Option<directories::ProjectDirs> {
+    directories::ProjectDirs::from("", "", freya_protocol::SERVER_APP)
+}
+
 fn dirs() -> Option<directories::ProjectDirs> {
     directories::ProjectDirs::from("", "", "Freya")
 }
@@ -148,21 +153,13 @@ pub fn cache_dir() -> Option<PathBuf> {
 /// The code Freya Server on this computer is adopted with, in its folder while it is not
 /// adopted yet: readable by its user alone, as Freya here is.
 pub fn adoption_code_path() -> Option<PathBuf> {
-    dirs().map(|d| {
-        d.data_dir()
-            .join("server")
-            .join(freya_protocol::ADOPTION_CODE)
-    })
+    server_dirs().map(|d| d.data_dir().join(freya_protocol::ADOPTION_CODE))
 }
 
 /// The certificate Freya's server on this computer keeps in its folder, which the client here
 /// pins.
 pub fn server_certificate_path() -> Option<PathBuf> {
-    dirs().map(|d| {
-        d.data_dir()
-            .join("server")
-            .join(freya_protocol::CERTIFICATE_FILE)
-    })
+    server_dirs().map(|d| d.data_dir().join(freya_protocol::CERTIFICATE_FILE))
 }
 
 /// Where this computer keeps the refresh tokens servers gave it, by their address: the
