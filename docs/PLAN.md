@@ -219,6 +219,27 @@ network); users are invited with a one-time code, so the owner never knows their
 | **B1** ✓ | **Adopting**: a server whose owner has no password is not adopted yet. A device that typed its connection code proves it knows it too, and the server's page in the browser lets it choose the owner's name and password, logging it in as the owner. On the server's own computer, choosing the password chooses the name too. Without a screen, `freya-server --code` shows the code a server not adopted keeps | A Mac mini that only serves is adopted from another computer |
 | **B2** ✓ | **Users**: the owner, and any admin, adds a user as an admin or a listener and is given a one-time code for them, lasting a week. Typed on the user's computer, the code proves the server, as a connection code does, and opens a page where the user chooses their password. Users are listed with their devices, invited again with a new code, and removed with their devices | A listener joins from their own computer without the owner knowing their password |
 
+### Two packages: Freya and Freya Server (from 2026-10-24)
+
+Until now one package carried both programs, and Freya started `freya-server` from beside
+itself, quit a server of another version and started its own, and registered it to start at
+login. Decided with the user, as with servers of this kind: two packages, Freya and Freya
+Server. Freya does nothing without a server: connecting to one is the first thing it asks,
+in a welcome view, whether the server is on this computer or another. Freya Server runs a
+library on a computer with or without a screen, as on a Mac mini that only serves. Both on
+one computer are installed as two.
+
+The API still changes from version to version, so for now Freya and its server are of the
+same version; once the API is stable, they are to work across versions. Nothing is carried
+over from the single package: 0.3 is uninstalled, and the next version comes split. Updates
+are never installed by themselves, the server's no more than Freya's.
+
+| # | Milestone | Done when |
+|---|---|---|
+| **D1** | **Freya connects first**: a welcome view on the first start, and whenever no server is chosen: this computer's server when one answers, the servers found on the network, or one typed in, with its connection code; nothing in Freya works before. Freya never starts, quits or replaces a server; one of another version is refused with which side to update; why a server cannot be reached shows in the Server tab and the welcome view, not only in the log | Freya with no server shows only the welcome view, and gets to the library of a server here or elsewhere through it |
+| **D2** | **Freya Server on its own**: it registers itself to start at login (launchd, systemd user unit, Run entry), switched on and off in its own menu; a menu bar icon on macOS as now, and the same in the notification area on Windows; "Open Freya" only when Freya is installed; it finds its own updates with the signed updater and installs them when its owner says so, in its menu or from Freya's Server tab | Freya Server installed alone starts at login, is adopted from another computer, and updates itself when told to |
+| **D3** | **Packages and releases**: `Freya-*` and `FreyaServer-*` for each system (`.app`/`.dmg`, `.msi`, `.deb`/`.AppImage`), built, smoke-tested and signed by the release workflow under one `SHA256SUMS`; Windows' installer closes the server through its window, as it does Freya; the release notes say to uninstall 0.3 first | A release publishes both, and each installs, upgrades and uninstalls without the other |
+
 ### Speed between server and client (from 2026-10-22)
 
 Measured on the dev library (7,832 tracks, 782 albums) over TLS with a delay each way: every
