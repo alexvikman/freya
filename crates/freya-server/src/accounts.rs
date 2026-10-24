@@ -440,8 +440,17 @@ impl Accounts {
         if unhex(&kept.secret).is_none_or(|secret| secret.len() < 32) {
             kept.secret = random_hex(32);
         }
-        // A device paired on the server's computer, as until 0.3, logged in without a password.
-        kept.devices.retain(|d| d.joined != Some(Joined::Paired));
+        // Only a device that logged in with a password, of a user who has one, stays: one paired
+        // on the server's computer, as until 0.3, or from before how it joined was kept, logged in
+        // without one.
+        let with_password: HashSet<u32> = kept
+            .users
+            .iter()
+            .filter(|u| u.password.is_some())
+            .map(|u| u.id)
+            .collect();
+        kept.devices
+            .retain(|d| d.joined == Some(Joined::LoggedIn) && with_password.contains(&d.user));
         let accounts = Self {
             file,
             kept: Mutex::new(kept),
@@ -1873,13 +1882,21 @@ mod tests {
         assert_eq!(again.info(&mac).devices.len(), 1);
         drop(again);
 
-        // A device paired on the server's computer, as until 0.3, logged in without a password:
-        // logged out as the server starts.
+        // A device paired on the server's computer, as until 0.3, or from before how it joined
+        // was kept, logged in without a password: logged out as the server starts.
         let kept = std::fs::read_to_string(&file).unwrap();
         assert!(kept.contains("\"logged-in\""));
-        std::fs::write(&file, kept.replace("\"logged-in\"", "\"paired\"")).unwrap();
+        for old in ["\"paired\"", "null"] {
+            std::fs::write(&file, kept.replace("\"logged-in\"", old)).unwrap();
+            let again = Accounts::open(Some(file.clone()));
+            assert_eq!(again.caller(&first.access), None, "joined {old}");
+        }
+        // So is one of a user without a password, as an owner's whose was forgotten in the file.
+        let mut without: serde_json::Value = serde_json::from_str(&kept).unwrap();
+        without["users"][0]["password"] = serde_json::Value::Null;
+        std::fs::write(&file, without.to_string()).unwrap();
         let again = Accounts::open(Some(file.clone()));
-        assert_eq!(again.caller(&first.access), None);
+        assert_eq!(again.caller(&first.access), None, "no password");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
