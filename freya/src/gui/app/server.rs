@@ -34,18 +34,6 @@ impl App {
             self.playlists
                 .connect(Arc::clone(&connected.server), connected.playlists);
             self.lastfm.use_server(connected.server, connected.lastfm);
-            // The server's settings, as the settings page shows them.
-            if let Some(server) = self.library.server_settings().cloned() {
-                let settings = &mut self.settings;
-                settings.library_folders = server.library_folders;
-                settings.watch_folders = server.watch_folders;
-                settings.scan_every_hours = server.scan_every_hours;
-                settings.scan_at_start = server.scan_at_start;
-                settings.artist_pictures_online = server.artist_pictures_online;
-                settings.artist_bios_online = server.artist_bios_online;
-                settings.artist_wikipedia_online = server.artist_wikipedia_online;
-                settings.fanart_key = server.fanart_key;
-            }
         }
     }
 
@@ -140,23 +128,9 @@ impl App {
         self.attach_library();
     }
 
-    pub fn add_library_folder(&mut self, folder: PathBuf) {
-        if add_folder(&mut self.settings.library_folders, folder.clone()) {
-            self.library
-                .scan_added(&self.settings.library_folders, vec![folder]);
-        }
-    }
-
-    pub fn remove_library_folder(&mut self, index: usize) {
-        if index < self.settings.library_folders.len() {
-            self.settings.library_folders.remove(index);
-            self.library.rescan(&self.settings.library_folders);
-        }
-    }
-
     /// Starts editing the library folders, from those in use.
     pub fn edit_folders(&mut self) {
-        self.folders_draft = Some(self.settings.library_folders.clone());
+        self.folders_draft = Some(self.library.folders());
     }
 
     pub fn add_draft_folder(&mut self, folder: PathBuf) {
@@ -178,15 +152,14 @@ impl App {
         let Some(draft) = self.folders_draft.take() else {
             return;
         };
-        if draft != self.settings.library_folders {
-            let before = std::mem::replace(&mut self.settings.library_folders, draft);
-            let folders = &self.settings.library_folders;
+        let before = self.library.folders();
+        if draft != before {
             // Only new folders are read; one taken away needs every folder looked over.
-            if before.iter().all(|f| folders.contains(f)) {
-                let added = folders.iter().filter(|f| !before.contains(f)).cloned();
-                self.library.scan_added(folders, added.collect());
+            if before.iter().all(|f| draft.contains(f)) {
+                let added = draft.iter().filter(|f| !before.contains(f)).cloned();
+                self.library.scan_added(&draft, added.collect());
             } else {
-                self.library.rescan(folders);
+                self.library.rescan(&draft);
             }
         }
     }

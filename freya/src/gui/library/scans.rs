@@ -4,6 +4,11 @@ use super::*;
 
 impl LibraryPanel {
     /// The library's folders now: those watched, and scanned later.
+    /// The music folders, as the server keeps them; none before it is reached.
+    pub fn folders(&self) -> Vec<PathBuf> {
+        self.settings.library_folders.clone()
+    }
+
     pub fn set_folders(&mut self, folders: &[PathBuf]) {
         if self.settings.library_folders != folders {
             self.settings.library_folders = folders.to_vec();

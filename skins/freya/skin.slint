@@ -3324,6 +3324,8 @@ component LibraryPanel inherits FocusScope {
     callback edit-genre();
     /// Show another view: the playlist just made.
     callback show-view(string);
+    /// The dialog for the library's folders, among the server's.
+    callback manage-folders();
     /// Settings, on the Server tab.
     callback show-server();
 
@@ -4261,7 +4263,7 @@ component LibraryPanel inherits FocusScope {
 
             TextButton {
                 text: "Add music folder…";
-                clicked => { Library.add-folder(); }
+                clicked => { root.manage-folders(); }
             }
         }
     }
@@ -9542,6 +9544,7 @@ export component FreyaSkin inherits Window {
                                 }
                                 show-view(view) => { root.show(view); }
                                 show-server => { root.show-server(); }
+                                manage-folders => { root.manage-folders(); }
                             }
                             if root.view == "playlist": PlaylistView {
                                 width: 100%;

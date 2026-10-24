@@ -158,15 +158,6 @@ fn pick_folder() -> Option<Vec<PathBuf>> {
         .map(|p| vec![p])
 }
 
-/// Starts in the user's music folder, where the music usually is.
-fn pick_music_folder() -> Option<Vec<PathBuf>> {
-    let mut dialog = rfd::FileDialog::new().set_title("Add music folder");
-    if let Some(music) = directories::UserDirs::new().and_then(|d| d.audio_dir().map(Into::into)) {
-        dialog = dialog.set_directory::<PathBuf>(music);
-    }
-    dialog.pick_folder().map(|p| vec![p])
-}
-
 fn pick_playlist() -> Option<Vec<PathBuf>> {
     rfd::FileDialog::new()
         .set_title("Load playlist")

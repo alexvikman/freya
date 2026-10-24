@@ -223,7 +223,6 @@ pub(super) fn bind(b: &Binder) {
         "set-artist-bios-online",
         Box::new(|app, args| {
             if let Some(Value::Bool(online)) = args.first() {
-                app.settings.artist_bios_online = *online;
                 app.library.set_online_bios(*online);
             }
         }),
@@ -233,7 +232,6 @@ pub(super) fn bind(b: &Binder) {
         "set-artist-wikipedia-online",
         Box::new(|app, args| {
             if let Some(Value::Bool(online)) = args.first() {
-                app.settings.artist_wikipedia_online = *online;
                 app.library.set_online_wikipedia(*online);
             }
         }),
@@ -406,7 +404,6 @@ pub(super) fn bind(b: &Binder) {
         Box::new(|app, args| {
             if let Some(Value::String(key)) = args.first() {
                 let key = Some(key.trim().to_owned()).filter(|k| !k.is_empty());
-                app.settings.fanart_key.clone_from(&key);
                 app.library.set_fanart_key(key);
             }
         }),
@@ -416,7 +413,6 @@ pub(super) fn bind(b: &Binder) {
         "set-watch-folders",
         Box::new(|app, args| {
             if let Some(Value::Bool(watch)) = args.first() {
-                app.settings.watch_folders = *watch;
                 app.library.set_watch_folders(*watch);
             }
         }),
@@ -426,7 +422,6 @@ pub(super) fn bind(b: &Binder) {
         "set-scan-every-hours",
         Box::new(|app, args| {
             let hours = index(args, 0) as u32;
-            app.settings.scan_every_hours = hours;
             app.library.set_scan_every_hours(hours);
         }),
     );
@@ -435,7 +430,6 @@ pub(super) fn bind(b: &Binder) {
         "set-scan-at-start",
         Box::new(|app, args| {
             if let Some(Value::Bool(scan)) = args.first() {
-                app.settings.scan_at_start = *scan;
                 app.library.set_scan_at_start(*scan);
             }
         }),
@@ -445,7 +439,6 @@ pub(super) fn bind(b: &Binder) {
         "set-artist-pictures-online",
         Box::new(|app, args| {
             if let Some(Value::Bool(online)) = args.first() {
-                app.settings.artist_pictures_online = *online;
                 app.library.set_online_pictures(*online);
             }
         }),
@@ -475,30 +468,10 @@ pub(super) fn bind(b: &Binder) {
         };
         Value::Image(image)
     });
-    b.dialog("Library", "add-folder", pick_music_folder, |app, paths| {
-        for path in paths {
-            app.add_library_folder(path);
-        }
-    });
-    b.bind(
-        "Library",
-        "remove-folder",
-        Box::new(|app, args| app.remove_library_folder(index(args, 0))),
-    );
     b.bind(
         "Library",
         "edit-folders",
         Box::new(|app, _| app.edit_folders()),
-    );
-    b.dialog(
-        "Library",
-        "add-draft-folder",
-        pick_music_folder,
-        |app, paths| {
-            for path in paths {
-                app.add_draft_folder(path);
-            }
-        },
     );
     b.bind(
         "Library",
@@ -514,7 +487,7 @@ pub(super) fn bind(b: &Binder) {
         "Library",
         "rescan",
         Box::new(|app, _| {
-            let folders = app.settings.library_folders.clone();
+            let folders = app.library.folders();
             app.library.rescan(&folders);
         }),
     );
@@ -522,7 +495,7 @@ pub(super) fn bind(b: &Binder) {
         "Library",
         "rescan-files",
         Box::new(|app, _| {
-            let folders = app.settings.library_folders.clone();
+            let folders = app.library.folders();
             app.library.rescan_files(&folders);
         }),
     );
@@ -530,7 +503,7 @@ pub(super) fn bind(b: &Binder) {
         "Library",
         "scan-one-folder",
         Box::new(|app, args| {
-            let folders = app.settings.library_folders.clone();
+            let folders = app.library.folders();
             app.library.scan_folder(&folders, index(args, 0));
         }),
     );

@@ -1257,10 +1257,7 @@ skin_api! {
         Library."open-playing-artist" => on_open_playing_artist, invoke_open_playing_artist();
         Library."open-playing-album" => on_open_playing_album, invoke_open_playing_album();
         Library."set-album-view" => on_set_album_view, invoke_set_album_view(view: SharedString);
-        Library."add-folder" => on_add_folder, invoke_add_folder();
-        Library."remove-folder" => on_remove_folder, invoke_remove_folder(index: i32);
         Library."edit-folders" => on_edit_folders, invoke_edit_folders();
-        Library."add-draft-folder" => on_add_draft_folder, invoke_add_draft_folder();
         Library."remove-draft-folder" => on_remove_draft_folder, invoke_remove_draft_folder(index: i32);
         Library."save-folders" => on_save_folders, invoke_save_folders();
         Library."rescan" => on_rescan, invoke_rescan();

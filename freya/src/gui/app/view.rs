@@ -79,11 +79,9 @@ impl App {
                 .filter(|_| status.state != PlaybackState::Stopped)
                 .map(|track| (track.path.as_path(), track.start));
             self.library.set_playing(playing);
-            self.library.show_folders(
-                ui,
-                &self.settings.library_folders,
-                self.folders_draft.as_deref(),
-            );
+            let folders = self.library.folders();
+            self.library
+                .show_folders(ui, &folders, self.folders_draft.as_deref());
             view.library_out.write(ui, self.library.values());
         }
         if view.playlists_out.available {

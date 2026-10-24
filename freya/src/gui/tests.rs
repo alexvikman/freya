@@ -392,7 +392,9 @@ export component W inherits Window { Text { text: Player.title; } }
     for name in ["sine.mp3", "sine.flac", "mono-22k.wav"] {
         std::fs::copy(fixture(name), music.join(name)).unwrap();
     }
-    app.borrow_mut().add_library_folder(music.clone());
+    call(&ui, "Library", "edit-folders", &[]);
+    app.borrow_mut().add_draft_folder(music.clone());
+    call(&ui, "Library", "save-folders", &[]);
     wait_for_scan(&app);
     assert_eq!(library_titles(&ui), ["Freya", "Unknown artist"]);
     assert_eq!(global(&ui, "Library", "status"), text("3 tracks · 1 album"));
@@ -555,10 +557,12 @@ export component W inherits Window { Text { text: Player.title; } }
     assert_eq!(count(&ui, "playlists"), 1);
     call(&ui, "Player", "stop", &[]);
 
-    call(&ui, "Library", "remove-folder", &[num(0.0)]);
+    call(&ui, "Library", "edit-folders", &[]);
+    call(&ui, "Library", "remove-draft-folder", &[num(0.0)]);
+    call(&ui, "Library", "save-folders", &[]);
     wait_for_scan(&app);
     assert!(library_titles(&ui).is_empty());
-    assert!(app.borrow().settings.library_folders.is_empty());
+    assert!(app.borrow().library.folders().is_empty());
     let _ = std::fs::remove_dir_all(&music);
 
     // Internet radio: a station playlist is fetched, and its station plays live.
@@ -856,7 +860,9 @@ fn library_folders_change_only_when_saved() {
     for dir in [&a, &b] {
         std::fs::create_dir_all(dir).unwrap();
     }
-    app.borrow_mut().settings.library_folders = vec![a.clone()];
+    app.borrow_mut()
+        .library
+        .set_folders(std::slice::from_ref(&a));
     app.borrow_mut().refresh();
 
     // Edited and cancelled: nothing changes, and the next edit starts from what is in use.
@@ -865,10 +871,7 @@ fn library_folders_change_only_when_saved() {
     call(&ui, "Library", "remove-draft-folder", &[num(0.0)]);
     app.borrow_mut().refresh();
     assert_eq!(string_list(&ui, "Library", "folders-draft").len(), 1);
-    assert_eq!(
-        app.borrow().settings.library_folders,
-        std::slice::from_ref(&a)
-    );
+    assert_eq!(app.borrow().library.folders(), std::slice::from_ref(&a));
     call(&ui, "Library", "edit-folders", &[]);
     app.borrow_mut().refresh();
     assert_eq!(
@@ -881,7 +884,7 @@ fn library_folders_change_only_when_saved() {
     app.borrow_mut().add_draft_folder(b.clone());
     call(&ui, "Library", "save-folders", &[]);
     app.borrow_mut().refresh();
-    assert_eq!(app.borrow().settings.library_folders, [a, b]);
+    assert_eq!(app.borrow().library.folders(), [a, b]);
     assert_eq!(string_list(&ui, "Library", "folders").len(), 2);
     assert!(app.borrow().folders_draft.is_none());
 }
@@ -982,7 +985,6 @@ fn artist_order_view_and_pictures_are_kept_in_the_settings() {
     let settings = &app.borrow().settings;
     assert_eq!(settings.artist_sort, "most-played");
     assert_eq!(settings.artist_view, "list");
-    assert!(!settings.artist_pictures_online);
     assert_eq!(global(&ui, "Library", "artist-sort"), text("most-played"));
     assert_eq!(
         global(&ui, "Library", "artist-pictures-online"),

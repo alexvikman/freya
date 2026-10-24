@@ -187,7 +187,7 @@ The user's music, read from the folders they chose, browsed in four sections (ar
 | `play(row)`, `enqueue(row)` | Play, or add to the end of the playlist, everything a row stands for: all of an artist's, album's or genre's tracks |
 | `play-all()`, `enqueue-all()` | The same for every row shown |
 | `back()` | Back the way the user came (an album opened from a genre goes back to the genre), or out of a search |
-| `add-folder()`, `remove-folder(index)`, `rescan()` | Freya asks for the folder itself |
+| `edit-folders()`, `remove-draft-folder(index)`, `save-folders()`, `rescan()` | The music folders, edited in `folders-draft` and put in use when saved; folders are added among the server's, with `Server.browse-add`, wherever the server runs |
 
 A search field:
 
@@ -371,7 +371,7 @@ Her poses are pictures in `assets/hologram/` (JPEG or PNG, built into Freya), sh
 | `minimize-window()`, `toggle-maximize-window()`, `close-window()` | The window buttons, for a skin that draws them; closing quits Freya |
 | `open-link(name)` | Opens one of Freya's own pages in the browser: "github", "releases", "server" (where Freya Server is downloaded), "issues", "license", or "licenses", the third-party licenses built into Freya; or "fanart-key", fanart.tv's page for a personal API key. Other names are ignored: a skin cannot open other addresses |
 
-A settings page in a skin can be built from what the API already offers: `App.set-theme`, `App.show-skins`, the library's `folders`, `add-folder`, `remove-folder(index)` and `rescan`, the visualizer's `set-mode` and `set-fps`, and `Updates`. The built-in skin opens its Settings and About views from the "⋯" menu at the top right (Cmd+, or Ctrl+, opens Settings).
+A settings page in a skin can be built from what the API already offers: `App.set-theme`, `App.show-skins`, the library's `folders`, `edit-folders`, `save-folders` and `rescan` with `Server`'s folder browsing, the visualizer's `set-mode` and `set-fps`, and `Updates`. The built-in skin opens its Settings and About views from the "⋯" menu at the top right (Cmd+, or Ctrl+, opens Settings).
 
 #### Drawing into the title bar
 
@@ -460,7 +460,7 @@ The server that keeps the library: Freya Server on this computer, or on another 
 | `set-network(on)`, `set-server-name(name)` | For the server on this computer |
 | `set-start-at-login(on)` | Whether the server starts when its user logs in |
 | `check-update()`, `install-update()` | Has the server look for an update now, or install the one available, for an admin |
-| `browse-start()`, `browse-into(index)`, `browse-up()`, `browse-add()`, `browse-cancel()` | Choosing a music folder among a server's on another computer: `browsing`, `browse-folder` ("" where to start: the home folder and the drives) and `browse-folders` say what is shown; `browse-add` adds the folder shown to `Library.folders-draft` |
+| `browse-start()`, `browse-into(index)`, `browse-up()`, `browse-add()`, `browse-cancel()` | Choosing a music folder among the server's, wherever it runs: `browsing`, `browse-folder` ("" where to start: the home folder and the drives) and `browse-folders` say what is shown; `browse-add` adds the folder shown to `Library.folders-draft` |
 
 ### `Updates`
 

@@ -708,14 +708,6 @@ fn configure_library(library: &mut LibraryPanel, settings: &Settings) {
     library.set_artist_list(settings.artist_view == "list");
     library.set_albums_order(&settings.albums_sort);
     library.set_playlists_order(&settings.playlists_sort);
-    library.set_online_pictures(settings.artist_pictures_online);
-    library.set_online_bios(settings.artist_bios_online);
-    library.set_online_wikipedia(settings.artist_wikipedia_online);
-    library.set_fanart_key(settings.fanart_key.clone());
-    library.set_folders(&settings.library_folders);
-    library.set_watch_folders(settings.watch_folders);
-    library.set_scan_every_hours(settings.scan_every_hours);
-    library.set_scan_at_start(settings.scan_at_start);
 }
 
 /// What the player plays for a playlist entry: its file, or for a track of a CUE sheet, the

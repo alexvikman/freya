@@ -28,8 +28,6 @@ pub struct Settings {
     /// Visualization frames per second. Every frame redraws the whole window, so this is the
     /// main cost of visualization: about 6 % CPU at 30 and 11 % at 60 on an M-series MacBook.
     pub visualizer_fps: u32,
-    /// Folders the library is made from.
-    pub library_folders: Vec<PathBuf>,
     pub equalizer: EqualizerSettings,
     /// Whether Freya looks for updates on its own, at launch and once a day.
     pub check_for_updates: bool,
@@ -37,8 +35,7 @@ pub struct Settings {
     pub last_update_check: Option<u64>,
     /// A version the user does not want offered again.
     pub skipped_update: Option<String>,
-    /// Set when settings.toml could not be read as a whole: the fields that could be are kept,
-    /// and the library is not brought in line with a folder list that may be missing.
+    /// Set when settings.toml could not be read as a whole: the fields that could be are kept.
     #[serde(skip)]
     pub damaged: bool,
     /// The Last.fm user Freya scrobbles for; their session key is kept apart (see
@@ -58,23 +55,6 @@ pub struct Settings {
     pub playlists_sort: String,
     /// How the artists are shown: "grid" (pictures) or "list".
     pub artist_view: String,
-    /// Whether pictures of artists without one of their own come from Deezer, which is told
-    /// the artists' names.
-    pub artist_pictures_online: bool,
-    /// Whether artists' pages show what Last.fm says of them, which is told their names.
-    pub artist_bios_online: bool,
-    /// Whether they show the opening of their Wikipedia article, found by their MusicBrainz id.
-    pub artist_wikipedia_online: bool,
-    /// The user's personal fanart.tv API key, for wide pictures across artists' pages.
-    pub fanart_key: Option<String>,
-    /// Whether the music folders are watched, and what changes in them scanned at once.
-    pub watch_folders: bool,
-    /// How often the whole library is scanned, in hours, for what watching misses, as on
-    /// network drives; 0 for never.
-    pub scan_every_hours: u32,
-    /// Whether the whole library is scanned each time Freya starts; it is the first time
-    /// anyway.
-    pub scan_at_start: bool,
     /// The server on another computer the library is on.
     pub server: Option<SavedServer>,
     /// Whose library Up Next was saved from: the certificate of the server elsewhere, in hex,
@@ -128,7 +108,6 @@ impl Default for Settings {
             equalizer_visible: false,
             visualizer_mode: "spectrum".to_owned(),
             visualizer_fps: 30,
-            library_folders: Vec::new(),
             equalizer: EqualizerSettings::default(),
             check_for_updates: true,
             last_update_check: None,
@@ -141,13 +120,6 @@ impl Default for Settings {
             albums_sort: "added".to_owned(),
             playlists_sort: "added".to_owned(),
             artist_view: "grid".to_owned(),
-            artist_pictures_online: true,
-            artist_bios_online: true,
-            artist_wikipedia_online: true,
-            fanart_key: None,
-            watch_folders: true,
-            scan_every_hours: 24,
-            scan_at_start: false,
             server: None,
             queue_from: None,
             damaged: false,
@@ -319,7 +291,7 @@ mod tests {
 
     #[test]
     fn a_bad_field_costs_only_itself() {
-        let text = "volume = 0.5\nvisualizer_fps = 60.0\nlibrary_folders = [\"/music\"]\n";
+        let text = "volume = 0.5\nvisualizer_fps = 60.0\nartist_sort = \"most-played\"\n";
         let settings = Settings::parse(text);
         assert!(settings.damaged);
         assert_eq!(settings.volume, 0.5);
@@ -327,14 +299,14 @@ mod tests {
             settings.visualizer_fps, 30,
             "the bad field takes its default"
         );
-        assert_eq!(settings.library_folders, [PathBuf::from("/music")]);
+        assert_eq!(settings.artist_sort, "most-played");
     }
 
     #[test]
     fn a_broken_file_is_marked_damaged() {
-        let settings = Settings::parse("volume = 0.5\nlibrary_folders = [\"/mus");
+        let settings = Settings::parse("volume = 0.5\nartist_sort = [\"most");
         assert!(settings.damaged);
-        assert!(settings.library_folders.is_empty());
+        assert_eq!(settings.artist_sort, Settings::default().artist_sort);
         assert!(!Settings::parse("volume = 0.5\n").damaged);
     }
 
