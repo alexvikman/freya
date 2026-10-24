@@ -433,10 +433,10 @@ The server that keeps the library: Freya Server on this computer, or on another 
 | `start-at-login` | bool | Whether the server starts when its user logs in to its computer |
 | `update-state`, `update-version`, `update-current`, `update-progress`, `update-error`, `update-can-install` | string, string, string, float, string, bool | Updating the server, for an admin: "" while unknown, "idle", "checking", "up-to-date", "available", "downloading", "installed" (it restarts into it) or "failed"; the version available and the running one; 0 to 1 while downloading; why it failed; whether it installs itself, or `install-update()` opens its page |
 | `user`, `has-password` | string, bool | The account this computer is connected to, and whether it has a password; only then can other computers log in |
-| `devices` | [`ServerDevice`] | The devices connected to the account: `id`, `name`, `connected` and `used` (dates; `used` is "" when not known), `joined` ("paired" on the server's own computer, "logged-in" in the browser, or ""), `this` |
+| `devices` | [`ServerDevice`] | The devices connected to the account: `id`, `name`, `connected` and `used` (dates; `used` is "" when not known), `joined` ("logged-in" in the browser, or "" for a device from before it was kept), `this` |
 | `password-waiting`, `password-error` | bool, string | While the page the password is set or changed on is open in the browser; why it could not be opened |
 | `finding`, `found` | bool, [`FoundServer`] | While looking for servers on the network, and those that answered: `name`, `address`, `fingerprint` |
-| `logging-in`, `login-address`, `login-fingerprint`, `login-busy`, `login-waiting`, `login-error` | | While logging in to a server chosen: where it is, its certificate's fingerprint, whether Freya is asking it now, whether its login page is open in the browser, and what went wrong |
+| `logging-in`, `login-name`, `login-address`, `login-fingerprint`, `login-busy`, `login-waiting`, `login-error` | | While logging in to a server chosen: what it is called, where it is, its certificate's fingerprint, whether Freya is asking it now, whether its login page is open in the browser, and what went wrong |
 | `login-verified` | bool | Whether the server chosen proved it knows the connection code, or is the one this computer used before: only then can it be logged in to |
 | `connection-code-error` | string | Why no connection code could be shown; "" otherwise |
 | `connection-code`, `connection-code-until` | string | On the server's computer: the connection code shown for a new device ("K7Q2M-9XD4T") and until when it works ("20:31"); "" when none is |
@@ -452,7 +452,7 @@ The server that keeps the library: Freya Server on this computer, or on another 
 | `verify-code(code)` | Checks the connection code typed with the server chosen; `login-verified` turns on when it matches |
 | `show-connection-code()` | On the server's computer: shows a new connection code, in place of any before |
 | `log-in()`, `cancel-login()` | Opens the server's login page in the browser, where a password manager fills it in, or, as `login-kind` says, the page adopting or joining the server; once the user is done there, the library is that server's |
-| `use-this-computer()` | The library is Freya Server's on this computer |
+| `use-this-computer()` | Logs in to Freya Server on this computer as to any server, without a code: adopting it first while nobody has. `logging-in` and the rest follow as for a server chosen |
 | `change-password()` | Opens the page the password is set or changed on in the browser; for the owner of a server not adopted yet, the name too, adopting it |
 | `revoke(id)` | Takes a device's token back: it has to log in again |
 | `log-out()` | Logs this computer out of the server elsewhere: the server takes its token back, and no server is chosen until one is again |

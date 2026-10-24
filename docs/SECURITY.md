@@ -53,17 +53,18 @@ files, and with them Freya's.
 
 - **Users belong to the server**: they are kept in its `accounts.json`, with no account
   anywhere else. It starts with its owner, an admin, named after the system's user it runs as
-  and without a password: not adopted yet.
-- **Adopting** it is choosing the owner's name and password. On the server's own computer, the
-  device paired there does so on the password page. From another computer, the device types
-  the connection code, as any new device does, and also proves to the server that it knows
-  it, with an HMAC under the same key over a message of its own (`/claim`, asked as often as
+  and without a password: not adopted yet. Freya uses no server before it is adopted, on its
+  own computer neither.
+- **Adopting** it is choosing the owner's name and password, from any computer alike: the
+  device knows the connection code, as any new device does, and also proves to the server
+  that it knows it, with an HMAC under the same key over a message of its own (`/claim`, asked as often as
   proofs are); only then, and only while nobody has adopted the server, is it given a ticket
   for the page that adopts it. Anyone on the network can reach an unadopted server, but only
   someone who sees its computer's code can own it. A server not adopted keeps a connection
-  code, a new one every ten minutes, written to a file only its user reads, for
-  `freya-server --code` on a server without a screen; the log says where it is, never what
-  it is.
+  code, a new one every ten minutes, written to a file only its user reads (`adoption-code`,
+  0600): Freya on the server's own computer reads it there, with the server's certificate,
+  so its user types no code; `freya-server --code` shows it on a server without a screen; the
+  log says where it is, never what it is.
 - **Inviting** a user, which admins alone may do, gives a one-time code lasting a week, kept
   by the server only as its key (PBKDF2, as a connection code's). Typed on the user's
   computer, it proves the server, and the device proving it knows it too is given a ticket for
@@ -75,18 +76,18 @@ files, and with them Freya's.
   longer than the invitation it was proved with, and adopting is checked again as it is
   written, so two devices do not both adopt. Removing a user takes their devices, invitation and tickets away,
   and no id is given twice. The owner is neither invited again nor removed (their password is
-  reset on the server's computer), and only the owner invites another admin again or removes
+  forgotten on the server's computer, `freya-server --forget-password`, which logs all their
+  devices out, and the server is adopted again), and only the owner invites another admin again or removes
   one, so no admin takes the owner's or another admin's account.
 - The server proves itself with each code it knows at once, so a device on the network learns
   how many invitations are pending, nothing more.
 
 ## Logging in
 
-- **On the same computer**, the client pairs with the pairing key the server writes to a file
-  only the user can read (`pairing.key`, 0600), made anew when used. The key is never sent: an
-  HMAC with it over a nonce is. A wrong one changes nothing and holds the answer up a tenth of
-  a second.
-- **Elsewhere**, in the browser, so a password manager fills it in: OAuth 2.0's authorization
+- **Only with a password**, on the server's own computer as on any other: there is no other
+  way in. Devices paired with a key in the server's folder, as until 0.3, logged in without
+  one, and are logged out as the server starts; the key's file goes.
+- **In the browser**, so a password manager fills it in: OAuth 2.0's authorization
   code with PKCE (S256). Freya opens the server's login page through a proxy on
   `http://127.0.0.1:47477`, which carries it to the server over the pinned connection. The page
   sends the browser back to `http://127.0.0.1:47477/callback`, the only place a code is sent,
@@ -135,8 +136,8 @@ not named there is refused, so one added later is too until named. Plays, favour
 playlists and Last.fm are the owner's until each user has their own, so a listener has none,
 and hears only how the shared library goes, not the folders a scan looks in. A listener does
 see the tracks' paths, which `/audio` is asked by, and with them where the music is. A
-listener is not told when the library changes, which the owner's plays would show. Only a
-paired admin stops the server.
+listener is not told when the library changes, which the owner's plays would show. No device
+stops the server: its menu, its computer's user and the system do.
 
 ## The server under load
 
@@ -170,8 +171,8 @@ Nobody can wear it out before logging in:
   within the track's folder, after links.
 - A scan follows no link out of the folders it walks, so one put in a shared music folder does
   not bring the rest of the computer into the library.
-- The server's folder holds `accounts.json`, `pairing.key`, `tls-key.pk8`,
-  `tls-certificate.der` and `server.log`, all 0600, written as new files and renamed into place.
+- The server's folder holds `accounts.json`, `adoption-code` while it is not adopted,
+  `tls-key.pk8`, `tls-certificate.der` and `server.log`, all 0600, written as new files and renamed into place.
   Started at login, the server makes files for the user alone (launchd's `Umask`, systemd's
   `UMask=0077`); on Linux its unit gains no privileges, and seccomp lets it make only a
   service's system calls; it retries every ten seconds, never giving up. The server registers
@@ -207,8 +208,8 @@ Nobody can wear it out before logging in:
 
 ## Not guarded against
 
-- **Another program of the same user** can read the token file, the pairing key and the
-  server's key.
+- **Another program of the same user** can read the token file, the adoption code while the
+  server is not adopted, and the server's key.
 - **The login page's origin is shared** by every server's pages (`127.0.0.1:47477`): a
   password manager may offer one server's saved password on another's page. A server is
   logged in to only once its connection code proved it, and its pages run no script, but a
