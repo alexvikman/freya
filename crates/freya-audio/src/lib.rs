@@ -36,7 +36,7 @@ pub use crate::eq::{BAND_FREQUENCIES, EqSettings, MAX_GAIN_DB};
 pub use crate::remote::REQUEST_TIMEOUT as REMOTE_TIMEOUT;
 pub use crate::source::{Bearer, Media, MediaTags, RemoteSource, TrackInfo};
 pub use crate::state::{PlaybackState, Status};
-pub use crate::stream::{is_url, split_title};
+pub use crate::stream::{is_url, split_title, web_agent};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

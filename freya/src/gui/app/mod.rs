@@ -23,7 +23,6 @@ use super::library::{self, AlbumSort, LibraryPanel};
 use super::listening::Listening;
 use super::playlists::Playlists;
 use super::radio::{self, Stations};
-use super::radio_directory;
 use super::server_panel::{self, ServerPanel};
 use super::skin_state::{self, GlobalWriter, ModelRows, Rows};
 use super::skin_window::SkinWindow;
@@ -31,6 +30,7 @@ use super::system_media::{MediaRequest, SystemMedia};
 use super::title_bar::TitleBar;
 use super::visualizer::{self, Visualizer};
 use super::window_events::{WindowEvent, WindowEvents};
+use super::{radio_directory, radio_logos};
 use crate::lastfm::{self, LastFm};
 use crate::playlist::Playlist;
 use crate::settings::{self, Settings};
@@ -83,6 +83,10 @@ type StationList = (String, Result<Vec<Entry>, String>);
 /// How long after starting Freya first looks for an update on its own.
 const UPDATE_CHECK_DELAY: Duration = Duration::from_secs(10);
 
+/// What the radio directory's rows were made of: the directory's and the logos' versions, the
+/// stations the server keeps, and the stream playing.
+type DirectoryShown = ((u64, u64), Vec<String>, Option<String>);
+
 pub struct View {
     pub ui: SkinWindow,
     rows: Rows,
@@ -96,7 +100,7 @@ pub struct View {
     /// The radio directory's rows: the stations shown, the first page's rows, the tags to
     /// choose and those chosen; and what they were made of when last given to the skin.
     directory_rows: [ModelRows; 4],
-    directory_shown: Option<(u64, Vec<String>, Option<String>)>,
+    directory_shown: Option<DirectoryShown>,
     playlists_out: GlobalWriter,
     updates_out: GlobalWriter,
     lastfm_out: GlobalWriter,
@@ -294,6 +298,8 @@ pub struct App {
     pub stations: Stations,
     /// The server's radio directory, as the radio view browses it.
     pub radio: radio_directory::Directory,
+    /// The radio stations' logos, as they are fetched.
+    pub radio_logos: radio_logos::Logos,
     pub playlists: Playlists,
     /// The playlist shown in the skin.
     pub shown_playlist: Option<usize>,
@@ -417,6 +423,7 @@ impl App {
             library,
             stations,
             radio: radio_directory::Directory::new(),
+            radio_logos: radio_logos::Logos::new(settings::cache_dir()),
             playlists,
             history: History::default(),
             restores: 0,
@@ -675,6 +682,7 @@ impl App {
             self.radio.reload();
         }
         self.radio.poll();
+        self.radio_logos.poll();
         if let Some(status) = self.library.take_lastfm_status() {
             self.lastfm.set_status(status);
         }

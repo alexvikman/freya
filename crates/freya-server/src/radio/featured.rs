@@ -111,6 +111,11 @@ mod tests {
                 featured.id
             );
             assert!(is_web(&featured.url), "{}", featured.id);
+            assert!(
+                featured.logo.as_deref().is_none_or(is_web),
+                "{}",
+                featured.id
+            );
             assert!(featured.url.starts_with("https://") || featured.url.starts_with("http://"));
             assert!(
                 ["MP3", "AAC", "OGG", "FLAC"].contains(&featured.codec.as_str()),

@@ -718,6 +718,8 @@ export struct DirectoryStationRow {
     playing: bool,
     /// Whether Freya picked it.
     featured: bool,
+    /// Its logo, once it is fetched; empty until then, and for a station without one.
+    logo: image,
 }
 
 /// A tag of the radio directory, to find stations by.

@@ -351,6 +351,7 @@ impl Convert for DirectoryStationRow {
             saved: field(&s, "saved"),
             playing: field(&s, "playing"),
             featured: field(&s, "featured"),
+            logo: field(&s, "logo"),
         })
     }
 
@@ -362,6 +363,7 @@ impl Convert for DirectoryStationRow {
             ("saved", self.saved.to_value()),
             ("playing", self.playing.to_value()),
             ("featured", self.featured.to_value()),
+            ("logo", self.logo.to_value()),
         ])
     }
 }

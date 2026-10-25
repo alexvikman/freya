@@ -110,7 +110,7 @@ ring = "0.17.14"
 ureq = "3"
 # Freya's icon on its windows (see gui/app_icon.rs) and the hologram's poses (see
 # gui/hologram), with the decoders the library and skin loader already use.
-image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
+image = { version = "0.25.10", default-features = false, features = ["ico", "jpeg", "png"] }
 
 [target.'cfg(any(windows, target_os = "macos", target_os = "linux"))'.dependencies]
 # The native window behind Slint's: for Windows' media controls and the spectrum layer.

@@ -220,6 +220,11 @@ Nobody can wear it out before logging in:
 - A play is told Radio Browser only for one of its stations, by its UUID, and at most once an
   hour for each, whoever plays it, so a listener cannot make the server ask it over and over.
 - A search reads at most 10 tags and 10 words, and gives at most 200 stations.
+- Freya fetches the stations' logos the directory names as it fetches streams: for a server
+  elsewhere only from addresses beyond this computer and its network. A logo is at most 1 MB,
+  decoded only as PNG, JPEG or ICO within 2,048 pixels a side and 64 MB, and kept in Freya's
+  cache made small, named by its address's SHA-256. A station's site learns that a logo was
+  asked, as it does when the station plays.
 
 ## Not guarded against
 

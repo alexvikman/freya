@@ -18,6 +18,7 @@ mod picture_finder;
 mod playlists;
 mod radio;
 mod radio_directory;
+mod radio_logos;
 mod screen;
 mod server_panel;
 mod skin_state;

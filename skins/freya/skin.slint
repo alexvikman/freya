@@ -4496,7 +4496,15 @@ component StationTile inherits Rectangle {
             border-width: root.entry.playing ? 2px : 0;
             border-color: Theme.accent;
 
-            Icon {
+            if root.entry.logo.width > 0: Image {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: min(parent.width, parent.height) - 28px;
+                height: self.width;
+                source: root.entry.logo;
+                image-fit: contain;
+            }
+            if root.entry.logo.width == 0: Icon {
                 width: 34px;
                 height: 34px;
                 data: Icons.radio;
@@ -4571,12 +4579,26 @@ component DirectoryStationView inherits Rectangle {
         VerticalLayout {
             alignment: center;
 
-            Icon {
-                width: 22px;
-                height: 22px;
-                data: Icons.radio;
-                stroked: true;
-                color: root.entry.playing ? Theme.accent-text : Theme.text-secondary;
+            Rectangle {
+                width: 36px;
+                height: 36px;
+                border-radius: 6px;
+                clip: true;
+                background: root.entry.logo.width > 0 ? Theme.surface : transparent;
+
+                if root.entry.logo.width > 0: Image {
+                    width: parent.width - 4px;
+                    height: parent.height - 4px;
+                    source: root.entry.logo;
+                    image-fit: contain;
+                }
+                if root.entry.logo.width == 0: Icon {
+                    width: 22px;
+                    height: 22px;
+                    data: Icons.radio;
+                    stroked: true;
+                    color: root.entry.playing ? Theme.accent-text : Theme.text-secondary;
+                }
             }
         }
         VerticalLayout {

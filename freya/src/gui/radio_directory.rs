@@ -256,11 +256,18 @@ impl Directory {
     }
 
     /// What the skin shows of it: the stations shown, as `DirectoryStationRow`s, and the first
-    /// page's rows, given which stations the server keeps and whether a station plays; the tags
-    /// to choose and those chosen.
-    pub fn rows(&self, saved: &HashSet<String>, playing: &dyn Fn(&str) -> bool) -> Rows {
-        let row = |station: &DirectoryStation| {
+    /// page's rows, given which stations the server keeps, whether a station plays, and the
+    /// logos at hand; the tags to choose and those chosen.
+    pub fn rows(
+        &self,
+        saved: &HashSet<String>,
+        playing: &dyn Fn(&str) -> bool,
+        logo: &mut dyn FnMut(&str) -> Option<slint::Image>,
+    ) -> Rows {
+        let mut row = |station: &DirectoryStation| {
+            let logo = station.logo.as_deref().and_then(&mut *logo);
             Value::Struct(Struct::from_iter([
+                ("logo".to_owned(), Value::Image(logo.unwrap_or_default())),
                 ("name".to_owned(), string(&station.name)),
                 ("detail".to_owned(), string(self.detail(station))),
                 ("quality".to_owned(), string(quality(station))),
@@ -275,7 +282,7 @@ impl Directory {
         let searching = self.is_searching();
         let mut shelves = Vec::new();
         let found: Vec<Value> = if searching {
-            self.found.iter().map(row).collect()
+            self.found.iter().map(&mut row).collect()
         } else {
             let mut first = 0;
             let mut rows = Vec::new();
@@ -290,7 +297,7 @@ impl Directory {
                     ("tagged".to_owned(), Value::Bool(!shelf.tags.is_empty())),
                 ])));
                 first += shelf.stations.len();
-                rows.extend(shelf.stations.iter().map(row));
+                rows.extend(shelf.stations.iter().map(&mut row));
             }
             rows
         };

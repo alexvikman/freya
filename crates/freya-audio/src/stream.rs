@@ -122,6 +122,23 @@ impl Resolver for Far {
     }
 }
 
+/// An agent for the web, as streams are asked: when `far_only`, only of addresses beyond this
+/// computer and its network, and without a proxy, which would resolve names itself. Each answer
+/// is to be had within `timeout` when one is given.
+pub fn web_agent(far_only: bool, timeout: Option<std::time::Duration>) -> ureq::Agent {
+    let config = ureq::Agent::config_builder()
+        .timeout_connect(Some(CONNECT_TIMEOUT))
+        .timeout_recv_response(Some(CONNECT_TIMEOUT))
+        .timeout_global(timeout)
+        .user_agent(concat!("Freya/", env!("CARGO_PKG_VERSION")));
+    if far_only {
+        let config = config.proxy(None).build();
+        ureq::Agent::with_parts(config, DefaultConnector::new(), Far::default())
+    } else {
+        config.build().into()
+    }
+}
+
 /// What the station says about itself in its response headers.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StationInfo {
@@ -188,16 +205,7 @@ impl Stream {
         interrupt: Interrupt,
     ) -> Result<(Self, StationInfo, Titles), Error> {
         let fail = |msg: String| Error::Open(url.into(), msg);
-        let config = ureq::Agent::config_builder()
-            .timeout_connect(Some(CONNECT_TIMEOUT))
-            .timeout_recv_response(Some(CONNECT_TIMEOUT))
-            .user_agent(concat!("Freya/", env!("CARGO_PKG_VERSION")));
-        let agent = if far_only {
-            let config = config.proxy(None).build();
-            ureq::Agent::with_parts(config, DefaultConnector::new(), Far::default())
-        } else {
-            config.build().into()
-        };
+        let agent = web_agent(far_only, None);
         // Connecting can take the timeouts twice over; on its own thread, so playing something
         // else, stopping or quitting need not wait for it.
         let (sender, receiver) = crossbeam_channel::bounded(1);

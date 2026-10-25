@@ -357,6 +357,7 @@ pub fn fill_directory(ui: &ComponentInstance) {
             ("saved".to_owned(), Value::Bool(saved)),
             ("playing".to_owned(), Value::Bool(playing)),
             ("featured".to_owned(), Value::Bool(true)),
+            ("logo".to_owned(), Value::Image(Default::default())),
         ]))
     };
     let mut found: Vec<Value> = picked
@@ -364,6 +365,13 @@ pub fn fill_directory(ui: &ComponentInstance) {
         .enumerate()
         .map(|(i, &(name, detail, quality, saved))| row((name, detail, quality), i == 3, saved))
         .collect();
+    // Two stations' logos: a square one and a wide one.
+    for (at, logo) in [(1, sample_logo(120, 120)), (2, sample_logo(240, 80))] {
+        if let Value::Struct(mut station) = found[at].clone() {
+            station.set_field("logo".into(), Value::Image(logo));
+            found[at] = Value::Struct(station);
+        }
+    }
     found.extend(jazz.iter().map(|&station| row(station, false, false)));
     set("found", model(found));
     let shelf = |title: &str, first: usize, count: usize, tagged: bool| {
@@ -440,6 +448,7 @@ pub fn fill_directory_search(ui: &ComponentInstance) {
             ("saved".to_owned(), Value::Bool(saved)),
             ("playing".to_owned(), Value::Bool(i == 1)),
             ("featured".to_owned(), Value::Bool(i == 0)),
+            ("logo".to_owned(), Value::Image(Default::default())),
         ]))
     })
     .collect();
@@ -459,6 +468,20 @@ pub fn fill_directory_search(ui: &ComponentInstance) {
     set("query", text(""));
     set("directory", text("ready"));
     set("summary", text("45,012 stations"));
+}
+
+/// A logo to show: a two-colored picture of the given size.
+fn sample_logo(width: u32, height: u32) -> slint::Image {
+    let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(width, height);
+    for (i, pixel) in buffer.make_mut_slice().iter_mut().enumerate() {
+        let x = i as u32 % width;
+        *pixel = if x < width / 2 {
+            slint::Rgba8Pixel::new(220, 40, 60, 255)
+        } else {
+            slint::Rgba8Pixel::new(30, 30, 30, 255)
+        };
+    }
+    slint::Image::from_rgba8(buffer)
 }
 
 fn model(rows: Vec<Value>) -> Value {

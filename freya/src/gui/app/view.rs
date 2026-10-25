@@ -131,7 +131,11 @@ impl App {
             values.extend(self.radio.values());
             view.radio_out.write(ui, values);
             let saved: Vec<String> = self.stations.iter().map(|s| s.url.clone()).collect();
-            let shown = (self.radio.version(), saved, playing_stream.clone());
+            let shown = (
+                (self.radio.version(), self.radio_logos.version()),
+                saved,
+                playing_stream.clone(),
+            );
             if view.directory_shown.as_ref() != Some(&shown) {
                 let saved: HashSet<String> = shown.1.iter().cloned().collect();
                 let streams = &self.station_streams;
@@ -140,7 +144,11 @@ impl App {
                         url == stream || streams.get(url).is_some_and(|s| s == stream)
                     })
                 };
-                let rows = self.radio.rows(&saved, &playing);
+                let far_only = self.library.elsewhere();
+                let logos = &mut self.radio_logos;
+                let rows = self
+                    .radio
+                    .rows(&saved, &playing, &mut |url| logos.get(url, far_only));
                 let [found, shelves, tags, chosen] = &mut view.directory_rows;
                 found.sync(rows.found);
                 shelves.sync(rows.shelves);
