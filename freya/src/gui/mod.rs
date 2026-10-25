@@ -17,6 +17,7 @@ mod page_proxy;
 mod picture_finder;
 mod playlists;
 mod radio;
+mod radio_directory;
 mod screen;
 mod server_panel;
 mod skin_state;

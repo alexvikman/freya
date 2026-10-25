@@ -283,6 +283,303 @@ pub fn fill_radio(ui: &ComponentInstance) {
     set("live", Value::Bool(true));
 }
 
+/// The radio directory's first page: its tags and rows.
+pub fn fill_directory(ui: &ComponentInstance) {
+    let set = |name: &str, value: Value| {
+        let _ = ui.set_global_property("Radio", name, value);
+    };
+    let picked = [
+        (
+            "Radio Paradise (FLAC)",
+            "Eclectic · Rock · United States · English",
+            "Lossless",
+            true,
+        ),
+        (
+            "FIP",
+            "Eclectic · Jazz · Public · France · French",
+            "192 kbps",
+            false,
+        ),
+        (
+            "KEXP",
+            "Indie · Alternative · Eclectic · Community · United States",
+            "160 kbps",
+            false,
+        ),
+        (
+            "SomaFM: Groove Salad",
+            "Chillout · Ambient · Electronic · United States",
+            "128 kbps",
+            false,
+        ),
+        (
+            "NTS Radio 1",
+            "Eclectic · Electronic · United Kingdom · English",
+            "256 kbps",
+            false,
+        ),
+        (
+            "Sveriges Radio P2 (FLAC)",
+            "Classical · Jazz · Folk · Public · Sweden",
+            "Hi-Res",
+            false,
+        ),
+        (
+            "Worldwide FM",
+            "World · Jazz · Electronic · United Kingdom",
+            "320 kbps",
+            false,
+        ),
+    ];
+    let jazz = [
+        ("FIP Jazz", "Jazz · Public · France", "192 kbps"),
+        ("Naim Jazz (FLAC)", "Jazz · United Kingdom", "Lossless"),
+        (
+            "Český rozhlas Jazz (FLAC)",
+            "Jazz · Public · Czechia · Czech",
+            "Lossless",
+        ),
+        (
+            "Jazz24",
+            "Jazz · Public · United States · English",
+            "256 kbps",
+        ),
+        ("TSF Jazz", "Jazz · France · French", "128 kbps"),
+        ("DR P8 Jazz", "Jazz · Public · Denmark · Danish", "128 kbps"),
+        ("NRK Jazz", "Jazz · Public · Norway · Norwegian", "192 kbps"),
+    ];
+    let row = |(name, detail, quality): (&str, &str, &str), playing: bool, saved: bool| {
+        Value::Struct(Struct::from_iter([
+            ("name".to_owned(), text(name)),
+            ("detail".to_owned(), text(detail)),
+            ("quality".to_owned(), text(quality)),
+            ("saved".to_owned(), Value::Bool(saved)),
+            ("playing".to_owned(), Value::Bool(playing)),
+            ("featured".to_owned(), Value::Bool(true)),
+        ]))
+    };
+    let mut found: Vec<Value> = picked
+        .iter()
+        .enumerate()
+        .map(|(i, &(name, detail, quality, saved))| row((name, detail, quality), i == 3, saved))
+        .collect();
+    found.extend(jazz.iter().map(|&station| row(station, false, false)));
+    set("found", model(found));
+    let shelf = |title: &str, first: usize, count: usize, tagged: bool| {
+        Value::Struct(Struct::from_iter([
+            ("title".to_owned(), text(title)),
+            ("first".to_owned(), Value::Number(first as f64)),
+            ("count".to_owned(), Value::Number(count as f64)),
+            ("tagged".to_owned(), Value::Bool(tagged)),
+        ]))
+    };
+    set(
+        "shelves",
+        model(vec![
+            shelf("Picked by Freya", 0, picked.len(), false),
+            shelf("Jazz", picked.len(), jazz.len(), true),
+        ]),
+    );
+    set("tags", tag_groups(false));
+    set("total", Value::Number(-1.0));
+    set("directory", text("ready"));
+    set("summary", text("45,012 stations"));
+}
+
+/// The radio directory searched by tags: jazz from Italy.
+pub fn fill_directory_search(ui: &ComponentInstance) {
+    let set = |name: &str, value: Value| {
+        let _ = ui.set_global_property("Radio", name, value);
+    };
+    let found: Vec<Value> = [
+        (
+            "Rai Radio 3",
+            "Classical · Jazz · Public · Italy · Italian",
+            "320 kbps",
+            true,
+        ),
+        (
+            "Musica Jazz Radio",
+            "Blues · Jazz · Italy · Italian",
+            "128 kbps",
+            false,
+        ),
+        (
+            "RMC Nights Story",
+            "Jazz · World · Italy · Italian",
+            "128 kbps",
+            false,
+        ),
+        (
+            "RMC Marine",
+            "Chillout · Jazz · Lounge · Italy · Italian",
+            "",
+            false,
+        ),
+        (
+            "Radio Dimensione Relax",
+            "Ambient · Chillout · Jazz · Italy · Italian",
+            "256 kbps",
+            false,
+        ),
+        (
+            "Easy Network Jazz & Soul",
+            "Jazz · Soul · Italy · Italian",
+            "128 kbps",
+            false,
+        ),
+    ]
+    .iter()
+    .enumerate()
+    .map(|(i, &(name, detail, quality, saved))| {
+        Value::Struct(Struct::from_iter([
+            ("name".to_owned(), text(name)),
+            ("detail".to_owned(), text(detail)),
+            ("quality".to_owned(), text(quality)),
+            ("saved".to_owned(), Value::Bool(saved)),
+            ("playing".to_owned(), Value::Bool(i == 1)),
+            ("featured".to_owned(), Value::Bool(i == 0)),
+        ]))
+    })
+    .collect();
+    set("found", model(found));
+    set("shelves", model(Vec::new()));
+    set("tags", tag_groups(true));
+    set(
+        "chosen",
+        model(vec![
+            tag("genre:jazz", "Jazz", "genre", 0, true),
+            tag("country:it", "Italy", "country", 0, true),
+        ]),
+    );
+    set("total", Value::Number(31.0));
+    // An admin, who saves stations.
+    let _ = ui.set_global_property("Server", "admin", Value::Bool(true));
+    set("query", text(""));
+    set("directory", text("ready"));
+    set("summary", text("45,012 stations"));
+}
+
+fn model(rows: Vec<Value>) -> Value {
+    Value::Model(ModelRc::new(VecModel::from(rows)))
+}
+
+fn tag(id: &str, name: &str, kind: &str, stations: u32, chosen: bool) -> Value {
+    Value::Struct(Struct::from_iter([
+        ("id".to_owned(), text(id)),
+        ("name".to_owned(), text(name)),
+        ("kind".to_owned(), text(kind)),
+        ("stations".to_owned(), Value::Number(f64::from(stations))),
+        ("chosen".to_owned(), Value::Bool(chosen)),
+    ]))
+}
+
+/// The directory's tags by kind, as on its first page or of the stations found.
+fn tag_groups(found: bool) -> Value {
+    let group = |kind: &str, title: &str, names: &[&str]| {
+        let tags: Vec<Value> = names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let id = format!("{kind}:{}", name.to_lowercase());
+                tag(&id, name, kind, 1000 / (i as u32 + 1), false)
+            })
+            .collect();
+        Value::Struct(Struct::from_iter([
+            ("kind".to_owned(), text(kind)),
+            ("title".to_owned(), text(title)),
+            ("tags".to_owned(), model(tags)),
+        ]))
+    };
+    let groups = if found {
+        vec![
+            group("quality", "Quality", &["High bitrate"]),
+            group(
+                "genre",
+                "Genres",
+                &[
+                    "Soul", "Lounge", "Chillout", "Blues", "Pop", "World", "Funk",
+                ],
+            ),
+            group("language", "Languages", &["Italian", "English"]),
+        ]
+    } else {
+        vec![
+            group(
+                "quality",
+                "Quality",
+                &["High bitrate", "Lossless", "Hi-Res"],
+            ),
+            group(
+                "genre",
+                "Genres",
+                &[
+                    "Pop",
+                    "Rock",
+                    "Oldies",
+                    "Dance",
+                    "Latin",
+                    "Electronic",
+                    "Jazz",
+                    "Classical",
+                    "Eclectic",
+                    "Alternative",
+                    "House",
+                    "Chillout",
+                    "Folk",
+                    "Hip-hop",
+                ],
+            ),
+            group(
+                "country",
+                "Countries",
+                &[
+                    "United States",
+                    "Germany",
+                    "France",
+                    "Russia",
+                    "Greece",
+                    "United Kingdom",
+                    "Mexico",
+                    "Italy",
+                    "Brazil",
+                    "Australia",
+                    "China",
+                    "Spain",
+                ],
+            ),
+            group(
+                "language",
+                "Languages",
+                &[
+                    "English", "Spanish", "German", "French", "Russian", "Chinese", "Italian",
+                    "Greek", "Dutch",
+                ],
+            ),
+            group(
+                "era",
+                "Decades",
+                &["80s", "90s", "70s", "2000s", "60s", "2010s", "50s"],
+            ),
+            group(
+                "format",
+                "Formats",
+                &[
+                    "News",
+                    "Talk",
+                    "Religious",
+                    "Community",
+                    "Public",
+                    "Sports",
+                    "Kids",
+                ],
+            ),
+        ]
+    };
+    model(groups)
+}
+
 /// A track that could not be played.
 pub fn fill_error(ui: &ComponentInstance) {
     let set = |name: &str, value: Value| {

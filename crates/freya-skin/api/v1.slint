@@ -351,6 +351,9 @@ export global Library {
     /// Whether a scan asks Wikipedia for the opening of artists' articles, found by their
     /// MusicBrainz id, which their pages show before what Last.fm says. Kept between runs.
     in property <bool> artist-wikipedia-online: true;
+    /// Whether the server's radio directory has Radio Browser's stations, which it fetches about
+    /// once a week and tells which are played; only the stations Freya picked otherwise.
+    in property <bool> radio-directory-online: true;
     /// The user's personal fanart.tv API key, for a scan to ask for pictures of artists who
     /// lack them; empty for none. Kept between runs.
     in property <string> fanart-key;
@@ -492,6 +495,7 @@ export global Library {
     callback more-popular();
     callback set-artist-bios-online(bool);
     callback set-artist-wikipedia-online(bool);
+    callback set-radio-directory-online(bool);
     callback set-fanart-key(string);
     /// Start changing the artist whose page is shown: Freya sets `artist-draft` to what was
     /// changed about them before. `save-artist` keeps the name, sort name, MusicBrainz id,
@@ -701,8 +705,58 @@ export struct StationRow {
     playing: bool,
 }
 
-/// Internet radio stations, which the server keeps for its users, none at first. Optional.
-/// Its admins (`Server.admin`) add and remove them.
+/// A station of the radio directory, as the radio view shows it.
+export struct DirectoryStationRow {
+    name: string,
+    /// Its tags but its quality, the first few: "Jazz · Italy · Italian".
+    detail: string,
+    /// "Hi-Res", "Lossless" or "320 kbps"; empty when not known.
+    quality: string,
+    /// Whether the server keeps it among its stations.
+    saved: bool,
+    /// True while it plays.
+    playing: bool,
+    /// Whether Freya picked it.
+    featured: bool,
+}
+
+/// A tag of the radio directory, to find stations by.
+export struct RadioTagRow {
+    /// What `toggle-tag` is given: "genre:jazz".
+    id: string,
+    /// As shown: "Jazz", "Italy".
+    name: string,
+    /// "quality", "genre", "era", "format", "country" or "language".
+    kind: string,
+    /// How many stations have it: of the directory on its first page, of those found after.
+    stations: int,
+    /// Whether it is looked for.
+    chosen: bool,
+}
+
+/// The radio directory's tags of one kind.
+export struct RadioTagGroup {
+    /// "quality", "genre", "country", "language", "era" or "format".
+    kind: string,
+    /// As shown: "Genres", "Countries".
+    title: string,
+    tags: [RadioTagRow],
+}
+
+/// A row of the radio directory's first page: its stations are `found[first]` and the
+/// `count` after it.
+export struct RadioShelfRow {
+    title: string,
+    first: int,
+    count: int,
+    /// Whether it is a tag's, or a few tags', which `show-shelf` looks for; otherwise the
+    /// stations Freya picked.
+    tagged: bool,
+}
+
+/// Internet radio: the stations the server keeps for its users, none at first, which its
+/// admins (`Server.admin`) add and remove; and the server's directory of stations to find
+/// more in, by tags and words. Optional.
 export global Radio {
     in property <[StationRow]> stations;
     /// Why the last `add` failed, like "Not a web address: …"; empty after one that worked.
@@ -713,6 +767,43 @@ export global Radio {
     /// "http://" may be left out; without a name, the station is named after the address.
     callback add(string, string);
     callback remove(int);
+
+    /// The directory: "loading" while its stations are first fetched, "ready", "off" when the
+    /// server may not ask Radio Browser (only the stations Freya picked are in it), "failed".
+    in property <string> directory;
+    /// "45,012 stations", or how fetching them goes.
+    in property <string> summary;
+    /// The stations shown: those found, or the first page's rows' one after another.
+    in property <[DirectoryStationRow]> found;
+    /// The first page's rows; none while words or tags are looked for.
+    in property <[RadioShelfRow]> shelves;
+    /// How many stations the words and tags looked for find, of which `found` are the first;
+    /// -1 while none are looked for, and the first page shows.
+    in property <int> total: -1;
+    /// The tags to choose, by kind: the directory's best known on the first page, the tags of
+    /// the stations found after; the most first within each kind.
+    in property <[RadioTagGroup]> tags;
+    /// The tags looked for.
+    in property <[RadioTagRow]> chosen;
+    /// The words looked for.
+    in property <string> query;
+    /// Whether the server is being asked.
+    in property <bool> searching;
+    /// Look for stations with every one of these words in their names or tags.
+    callback find(string);
+    /// Look for stations with a tag too, by its id, or no longer.
+    callback toggle-tag(string);
+    /// Look for the stations of a row of the first page, by its index in `shelves`.
+    callback show-shelf(int);
+    /// Back to the first page.
+    callback clear-find();
+    /// More of the stations found, after those in `found`; when they are all there, nothing.
+    callback more();
+    /// Play a station of `found`, as a saved one plays.
+    callback play-found(int);
+    /// Keep a station of `found` among the server's stations, or no longer when it is kept;
+    /// for an admin.
+    callback save-found(int);
 }
 
 /// The 10-band equalizer. Optional. Gains are in decibels, from -12 to +12.

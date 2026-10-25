@@ -102,6 +102,10 @@ impl LibraryPanel {
                 Value::Bool(self.settings.artist_wikipedia_online),
             ),
             (
+                "radio-directory-online",
+                Value::Bool(self.settings.radio_directory_online),
+            ),
+            (
                 "fanart-key",
                 string(self.settings.fanart_key.clone().unwrap_or_default()),
             ),

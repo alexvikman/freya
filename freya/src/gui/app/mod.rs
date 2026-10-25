@@ -1,6 +1,6 @@
 //! The app's state, and the skin window it is shown in.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -23,6 +23,7 @@ use super::library::{self, AlbumSort, LibraryPanel};
 use super::listening::Listening;
 use super::playlists::Playlists;
 use super::radio::{self, Stations};
+use super::radio_directory;
 use super::server_panel::{self, ServerPanel};
 use super::skin_state::{self, GlobalWriter, ModelRows, Rows};
 use super::skin_window::SkinWindow;
@@ -92,6 +93,10 @@ pub struct View {
     library_out: GlobalWriter,
     radio_out: GlobalWriter,
     station_rows: ModelRows,
+    /// The radio directory's rows: the stations shown, the first page's rows, the tags to
+    /// choose and those chosen; and what they were made of when last given to the skin.
+    directory_rows: [ModelRows; 4],
+    directory_shown: Option<(u64, Vec<String>, Option<String>)>,
     playlists_out: GlobalWriter,
     updates_out: GlobalWriter,
     lastfm_out: GlobalWriter,
@@ -126,6 +131,13 @@ impl View {
             library_out: GlobalWriter::new(&ui, "Library"),
             radio_out: GlobalWriter::new(&ui, "Radio"),
             station_rows: ModelRows::new(),
+            directory_rows: [
+                ModelRows::new(),
+                ModelRows::new(),
+                ModelRows::new(),
+                ModelRows::new(),
+            ],
+            directory_shown: None,
             playlists_out: GlobalWriter::new(&ui, "Playlists"),
             updates_out: GlobalWriter::new(&ui, "Updates"),
             lastfm_out: GlobalWriter::new(&ui, "LastFm"),
@@ -152,6 +164,14 @@ impl View {
             let _ =
                 view.ui
                     .set_global_property("Radio", "stations", view.station_rows.model_value());
+            for (name, rows) in ["found", "shelves", "tags", "chosen"]
+                .into_iter()
+                .zip(&view.directory_rows)
+            {
+                let _ = view
+                    .ui
+                    .set_global_property("Radio", name, rows.model_value());
+            }
         }
         if view.playlists_out.available {
             let _ = view.ui.set_global_property(
@@ -272,6 +292,8 @@ pub struct App {
     pub error: String,
     pub library: LibraryPanel,
     pub stations: Stations,
+    /// The server's radio directory, as the radio view browses it.
+    pub radio: radio_directory::Directory,
     pub playlists: Playlists,
     /// The playlist shown in the skin.
     pub shown_playlist: Option<usize>,
@@ -394,6 +416,7 @@ impl App {
             error: String::new(),
             library,
             stations,
+            radio: radio_directory::Directory::new(),
             playlists,
             history: History::default(),
             restores: 0,
@@ -648,6 +671,10 @@ impl App {
         if self.library.take_stations_changed() {
             self.stations.reload();
         }
+        if self.library.take_radio_changed() {
+            self.radio.reload();
+        }
+        self.radio.poll();
         if let Some(status) = self.library.take_lastfm_status() {
             self.lastfm.set_status(status);
         }

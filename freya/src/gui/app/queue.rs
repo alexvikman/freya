@@ -88,6 +88,44 @@ impl App {
             .position(|entry| entry.path.to_string_lossy() == url)
     }
 
+    /// Plays the radio directory's `index`th station shown, as a saved one plays, and tells the
+    /// server, which counts plays for Radio Browser.
+    pub fn play_found(&mut self, index: usize) {
+        let Some(station) = self.radio.get(index) else {
+            return;
+        };
+        let (url, id) = (station.url.clone(), station.id.clone());
+        let stream = self.station_streams.get(&url).unwrap_or(&url).clone();
+        match self.entry_for(&stream) {
+            Some(index) => self.play_index(index),
+            None => self.add_url(&url),
+        }
+        self.radio.played(&id);
+    }
+
+    /// Keeps the radio directory's `index`th station shown among the server's stations, or no
+    /// longer when it is kept.
+    pub fn save_found(&mut self, index: usize) {
+        let Some(station) = self.radio.get(index) else {
+            return;
+        };
+        let (name, url) = (station.name.clone(), station.url.clone());
+        let saved = self.stations.iter().position(|s| s.url == url);
+        match saved {
+            Some(saved) => self.stations.remove(saved),
+            None => self.radio_error = self.stations.add(&name, &url).err().unwrap_or_default(),
+        }
+    }
+
+    /// The address of the stream playing, if one plays.
+    pub fn playing_stream(&self) -> Option<String> {
+        if self.player.status().state == PlaybackState::Stopped {
+            return None;
+        }
+        let playing = self.playlist.current_entry()?.path.to_string_lossy();
+        freya_audio::is_url(&playing).then(|| playing.into_owned())
+    }
+
     /// The address of the saved station playing, if a stream of one plays.
     pub fn playing_station(&self) -> Option<String> {
         if self.player.status().state == PlaybackState::Stopped {

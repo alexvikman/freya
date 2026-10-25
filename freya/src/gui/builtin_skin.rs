@@ -341,6 +341,94 @@ impl Convert for StationRow {
     }
 }
 
+impl Convert for DirectoryStationRow {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            name: field(&s, "name"),
+            detail: field(&s, "detail"),
+            quality: field(&s, "quality"),
+            saved: field(&s, "saved"),
+            playing: field(&s, "playing"),
+            featured: field(&s, "featured"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("name", self.name.to_value()),
+            ("detail", self.detail.to_value()),
+            ("quality", self.quality.to_value()),
+            ("saved", self.saved.to_value()),
+            ("playing", self.playing.to_value()),
+            ("featured", self.featured.to_value()),
+        ])
+    }
+}
+
+impl Convert for RadioTagRow {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            id: field(&s, "id"),
+            name: field(&s, "name"),
+            kind: field(&s, "kind"),
+            stations: field(&s, "stations"),
+            chosen: field(&s, "chosen"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("id", self.id.to_value()),
+            ("name", self.name.to_value()),
+            ("kind", self.kind.to_value()),
+            ("stations", self.stations.to_value()),
+            ("chosen", self.chosen.to_value()),
+        ])
+    }
+}
+
+impl Convert for RadioTagGroup {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            kind: field(&s, "kind"),
+            title: field(&s, "title"),
+            tags: field(&s, "tags"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("kind", self.kind.to_value()),
+            ("title", self.title.to_value()),
+            ("tags", self.tags.to_value()),
+        ])
+    }
+}
+
+impl Convert for RadioShelfRow {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            title: field(&s, "title"),
+            first: field(&s, "first"),
+            count: field(&s, "count"),
+            tagged: field(&s, "tagged"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("title", self.title.to_value()),
+            ("first", self.first.to_value()),
+            ("count", self.count.to_value()),
+            ("tagged", self.tagged.to_value()),
+        ])
+    }
+}
+
 impl Convert for LibraryRow {
     fn from_value(value: Value) -> Option<Self> {
         let Value::Struct(s) = value else { return None };
@@ -998,6 +1086,15 @@ skin_api! {
 
         Radio."stations" => set_stations, get_stations;
         Radio."error" => set_error, get_error;
+        Radio."directory" => set_directory, get_directory;
+        Radio."summary" => set_summary, get_summary;
+        Radio."found" => set_found, get_found;
+        Radio."shelves" => set_shelves, get_shelves;
+        Radio."total" => set_total, get_total;
+        Radio."tags" => set_tags, get_tags;
+        Radio."chosen" => set_chosen, get_chosen;
+        Radio."query" => set_query, get_query;
+        Radio."searching" => set_searching, get_searching;
         Library."title" => set_title, get_title;
         Library."subtitle" => set_subtitle, get_subtitle;
         Library."can-go-back" => set_can_go_back, get_can_go_back;
@@ -1015,6 +1112,7 @@ skin_api! {
         Library."popular" => set_popular, get_popular;
         Library."artist-bios-online" => set_artist_bios_online, get_artist_bios_online;
         Library."artist-wikipedia-online" => set_artist_wikipedia_online, get_artist_wikipedia_online;
+        Library."radio-directory-online" => set_radio_directory_online, get_radio_directory_online;
         Library."fanart-key" => set_fanart_key, get_fanart_key;
         Library."artist-draft" => set_artist_draft, get_artist_draft;
         Library."genre-draft" => set_genre_draft, get_genre_draft;
@@ -1212,6 +1310,13 @@ skin_api! {
         Radio."play" => on_play, invoke_play(row: i32);
         Radio."add" => on_add, invoke_add(name: SharedString, url: SharedString);
         Radio."remove" => on_remove, invoke_remove(row: i32);
+        Radio."find" => on_find, invoke_find(text: SharedString);
+        Radio."toggle-tag" => on_toggle_tag, invoke_toggle_tag(id: SharedString);
+        Radio."show-shelf" => on_show_shelf, invoke_show_shelf(index: i32);
+        Radio."clear-find" => on_clear_find, invoke_clear_find();
+        Radio."more" => on_more, invoke_more();
+        Radio."play-found" => on_play_found, invoke_play_found(row: i32);
+        Radio."save-found" => on_save_found, invoke_save_found(row: i32);
         Library."back" => on_back, invoke_back();
         Library."set-album-sort" => on_set_album_sort, invoke_set_album_sort(sort: SharedString);
         Library."shuffle-all" => on_shuffle_all, invoke_shuffle_all();
@@ -1219,6 +1324,7 @@ skin_api! {
         Library."more-popular" => on_more_popular, invoke_more_popular();
         Library."set-artist-bios-online" => on_set_artist_bios_online, invoke_set_artist_bios_online(online: bool);
         Library."set-artist-wikipedia-online" => on_set_artist_wikipedia_online, invoke_set_artist_wikipedia_online(online: bool);
+        Library."set-radio-directory-online" => on_set_radio_directory_online, invoke_set_radio_directory_online(online: bool);
         Library."set-fanart-key" => on_set_fanart_key, invoke_set_fanart_key(key: SharedString);
         Library."edit-artist" => on_edit_artist, invoke_edit_artist();
         Library."save-artist" => on_save_artist, invoke_save_artist(name: SharedString, sort_name: SharedString, mbid: SharedString, biography: SharedString, header: SharedString);

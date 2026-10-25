@@ -7,6 +7,7 @@ impl App {
     pub fn refresh(&mut self) {
         let chosen = self.server_chosen();
         let station_rows = self.stations.rows(self.playing_station().as_deref());
+        let playing_stream = self.playing_stream();
         let view = &mut self.view;
         let ui = &view.ui;
         let status = self.player.status();
@@ -126,8 +127,27 @@ impl App {
         }
         if view.radio_out.available {
             view.station_rows.sync(station_rows);
-            view.radio_out
-                .write(ui, vec![("error", skin_state::string(&self.radio_error))]);
+            let mut values = vec![("error", skin_state::string(&self.radio_error))];
+            values.extend(self.radio.values());
+            view.radio_out.write(ui, values);
+            let saved: Vec<String> = self.stations.iter().map(|s| s.url.clone()).collect();
+            let shown = (self.radio.version(), saved, playing_stream.clone());
+            if view.directory_shown.as_ref() != Some(&shown) {
+                let saved: HashSet<String> = shown.1.iter().cloned().collect();
+                let streams = &self.station_streams;
+                let playing = |url: &str| {
+                    playing_stream.as_deref().is_some_and(|stream| {
+                        url == stream || streams.get(url).is_some_and(|s| s == stream)
+                    })
+                };
+                let rows = self.radio.rows(&saved, &playing);
+                let [found, shelves, tags, chosen] = &mut view.directory_rows;
+                found.sync(rows.found);
+                shelves.sync(rows.shelves);
+                tags.sync(rows.tags);
+                chosen.sync(rows.chosen);
+                view.directory_shown = Some(shown);
+            }
         }
         if !view.icon_set {
             view.icon_set = app_icon::set_window_icon(ui.window());

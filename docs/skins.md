@@ -243,7 +243,7 @@ Playlists the user keeps in Freya, apart from the queue: `Playlist` is what play
 
 ### `Radio`
 
-Internet radio stations, which the server keeps for its users; none at first. Its admins (`Server.admin`) add and remove them; its listeners play them.
+Internet radio. The stations the server keeps for its users, none at first: its admins (`Server.admin`) add and remove them; its listeners play them.
 
 | Property | Type | |
 |---|---|---|
@@ -255,6 +255,30 @@ Internet radio stations, which the server keeps for its users; none at first. It
 | `play(row)` | Play a station: its entry in the playlist when it is there, else added to the end |
 | `add(name, address)` | Save a station: its stream, or its `.pls` or `.m3u` file. "http://" may be left out; without a name the station is named after the address. Freya answers at once, so check `error` right after |
 | `remove(row)` | |
+
+The server's directory of stations to find more in: those Freya picked, and when the server may ask it, Radio Browser's, found by tags and words. A station has tags of several kinds at once ("Jazz", "Italy", "Italian", "Lossless"), and a search finds the stations with all the tags chosen and every word typed.
+
+| Property | Type | |
+|---|---|---|
+| `directory` | string | "loading" while its stations are first fetched, "ready", "off" when the server may not ask Radio Browser, "failed" |
+| `summary` | string | "45,012 stations", or how fetching them goes |
+| `found` | `[DirectoryStationRow]` | The stations shown: those found, or the first page's rows' one after another. `name`, `detail` (its tags, "Jazz · Italy · Italian"), `quality` ("Hi-Res", "Lossless", "320 kbps" or empty), `saved` (the server keeps it), `playing`, `featured` (Freya picked it) |
+| `shelves` | `[RadioShelfRow]` | The first page's rows: `title`, and its stations are `found[first]` and the `count` after; `tagged` when it is a tag's, which `show-shelf` looks for. None while a search shows |
+| `total` | int | How many the search finds, of which `found` are the first; -1 while none is looked for and the first page shows |
+| `tags` | `[RadioTagGroup]` | The tags to choose, by kind: `kind`, `title` ("Genres"), `tags`. The directory's best known on the first page, those of the stations found after |
+| `chosen` | `[RadioTagRow]` | The tags looked for. A `RadioTagRow` has `id` ("genre:jazz"), `name`, `kind` ("quality", "genre", "country", "language", "era" or "format"), `stations` and `chosen` |
+| `query` | string | The words looked for |
+| `searching` | bool | While the server is asked |
+
+| Callback | |
+|---|---|
+| `find(text)` | Look for stations with every word, as it is typed |
+| `toggle-tag(id)` | Look for a tag too, or no longer |
+| `show-shelf(row)` | Look for the tags of a row of `shelves` |
+| `clear-find()` | Back to the first page |
+| `more()` | More of those found, after `found`; call it as the list nears its end |
+| `play-found(row)` | Play a station of `found` |
+| `save-found(row)` | Keep a station of `found` among the server's stations, or no longer; an admin's |
 
 ### `Equalizer`
 

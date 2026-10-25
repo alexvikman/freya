@@ -36,6 +36,7 @@ impl App {
                 .connect(Arc::clone(&connected.server), connected.playlists);
             self.stations
                 .connect(Arc::clone(&connected.server), connected.stations);
+            self.radio.connect(Arc::clone(&connected.server));
             self.lastfm.use_server(connected.server, connected.lastfm);
         }
     }

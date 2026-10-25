@@ -238,6 +238,15 @@ pub(super) fn bind(b: &Binder) {
     );
     b.bind(
         "Library",
+        "set-radio-directory-online",
+        Box::new(|app, args| {
+            if let Some(Value::Bool(online)) = args.first() {
+                app.library.set_radio_directory_online(*online);
+            }
+        }),
+    );
+    b.bind(
+        "Library",
         "edit-artist",
         Box::new(|app, _| app.library.edit_artist()),
     );

@@ -515,6 +515,40 @@ export component W inherits Window { Text { text: Player.title; } }
     assert_eq!(stations(&ui), 0);
     call(&ui, "Player", "stop", &[]);
 
+    // The radio directory: its first page, a tag looked for, a station of it kept among the
+    // server's and no longer, and back.
+    let tick_until = |what: &str, done: &dyn Fn(&SkinWindow) -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            app.borrow_mut().tick();
+            if done(&ui) {
+                return;
+            }
+            assert!(Instant::now() < deadline, "{what}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    let rows = |ui: &SkinWindow, name: &str| match global(ui, "Radio", name) {
+        Value::Model(model) => model.row_count(),
+        other => panic!("{name} is a model, not {other:?}"),
+    };
+    tick_until("the directory's first page", &|ui| rows(ui, "shelves") > 0);
+    assert_eq!(global(&ui, "Radio", "total"), num(-1.0));
+    assert!(rows(&ui, "tags") > 0);
+    call(&ui, "Radio", "toggle-tag", &[text("genre:jazz")]);
+    tick_until("jazz stations", &|ui| {
+        global(ui, "Radio", "searching") == Value::Bool(false) && rows(ui, "found") > 0
+    });
+    assert_eq!(rows(&ui, "chosen"), 1);
+    assert_ne!(global(&ui, "Radio", "total"), num(-1.0));
+    call(&ui, "Radio", "save-found", &[num(0.0)]);
+    assert_eq!(stations(&ui), 1);
+    call(&ui, "Radio", "save-found", &[num(0.0)]);
+    assert_eq!(stations(&ui), 0);
+    call(&ui, "Radio", "clear-find", &[]);
+    assert_eq!(global(&ui, "Radio", "total"), num(-1.0));
+    assert_eq!(rows(&ui, "chosen"), 0);
+
     // Playlists: made empty or from Up Next, filled from the library, played, edited, deleted.
     let count = |ui: &SkinWindow, name: &str| match global(ui, "Playlists", name) {
         Value::Model(model) => model.row_count(),

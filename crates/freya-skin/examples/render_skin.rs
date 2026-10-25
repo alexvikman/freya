@@ -3,11 +3,11 @@
 //! Usage: cargo run -p freya-skin --example render_skin -- <out.png> [skin | builtin | picker]
 //!        [scale] [width] [height]
 //!        [library | library-search | albums | songs | most-played | stations | playlist | visualizer
-//!        | equalizer | radio | error]
+//!        | equalizer | radio | directory | directory-search | error]
 //!
 //! The last argument shows another of the built-in skin's views than Up Next (the library at an
-//! album, its search, its albums, songs or most played, the saved stations, the visualizer or
-//! the equalizer),
+//! album, its search, its albums, songs or most played, the radio directory's first page or a
+//! search of it, the visualizer or the equalizer),
 //! internet radio playing, or a track that could not be played.
 
 use std::path::PathBuf;
@@ -47,13 +47,15 @@ fn main() {
             }
             let view = match panel.as_str() {
                 "library" | "library-search" | "albums" | "songs" | "most-played" => "library",
-                "stations" => "radio",
+                "stations" | "directory" | "directory-search" => "radio",
                 "playlist" | "visualizer" | "equalizer" => panel.as_str(),
                 _ => "queue",
             };
             let _ = ui.set_property("view", slint_interpreter::Value::String(view.into()));
             match panel.as_str() {
                 "radio" => freya_skin::sample::fill_radio(ui),
+                "directory" => freya_skin::sample::fill_directory(ui),
+                "directory-search" => freya_skin::sample::fill_directory_search(ui),
                 "error" => freya_skin::sample::fill_error(ui),
                 "welcome" => freya_skin::sample::fill_welcome(ui),
                 _ => {}

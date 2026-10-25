@@ -278,6 +278,8 @@ pub struct LibraryPanel {
     playlists_changed: bool,
     /// Whether the server told that the radio stations changed, since this was last asked.
     stations_changed: bool,
+    /// Whether the server told that the radio directory changed, since this was last asked.
+    radio_changed: bool,
     lastfm_status: Option<freya_protocol::LastFmStatus>,
     /// Where thumbnails of covers and pictures are made, once the library is open.
     covers_dir: Option<PathBuf>,
@@ -485,6 +487,7 @@ impl LibraryPanel {
             tried: None,
             playlists_changed: false,
             stations_changed: false,
+            radio_changed: false,
             lastfm_status: None,
             covers_dir: covers,
             opened: vec![Level::Artists],
@@ -779,8 +782,7 @@ impl LibraryPanel {
                 ServiceEvent::PlaysWritten => self.stale |= self.shows_plays(),
                 ServiceEvent::PlaylistsChanged => self.playlists_changed = true,
                 ServiceEvent::StationsChanged => self.stations_changed = true,
-                // Followed once the radio view shows the directory.
-                ServiceEvent::RadioDirectoryChanged => {}
+                ServiceEvent::RadioDirectoryChanged => self.radio_changed = true,
                 ServiceEvent::LastFm(status) => self.lastfm_status = Some(status),
                 // The answers kept are forgotten by the client; the rows are read anew when
                 // the events above say what changed them.

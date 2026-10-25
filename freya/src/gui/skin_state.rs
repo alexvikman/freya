@@ -73,6 +73,11 @@ fn same(a: &Value, b: &Value) -> bool {
     }
 }
 
+/// A model of `rows`, for a list inside a row.
+pub fn model(rows: Vec<Value>) -> Value {
+    Value::Model(ModelRc::new(VecModel::from(rows)))
+}
+
 /// Rows of a list the skin shows. Only rows that changed are updated, so large lists stay
 /// cheap and the skin keeps its scroll position.
 pub struct ModelRows {
@@ -93,11 +98,15 @@ impl ModelRows {
     }
 
     pub fn sync(&mut self, rows: Vec<Value>) {
-        if rows.len() == self.shown.len() {
+        // As many, or more after them, as when a list grows a page at a time.
+        if rows.len() >= self.shown.len() {
             for (i, (new, old)) in rows.iter().zip(&self.shown).enumerate() {
                 if !same(new, old) {
                     self.model.set_row_data(i, new.clone());
                 }
+            }
+            for row in &rows[self.shown.len()..] {
+                self.model.push(row.clone());
             }
         } else {
             self.model.set_vec(rows.clone());

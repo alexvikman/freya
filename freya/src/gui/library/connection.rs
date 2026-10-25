@@ -199,6 +199,11 @@ impl LibraryPanel {
         std::mem::take(&mut self.stations_changed)
     }
 
+    /// Whether the server told that the radio directory changed since this was last asked.
+    pub fn take_radio_changed(&mut self) -> bool {
+        std::mem::take(&mut self.radio_changed)
+    }
+
     /// How the server keeps the library, as the user set it; once it is open.
     pub fn server_settings(&self) -> Option<&ServerSettings> {
         self.server.as_ref().map(|_| &self.settings)

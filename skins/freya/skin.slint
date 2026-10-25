@@ -4,7 +4,7 @@
 // contrast against the background it is drawn on (WCAG AA), light and dark mode follow the
 // system.
 
-import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, LastFm, Server, ServerDevice, ServerUser, FoundServer, PlaybackState, Shortcuts, TrackRow, LibraryRow, AlbumPage, ArtistPage, ArtistDraft, PictureChoice, MatchChoice, AlbumMatchDraft, AlbumMatchChoice, ArtistMatchDraft, PlaylistRow, PlaylistPage, PlaylistEntryRow, SearchSection, StationRow, NativeSpectrum, NativeOscilloscope, NativeHologram } from "@freya/v1.slint";
+import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, LastFm, Server, ServerDevice, ServerUser, FoundServer, PlaybackState, Shortcuts, TrackRow, LibraryRow, AlbumPage, ArtistPage, ArtistDraft, PictureChoice, MatchChoice, AlbumMatchDraft, AlbumMatchChoice, ArtistMatchDraft, PlaylistRow, PlaylistPage, PlaylistEntryRow, SearchSection, StationRow, DirectoryStationRow, RadioTagRow, RadioTagGroup, NativeSpectrum, NativeOscilloscope, NativeHologram } from "@freya/v1.slint";
 import { AboutSlint, ListView, Palette, ScrollView } from "std-widgets.slint";
 
 // Every skin re-exports the API globals so the app can reach them.
@@ -4336,15 +4336,368 @@ component StationRowView inherits Rectangle {
     }
 }
 
-/// The saved radio stations; a click plays one.
+/// One of a page's tabs, in a row under its title; the chosen one is underlined in the accent
+/// color. As wide as its bold text always, so choosing a tab moves none of the others.
+component PageTab inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    callback clicked;
+
+    width: bold.preferred-width;
+    height: 34px;
+    accessible-role: tab;
+    accessible-label: text;
+    accessible-item-selected: selected;
+    accessible-action-default => { root.clicked(); }
+
+    bold := Text {
+        visible: false;
+        text: root.text;
+        font-size: 14px;
+        font-weight: 600;
+    }
+    Text {
+        x: (parent.width - self.preferred-width) / 2;
+        y: 4px;
+        width: self.preferred-width;
+        text: root.text;
+        font-size: 14px;
+        font-weight: root.selected ? 600 : 400;
+        color: root.selected || touch.has-hover ? Theme.text : Theme.text-secondary;
+    }
+    Rectangle {
+        y: parent.height - self.height;
+        height: 2px;
+        border-radius: 1px;
+        background: root.selected ? Theme.accent : transparent;
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+/// How a stream sounds, as a small badge: "Hi-Res", "Lossless", "320 kbps".
+component QualityBadge inherits Rectangle {
+    in property <string> text;
+    /// Over a tile's picture, where it needs a background of its own.
+    in property <bool> raised;
+
+    property <bool> lossless: root.text == "Hi-Res" || root.text == "Lossless";
+
+    height: 20px;
+    width: label.preferred-width + 12px;
+    border-radius: 4px;
+    border-width: root.raised ? 0 : 1px;
+    border-color: root.lossless ? Theme.accent : Theme.divider;
+    background: root.raised ? (root.lossless ? Theme.accent : #000000a6) : transparent;
+
+    label := Text {
+        text: root.text;
+        font-size: 11px;
+        font-weight: 600;
+        color: root.raised ? (root.lossless ? Theme.on-accent : #ffffff) : root.lossless ? Theme.accent-text : Theme.text-secondary;
+    }
+}
+
+/// A tag to look for stations by; one looked for shows a cross, and a click on either looks
+/// for it, or no longer.
+component TagChip inherits Rectangle {
+    in property <RadioTagRow> tag;
+
+    height: 30px;
+    width: label.preferred-width + (root.tag.chosen ? 40px : 24px);
+    border-radius: 15px;
+    background: root.tag.chosen ? Theme.text : touch.has-hover ? Theme.pressed : Theme.hover;
+    accessible-role: button;
+    accessible-label: root.tag.chosen ? root.tag.name + ", looked for" : root.tag.name + ", " + root.tag.stations + " stations";
+    accessible-checked: root.tag.chosen;
+    accessible-action-default => { Radio.toggle-tag(root.tag.id); }
+
+    label := Text {
+        x: 12px;
+        text: root.tag.name;
+        font-size: 13px;
+        font-weight: 600;
+        color: root.tag.chosen ? Theme.background : Theme.text;
+    }
+    if root.tag.chosen: Icon {
+        x: parent.width - 24px;
+        width: 12px;
+        height: 12px;
+        data: Icons.close;
+        stroked: true;
+        color: Theme.background;
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { Radio.toggle-tag(root.tag.id); }
+    }
+}
+
+/// The radio directory's tags of one kind, in a row that scrolls sideways.
+component TagGroupRow inherits HorizontalLayout {
+    in property <RadioTagGroup> group;
+
+    height: 30px;
+    spacing: 12px;
+
+    Text {
+        width: 84px;
+        text: root.group.title;
+        font-size: 12px;
+        font-weight: 600;
+        color: Theme.text-secondary;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    Flickable {
+        horizontal-stretch: 1;
+        content-width: chips.preferred-width;
+        content-height: self.height;
+
+        chips := HorizontalLayout {
+            spacing: 8px;
+
+            for tag in root.group.tags: TagChip {
+                tag: tag;
+            }
+        }
+    }
+}
+
+/// A station of the radio directory's first page; a click plays it.
+component StationTile inherits Rectangle {
+    in property <DirectoryStationRow> entry;
+    in property <int> index;
+    in property <length> size;
+
+    width: root.size;
+    accessible-role: list-item;
+    accessible-label: root.entry.name + (root.entry.playing ? ", playing" : "") + (root.entry.quality == "" ? "" : ", " + root.entry.quality);
+    accessible-action-default => { Radio.play-found(root.index); }
+
+    // Below the save button, so it gets its own clicks.
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { Radio.play-found(root.index); }
+    }
+
+    VerticalLayout {
+        alignment: start;
+        spacing: 3px;
+
+        Rectangle {
+            width: root.size;
+            height: root.size * 0.62;
+            border-radius: 8px;
+            clip: true;
+            background: touch.has-hover ? Theme.hover : Theme.surface;
+            border-width: root.entry.playing ? 2px : 0;
+            border-color: Theme.accent;
+
+            Icon {
+                width: 34px;
+                height: 34px;
+                data: Icons.radio;
+                stroked: true;
+                color: root.entry.playing ? Theme.accent-text : Theme.text-secondary;
+            }
+            if root.entry.quality == "Hi-Res" || root.entry.quality == "Lossless": QualityBadge {
+                x: 8px;
+                y: 8px;
+                text: root.entry.quality;
+                raised: true;
+            }
+            if Server.admin && (touch.has-hover || root.entry.saved): Rectangle {
+                x: parent.width - self.width - 6px;
+                y: 6px;
+                width: 30px;
+                height: 30px;
+                border-radius: 15px;
+                background: #000000a6;
+
+                Icon {
+                    width: 16px;
+                    height: 16px;
+                    data: root.entry.saved ? Icons.check : Icons.plus;
+                    stroked: true;
+                    color: root.entry.saved ? Theme.accent : #ffffff;
+                }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { Radio.save-found(root.index); }
+                }
+            }
+        }
+        Rectangle { height: 4px; }
+        Text {
+            text: root.entry.name;
+            font-size: 13px;
+            font-weight: 600;
+            color: root.entry.playing ? Theme.accent-text : Theme.text;
+            overflow: elide;
+        }
+        Text {
+            text: root.entry.detail;
+            font-size: 12px;
+            color: Theme.text-secondary;
+            overflow: elide;
+        }
+    }
+}
+
+/// A station the directory found; a click plays it.
+component DirectoryStationView inherits Rectangle {
+    in property <DirectoryStationRow> entry;
+    in property <int> index;
+
+    height: 56px;
+    background: touch.has-hover ? Theme.hover : transparent;
+    accessible-role: list-item;
+    accessible-label: root.entry.name + (root.entry.playing ? ", playing" : "") + (root.entry.quality == "" ? "" : ", " + root.entry.quality);
+    accessible-action-default => { Radio.play-found(root.index); }
+
+    // Below the button, so it gets its own clicks.
+    touch := TouchArea {
+        clicked => { Radio.play-found(root.index); }
+    }
+
+    HorizontalLayout {
+        padding-left: 24px;
+        padding-right: 12px;
+        spacing: 14px;
+
+        VerticalLayout {
+            alignment: center;
+
+            Icon {
+                width: 22px;
+                height: 22px;
+                data: Icons.radio;
+                stroked: true;
+                color: root.entry.playing ? Theme.accent-text : Theme.text-secondary;
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+
+            Text {
+                text: root.entry.name;
+                color: root.entry.playing ? Theme.accent-text : Theme.text;
+                font-weight: root.entry.playing ? 600 : 400;
+                overflow: elide;
+            }
+            Text {
+                text: root.entry.detail;
+                font-size: 12px;
+                color: Theme.text-secondary;
+                overflow: elide;
+            }
+        }
+        if root.entry.playing: Text {
+            text: "Playing";
+            font-size: 12px;
+            color: Theme.accent-text;
+            vertical-alignment: center;
+        }
+        if root.entry.quality != "": VerticalLayout {
+            alignment: center;
+
+            QualityBadge {
+                text: root.entry.quality;
+            }
+        }
+        if Server.admin: IconButton {
+            icon: root.entry.saved ? Icons.check : Icons.plus;
+            stroked: true;
+            size: 32px;
+            label: root.entry.saved ? "Remove " + root.entry.name + " from the server's stations" : "Save " + root.entry.name + " to the server's stations";
+            tooltip: root.entry.saved ? "Saved: click to remove" : "Save the station";
+            clicked => { Radio.save-found(root.index); }
+        }
+    }
+}
+
+/// Looks for stations in the radio directory by words, as they are typed.
+component RadioSearchField inherits Rectangle {
+    forward-focus: input;
+
+    height: 34px;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: input.has-focus ? Theme.accent : Theme.divider;
+    background: Theme.surface;
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 4px;
+        spacing: 8px;
+
+        Icon {
+            width: 16px;
+            height: 16px;
+            y: (parent.height - self.height) / 2;
+            data: Icons.search;
+            stroked: true;
+            color: Theme.text-secondary;
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+
+            if input.text == "": Text {
+                width: 100%;
+                text: "Search stations";
+                color: Theme.text-secondary;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            input := TextInput {
+                width: 100%;
+                text: Radio.query;
+                single-line: true;
+                color: Theme.text;
+                selection-background-color: Theme.selection;
+                selection-foreground-color: Theme.text;
+                vertical-alignment: center;
+                accessible-role: text-input;
+                accessible-label: "Search stations";
+                edited => { Radio.find(self.text); }
+            }
+        }
+        if input.text != "": IconButton {
+            icon: Icons.close;
+            stroked: true;
+            size: 26px;
+            label: "Clear search";
+            clicked => {
+                input.text = "";
+                Radio.find("");
+                input.focus();
+            }
+        }
+    }
+}
+
+/// Radio: the server's directory of stations, browsed by its first page's rows and tags, or
+/// searched by words and tags; and the stations the server keeps, saved from there or added by
+/// their address.
 component RadioView inherits Rectangle {
     callback add-station();
+    /// "browse" or "saved".
+    in-out property <string> tab: "browse";
 
+    property <length> tile: 176px;
+    property <length> gap: 16px;
+    property <int> fit: max(1, floor((self.width - 48px + self.gap) / (self.tile + self.gap)));
     property <int> restores: App.restores;
     init => { root.restore-scroll(); }
     changed restores => { root.restore-scroll(); }
 
-    // Back and forward: how far down it is scrolled, and scrolling it back there.
+    // Back and forward: how far down the saved stations are scrolled, and scrolling them back
+    // there.
     function restore-scroll() {
         if (App.restore-view == "radio") {
             stations.content-y = -App.restore-scroll;
@@ -4352,41 +4705,233 @@ component RadioView inherits Rectangle {
         App.scroll = -stations.content-y;
     }
 
-    stations := ListView {
-        changed content-y => { App.scroll = -self.content-y; }
+    VerticalLayout {
+        HorizontalLayout {
+            height: 52px;
+            padding-left: 24px;
+            padding-right: 24px;
+            spacing: 22px;
 
-        for station[i] in Radio.stations: StationRowView {
-            entry: station;
-            index: i;
+            VerticalLayout {
+                alignment: end;
+
+                PageTab {
+                    text: "Browse";
+                    selected: root.tab == "browse";
+                    clicked => { root.tab = "browse"; }
+                }
+            }
+            VerticalLayout {
+                alignment: end;
+
+                PageTab {
+                    text: Radio.stations.length == 0 ? "Saved" : "Saved (" + Radio.stations.length + ")";
+                    selected: root.tab == "saved";
+                    clicked => { root.tab = "saved"; }
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            VerticalLayout {
+                alignment: center;
+
+                RadioSearchField {
+                    width: 280px;
+                    visible: root.tab == "browse";
+                }
+            }
         }
-    }
-
-    if Radio.stations.length == 0: VerticalLayout {
-        alignment: center;
-        spacing: 6px;
-
-        Text {
-            text: "No stations";
-            font-size: 16px;
-            font-weight: 600;
-            color: Theme.text;
-            horizontal-alignment: center;
+        Rectangle {
+            height: 1px;
+            background: Theme.divider;
         }
-        Text {
-            text: Server.admin
-                ? "Save the stations you listen to, and play them from here."
-                : "The stations the server keeps show here.";
-            font-size: 14px;
-            color: Theme.text-secondary;
-            horizontal-alignment: center;
-        }
-        if Server.admin: HorizontalLayout {
-            alignment: center;
-            padding-top: 8px;
+        Rectangle {
+            vertical-stretch: 1;
 
-            TextButton {
-                text: "Add a station…";
-                clicked => { root.add-station(); }
+            // The stations the server keeps.
+            stations := ListView {
+                width: 100%;
+                height: 100%;
+                visible: root.tab == "saved";
+                changed content-y => { App.scroll = -self.content-y; }
+
+                for station[i] in Radio.stations: StationRowView {
+                    entry: station;
+                    index: i;
+                }
+            }
+            if root.tab == "saved" && Radio.stations.length == 0: VerticalLayout {
+                alignment: center;
+                spacing: 6px;
+
+                Text {
+                    text: "No stations";
+                    font-size: 16px;
+                    font-weight: 600;
+                    color: Theme.text;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: Server.admin
+                        ? "Save the stations you listen to from Browse, and play them from here."
+                        : "The stations the server keeps show here.";
+                    font-size: 14px;
+                    color: Theme.text-secondary;
+                    horizontal-alignment: center;
+                }
+                if Server.admin: HorizontalLayout {
+                    alignment: center;
+                    padding-top: 8px;
+
+                    TextButton {
+                        text: "Add a station by its address…";
+                        clicked => { root.add-station(); }
+                    }
+                }
+            }
+
+            // The directory's first page: its tags, and its rows of stations.
+            first-page := ScrollView {
+                width: 100%;
+                height: 100%;
+                visible: root.tab == "browse" && Radio.total < 0;
+
+                VerticalLayout {
+                    width: first-page.visible-width;
+                    alignment: start;
+                    padding: 24px;
+                    spacing: 28px;
+
+                    if Radio.directory == "loading" || Radio.directory == "failed" || Radio.directory == "off": Text {
+                        text: Radio.directory == "loading"
+                            ? "Fetching the stations of Radio Browser, the open directory of internet radio. Until then, here are the ones Freya picked."
+                            : Radio.directory == "failed"
+                            ? "Radio Browser's stations could not be fetched; the server tries again later. Here are the ones Freya picked."
+                            : "The server does not ask Radio Browser for its stations, so here are the ones Freya picked. An admin can change that in Settings, on the Library tab.";
+                        font-size: 13px;
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
+                    }
+                    VerticalLayout {
+                        spacing: 8px;
+
+                        for group in Radio.tags: TagGroupRow {
+                            group: group;
+                        }
+                    }
+                    for shelf[s] in Radio.shelves: VerticalLayout {
+                        spacing: 12px;
+
+                        HorizontalLayout {
+                            spacing: 12px;
+
+                            Text {
+                                text: shelf.title;
+                                font-size: 20px;
+                                font-weight: 700;
+                                color: Theme.text;
+                                vertical-alignment: center;
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            if shelf.tagged: VerticalLayout {
+                                alignment: center;
+
+                                LinkText {
+                                    text: "Show all";
+                                    label: "Show all of " + shelf.title;
+                                    font-size: 13px;
+                                    color: Theme.accent-text;
+                                    clicked => { Radio.show-shelf(s); }
+                                }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: root.gap;
+                            alignment: start;
+
+                            for i in min(shelf.count, root.fit): StationTile {
+                                size: root.tile;
+                                index: shelf.first + i;
+                                entry: Radio.found[shelf.first + i];
+                            }
+                        }
+                    }
+                }
+            }
+
+            // What the words and tags looked for found.
+            VerticalLayout {
+                width: 100%;
+                height: 100%;
+                visible: root.tab == "browse" && Radio.total >= 0;
+
+                VerticalLayout {
+                    padding-left: 24px;
+                    padding-right: 24px;
+                    padding-top: 16px;
+                    padding-bottom: 12px;
+                    spacing: 10px;
+
+                    HorizontalLayout {
+                        height: 30px;
+                        spacing: 8px;
+
+                        for tag in Radio.chosen: TagChip {
+                            tag: tag;
+                        }
+                        VerticalLayout {
+                            alignment: center;
+
+                            LinkText {
+                                text: "Back to Browse";
+                                label: "Back to Browse";
+                                font-size: 13px;
+                                color: Theme.accent-text;
+                                clicked => { Radio.clear-find(); }
+                            }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        Text {
+                            text: Radio.searching && Radio.found.length == 0 ? "Searching…"
+                                : Radio.total == 1 ? "1 station" : Radio.total + " stations";
+                            font-size: 13px;
+                            color: Theme.text-secondary;
+                            vertical-alignment: center;
+                        }
+                    }
+                    for group in Radio.tags: TagGroupRow {
+                        group: group;
+                    }
+                }
+                Rectangle {
+                    height: 1px;
+                    background: Theme.divider;
+                }
+                Rectangle {
+                    vertical-stretch: 1;
+
+                    found := ListView {
+                        width: 100%;
+                        height: 100%;
+                        // More of them as the end comes near.
+                        changed content-y => {
+                            if (-self.content-y + self.visible-height > self.content-height - 600px) {
+                                Radio.more();
+                            }
+                        }
+
+                        for station[i] in Radio.found: DirectoryStationView {
+                            entry: station;
+                            index: i;
+                        }
+                    }
+                    if !Radio.searching && Radio.total == 0: Text {
+                        text: "No stations match";
+                        font-size: 15px;
+                        color: Theme.text-secondary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
             }
         }
     }
@@ -7447,47 +7992,6 @@ component SettingsSection inherits VerticalLayout {
     @children
 }
 
-/// One of a page's tabs, in a row under its title; the chosen one is underlined in the accent
-/// color. As wide as its bold text always, so choosing a tab moves none of the others.
-component PageTab inherits Rectangle {
-    in property <string> text;
-    in property <bool> selected;
-    callback clicked;
-
-    width: bold.preferred-width;
-    height: 34px;
-    accessible-role: tab;
-    accessible-label: text;
-    accessible-item-selected: selected;
-    accessible-action-default => { root.clicked(); }
-
-    bold := Text {
-        visible: false;
-        text: root.text;
-        font-size: 14px;
-        font-weight: 600;
-    }
-    Text {
-        x: (parent.width - self.preferred-width) / 2;
-        y: 4px;
-        width: self.preferred-width;
-        text: root.text;
-        font-size: 14px;
-        font-weight: root.selected ? 600 : 400;
-        color: root.selected || touch.has-hover ? Theme.text : Theme.text-secondary;
-    }
-    Rectangle {
-        y: parent.height - self.height;
-        height: 2px;
-        border-radius: 1px;
-        background: root.selected ? Theme.accent : transparent;
-    }
-
-    touch := TouchArea {
-        clicked => { root.clicked(); }
-    }
-}
-
 /// One setting: what it is on the left, with an explanation below when it needs one, and its
 /// control at the far right.
 component SettingsRow inherits HorizontalLayout {
@@ -8173,6 +8677,24 @@ component SettingsView inherits Rectangle {
 
             // The server is a server wherever it runs: what Freya is connected to, and, for its
             // admins, the server's own settings.
+            if root.tab == "library": SettingsSection {
+                title: "Radio";
+
+                SettingsRow {
+                    label: "Stations from Radio Browser";
+                    detail: "The open directory of internet radio, with tens of thousands of stations to find by genre, country and language, besides those Freya picked. The server fetches them about once a week, and tells Radio Browser which are played.";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        Toggle {
+                            label: "Stations from Radio Browser";
+                            checked: Library.radio-directory-online;
+                            toggled => { Library.set-radio-directory-online(!Library.radio-directory-online); }
+                        }
+                    }
+                }
+            }
             if root.tab == "server": SettingsSection {
                 title: "Server";
 
@@ -9312,6 +9834,8 @@ export component FreyaSkin inherits Window {
     property <string> music-view: "queue";
     /// The tab Settings opens on: the one it was left on.
     property <string> settings-tab: "general";
+    /// The radio view's tab: "browse" or "saved", as it was left.
+    property <string> radio-tab: "browse";
     /// Whether the navigation shows; the toolbar's first button toggles it.
     property <bool> sidebar-shown: true;
     /// Whether the visualizer fills the screen, for a TV; the view to go back to after, and
@@ -9475,7 +9999,7 @@ export component FreyaSkin inherits Window {
                                     : "Equalizer";
                                 subtitle: root.view == "queue" ? Playlist.summary
                                     : root.view == "library" ? (Library.subtitle != "" ? Library.subtitle : Library.status)
-                                    : root.view == "radio" ? (Radio.stations.length == 1 ? "1 station" : Radio.stations.length + " stations")
+                                    : root.view == "radio" ? Radio.summary
                                     : root.view == "playlist" ? Playlists.summary
                                     : "";
                                 can-go-back: root.view == "library" && Library.can-go-back;
@@ -9560,6 +10084,7 @@ export component FreyaSkin inherits Window {
                             if root.view == "radio": RadioView {
                                 width: 100%;
                                 height: 100%;
+                                tab <=> root.radio-tab;
                                 add-station => { toolbar.add-station(); }
                             }
                             VisualizerView {

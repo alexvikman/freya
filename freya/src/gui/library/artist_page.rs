@@ -393,6 +393,12 @@ impl LibraryPanel {
         self.tell_settings();
     }
 
+    /// Whether the server's radio directory has Radio Browser's stations.
+    pub fn set_radio_directory_online(&mut self, online: bool) {
+        self.settings.radio_directory_online = online;
+        self.tell_settings();
+    }
+
     /// Whether a scan may ask Last.fm what it says of artists; as for Wikipedia.
     pub fn set_online_bios(&mut self, online: bool) {
         self.settings.artist_bios_online = online;
