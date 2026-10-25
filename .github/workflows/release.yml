@@ -2,13 +2,19 @@
 # Cargo.toml and on main, first passes all of CI (ci.yml, on the tagged commit), then builds and
 # packages Freya for every platform; the release job, which waits for the owner's approval in the
 # `release` environment, signs the checksums and publishes the GitHub Release that Freya's
-# updater reads. Started by hand, it only checks and builds the packages.
+# updater reads. Started by hand, it only checks and builds the packages; with `windows_only`,
+# only Windows', of a commit whose CI passed already, so a build to try comes in half the time.
 name: Release
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      windows_only:
+        description: "Only the Windows packages, of a commit CI has passed already"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -24,6 +30,10 @@ env:
 jobs:
   check:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # To see that CI passed on the commit, for Windows' packages alone.
+      actions: read
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -52,13 +62,26 @@ jobs:
             fi
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: CI passed on the commit already
+        if: inputs.windows_only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          passed=$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$SHA" \
+            --json conclusion --jq 'map(select(.conclusion == "success")) | length')
+          if [ "$passed" -eq 0 ]; then
+            echo "::error::CI has not passed on $SHA: run the whole workflow"; exit 1
+          fi
 
   # All of CI on the commit being released: tests on every platform, dependencies, scripts and
   # every commit scanned for credentials. Nothing is built or published unless it passes.
   ci:
+    if: ${{ !inputs.windows_only }}
     uses: ./.github/workflows/ci.yml
 
   macos:
+    if: ${{ !inputs.windows_only }}
     needs: [check, ci]
     strategy:
       matrix:
@@ -145,6 +168,7 @@ jobs:
           if-no-files-found: error
 
   linux:
+    if: ${{ !inputs.windows_only }}
     needs: [check, ci]
     strategy:
       matrix:
@@ -198,6 +222,10 @@ jobs:
 
   windows:
     needs: [check, ci]
+    # After CI, or without it for Windows' packages alone, whose commit passed it already.
+    if: >-
+      ${{ !cancelled() && needs.check.result == 'success'
+      && (needs.ci.result == 'success' || (inputs.windows_only && needs.ci.result == 'skipped')) }}
     runs-on: windows-2025
     env:
       VERSION: ${{ needs.check.outputs.version }}

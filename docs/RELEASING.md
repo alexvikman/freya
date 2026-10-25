@@ -29,7 +29,7 @@ The tag starts [`.github/workflows/release.yml`](../.github/workflows/release.ym
    build's provenance, and publishes the GitHub Release with notes from the commits since the
    last tag.
 
-Started by hand (*Run workflow*), the workflow only builds the packages, as artifacts.
+Started by hand (*Run workflow*), the workflow only builds the packages, as artifacts. With *windows_only*, it builds only the Windows packages, of a commit CI has passed already, and runs CI no more: a build to try on Windows comes in about 25 minutes rather than an hour.
 
 All actions are GitHub's own, pinned to commits (Dependabot keeps them current); no job keeps
 the repository token, and only the release job may write.
