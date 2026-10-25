@@ -1178,6 +1178,9 @@ skin_api! {
         App."build-date" => set_build_date, get_build_date;
         App."theme" => set_theme, get_theme;
         App."close-minimizes" => set_close_minimizes, get_close_minimizes;
+        App."autoscroll" => set_autoscroll, get_autoscroll;
+        App."autoscroll-x" => set_autoscroll_x, get_autoscroll_x;
+        App."autoscroll-y" => set_autoscroll_y, get_autoscroll_y;
         App."activities" => set_activities, get_activities;
         App."log" => set_log, get_log;
         App."log-level" => set_log_level, get_log_level;

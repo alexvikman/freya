@@ -1025,3 +1025,28 @@ fn artist_order_view_and_pictures_are_kept_in_the_settings() {
         Value::Bool(false)
     );
 }
+
+#[test]
+fn scrolling_by_the_middle_button_scrolls_what_is_under_it_down() {
+    let app = silent_app();
+    let ui = current_ui(&app);
+    // A server chosen, so the views show rather than the welcome view.
+    ui.set_global_property("Server", "chosen", Value::Bool(true))
+        .unwrap();
+    ui.window().set_size(slint::LogicalSize::new(1100.0, 720.0));
+    let many: Vec<PathBuf> = (0..300).map(|_| fixture("sine.flac")).collect();
+    app.borrow_mut().add_paths(&many);
+    app.borrow_mut().refresh();
+    assert_eq!(global(&ui, "App", "scroll"), num(0.0));
+    // What the middle button's scrolling asks below its mark: a negative step.
+    ui.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(600.0, 300.0),
+            delta_x: 0.0,
+            delta_y: -120.0,
+        });
+    let Value::Number(scrolled) = global(&ui, "App", "scroll") else {
+        panic!("App.scroll is a length");
+    };
+    assert!(scrolled > 0.0, "scrolled {scrolled}");
+}

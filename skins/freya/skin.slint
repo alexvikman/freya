@@ -94,6 +94,8 @@ global Icons {
     out property <string> code: "M8 6 L2 12 L8 18 M16 6 L22 12 L16 18";
     out property <string> document: "M6 3 H14 L19 8 V21 H6 Z M14 3 V8 H19 M9 13 H16 M9 17 H16";
     out property <string> bubble: "M4 5 H20 V16 H11 L6 20 V16 H4 Z";
+    // Filled: scrolling up and down from a point.
+    out property <string> autoscroll: "M12 3 L7.5 8 H16.5 Z M12 21 L16.5 16 H7.5 Z M12 10.5 A1.5 1.5 0 1 0 12 13.5 A1.5 1.5 0 1 0 12 10.5 Z";
     out property <string> shrink: "M9 4 V9 H4 M20 9 H15 V4 M15 20 V15 H20 M4 15 H9 V20";
 }
 
@@ -11241,6 +11243,27 @@ export component FreyaSkin inherits Window {
             text: "Drop to add to Up Next";
             font-size: 18px;
             font-weight: 600;
+            color: Theme.text;
+        }
+    }
+
+    // Where scrolling by the middle button was started, while it scrolls.
+    if App.autoscroll: Rectangle {
+        x: App.autoscroll-x - self.width / 2;
+        y: App.autoscroll-y - self.height / 2;
+        width: 30px;
+        height: 30px;
+        border-radius: 15px;
+        background: Theme.surface;
+        border-width: 1px;
+        border-color: Theme.divider;
+        drop-shadow-blur: 8px;
+        drop-shadow-color: #00000040;
+
+        Icon {
+            width: 20px;
+            height: 20px;
+            data: Icons.autoscroll;
             color: Theme.text;
         }
     }

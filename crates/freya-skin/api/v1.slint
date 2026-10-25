@@ -1090,6 +1090,11 @@ export global App {
     /// Whether closing the window minimizes it to the taskbar, Freya playing on, rather than
     /// quitting; on macOS closing leaves Freya in the Dock either way. Kept between runs.
     in property <bool> close-minimizes: true;
+    /// Whether the window scrolls by the mouse's middle button, which Freya does for any skin,
+    /// and where in the window it was started: a skin may mark the place.
+    in property <bool> autoscroll;
+    in property <length> autoscroll-x;
+    in property <length> autoscroll-y;
     /// Whether the skin shows its equalizer; kept between runs.
     in property <bool> equalizer-visible;
     /// To draw into the window's title bar, set this to the height of the skin's top bar, e.g.

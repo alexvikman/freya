@@ -1,5 +1,6 @@
 //! Window events Slint does not pass on: files dragged onto the window, whether a window can
-//! be seen and has focus, and the app being quit. They are taken from winit directly.
+//! be seen and has focus, and the app being quit; and scrolling by the middle button, which
+//! Slint is not given. They are taken from winit directly.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -9,6 +10,8 @@ use slint::winit_030::winit::event::{ElementState, MouseButton, WindowEvent as W
 use slint::winit_030::winit::event_loop::ActiveEventLoop;
 use slint::winit_030::winit::window::{Window, WindowId};
 use slint::winit_030::{CustomApplicationHandler, EventResult};
+
+use super::autoscroll::Autoscroll;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WindowEvent {
@@ -36,6 +39,7 @@ pub struct WindowEvents {
     on_exit: Rc<RefCell<Option<ExitAction>>>,
     /// Handles the queue at once, for events that should not wait for the next tick.
     wake: Rc<RefCell<Option<WakeAction>>>,
+    autoscroll: Autoscroll,
 }
 
 impl WindowEvents {
@@ -56,6 +60,11 @@ impl WindowEvents {
         *self.wake.borrow_mut() = Some(Rc::new(action));
     }
 
+    /// Scrolling by the middle button, which these events start and stop.
+    pub fn autoscroll(&self) -> Autoscroll {
+        self.autoscroll.clone()
+    }
+
     /// A winit event hook that fills this queue.
     pub fn handler(&self) -> Handler {
         Handler(self.clone())
@@ -70,9 +79,13 @@ impl CustomApplicationHandler for Handler {
         _event_loop: &ActiveEventLoop,
         window_id: WindowId,
         _winit_window: Option<&Window>,
-        _slint_window: Option<&slint::Window>,
+        slint_window: Option<&slint::Window>,
         event: &WinitEvent,
     ) -> EventResult {
+        let scale = slint_window.map_or(1.0, slint::Window::scale_factor);
+        if self.0.autoscroll.event(event, scale) {
+            return EventResult::PreventDefault;
+        }
         let mut queue = self.0.queue.borrow_mut();
         match event {
             WinitEvent::HoveredFile(_) => queue.push(WindowEvent::FileHover(true)),

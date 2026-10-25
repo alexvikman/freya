@@ -382,6 +382,7 @@ Her poses are pictures in `assets/hologram/` (JPEG or PNG, built into Freya), sh
 | `build-date` | string | When this copy of Freya was built, as "2026-10-17"; empty when unknown |
 | `theme` | string | "system", "light" or "dark", as chosen by the user |
 | `close-minimizes` | bool | Whether closing the window minimizes it to the taskbar, Freya playing on, rather than quitting; on macOS closing leaves Freya in the Dock either way |
+| `autoscroll`, `autoscroll-x`, `autoscroll-y` | bool, length, length | Whether the window scrolls by the mouse's middle button, which Freya does for any skin, as by the wheel; and where in the window it was started, for the skin to mark |
 | `equalizer-visible` | bool | Whether the user wants the equalizer shown |
 | `title-bar-height` | length | `in-out`, set by the skin: see below. 0 by default |
 | `window-buttons-width` | length | The room the window buttons take at the left of the skin's top bar; 0 while the system draws its own title bar, and in full screen |

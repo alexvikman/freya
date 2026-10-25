@@ -2,6 +2,7 @@
 
 mod app;
 mod app_icon;
+mod autoscroll;
 mod bindings;
 mod builtin_skin;
 mod cover_decoder;
@@ -181,6 +182,51 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 && let Ok(mut app) = app.try_borrow_mut()
             {
                 app.tick();
+            }
+        });
+    }
+    {
+        // Scrolling by the middle button: the window is asked as by the wheel at the mark, with
+        // the app let go of, as what scrolls may call into it.
+        let app = Rc::downgrade(&app);
+        let autoscroll = window_events.autoscroll();
+        let shown = std::cell::Cell::new(None::<slint::LogicalPosition>);
+        window_events.autoscroll().on_frame(move || {
+            let Some(ui) = app
+                .upgrade()
+                .and_then(|app| app.try_borrow().ok().map(|app| app.view.ui.clone()))
+            else {
+                return;
+            };
+            if let Some(step) = autoscroll.step()
+                && (step.delta_x != 0.0 || step.delta_y != 0.0)
+            {
+                ui.window()
+                    .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                        position: step.at,
+                        delta_x: step.delta_x,
+                        delta_y: step.delta_y,
+                    });
+            }
+            let mark = autoscroll.mark();
+            if shown.replace(mark) != mark {
+                let _ = ui.set_global_property(
+                    "App",
+                    "autoscroll",
+                    slint_interpreter::Value::Bool(mark.is_some()),
+                );
+                if let Some(mark) = mark {
+                    let _ = ui.set_global_property(
+                        "App",
+                        "autoscroll-x",
+                        slint_interpreter::Value::Number(f64::from(mark.x)),
+                    );
+                    let _ = ui.set_global_property(
+                        "App",
+                        "autoscroll-y",
+                        slint_interpreter::Value::Number(f64::from(mark.y)),
+                    );
+                }
             }
         });
     }
