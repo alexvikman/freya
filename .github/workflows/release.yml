@@ -3,8 +3,8 @@
 # packages Freya for every platform; the release job, which waits for the owner's approval in the
 # `release` environment, signs the checksums and publishes the GitHub Release that Freya's
 # updater reads. Started by hand, it only checks and builds the packages; with `windows_only`,
-# only Windows', of a commit whose CI passed, or passes while it waits, so a build to try comes
-# in half the time.
+# only Windows', without CI, a build to try on Windows within half an hour. What is published
+# always passed all of CI first.
 name: Release
 
 on:
@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       windows_only:
-        description: "Only the Windows packages, of a commit CI has passed, or passes meanwhile"
+        description: "Only the Windows packages, without CI: a build to try"
         type: boolean
         default: false
 
@@ -31,10 +31,6 @@ env:
 jobs:
   check:
     runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      # To see that CI passed on the commit, for Windows' packages alone.
-      actions: read
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -63,24 +59,6 @@ jobs:
             fi
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - name: CI passed on the commit, waiting for it while it runs
-        if: inputs.windows_only
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ github.sha }}
-        run: |
-          runs() {
-            gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$SHA" \
-              --json databaseId,status,conclusion --jq "$1"
-          }
-          if [ "$(runs 'map(select(.conclusion == "success")) | length')" -gt 0 ]; then
-            exit 0
-          fi
-          running=$(runs 'map(select(.status != "completed")) | .[0].databaseId // empty')
-          if [ -z "$running" ]; then
-            echo "::error::CI has not passed on $SHA: run the whole workflow"; exit 1
-          fi
-          gh run watch -R "$GITHUB_REPOSITORY" "$running" --exit-status > /dev/null
 
   # All of CI on the commit being released: tests on every platform, dependencies, scripts and
   # every commit scanned for credentials. Nothing is built or published unless it passes.
@@ -230,7 +208,7 @@ jobs:
 
   windows:
     needs: [check, ci]
-    # After CI, or without it for Windows' packages alone, whose commit passed it already.
+    # After CI, or without it for Windows' packages alone, to try.
     if: >-
       ${{ !cancelled() && needs.check.result == 'success'
       && (needs.ci.result == 'success' || (inputs.windows_only && needs.ci.result == 'skipped')) }}
