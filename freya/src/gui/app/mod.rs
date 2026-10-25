@@ -36,6 +36,8 @@ use crate::playlist::Playlist;
 use crate::settings::{self, Settings};
 use crate::update::{self, Updater};
 
+mod closing;
+pub use closing::CloseBy;
 mod covers;
 mod navigation;
 mod playback;
@@ -275,9 +277,11 @@ pub struct App {
     /// far as the system says.
     window_hidden: bool,
     window_focused: bool,
-    /// Whether the window was closed on macOS, Freya staying in the Dock, until it is clicked
-    /// there.
+    /// Whether the window was closed, Freya staying in the Dock on macOS and in the
+    /// notification area on Windows, until it is opened there again.
     window_closed: bool,
+    /// Freya's icon in the notification area, on Windows.
+    pub tray: Option<super::tray::Tray>,
     /// What the Activity page shows of the log: entries at this level or worse.
     log_level: log::Level,
     covers: Covers,
@@ -412,6 +416,7 @@ impl App {
             window_events,
             window_hidden: false,
             window_closed: false,
+            tray: None,
             window_focused: true,
             log_level: log::Level::Info,
             covers: Covers::new(),
@@ -483,23 +488,6 @@ impl App {
                 self.playlist_dirty = true;
             }
             Err(e) => log::warn!("could not restore playlist: {e}"),
-        }
-    }
-
-    /// What closing the window does, by its close button or the system's: on macOS the window
-    /// goes and Freya stays in the Dock, as Mac apps do; elsewhere it is minimized to the
-    /// taskbar when the settings say so, and Freya quits otherwise. Either way what plays plays
-    /// on until Freya quits.
-    pub fn close_window(&mut self) -> slint::CloseRequestResponse {
-        if cfg!(target_os = "macos") {
-            self.window_closed = true;
-            slint::CloseRequestResponse::HideWindow
-        } else if self.settings.close_minimizes {
-            self.view.ui.window().set_minimized(true);
-            slint::CloseRequestResponse::KeepWindowShown
-        } else {
-            let _ = slint::quit_event_loop();
-            slint::CloseRequestResponse::HideWindow
         }
     }
 
@@ -703,10 +691,7 @@ impl App {
             self.radio.reload();
         }
         if self.window_closed && reopen::take() {
-            self.window_closed = false;
-            if let Err(e) = self.view.ui.show() {
-                log::warn!("could not open the window again: {e}");
-            }
+            self.open_window();
         }
         self.radio.poll();
         self.radio_logos.poll();

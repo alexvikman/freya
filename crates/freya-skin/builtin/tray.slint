@@ -1,0 +1,39 @@
+// Freya's icon in the notification area, where closing the window leaves Freya on Windows: a
+// click opens the window again, and its menu plays, skips and quits.
+
+export component FreyaTray inherits SystemTrayIcon {
+    in property <bool> playing;
+    callback open();
+    callback toggle-pause();
+    callback next();
+    callback previous();
+    callback quit();
+
+    tooltip: "Freya";
+    clicked => { root.open(); }
+
+    Menu {
+        MenuItem {
+            title: "Open Freya";
+            activated => { root.open(); }
+        }
+        MenuSeparator { }
+        MenuItem {
+            title: root.playing ? "Pause" : "Play";
+            activated => { root.toggle-pause(); }
+        }
+        MenuItem {
+            title: "Next";
+            activated => { root.next(); }
+        }
+        MenuItem {
+            title: "Previous";
+            activated => { root.previous(); }
+        }
+        MenuSeparator { }
+        MenuItem {
+            title: "Exit";
+            activated => { root.quit(); }
+        }
+    }
+}

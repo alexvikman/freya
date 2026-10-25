@@ -30,6 +30,7 @@ mod system_media;
 #[cfg(test)]
 mod tests;
 mod title_bar;
+mod tray;
 mod visualizer;
 mod window_events;
 
@@ -184,6 +185,10 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 app.tick();
             }
         });
+    }
+    {
+        let tray = tray::Tray::new(&Rc::downgrade(&app));
+        app.borrow_mut().tray = tray;
     }
     {
         // Scrolling by the middle button: the window is asked as by the wheel at the mark, with

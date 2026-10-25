@@ -1,6 +1,7 @@
 //! App: the window, its views and settings, and where it has been.
 
 use super::*;
+use crate::gui::app::CloseBy;
 
 pub(super) fn bind(b: &Binder) {
     b.bind("App", "show-about", Box::new(|app, _| app.show_about()));
@@ -103,30 +104,11 @@ pub(super) fn bind(b: &Binder) {
             Value::Void
         });
     }
-    // As the system's close button.
-    {
-        let app = b.weak.clone();
-        let _ = b.ui.set_global_callback("App", "close-window", move |_| {
-            let hide = app.upgrade().and_then(|app| {
-                let mut app = app.try_borrow_mut().ok()?;
-                let response = app.close_window();
-                Some((response, app.view.ui.clone()))
-            });
-            match hide {
-                Some((slint::CloseRequestResponse::HideWindow, ui)) => {
-                    let _ = ui.hide();
-                }
-                Some(_) => {}
-                None => {
-                    let _ = slint::quit_event_loop();
-                }
-            }
-            Value::Void
-        });
-    }
+    b.bind(
+        "App",
+        "close-window",
+        Box::new(|app, _| app.close_window(CloseBy::Button)),
+    );
     // The app menu's Exit.
-    let _ = b.ui.set_global_callback("App", "quit", |_| {
-        let _ = slint::quit_event_loop();
-        Value::Void
-    });
+    b.bind("App", "quit", Box::new(|app, _| app.quit()));
 }

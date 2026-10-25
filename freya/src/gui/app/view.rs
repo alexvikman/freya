@@ -6,6 +6,10 @@ impl App {
     /// Writes current state into the skin.
     pub fn refresh(&mut self) {
         let chosen = self.server_chosen();
+        let playing = self.player.status().state == PlaybackState::Playing;
+        if let Some(tray) = &mut self.tray {
+            tray.update(self.settings.close_minimizes, playing);
+        }
         let station_rows = self.stations.rows(self.playing_station().as_deref());
         let playing_stream = self.playing_stream();
         let view = &mut self.view;

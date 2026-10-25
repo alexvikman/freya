@@ -55,6 +55,7 @@ export component AboutWindow inherits Window {
 /// The skin picker: Freya's own window for switching skins. It does not depend on the current
 /// skin, so it always works, even from a skin without a menu.
 const SKIN_PICKER: &str = include_str!("../builtin/skin-picker.slint");
+const TRAY: &str = include_str!("../builtin/tray.slint");
 
 /// Globals every skin must export for the app to drive it.
 const REQUIRED_GLOBALS: [&str; 1] = ["Player"];
@@ -202,6 +203,20 @@ pub fn skin_picker_window() -> Result<ComponentInstance, Error> {
         .create()?)
 }
 
+/// Creates Freya's icon in the notification area, not yet shown: its `icon` is to be set, and
+/// its `visible` turned on when it is wanted.
+pub fn tray_icon() -> Result<ComponentInstance, Error> {
+    let result = spin_on::spin_on(
+        compiler().build_from_source(TRAY.to_owned(), PathBuf::from("builtin/tray.slint")),
+    );
+    diagnostics(&result)?;
+    Ok(result
+        .components()
+        .last()
+        .ok_or(Error::NoComponent)?
+        .create()?)
+}
+
 /// Fails with the compile errors, or returns the warnings.
 fn diagnostics(result: &CompilationResult) -> Result<Vec<String>, Error> {
     let mut errors = Vec::new();
@@ -252,6 +267,15 @@ mod tests {
             SKIN_PICKER.to_owned(),
             PathBuf::from("builtin/skin-picker.slint"),
         ));
+        let diagnostics: Vec<String> = result.diagnostics().map(|d| d.to_string()).collect();
+        assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+    }
+
+    #[test]
+    fn tray_icon_compiles_cleanly() {
+        let result = spin_on::spin_on(
+            compiler().build_from_source(TRAY.to_owned(), PathBuf::from("builtin/tray.slint")),
+        );
         let diagnostics: Vec<String> = result.diagnostics().map(|d| d.to_string()).collect();
         assert!(diagnostics.is_empty(), "{diagnostics:#?}");
     }

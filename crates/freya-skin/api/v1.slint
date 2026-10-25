@@ -1087,8 +1087,9 @@ export global App {
     in property <string> build-date;
     /// "system", "light" or "dark". Skins that support both color schemes should follow it.
     in property <string> theme: "system";
-    /// Whether closing the window minimizes it to the taskbar, Freya playing on, rather than
-    /// quitting; on macOS closing leaves Freya in the Dock either way. Kept between runs.
+    /// Whether `close-window` keeps Freya running, playing on: in the notification area on
+    /// Windows, minimized in the taskbar on Linux; otherwise it quits. On macOS closing leaves
+    /// Freya in the Dock either way. Kept between runs.
     in property <bool> close-minimizes: true;
     /// Whether the window scrolls by the mouse's middle button, which Freya does for any skin,
     /// and where in the window it was started: a skin may mark the place.

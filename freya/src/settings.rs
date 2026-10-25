@@ -31,8 +31,8 @@ pub struct Settings {
     pub equalizer: EqualizerSettings,
     /// Whether Freya looks for updates on its own, at launch and once a day.
     pub check_for_updates: bool,
-    /// Whether the window's close button minimizes it to the taskbar, Freya playing on, rather
-    /// than quitting, as music apps do; on macOS closing leaves Freya in the Dock either way.
+    /// Whether the window's close button keeps Freya running, playing on, as music apps do:
+    /// in the notification area on Windows, minimized on Linux (see `gui::app::closing`).
     pub close_minimizes: bool,
     /// When Freya last looked, in seconds since 1970.
     pub last_update_check: Option<u64>,

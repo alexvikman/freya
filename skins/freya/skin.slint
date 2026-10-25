@@ -638,16 +638,23 @@ component MenuRow inherits Rectangle {
     /// Whether it opens a page in the browser, or a menu of its own: an arrow at the right.
     in property <bool> external;
     in property <bool> submenu;
+    /// Whether it does anything now: shown greyed otherwise, as menus show what does not apply.
+    in property <bool> enabled: true;
     /// Whether it is hovered, for a menu of its own to open.
     out property <bool> hovered: touch.has-hover;
     callback activated;
 
     height: 32px;
     border-radius: 6px;
-    background: touch.has-hover ? Theme.hover : transparent;
+    background: touch.has-hover && root.enabled ? Theme.hover : transparent;
     accessible-role: button;
     accessible-label: text;
-    accessible-action-default => { root.activated(); }
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if (root.enabled) {
+            root.activated();
+        }
+    }
 
     accessible-checkable: checked;
     accessible-checked: checked;
@@ -671,7 +678,7 @@ component MenuRow inherits Rectangle {
         Text {
             horizontal-stretch: 1;
             text: root.text;
-            color: Theme.text;
+            color: root.enabled ? Theme.text : Theme.text-secondary.with-alpha(0.6);
             vertical-alignment: center;
             // A long name, like a folder's, is cut short inside the menu.
             overflow: elide;
@@ -696,6 +703,7 @@ component MenuRow inherits Rectangle {
     }
 
     touch := TouchArea {
+        enabled: root.enabled;
         clicked => { root.activated(); }
     }
 }
@@ -7462,6 +7470,20 @@ component AppMenuButton inherits Rectangle {
 
     property <string> open;
     property <int> open-at;
+    /// The menu pointed at, opened a moment later unless another is pointed at meanwhile, so
+    /// the mouse can cross another on its way to the items.
+    property <string> pointed;
+    property <int> pointed-at;
+
+    pointing := Timer {
+        interval: 250ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.open = root.pointed;
+            root.open-at = root.pointed-at;
+        }
+    }
 
     width: button.width;
 
@@ -7500,12 +7522,17 @@ component AppMenuButton inherits Rectangle {
                             submenu: true;
                             background: root.open == menu ? Theme.hover : transparent;
                             changed hovered => {
-                                if (self.hovered) {
-                                    root.open = menu;
-                                    root.open-at = i;
+                                if (self.hovered && root.open != menu) {
+                                    root.pointed = menu;
+                                    root.pointed-at = i;
+                                    pointing.running = false;
+                                    pointing.running = true;
+                                } else if (!self.hovered && root.pointed == menu) {
+                                    pointing.running = false;
                                 }
                             }
                             activated => {
+                                pointing.running = false;
                                 root.open = menu;
                                 root.open-at = i;
                             }
@@ -7528,15 +7555,15 @@ component AppMenuButton inherits Rectangle {
                                 text: "New Playlist…";
                                 shortcut: "Ctrl+N";
                                 activated => {
-                                    popup.close();
                                     root.act("new-playlist");
+                                    popup.close();
                                 }
                             }
                             MenuRow {
                                 text: "Keep Up Next as Playlist…";
                                 activated => {
-                                    popup.close();
                                     root.act("keep-queue");
+                                    popup.close();
                                 }
                             }
                             MenuDivider { }
@@ -7544,54 +7571,55 @@ component AppMenuButton inherits Rectangle {
                                 text: "Open Playlist File…";
                                 shortcut: "Ctrl+O";
                                 activated => {
-                                    popup.close();
                                     root.act("open-playlist-file");
+                                    popup.close();
                                 }
                             }
                             MenuRow {
                                 text: "Save Up Next as Playlist File…";
                                 activated => {
-                                    popup.close();
                                     root.act("save-playlist-file");
+                                    popup.close();
                                 }
                             }
                             MenuRow {
                                 text: "Play Stream URL…";
                                 shortcut: "Ctrl+U";
                                 activated => {
-                                    popup.close();
                                     root.act("play-url");
+                                    popup.close();
                                 }
                             }
                             MenuRow {
                                 text: "Add Files to Up Next…";
                                 activated => {
-                                    popup.close();
                                     root.act("add-files");
+                                    popup.close();
                                 }
                             }
                             MenuRow {
                                 text: "Add Folder to Up Next…";
                                 activated => {
-                                    popup.close();
                                     root.act("add-folder");
+                                    popup.close();
                                 }
                             }
                             MenuDivider { }
-                            if Server.chosen: MenuRow {
+                            MenuRow {
+                                enabled: Server.chosen;
                                 text: "Log Out";
                                 shortcut: "Ctrl+Shift+W";
                                 activated => {
-                                    popup.close();
                                     root.act("log-out");
+                                    popup.close();
                                 }
                             }
                             MenuRow {
                                 text: "Exit";
                                 shortcut: "Ctrl+Shift+Q";
                                 activated => {
-                                    popup.close();
                                     root.act("quit");
+                                    popup.close();
                                 }
                             }
                         }
@@ -7600,45 +7628,49 @@ component AppMenuButton inherits Rectangle {
                             MenuRow {
                                 text: "Remove Selected from Up Next";
                                 activated => {
-                                    popup.close();
                                     root.act("remove-selected");
+                                    popup.close();
                                 }
                             }
                             MenuRow {
                                 text: "Clear Up Next";
                                 activated => {
-                                    popup.close();
                                     root.act("clear-queue");
+                                    popup.close();
                                 }
                             }
                             MenuDivider { }
-                            if App.view == "playlist": MenuRow {
+                            MenuRow {
+                                enabled: App.view == "playlist";
                                 text: "Rename Playlist…";
                                 activated => {
-                                    popup.close();
                                     root.act("rename-playlist");
+                                    popup.close();
                                 }
                             }
-                            if App.view == "playlist": MenuRow {
+                            MenuRow {
+                                enabled: App.view == "playlist";
                                 text: "Delete Playlist…";
                                 activated => {
-                                    popup.close();
                                     root.act("delete-playlist");
+                                    popup.close();
                                 }
                             }
                             MenuDivider { }
-                            if Server.admin: MenuRow {
+                            MenuRow {
+                                enabled: Server.admin;
                                 text: "Library Folders…";
                                 activated => {
-                                    popup.close();
                                     root.act("folders");
+                                    popup.close();
                                 }
                             }
-                            if Server.admin: MenuRow {
+                            MenuRow {
+                                enabled: Server.admin;
                                 text: Library.scanning ? "Stop Scanning" : "Scan Library";
                                 activated => {
-                                    popup.close();
                                     root.act("scan");
+                                    popup.close();
                                 }
                             }
                             MenuDivider { }
@@ -7646,8 +7678,8 @@ component AppMenuButton inherits Rectangle {
                                 text: "Settings";
                                 shortcut: "Ctrl+,";
                                 activated => {
-                                    popup.close();
                                     root.act("settings");
+                                    popup.close();
                                 }
                             }
                         }
@@ -7656,43 +7688,43 @@ component AppMenuButton inherits Rectangle {
                             MenuRow {
                                 text: "Up Next";
                                 activated => {
-                                    popup.close();
                                     root.act("queue");
+                                    popup.close();
                                 }
                             }
                             MenuRow {
                                 text: "Library";
                                 activated => {
-                                    popup.close();
                                     root.act("library");
+                                    popup.close();
                                 }
                             }
                             MenuRow {
                                 text: "Radio";
                                 activated => {
-                                    popup.close();
                                     root.act("radio");
+                                    popup.close();
                                 }
                             }
                             MenuRow {
                                 text: "Visualizer";
                                 activated => {
-                                    popup.close();
                                     root.act("visualizer");
+                                    popup.close();
                                 }
                             }
                             MenuRow {
                                 text: "Equalizer";
                                 activated => {
-                                    popup.close();
                                     root.act("equalizer");
+                                    popup.close();
                                 }
                             }
                             MenuRow {
                                 text: "Activity";
                                 activated => {
-                                    popup.close();
                                     root.act("activity");
+                                    popup.close();
                                 }
                             }
                             MenuDivider { }
@@ -7700,15 +7732,15 @@ component AppMenuButton inherits Rectangle {
                                 text: "Navigation";
                                 checked: AppMenu.navigation;
                                 activated => {
-                                    popup.close();
                                     root.act("navigation");
+                                    popup.close();
                                 }
                             }
                             MenuRow {
                                 text: "Full Screen Visualizer";
                                 activated => {
-                                    popup.close();
                                     root.act("full-screen");
+                                    popup.close();
                                 }
                             }
                         }
@@ -7717,31 +7749,31 @@ component AppMenuButton inherits Rectangle {
                             MenuRow {
                                 text: Player.state == PlaybackState.playing ? "Pause" : "Play";
                                 activated => {
-                                    popup.close();
                                     root.act("play-pause");
+                                    popup.close();
                                 }
                             }
                             MenuRow {
                                 text: "Next";
                                 shortcut: "Ctrl+→";
                                 activated => {
-                                    popup.close();
                                     root.act("next");
+                                    popup.close();
                                 }
                             }
                             MenuRow {
                                 text: "Previous";
                                 shortcut: "Ctrl+←";
                                 activated => {
-                                    popup.close();
                                     root.act("previous");
+                                    popup.close();
                                 }
                             }
                             MenuRow {
                                 text: "Stop";
                                 activated => {
-                                    popup.close();
                                     root.act("stop");
+                                    popup.close();
                                 }
                             }
                             MenuDivider { }
@@ -7750,8 +7782,8 @@ component AppMenuButton inherits Rectangle {
                                 shortcut: "Ctrl+S";
                                 checked: Playlist.shuffle;
                                 activated => {
-                                    popup.close();
                                     root.act("shuffle");
+                                    popup.close();
                                 }
                             }
                             MenuRow {
@@ -7759,8 +7791,8 @@ component AppMenuButton inherits Rectangle {
                                 shortcut: "Ctrl+R";
                                 checked: Playlist.repeat;
                                 activated => {
-                                    popup.close();
                                     root.act("repeat");
+                                    popup.close();
                                 }
                             }
                             MenuDivider { }
@@ -7768,24 +7800,24 @@ component AppMenuButton inherits Rectangle {
                                 text: "Volume Up";
                                 shortcut: "Ctrl+↑";
                                 activated => {
-                                    popup.close();
                                     root.act("volume-up");
+                                    popup.close();
                                 }
                             }
                             MenuRow {
                                 text: "Volume Down";
                                 shortcut: "Ctrl+↓";
                                 activated => {
-                                    popup.close();
                                     root.act("volume-down");
+                                    popup.close();
                                 }
                             }
                             MenuRow {
                                 text: "Mute";
                                 checked: Player.muted;
                                 activated => {
-                                    popup.close();
                                     root.act("mute");
+                                    popup.close();
                                 }
                             }
                         }
@@ -7794,8 +7826,8 @@ component AppMenuButton inherits Rectangle {
                             MenuRow {
                                 text: "About Freya";
                                 activated => {
-                                    popup.close();
                                     root.act("about");
+                                    popup.close();
                                 }
                             }
                             MenuDivider { }
@@ -7803,32 +7835,32 @@ component AppMenuButton inherits Rectangle {
                                 text: "Freya on GitHub";
                                 external: true;
                                 activated => {
-                                    popup.close();
                                     root.act("github");
+                                    popup.close();
                                 }
                             }
                             MenuRow {
                                 text: "Report a Problem";
                                 external: true;
                                 activated => {
-                                    popup.close();
                                     root.act("issues");
+                                    popup.close();
                                 }
                             }
                             MenuRow {
                                 text: "Third-Party Licenses";
                                 external: true;
                                 activated => {
-                                    popup.close();
                                     root.act("licenses");
+                                    popup.close();
                                 }
                             }
                             MenuDivider { }
                             MenuRow {
                                 text: "Check for Updates…";
                                 activated => {
-                                    popup.close();
                                     root.act("updates");
+                                    popup.close();
                                 }
                             }
                         }
@@ -8921,14 +8953,16 @@ component SettingsView inherits Rectangle {
                     }
                 }
                 if Platform.os != OperatingSystemType.macos: SettingsRow {
-                    label: "Close button minimizes the window";
-                    detail: "Closing the window keeps Freya playing, in the taskbar. Exit in the menu quits.";
+                    label: "Close button keeps Freya running";
+                    detail: Platform.os == OperatingSystemType.windows
+                        ? "Closing the window with its × leaves Freya playing in the notification area, by the clock: click its icon there to open the window again. Exit in the menu, or Close window in the taskbar, quits."
+                        : "Closing the window with its × leaves Freya playing, minimized in the taskbar. Exit in the menu quits.";
 
                     VerticalLayout {
                         alignment: center;
 
                         Toggle {
-                            label: "Close button minimizes the window";
+                            label: "Close button keeps Freya running";
                             checked: App.close-minimizes;
                             toggled => { App.set-close-minimizes(!App.close-minimizes); }
                         }
@@ -10234,37 +10268,37 @@ component Toolbar inherits HorizontalLayout {
                     text: "Account";
                     external: true;
                     activated => {
-                        account-popup.close();
                         Server.change-password();
+                        account-popup.close();
                     }
                 }
                 MenuRow {
                     text: "Settings";
                     activated => {
-                        account-popup.close();
                         root.show-view("settings");
+                        account-popup.close();
                     }
                 }
                 MenuRow {
                     text: "Activity";
                     activated => {
-                        account-popup.close();
                         root.show-view("activity");
+                        account-popup.close();
                     }
                 }
                 MenuRow {
                     text: "About Freya";
                     activated => {
-                        account-popup.close();
                         root.show-view("about");
+                        account-popup.close();
                     }
                 }
                 MenuDivider { }
                 MenuRow {
                     text: "Log out";
                     activated => {
-                        account-popup.close();
                         Server.log-out();
+                        account-popup.close();
                     }
                 }
             }

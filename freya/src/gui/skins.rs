@@ -14,21 +14,19 @@ use super::skin_state::string;
 use super::skin_window::SkinWindow;
 use crate::settings;
 
-/// Closing a skin window does what the app's settings say (see `App::close_window`); without
-/// the app, Freya quits, even if the About or skin picker window is open.
+/// The system asking a skin window to close is closing it by the system (see
+/// `super::app::CloseBy`), which the app carries out; without the app, Freya quits, even if
+/// the About or skin picker window is open.
 pub fn attach_window(ui: &SkinWindow, app: Weak<RefCell<App>>) {
     ui.window().on_close_requested(move || {
-        match app
-            .upgrade()
-            .as_ref()
-            .and_then(|app| app.try_borrow_mut().ok())
-        {
-            Some(mut app) => app.close_window(),
-            None => {
+        match app.upgrade().as_ref().map(|app| app.try_borrow_mut()) {
+            Some(Ok(mut app)) => app.close_window(super::app::CloseBy::System),
+            _ => {
                 let _ = slint::quit_event_loop();
-                slint::CloseRequestResponse::HideWindow
             }
         }
+        // Whatever the window is to do, closing it did it.
+        slint::CloseRequestResponse::KeepWindowShown
     });
 }
 

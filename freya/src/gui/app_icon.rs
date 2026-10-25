@@ -49,6 +49,21 @@ pub fn set_name() {}
 /// 128 pixels: sharp in the Dock and task bar, and small to keep in the program.
 const ICON_PNG: &[u8] = include_bytes!("../../../assets/icons/128x128.png");
 
+/// Freya's icon, for Slint to show, as in the notification area.
+pub fn image() -> Option<slint::Image> {
+    let image = image::load_from_memory_with_format(ICON_PNG, image::ImageFormat::Png)
+        .map_err(|e| log::debug!("could not read Freya's icon: {e}"))
+        .ok()?
+        .into_rgba8();
+    let (width, height) = image.dimensions();
+    let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+        image.as_raw(),
+        width,
+        height,
+    );
+    Some(slint::Image::from_rgba8(buffer))
+}
+
 /// Shows Freya's icon in the Dock when Freya is not an app bundle, which would give it its
 /// own. Call once the event loop runs.
 #[cfg(target_os = "macos")]
