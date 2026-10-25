@@ -99,4 +99,9 @@ pub(super) fn bind(b: &Binder) {
         let _ = slint::quit_event_loop();
         Value::Void
     });
+    // The app menu's Exit.
+    let _ = b.ui.set_global_callback("App", "quit", |_| {
+        let _ = slint::quit_event_loop();
+        Value::Void
+    });
 }

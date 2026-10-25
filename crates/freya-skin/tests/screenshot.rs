@@ -1,7 +1,8 @@
 //! Renders the built-in skin and compares it with a reference image.
 //!
 //! Text uses the system font, which differs between operating systems, so this runs on macOS
-//! only. After an intended visual change, update the reference with:
+//! only. Without a screen there is no system menu bar, so the app's menu shows in the window, as
+//! Slint draws it where the system has none. After an intended visual change, update the reference with:
 //! `UPDATE_SNAPSHOTS=1 cargo test -p freya-skin --test screenshot`
 
 #![cfg(target_os = "macos")]

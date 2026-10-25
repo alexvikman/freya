@@ -1399,6 +1399,7 @@ skin_api! {
         App."minimize-window" => on_minimize_window, invoke_minimize_window();
         App."toggle-maximize-window" => on_toggle_maximize_window, invoke_toggle_maximize_window();
         App."close-window" => on_close_window, invoke_close_window();
+        App."quit" => on_quit, invoke_quit();
         App."open-link" => on_open_link, invoke_open_link(name: SharedString);
         App."navigated" => on_navigated, invoke_navigated();
         App."go-back" => on_go_back, invoke_go_back();

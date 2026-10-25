@@ -393,6 +393,7 @@ Her poses are pictures in `assets/hologram/` (JPEG or PNG, built into Freya), sh
 | `set-theme(name)`, `toggle-equalizer()` | |
 | `drag-window()` | Call on a mouse press in an empty part of the top bar: the window follows the mouse, and a double click zooms or minimizes it, as the system's settings say |
 | `minimize-window()`, `toggle-maximize-window()`, `close-window()` | The window buttons, for a skin that draws them; closing quits Freya |
+| `quit()` | Quits Freya, whatever closing the window does: the app menu's Exit |
 | `open-link(name)` | Opens one of Freya's own pages in the browser: "github", "releases", "server" (where Freya Server is downloaded), "issues", "license", or "licenses", the third-party licenses built into Freya; or "fanart-key", fanart.tv's page for a personal API key. Other names are ignored: a skin cannot open other addresses |
 
 A settings page in a skin can be built from what the API already offers: `App.set-theme`, `App.show-skins`, the library's `folders`, `edit-folders`, `save-folders` and `rescan` with `Server`'s folder browsing, the visualizer's `set-mode` and `set-fps`, and `Updates`. The built-in skin opens its Settings and About views from the "⋯" menu at the top right (Cmd+, or Ctrl+, opens Settings).
@@ -415,6 +416,8 @@ TouchArea {
 ```
 
 On Windows the same `title-bar-height` makes `App.window-controls` true, outside full screen. Bind the window's `no-frame` to it: the system's title bar goes, and the skin draws the window buttons at the right of its top bar, calling `App.minimize-window()`, `App.toggle-maximize-window()` and `App.close-window()`. The window keeps its shadow, snapping and resizing at its edges; a double click on empty parts of the top bar maximizes it.
+
+A skin may give Freya a menu with Slint's `MenuBar`, as the built-in skin does: on macOS it is the system's menu bar, as Mac apps have it, and its items' `shortcut`s work on every system, before anything in the window sees the keys. Elsewhere the built-in skin hides it (`visible`) and opens the same items from a button at the top left of the window.
 
 ```slint
 no-frame: App.window-controls;

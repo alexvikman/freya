@@ -627,7 +627,7 @@ component PlayerBar inherits Rectangle {
     }
 }
 
-component MenuItem inherits Rectangle {
+component MenuRow inherits Rectangle {
     in property <string> text;
     /// Shows a check mark, for choices.
     in property <bool> checked;
@@ -1074,7 +1074,7 @@ component EqualizerView inherits VerticalLayout {
 
         MenuSurface {
             ListView {
-                for name[i] in Equalizer.presets: MenuItem {
+                for name[i] in Equalizer.presets: MenuRow {
                     text: name;
                     checked: name == Equalizer.preset-name;
                     activated => {
@@ -1095,11 +1095,11 @@ component EqualizerView inherits VerticalLayout {
             VerticalLayout {
                 padding: 6px;
 
-                MenuItem {
+                MenuRow {
                     text: "Load preset file (.eqf)…";
                     activated => { Equalizer.load-file(); }
                 }
-                MenuItem {
+                MenuRow {
                     text: "Save preset file (.eqf)…";
                     activated => { Equalizer.save-file(); }
                 }
@@ -1407,12 +1407,12 @@ component TrackList inherits FocusScope {
             VerticalLayout {
                 padding: 6px;
 
-                for playlist[i] in Playlists.playlists: MenuItem {
+                for playlist[i] in Playlists.playlists: MenuRow {
                     text: "Add to " + playlist.name;
                     activated => { Playlists.add-queue-selection(i); }
                 }
                 if Playlists.playlists.length > 0: MenuDivider { }
-                MenuItem {
+                MenuRow {
                     text: "Remove from Up Next";
                     activated => { Playlist.remove-selected(); }
                 }
@@ -2211,7 +2211,7 @@ component ArtistPageHead inherits Rectangle {
                     VerticalLayout {
                         padding: 6px;
 
-                        MenuItem {
+                        MenuRow {
                             text: "Fix Match…";
                             activated => { root.fix-match(); }
                         }
@@ -2528,7 +2528,7 @@ component AlbumPageHead inherits Rectangle {
                 VerticalLayout {
                     padding: 6px;
 
-                    MenuItem {
+                    MenuRow {
                         text: "Fix Match…";
                         activated => { root.fix-match(); }
                     }
@@ -3056,7 +3056,7 @@ component SuggestionList inherits MenuSurface {
             clicked => { root.opened(i); }
         }
         MenuDivider { }
-        MenuItem {
+        MenuRow {
             text: "Show all results";
             activated => { root.all(); }
         }
@@ -4015,7 +4015,7 @@ component LibraryPanel inherits FocusScope {
                     for choice in [
                         { name: "added", text: "Recently added" },
                         { name: "name", text: "Alphabetical" },
-                    ]: MenuItem {
+                    ]: MenuRow {
                         text: choice.text;
                         checked: Library.playlists-sort == choice.name;
                         activated => { Library.set-playlists-sort(choice.name); }
@@ -4027,40 +4027,40 @@ component LibraryPanel inherits FocusScope {
                         { name: "played", text: "Recently played" },
                         { name: "name", text: "Alphabetical" },
                         { name: "artist", text: "Artist" },
-                    ]: MenuItem {
+                    ]: MenuRow {
                         text: choice.text;
                         checked: Library.albums-sort == choice.name;
                         activated => { Library.set-albums-sort(choice.name); }
                     }
                 }
-                if !Library.artist-options && !Library.albums-options && !Library.playlists-options: MenuItem {
+                if !Library.artist-options && !Library.albums-options && !Library.playlists-options: MenuRow {
                     text: "Release date";
                     checked: Library.album-sort == "release-date";
                     activated => { Library.set-album-sort("release-date"); }
                 }
-                if !Library.artist-options && !Library.albums-options && !Library.playlists-options: MenuItem {
+                if !Library.artist-options && !Library.albums-options && !Library.playlists-options: MenuRow {
                     text: "Name";
                     checked: Library.album-sort == "name";
                     activated => { Library.set-album-sort("name"); }
                 }
-                if Library.artist-options: MenuItem {
+                if Library.artist-options: MenuRow {
                     text: "Name";
                     checked: Library.artist-sort == "name";
                     activated => { Library.set-artist-sort("name"); }
                 }
-                if Library.artist-options: MenuItem {
+                if Library.artist-options: MenuRow {
                     text: "Most played";
                     checked: Library.artist-sort == "most-played";
                     activated => { Library.set-artist-sort("most-played"); }
                 }
-                if Library.artist-options: MenuItem {
+                if Library.artist-options: MenuRow {
                     text: "Recently added";
                     checked: Library.artist-sort == "recently-added";
                     activated => { Library.set-artist-sort("recently-added"); }
                 }
                 if !Library.albums-options && !Library.playlists-options: MenuDivider { }
                 if !Library.albums-options && !Library.playlists-options: MenuHeading { text: "View as"; }
-                if !Library.albums-options && !Library.playlists-options: MenuItem {
+                if !Library.albums-options && !Library.playlists-options: MenuRow {
                     text: "List";
                     checked: (Library.artist-options ? Library.artist-view : Library.album-view) == "list";
                     activated => {
@@ -4071,7 +4071,7 @@ component LibraryPanel inherits FocusScope {
                         }
                     }
                 }
-                if !Library.albums-options && !Library.playlists-options: MenuItem {
+                if !Library.albums-options && !Library.playlists-options: MenuRow {
                     text: "Grid";
                     checked: (Library.artist-options ? Library.artist-view : Library.album-view) == "grid";
                     activated => {
@@ -4184,22 +4184,22 @@ component LibraryPanel inherits FocusScope {
             VerticalLayout {
                 padding: 6px;
 
-                MenuItem {
+                MenuRow {
                     text: "Play";
                     activated => { Library.play(root.menu-row); }
                 }
-                MenuItem {
+                MenuRow {
                     text: "Add to Up Next";
                     activated => { Library.enqueue(root.menu-row); }
                 }
                 if Playlists.playlists.length > 0: MenuDivider { }
-                for playlist[i] in Playlists.playlists: MenuItem {
+                for playlist[i] in Playlists.playlists: MenuRow {
                     text: "Add to " + playlist.name;
                     activated => { Playlists.add-library-row(i, root.menu-row); }
                 }
                 // An artist is changed on their page, which opens first.
                 if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "artist": MenuDivider { }
-                if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "artist": MenuItem {
+                if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "artist": MenuRow {
                     text: "Edit Artist…";
                     activated => {
                         root.activate(root.menu-row);
@@ -4207,22 +4207,22 @@ component LibraryPanel inherits FocusScope {
                     }
                 }
                 if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "album": MenuDivider { }
-                if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "album": MenuItem {
+                if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "album": MenuRow {
                     text: Library.rows[root.menu-row].favorite ? "Remove from Favorites" : "Add to Favorites";
                     activated => { Library.toggle-favorite(root.menu-row); }
                 }
-                if root.menu-row >= 0 && root.menu-row < Library.rows.length && (Library.rows[root.menu-row].kind == "artist" || Library.rows[root.menu-row].kind == "playlist"): MenuItem {
+                if root.menu-row >= 0 && root.menu-row < Library.rows.length && (Library.rows[root.menu-row].kind == "artist" || Library.rows[root.menu-row].kind == "playlist"): MenuRow {
                     text: Library.rows[root.menu-row].favorite ? "Remove from Favorites" : "Add to Favorites";
                     activated => { Library.toggle-favorite(root.menu-row); }
                 }
-                if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "album": MenuItem {
+                if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "album": MenuRow {
                     text: "Fix Match…";
                     activated => {
                         root.activate(root.menu-row);
                         root.match-album();
                     }
                 }
-                if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "artist": MenuItem {
+                if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "artist": MenuRow {
                     text: "Fix Match…";
                     activated => {
                         root.activate(root.menu-row);
@@ -5303,7 +5303,7 @@ component PlaylistPageHead inherits Rectangle {
                             { name: "album", text: "Album" },
                             { name: "added", text: "Date added" },
                             { name: "duration", text: "Duration" },
-                        ]: MenuItem {
+                        ]: MenuRow {
                             text: (root.page.sort == choice.name ? "✓ " : "") + choice.text;
                             activated => { Playlists.set-sort(choice.name); }
                         }
@@ -7447,10 +7447,407 @@ component WindowControls inherits HorizontalLayout {
     }
 }
 
+/// Whether the navigation shows, for the check mark at it in the app's menu.
+global AppMenu {
+    in-out property <bool> navigation: true;
+}
+
+/// The app's menu, from a button at the top left of the window where the system has no menu bar
+/// for it (Windows, Linux): its menus, and the items of the one pointed at beside them.
+component AppMenuButton inherits Rectangle {
+    /// An item chosen, by what it does (see `menu-action` in FreyaSkin).
+    callback act(string);
+
+    property <string> open;
+    property <int> open-at;
+
+    width: button.width;
+
+    button := IconButton {
+        y: (parent.height - self.height) / 2;
+        icon: Icons.more;
+        size: 32px;
+        label: "Menu";
+        tooltip: "Menu";
+        clicked => {
+            root.open = "";
+            popup.show();
+        }
+    }
+
+    popup := PopupWindow {
+        x: button.x;
+        y: button.y + button.height + 4px;
+        close-policy: close-on-click-outside;
+
+        HorizontalLayout {
+            alignment: start;
+            spacing: 4px;
+
+            VerticalLayout {
+                alignment: start;
+
+                MenuSurface {
+                    width: 190px;
+
+                    VerticalLayout {
+                        padding: 6px;
+
+                        for menu[i] in ["File", "Edit", "View", "Playback", "Help"]: MenuRow {
+                            text: menu;
+                            submenu: true;
+                            background: root.open == menu ? Theme.hover : transparent;
+                            changed hovered => {
+                                if (self.hovered) {
+                                    root.open = menu;
+                                    root.open-at = i;
+                                }
+                            }
+                            activated => {
+                                root.open = menu;
+                                root.open-at = i;
+                            }
+                        }
+                    }
+                }
+            }
+            // The items of the menu pointed at, beside it.
+            if root.open != "": VerticalLayout {
+                alignment: start;
+                padding-top: root.open-at * 32px;
+
+                MenuSurface {
+                    width: 300px;
+
+                    VerticalLayout {
+                        if root.open == "File": VerticalLayout {
+                            padding: 6px;
+                            MenuRow {
+                                text: "New Playlist…";
+                                shortcut: "Ctrl+N";
+                                activated => {
+                                    popup.close();
+                                    root.act("new-playlist");
+                                }
+                            }
+                            MenuRow {
+                                text: "Keep Up Next as Playlist…";
+                                activated => {
+                                    popup.close();
+                                    root.act("keep-queue");
+                                }
+                            }
+                            MenuDivider { }
+                            MenuRow {
+                                text: "Open Playlist File…";
+                                shortcut: "Ctrl+O";
+                                activated => {
+                                    popup.close();
+                                    root.act("open-playlist-file");
+                                }
+                            }
+                            MenuRow {
+                                text: "Save Up Next as Playlist File…";
+                                activated => {
+                                    popup.close();
+                                    root.act("save-playlist-file");
+                                }
+                            }
+                            MenuRow {
+                                text: "Play Stream URL…";
+                                shortcut: "Ctrl+U";
+                                activated => {
+                                    popup.close();
+                                    root.act("play-url");
+                                }
+                            }
+                            MenuRow {
+                                text: "Add Files to Up Next…";
+                                activated => {
+                                    popup.close();
+                                    root.act("add-files");
+                                }
+                            }
+                            MenuRow {
+                                text: "Add Folder to Up Next…";
+                                activated => {
+                                    popup.close();
+                                    root.act("add-folder");
+                                }
+                            }
+                            MenuDivider { }
+                            if Server.chosen: MenuRow {
+                                text: "Log Out";
+                                shortcut: "Ctrl+Shift+W";
+                                activated => {
+                                    popup.close();
+                                    root.act("log-out");
+                                }
+                            }
+                            MenuRow {
+                                text: "Exit";
+                                shortcut: "Ctrl+Shift+Q";
+                                activated => {
+                                    popup.close();
+                                    root.act("quit");
+                                }
+                            }
+                        }
+                        if root.open == "Edit": VerticalLayout {
+                            padding: 6px;
+                            MenuRow {
+                                text: "Remove Selected from Up Next";
+                                activated => {
+                                    popup.close();
+                                    root.act("remove-selected");
+                                }
+                            }
+                            MenuRow {
+                                text: "Clear Up Next";
+                                activated => {
+                                    popup.close();
+                                    root.act("clear-queue");
+                                }
+                            }
+                            MenuDivider { }
+                            if App.view == "playlist": MenuRow {
+                                text: "Rename Playlist…";
+                                activated => {
+                                    popup.close();
+                                    root.act("rename-playlist");
+                                }
+                            }
+                            if App.view == "playlist": MenuRow {
+                                text: "Delete Playlist…";
+                                activated => {
+                                    popup.close();
+                                    root.act("delete-playlist");
+                                }
+                            }
+                            MenuDivider { }
+                            if Server.admin: MenuRow {
+                                text: "Library Folders…";
+                                activated => {
+                                    popup.close();
+                                    root.act("folders");
+                                }
+                            }
+                            if Server.admin: MenuRow {
+                                text: Library.scanning ? "Stop Scanning" : "Scan Library";
+                                activated => {
+                                    popup.close();
+                                    root.act("scan");
+                                }
+                            }
+                            MenuDivider { }
+                            MenuRow {
+                                text: "Settings";
+                                shortcut: "Ctrl+,";
+                                activated => {
+                                    popup.close();
+                                    root.act("settings");
+                                }
+                            }
+                        }
+                        if root.open == "View": VerticalLayout {
+                            padding: 6px;
+                            MenuRow {
+                                text: "Up Next";
+                                activated => {
+                                    popup.close();
+                                    root.act("queue");
+                                }
+                            }
+                            MenuRow {
+                                text: "Library";
+                                activated => {
+                                    popup.close();
+                                    root.act("library");
+                                }
+                            }
+                            MenuRow {
+                                text: "Radio";
+                                activated => {
+                                    popup.close();
+                                    root.act("radio");
+                                }
+                            }
+                            MenuRow {
+                                text: "Visualizer";
+                                activated => {
+                                    popup.close();
+                                    root.act("visualizer");
+                                }
+                            }
+                            MenuRow {
+                                text: "Equalizer";
+                                activated => {
+                                    popup.close();
+                                    root.act("equalizer");
+                                }
+                            }
+                            MenuRow {
+                                text: "Activity";
+                                activated => {
+                                    popup.close();
+                                    root.act("activity");
+                                }
+                            }
+                            MenuDivider { }
+                            MenuRow {
+                                text: "Navigation";
+                                checked: AppMenu.navigation;
+                                activated => {
+                                    popup.close();
+                                    root.act("navigation");
+                                }
+                            }
+                            MenuRow {
+                                text: "Full Screen Visualizer";
+                                activated => {
+                                    popup.close();
+                                    root.act("full-screen");
+                                }
+                            }
+                        }
+                        if root.open == "Playback": VerticalLayout {
+                            padding: 6px;
+                            MenuRow {
+                                text: Player.state == PlaybackState.playing ? "Pause" : "Play";
+                                activated => {
+                                    popup.close();
+                                    root.act("play-pause");
+                                }
+                            }
+                            MenuRow {
+                                text: "Next";
+                                shortcut: "Ctrl+→";
+                                activated => {
+                                    popup.close();
+                                    root.act("next");
+                                }
+                            }
+                            MenuRow {
+                                text: "Previous";
+                                shortcut: "Ctrl+←";
+                                activated => {
+                                    popup.close();
+                                    root.act("previous");
+                                }
+                            }
+                            MenuRow {
+                                text: "Stop";
+                                activated => {
+                                    popup.close();
+                                    root.act("stop");
+                                }
+                            }
+                            MenuDivider { }
+                            MenuRow {
+                                text: "Shuffle";
+                                shortcut: "Ctrl+S";
+                                checked: Playlist.shuffle;
+                                activated => {
+                                    popup.close();
+                                    root.act("shuffle");
+                                }
+                            }
+                            MenuRow {
+                                text: "Repeat";
+                                shortcut: "Ctrl+R";
+                                checked: Playlist.repeat;
+                                activated => {
+                                    popup.close();
+                                    root.act("repeat");
+                                }
+                            }
+                            MenuDivider { }
+                            MenuRow {
+                                text: "Volume Up";
+                                shortcut: "Ctrl+↑";
+                                activated => {
+                                    popup.close();
+                                    root.act("volume-up");
+                                }
+                            }
+                            MenuRow {
+                                text: "Volume Down";
+                                shortcut: "Ctrl+↓";
+                                activated => {
+                                    popup.close();
+                                    root.act("volume-down");
+                                }
+                            }
+                            MenuRow {
+                                text: "Mute";
+                                checked: Player.muted;
+                                activated => {
+                                    popup.close();
+                                    root.act("mute");
+                                }
+                            }
+                        }
+                        if root.open == "Help": VerticalLayout {
+                            padding: 6px;
+                            MenuRow {
+                                text: "About Freya";
+                                activated => {
+                                    popup.close();
+                                    root.act("about");
+                                }
+                            }
+                            MenuDivider { }
+                            MenuRow {
+                                text: "Freya on GitHub";
+                                external: true;
+                                activated => {
+                                    popup.close();
+                                    root.act("github");
+                                }
+                            }
+                            MenuRow {
+                                text: "Report a Problem";
+                                external: true;
+                                activated => {
+                                    popup.close();
+                                    root.act("issues");
+                                }
+                            }
+                            MenuRow {
+                                text: "Third-Party Licenses";
+                                external: true;
+                                activated => {
+                                    popup.close();
+                                    root.act("licenses");
+                                }
+                            }
+                            MenuDivider { }
+                            MenuRow {
+                                text: "Check for Updates…";
+                                activated => {
+                                    popup.close();
+                                    root.act("updates");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Back and forward through where the window has been, as in a web browser: at the top left,
-/// after the window buttons.
+/// after the window buttons; and the app's menu before them where the system has no menu bar.
 component NavButtons inherits HorizontalLayout {
+    /// An item of the app's menu chosen.
+    callback menu-action(string);
+
     spacing: 2px;
+
+    if Platform.os != OperatingSystemType.macos: AppMenuButton {
+        act(name) => { root.menu-action(name); }
+    }
 
     IconButton {
         y: (parent.height - self.height) / 2;
@@ -7483,6 +7880,8 @@ component Sidebar inherits Rectangle {
     callback show-section(string);
     /// The note that an update is available was clicked.
     callback show-update();
+    /// An item of the app's menu chosen.
+    callback menu-action(string);
 
     background: Theme.sidebar;
 
@@ -7498,7 +7897,9 @@ component Sidebar inherits Rectangle {
                 padding-left: App.window-buttons-width > 0 ? App.window-buttons-width : 10px;
                 alignment: start;
 
-                NavButtons { }
+                NavButtons {
+                    menu-action(name) => { root.menu-action(name); }
+                }
             }
         }
         // All of it scrolls when the window is too low for everything, playlists included.
@@ -9518,9 +9919,28 @@ component Toolbar inherits HorizontalLayout {
     callback manage-folders();
     /// Settings, on the Server tab.
     callback show-server();
+    /// An item of the app's menu chosen.
+    callback menu-action(string);
 
-    /// What the name form is for: keeping Up Next as a playlist, or renaming one.
+    /// What the name form is for: making a playlist, keeping Up Next as one, or renaming one.
     property <string> naming: "save-queue";
+    /// Where the forms and menus at the right end: before the window buttons, if any.
+    property <length> right-edge: App.window-controls ? 150px : 12px;
+
+    /// Opens the form for a playlist's name: "create", "save-queue" or "rename".
+    public function name-playlist(naming: string) {
+        root.naming = naming;
+        name-popup.show();
+    }
+
+    public function delete-playlist() {
+        delete-popup.show();
+    }
+
+    /// Opens the form for a stream's address, to play it.
+    public function play-url() {
+        url-popup.show();
+    }
 
     public function focus-search() {
         search.focus();
@@ -9537,7 +9957,9 @@ component Toolbar inherits HorizontalLayout {
     spacing: 6px;
 
     // Back and forward live in the navigation; with it hidden, here in its place.
-    if root.nav-buttons: NavButtons { }
+    if root.nav-buttons: NavButtons {
+        menu-action(name) => { root.menu-action(name); }
+    }
     IconButton {
         icon: Icons.sidebar;
         stroked: true;
@@ -9717,13 +10139,6 @@ component Toolbar inherits HorizontalLayout {
             : App.activities[0].title + ", and " + (App.activities.length - 1) + " more";
         clicked => { activity-popup.show(); }
     }
-    more := IconButton {
-        icon: Icons.more;
-        size: 36px;
-        label: "More";
-        tooltip: "More options";
-        clicked => { menu.show(); }
-    }
     if Server.chosen && Server.user != "": VerticalLayout {
         alignment: center;
 
@@ -9755,7 +10170,7 @@ component Toolbar inherits HorizontalLayout {
                     text: "Nothing is running in the background";
                 }
                 MenuDivider { }
-                MenuItem {
+                MenuRow {
                     text: "Show Activity and Log";
                     activated => {
                         activity-popup.close();
@@ -9768,9 +10183,8 @@ component Toolbar inherits HorizontalLayout {
 
     // The account's menu, under its button at the right.
     account-popup := PopupWindow {
-        // Its right edge under the button's, which follows the menu button.
-        x: more.x + more.width + root.spacing + 36px - self.width;
-        y: more.y + more.height;
+        x: root.width - self.width - root.right-edge;
+        y: root.height;
         width: 260px;
         close-policy: close-on-click-outside;
 
@@ -9800,7 +10214,7 @@ component Toolbar inherits HorizontalLayout {
                     }
                 }
                 MenuDivider { }
-                MenuItem {
+                MenuRow {
                     text: "Account";
                     external: true;
                     activated => {
@@ -9808,21 +10222,21 @@ component Toolbar inherits HorizontalLayout {
                         Server.change-password();
                     }
                 }
-                MenuItem {
+                MenuRow {
                     text: "Settings";
                     activated => {
                         account-popup.close();
                         root.show-view("settings");
                     }
                 }
-                MenuItem {
+                MenuRow {
                     text: "Activity";
                     activated => {
                         account-popup.close();
                         root.show-view("activity");
                     }
                 }
-                MenuItem {
+                MenuRow {
                     text: "About Freya";
                     activated => {
                         account-popup.close();
@@ -9830,7 +10244,7 @@ component Toolbar inherits HorizontalLayout {
                     }
                 }
                 MenuDivider { }
-                MenuItem {
+                MenuRow {
                     text: "Log out";
                     activated => {
                         account-popup.close();
@@ -9841,89 +10255,23 @@ component Toolbar inherits HorizontalLayout {
         }
     }
 
-    menu := PopupWindow {
-        x: more.x + more.width - 240px;
-        y: more.y + more.height;
-        width: 240px;
-
-        MenuSurface {
-            VerticalLayout {
-                padding: 6px;
-
-                if root.view == "queue": MenuItem {
-                    text: "Play stream URL…";
-                    activated => { url-popup.show(); }
-                }
-                if root.view == "queue": MenuItem {
-                    text: "Save as playlist file…";
-                    activated => { Playlist.save(); }
-                }
-                if root.view == "queue": MenuItem {
-                    text: "Open playlist file…";
-                    activated => { Playlist.load(); }
-                }
-                if root.view == "queue": MenuItem {
-                    text: "Clear Up Next";
-                    activated => { Playlist.clear(); }
-                }
-                if root.view == "queue": MenuItem {
-                    text: "Keep as a playlist…";
-                    activated => {
-                        root.naming = "save-queue";
-                        name-popup.show();
-                    }
-                }
-                if root.view == "playlist": MenuItem {
-                    text: "Rename…";
-                    activated => {
-                        root.naming = "rename";
-                        name-popup.show();
-                    }
-                }
-                if root.view == "playlist": MenuItem {
-                    text: "Delete playlist…";
-                    activated => { delete-popup.show(); }
-                }
-                if root.view == "library": MenuItem {
-                    text: "Library Folders…";
-                    activated => { root.manage-folders(); }
-                }
-                if root.view == "library": MenuItem {
-                    text: Library.scanning ? "Stop scanning" : "Scan library";
-                    activated => {
-                        if Library.scanning {
-                            Library.stop-scan();
-                        } else {
-                            Library.rescan();
-                        }
-                    }
-                }
-                if root.view == "queue" || root.view == "library" || root.view == "playlist": MenuDivider { }
-                MenuItem {
-                    text: "Settings";
-                    activated => { root.show-view("settings"); }
-                }
-                MenuItem {
-                    text: "About Freya";
-                    activated => { root.show-view("about"); }
-                }
-            }
-        }
-    }
-
     name-popup := PopupWindow {
-        x: more.x + more.width - 320px;
-        y: more.y + more.height;
+        x: root.width - self.width - root.right-edge;
+        y: root.height;
         width: 320px;
         close-policy: close-on-click-outside;
 
         PlaylistNameForm {
-            title: root.naming == "rename" ? "Rename the playlist" : "Keep Up Next as a playlist";
-            action: root.naming == "rename" ? "Rename" : "Keep";
+            title: root.naming == "rename" ? "Rename the playlist"
+                : root.naming == "create" ? "New playlist"
+                : "Keep Up Next as a playlist";
+            action: root.naming == "rename" ? "Rename" : root.naming == "create" ? "Create" : "Keep";
             initial: root.naming == "rename" && Playlists.shown >= 0 ? Playlists.playlists[Playlists.shown].name : "";
             submit(name) => {
                 if (root.naming == "rename") {
                     Playlists.rename(name);
+                } else if (root.naming == "create") {
+                    Playlists.create(name);
                 } else {
                     Playlists.save-queue(name);
                 }
@@ -9937,8 +10285,8 @@ component Toolbar inherits HorizontalLayout {
     }
 
     delete-popup := PopupWindow {
-        x: more.x + more.width - 320px;
-        y: more.y + more.height;
+        x: root.width - self.width - root.right-edge;
+        y: root.height;
         width: 320px;
         close-policy: close-on-click-outside;
 
@@ -9952,8 +10300,8 @@ component Toolbar inherits HorizontalLayout {
     }
 
     station-popup := PopupWindow {
-        x: more.x + more.width - 400px;
-        y: more.y + more.height;
+        x: root.width - self.width - root.right-edge;
+        y: root.height;
         width: 400px;
         close-policy: close-on-click-outside;
 
@@ -9963,8 +10311,8 @@ component Toolbar inherits HorizontalLayout {
     }
 
     url-popup := PopupWindow {
-        x: more.x + more.width - 380px;
-        y: more.y + more.height;
+        x: root.width - self.width - root.right-edge;
+        y: root.height;
         width: 380px;
         close-policy: close-on-click-outside;
 
@@ -10084,6 +10432,287 @@ export component FreyaSkin inherits Window {
         }
     }
 
+    // The app's menu: the system's menu bar on macOS, where Mac apps keep it; elsewhere it is
+    // hidden, and the button at the top left of the window opens the same (AppMenuButton).
+    // Its shortcuts work everywhere: Slint gives them to the menu before anything else.
+    MenuBar {
+        visible: Platform.os == OperatingSystemType.macos;
+
+        Menu {
+            title: "File";
+            MenuItem {
+                title: "New Playlist…";
+                shortcut: @keys(Control + N);
+                activated => { root.menu-action("new-playlist"); }
+            }
+            MenuItem {
+                title: "Keep Up Next as Playlist…";
+                activated => { root.menu-action("keep-queue"); }
+            }
+            MenuSeparator { }
+            MenuItem {
+                title: "Open Playlist File…";
+                shortcut: @keys(Control + O);
+                activated => { root.menu-action("open-playlist-file"); }
+            }
+            MenuItem {
+                title: "Save Up Next as Playlist File…";
+                activated => { root.menu-action("save-playlist-file"); }
+            }
+            MenuItem {
+                title: "Play Stream URL…";
+                shortcut: @keys(Control + U);
+                activated => { root.menu-action("play-url"); }
+            }
+            MenuItem {
+                title: "Add Files to Up Next…";
+                activated => { root.menu-action("add-files"); }
+            }
+            MenuItem {
+                title: "Add Folder to Up Next…";
+                activated => { root.menu-action("add-folder"); }
+            }
+            MenuSeparator { }
+            MenuItem {
+                title: "Log Out";
+                shortcut: @keys(Control + Shift + W);
+                enabled: Server.chosen;
+                activated => { root.menu-action("log-out"); }
+            }
+            if Platform.os != OperatingSystemType.macos: MenuItem {
+                title: "Exit";
+                shortcut: @keys(Control + Shift + Q);
+                activated => { root.menu-action("quit"); }
+            }
+        }
+
+        Menu {
+            title: "Edit";
+            MenuItem {
+                title: "Remove Selected from Up Next";
+                activated => { root.menu-action("remove-selected"); }
+            }
+            MenuItem {
+                title: "Clear Up Next";
+                activated => { root.menu-action("clear-queue"); }
+            }
+            MenuSeparator { }
+            MenuItem {
+                title: "Rename Playlist…";
+                enabled: root.view == "playlist";
+                activated => { root.menu-action("rename-playlist"); }
+            }
+            MenuItem {
+                title: "Delete Playlist…";
+                enabled: root.view == "playlist";
+                activated => { root.menu-action("delete-playlist"); }
+            }
+            MenuSeparator { }
+            MenuItem {
+                title: "Library Folders…";
+                enabled: Server.admin;
+                activated => { root.menu-action("folders"); }
+            }
+            MenuItem {
+                title: Library.scanning ? "Stop Scanning" : "Scan Library";
+                enabled: Server.admin;
+                activated => { root.menu-action("scan"); }
+            }
+            MenuSeparator { }
+            MenuItem {
+                title: "Settings";
+                shortcut: @keys(Control + Comma);
+                activated => { root.menu-action("settings"); }
+            }
+        }
+
+        Menu {
+            title: "View";
+            MenuItem {
+                title: "Up Next";
+                activated => { root.menu-action("queue"); }
+            }
+            MenuItem {
+                title: "Library";
+                activated => { root.menu-action("library"); }
+            }
+            MenuItem {
+                title: "Radio";
+                activated => { root.menu-action("radio"); }
+            }
+            MenuItem {
+                title: "Visualizer";
+                activated => { root.menu-action("visualizer"); }
+            }
+            MenuItem {
+                title: "Equalizer";
+                activated => { root.menu-action("equalizer"); }
+            }
+            MenuItem {
+                title: "Activity";
+                activated => { root.menu-action("activity"); }
+            }
+            MenuSeparator { }
+            MenuItem {
+                title: "Navigation";
+                checked: root.sidebar-shown;
+                activated => { root.menu-action("navigation"); }
+            }
+            MenuItem {
+                title: "Full Screen Visualizer";
+                activated => { root.menu-action("full-screen"); }
+            }
+        }
+
+        Menu {
+            title: "Playback";
+            MenuItem {
+                title: Player.state == PlaybackState.playing ? "Pause" : "Play";
+                activated => { root.menu-action("play-pause"); }
+            }
+            MenuItem {
+                title: "Next";
+                shortcut: @keys(Control + RightArrow);
+                activated => { root.menu-action("next"); }
+            }
+            MenuItem {
+                title: "Previous";
+                shortcut: @keys(Control + LeftArrow);
+                activated => { root.menu-action("previous"); }
+            }
+            MenuItem {
+                title: "Stop";
+                activated => { root.menu-action("stop"); }
+            }
+            MenuSeparator { }
+            MenuItem {
+                title: "Shuffle";
+                shortcut: @keys(Control + S);
+                checked: Playlist.shuffle;
+                activated => { root.menu-action("shuffle"); }
+            }
+            MenuItem {
+                title: "Repeat";
+                shortcut: @keys(Control + R);
+                checked: Playlist.repeat;
+                activated => { root.menu-action("repeat"); }
+            }
+            MenuSeparator { }
+            MenuItem {
+                title: "Volume Up";
+                shortcut: @keys(Control + UpArrow);
+                activated => { root.menu-action("volume-up"); }
+            }
+            MenuItem {
+                title: "Volume Down";
+                shortcut: @keys(Control + DownArrow);
+                activated => { root.menu-action("volume-down"); }
+            }
+            MenuItem {
+                title: "Mute";
+                checked: Player.muted;
+                activated => { root.menu-action("mute"); }
+            }
+        }
+
+        Menu {
+            title: "Help";
+            MenuItem {
+                title: "About Freya";
+                activated => { root.menu-action("about"); }
+            }
+            MenuSeparator { }
+            MenuItem {
+                title: "Freya on GitHub";
+                activated => { root.menu-action("github"); }
+            }
+            MenuItem {
+                title: "Report a Problem";
+                activated => { root.menu-action("issues"); }
+            }
+            MenuItem {
+                title: "Third-Party Licenses";
+                activated => { root.menu-action("licenses"); }
+            }
+            MenuSeparator { }
+            MenuItem {
+                title: "Check for Updates…";
+                activated => { root.menu-action("updates"); }
+            }
+        }
+    }
+
+    changed sidebar-shown => { AppMenu.navigation = root.sidebar-shown; }
+
+    /// Does what an item of the app's menu, `name`, says.
+    function menu-action(name: string) {
+        if (name == "new-playlist") {
+            toolbar.name-playlist("create");
+        } else if (name == "keep-queue") {
+            toolbar.name-playlist("save-queue");
+        } else if (name == "rename-playlist") {
+            toolbar.name-playlist("rename");
+        } else if (name == "delete-playlist") {
+            toolbar.delete-playlist();
+        } else if (name == "open-playlist-file") {
+            Playlist.load();
+        } else if (name == "save-playlist-file") {
+            Playlist.save();
+        } else if (name == "play-url") {
+            toolbar.play-url();
+        } else if (name == "add-files") {
+            Playlist.add-files();
+        } else if (name == "add-folder") {
+            Playlist.add-folder();
+        } else if (name == "log-out") {
+            Server.log-out();
+        } else if (name == "quit") {
+            App.quit();
+        } else if (name == "remove-selected") {
+            Playlist.remove-selected();
+        } else if (name == "clear-queue") {
+            Playlist.clear();
+        } else if (name == "folders") {
+            root.manage-folders();
+        } else if (name == "scan") {
+            if (Library.scanning) {
+                Library.stop-scan();
+            } else {
+                Library.rescan();
+            }
+        } else if (name == "settings" || name == "queue" || name == "library" || name == "radio"
+            || name == "visualizer" || name == "equalizer" || name == "activity" || name == "about") {
+            root.show(name);
+        } else if (name == "navigation") {
+            root.sidebar-shown = !root.sidebar-shown;
+        } else if (name == "full-screen") {
+            root.enter-stage();
+        } else if (name == "play-pause") {
+            Player.toggle-pause();
+        } else if (name == "next") {
+            Player.next();
+        } else if (name == "previous") {
+            Player.previous();
+        } else if (name == "stop") {
+            Player.stop();
+        } else if (name == "shuffle") {
+            Playlist.toggle-shuffle();
+        } else if (name == "repeat") {
+            Playlist.toggle-repeat();
+        } else if (name == "volume-up") {
+            Player.set-volume(min(1.0, Player.volume + 0.05));
+        } else if (name == "volume-down") {
+            Player.set-volume(max(0.0, Player.volume - 0.05));
+        } else if (name == "mute") {
+            Player.toggle-mute();
+        } else if (name == "github" || name == "issues" || name == "licenses") {
+            App.open-link(name);
+        } else if (name == "updates") {
+            Updates.check();
+            update-popup.show();
+        }
+    }
+
     // F fills the screen with the visualizer, and Esc leaves it again.
     stage-keys := FocusScope {
         key-pressed(event) => {
@@ -10131,6 +10760,7 @@ export component FreyaSkin inherits Window {
                             root.show("library");
                         }
                         show-update => { update-popup.show(); }
+                        menu-action(name) => { root.menu-action(name); }
                     }
                     if root.sidebar-shown && !root.stage: Rectangle {
                         width: 1px;
@@ -10189,6 +10819,7 @@ export component FreyaSkin inherits Window {
                                     update-popup.show();
                                 }
                                 full-screen => { root.enter-stage(); }
+                                menu-action(name) => { root.menu-action(name); }
                             }
                         }
                         Rectangle {

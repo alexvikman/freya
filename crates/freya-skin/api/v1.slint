@@ -1141,6 +1141,8 @@ export global App {
     callback minimize-window();
     callback toggle-maximize-window();
     callback close-window();
+    /// Quit Freya, as the app's menu's Exit does, whatever closing the window does.
+    callback quit();
     /// The skin changed `view`.
     callback navigated();
     callback go-back();
