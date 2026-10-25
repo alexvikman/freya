@@ -1,0 +1,92 @@
+# The stations Freya picked: long-running stations, most of them listener-supported, whose
+# streams were tried. They come first in the radio directory, and on its first page, whether
+# the server asks Radio Browser for its stations or not.
+#
+# A station's tags are those Freya knows (see tags.rs), its country and languages apart.
+# "quality:lossless" is for a FLAC stream at CD quality, "quality:hi-res" for one of more.
+
+[[shelves]]
+title = "Picked by Freya"
+
+[[shelves]]
+title = "Lossless"
+tags = ["quality:lossless"]
+
+[[shelves]]
+title = "Jazz"
+tags = ["genre:jazz"]
+
+[[shelves]]
+title = "Classical"
+tags = ["genre:classical"]
+
+[[shelves]]
+title = "Ambient"
+tags = ["genre:ambient"]
+
+[[shelves]]
+title = "Electronic"
+tags = ["genre:electronic"]
+
+[[shelves]]
+title = "Rock"
+tags = ["genre:rock"]
+
+[[shelves]]
+title = "News"
+tags = ["format:news"]
+
+[[stations]]
+id = "somafm-groove-salad"
+name = "SomaFM: Groove Salad"
+url = "https://somafm.com/groovesalad.pls"
+homepage = "https://somafm.com/groovesalad/"
+codec = "AAC"
+bitrate = 128
+country = "us"
+languages = ["en"]
+tags = ["genre:chillout", "genre:ambient", "genre:electronic", "format:community"]
+
+[[stations]]
+id = "somafm-drone-zone"
+name = "SomaFM: Drone Zone"
+url = "https://somafm.com/dronezone.pls"
+homepage = "https://somafm.com/dronezone/"
+codec = "AAC"
+bitrate = 128
+country = "us"
+languages = ["en"]
+tags = ["genre:ambient", "genre:experimental", "format:community"]
+
+[[stations]]
+id = "radio-paradise"
+name = "Radio Paradise"
+url = "https://www.radioparadise.com/m3u/mp3-128.m3u"
+homepage = "https://radioparadise.com/"
+codec = "MP3"
+bitrate = 128
+country = "us"
+languages = ["en"]
+tags = ["genre:eclectic", "genre:rock"]
+
+[[stations]]
+id = "fip"
+name = "FIP"
+url = "https://icecast.radiofrance.fr/fip-midfi.mp3"
+homepage = "https://www.radiofrance.fr/fip"
+codec = "MP3"
+bitrate = 128
+country = "fr"
+languages = ["fr"]
+tags = ["genre:eclectic", "genre:jazz", "format:public"]
+
+[[stations]]
+id = "kexp"
+name = "KEXP"
+url = "https://kexp.streamguys1.com/kexp160.aac"
+homepage = "https://www.kexp.org/"
+codec = "AAC"
+bitrate = 160
+country = "us"
+languages = ["en"]
+tags = ["genre:indie", "genre:eclectic", "format:community"]

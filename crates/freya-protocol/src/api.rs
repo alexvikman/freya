@@ -147,6 +147,16 @@ macro_rules! with_server_control {
             fn stations() -> Vec<$crate::RadioStation>;
             /// Keeps `stations`, in order, in place of those kept.
             fn save_stations(stations: &[$crate::RadioStation]) -> ();
+            /// How the radio directory is.
+            fn radio_directory() -> $crate::RadioDirectoryStatus;
+            /// The directory's tags, each with how many stations have it.
+            fn radio_tags() -> Vec<$crate::RadioTag>;
+            /// The directory's stations `query` finds.
+            fn radio_search(query: &$crate::RadioQuery) -> $crate::RadioResults;
+            /// The directory's first page: the stations Freya picked, and a few tags' best.
+            fn radio_shelves() -> Vec<$crate::RadioShelf>;
+            /// Notes that the directory's station `id` was played, so Radio Browser counts it.
+            fn radio_played(id: &str) -> ();
             /// The folders in `folder` on the server, or where to start looking when none.
             fn server_folders(folder: Option<&::std::path::Path>) -> $crate::FolderListing;
             /// How scrobbling to Last.fm goes.
@@ -268,6 +278,11 @@ pub const LISTENER_CALLS: &[&str] = &[
     "artist_article",
     "is_scanning",
     "stations",
+    "radio_directory",
+    "radio_tags",
+    "radio_search",
+    "radio_shelves",
+    "radio_played",
 ];
 
 /// The calls that only read what the library's database holds, and answer every caller the
@@ -363,7 +378,8 @@ lent_args!(
     crate::ArtistEdit,
     crate::GenreInfo,
     crate::AlbumMatch,
-    crate::PlaylistInfo
+    crate::PlaylistInfo,
+    crate::RadioQuery
 );
 
 impl<'a> WireArg<'a> for &'a str {

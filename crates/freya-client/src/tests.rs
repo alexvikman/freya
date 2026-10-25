@@ -173,6 +173,7 @@ fn the_server_is_told_what_to_do_and_tells_what_happens() {
         lastfm: None,
         playlists: Some(dir.join("playlists")),
         stations: Some(dir.join("stations.m3u8")),
+        radio_directory: None,
         scrobbles: None,
     };
     let service = Arc::new(Service::start(dir.join("library.db"), None, config).unwrap());
@@ -731,6 +732,26 @@ fn only_a_device_with_a_token_is_answered() {
     let stations = phone.stations().unwrap();
     assert!(!stations.is_empty());
     assert!(phone.save_stations(&[]).is_err());
+    // And browses the radio directory.
+    let shelves = phone.radio_shelves().unwrap();
+    assert!(!shelves.is_empty());
+    let jazz = phone
+        .radio_search(&freya_protocol::RadioQuery {
+            tags: vec!["genre:jazz".into()],
+            limit: 5,
+            ..freya_protocol::RadioQuery::default()
+        })
+        .unwrap();
+    assert!(jazz.total > 0);
+    assert!(
+        phone
+            .radio_tags()
+            .unwrap()
+            .iter()
+            .any(|t| t.id == "genre:jazz")
+    );
+    assert_eq!(phone.radio_directory().unwrap().state, "off");
+    phone.radio_played(&jazz.stations[0].id).unwrap();
     // Asked at once with what it may ask, it is still refused what it may not.
     phone.prefetch(&[
         ("most_played", freya_protocol::args(&(10usize,))),

@@ -927,7 +927,7 @@ fn account(
 }
 
 /// Whether a listener is told of `event`: how the library everyone shares goes, without the
-/// folders it is in, and the radio stations; nothing of the owner's plays, playlists or
+/// folders it is in, and the radio stations and directory; nothing of the owner's plays, playlists or
 /// Last.fm.
 fn for_listeners(event: &ServiceEvent) -> bool {
     use freya_protocol::ScanEvent;
@@ -935,7 +935,8 @@ fn for_listeners(event: &ServiceEvent) -> bool {
         ServiceEvent::Connected { .. }
         | ServiceEvent::ScanStarted
         | ServiceEvent::ScanEnded
-        | ServiceEvent::StationsChanged => true,
+        | ServiceEvent::StationsChanged
+        | ServiceEvent::RadioDirectoryChanged => true,
         ServiceEvent::Scan(scan) => matches!(
             scan,
             ScanEvent::Progress { .. }

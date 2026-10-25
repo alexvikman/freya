@@ -6,12 +6,14 @@ pub mod api;
 pub mod artists;
 pub mod lastfm;
 pub mod library;
+pub mod radio;
 pub mod scan;
 
 pub use api::*;
 pub use artists::*;
 pub use lastfm::*;
 pub use library::*;
+pub use radio::*;
 pub use scan::*;
 
 /// What Freya Server's own folders are named after, apart from Freya's: its library, users and

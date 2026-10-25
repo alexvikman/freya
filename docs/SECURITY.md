@@ -172,7 +172,7 @@ Nobody can wear it out before logging in:
   within the track's folder, after links.
 - A scan follows no link out of the folders it walks, so one put in a shared music folder does
   not bring the rest of the computer into the library.
-- The server's folder, its own apart from Freya's (`Freya Server` among the user's
+- The server's folder, its own apart from Freya's (named after Freya Server among the user's
   application data), holds `accounts.json`, `adoption-code` while it is not adopted,
   `tls-key.pk8`, `tls-certificate.der` and `server.log`, all 0600, written as new files and renamed into place.
   Started at login, the server makes files for the user alone (launchd's `Umask`, systemd's
@@ -207,6 +207,19 @@ Nobody can wear it out before logging in:
   readable by the user alone, and forgotten when the device logs out.
 - The fingerprint shown is the certificate's the client pinned.
 - Only HTTPS pages, and Freya's own, are opened, in plain URL characters.
+
+## The radio directory
+
+- The server asks Radio Browser (`radio-browser.info`, no key) for its stations about once a
+  week, when its settings let it: its list of servers over HTTPS, and only names under
+  `api.radio-browser.info` from it; at most 40 pages of 64 MB, each within a minute. What it
+  fetched is kept in `radio-directory.json` in its folder: public stations, no secret.
+- A station is kept only with a web address of one line, a codec Freya plays, and no HLS;
+  names lose control characters. Clients play the stations as any stream a server names (see
+  below).
+- A play is told Radio Browser only for one of its stations, by its UUID, and at most once an
+  hour for each, whoever plays it, so a listener cannot make the server ask it over and over.
+- A search reads at most 10 tags and 10 words, and gives at most 200 stations.
 
 ## Not guarded against
 

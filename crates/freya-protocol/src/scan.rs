@@ -68,6 +68,8 @@ pub enum ServiceEvent {
     PlaylistsChanged,
     /// The radio stations changed.
     StationsChanged,
+    /// The radio directory was read, or fetched anew.
+    RadioDirectoryChanged,
     /// What the library holds changed, by a scan, a client or a play: answers kept of
     /// [`crate::CACHED_CALLS`] are to be asked again.
     Changed,
@@ -96,6 +98,9 @@ pub struct ServerSettings {
     pub artist_bios_online: bool,
     /// Whether the opening of their Wikipedia article is asked, found by their MusicBrainz id.
     pub artist_wikipedia_online: bool,
+    /// Whether the radio directory's stations come from Radio Browser, which is asked for them
+    /// about once a week, and told which are played.
+    pub radio_directory_online: bool,
     /// The user's personal fanart.tv API key, for wide pictures across artists' pages.
     pub fanart_key: Option<String>,
     /// Whether clients on other computers may connect, over TLS, and find the server.
@@ -117,6 +122,7 @@ impl Default for ServerSettings {
             artist_pictures_online: true,
             artist_bios_online: true,
             artist_wikipedia_online: true,
+            radio_directory_online: true,
             fanart_key: None,
             network: true,
             name: String::new(),

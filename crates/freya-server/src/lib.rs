@@ -15,6 +15,7 @@ mod lastfm;
 pub mod menu;
 mod pages;
 mod playlists;
+mod radio;
 mod scrobbler;
 mod serve;
 mod service;

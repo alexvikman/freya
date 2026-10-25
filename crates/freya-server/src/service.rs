@@ -14,12 +14,14 @@ use freya_library::library::{LastFm, Online, ScanOptions, Scanner};
 use freya_media::pictures::Pictures;
 use freya_protocol::{
     ApiError, ApiResult, FolderListing, LastFmStatus, LastFmTrack, LibraryApi, LibraryData,
-    LibraryPictures, Part, PlaylistEntry, RadioStation, SavedPlaylist, ScanEvent, Scrobble,
-    ServerControl, ServerEvents, ServerSettings, ServiceEvent,
+    LibraryPictures, Part, PlaylistEntry, RadioDirectoryStatus, RadioQuery, RadioResults,
+    RadioShelf, RadioStation, RadioTag, SavedPlaylist, ScanEvent, Scrobble, ServerControl,
+    ServerEvents, ServerSettings, ServiceEvent,
 };
 
 use crate::folder_watch::FolderWatch;
 use crate::playlists::Playlists;
+use crate::radio::Directory;
 use crate::scrobbler::Scrobbler;
 use crate::stations::Stations;
 
@@ -45,6 +47,9 @@ pub struct ServiceConfig {
     pub playlists: Option<PathBuf>,
     /// The file the radio stations are kept in; without, there are none.
     pub stations: Option<PathBuf>,
+    /// The file Radio Browser's stations are kept in, for the radio directory; without, it
+    /// has only the stations Freya picked.
+    pub radio_directory: Option<PathBuf>,
     /// Where scrobbling to Last.fm keeps the session and the plays waiting; without, the server
     /// does not scrobble.
     pub scrobbles: Option<PathBuf>,
@@ -79,6 +84,7 @@ struct Shared {
     state: Mutex<State>,
     playlists: Option<Playlists>,
     stations: Option<Stations>,
+    radio: Directory,
     scrobbler: Option<Mutex<Scrobbler>>,
     stop: AtomicBool,
     listeners: Arc<Mutex<Listeners>>,
@@ -123,6 +129,14 @@ impl Service {
         let playlists = state.config.playlists.clone().map(Playlists::new);
         let stations = state.config.stations.clone().map(Stations::new);
         let listeners: Arc<Mutex<Listeners>> = Arc::default();
+        let radio = {
+            let listeners = Arc::clone(&listeners);
+            Directory::start(
+                state.config.radio_directory.clone(),
+                state.config.settings.radio_directory_online,
+                Arc::new(move || tell_all(&listeners, ServiceEvent::RadioDirectoryChanged)),
+            )
+        };
         let scrobbler = state.config.scrobbles.clone().map(|dir| {
             let listeners = Arc::clone(&listeners);
             let tell: crate::scrobbler::Tell = Arc::new(move |status| {
@@ -134,6 +148,7 @@ impl Service {
             state: Mutex::new(state),
             playlists,
             stations,
+            radio,
             scrobbler,
             stop: AtomicBool::new(false),
             listeners,
@@ -204,7 +219,11 @@ impl ServerControl for Service {
     }
 
     fn set_settings(&self, settings: &ServerSettings) -> ApiResult<()> {
-        self.with(|state| state.set_settings(settings.clone()))
+        self.with(|state| state.set_settings(settings.clone()))?;
+        self.shared
+            .radio
+            .set_online(settings.radio_directory_online);
+        Ok(())
     }
 
     fn rescan(&self) -> ApiResult<()> {
@@ -298,6 +317,27 @@ impl ServerControl for Service {
             .save(stations)
             .map_err(ApiError)?;
         self.with(|state| state.outbox.push(ServiceEvent::StationsChanged));
+        Ok(())
+    }
+
+    fn radio_directory(&self) -> ApiResult<RadioDirectoryStatus> {
+        Ok(self.shared.radio.status())
+    }
+
+    fn radio_tags(&self) -> ApiResult<Vec<RadioTag>> {
+        Ok(self.shared.radio.tags())
+    }
+
+    fn radio_search(&self, query: &RadioQuery) -> ApiResult<RadioResults> {
+        Ok(self.shared.radio.search(query))
+    }
+
+    fn radio_shelves(&self) -> ApiResult<Vec<RadioShelf>> {
+        Ok(self.shared.radio.shelves())
+    }
+
+    fn radio_played(&self, id: &str) -> ApiResult<()> {
+        self.shared.radio.played(id);
         Ok(())
     }
 

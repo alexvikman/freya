@@ -373,6 +373,7 @@ pub(super) fn connect(
                 lastfm: freya_server::lastfm(),
                 playlists: database.parent().map(|dir| dir.join("playlists")),
                 stations: database.parent().map(|dir| dir.join("stations.m3u8")),
+                radio_directory: None,
                 scrobbles: None,
             };
             let service = Service::start(database, pictures, config).map_err(|e| {

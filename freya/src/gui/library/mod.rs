@@ -779,6 +779,8 @@ impl LibraryPanel {
                 ServiceEvent::PlaysWritten => self.stale |= self.shows_plays(),
                 ServiceEvent::PlaylistsChanged => self.playlists_changed = true,
                 ServiceEvent::StationsChanged => self.stations_changed = true,
+                // Followed once the radio view shows the directory.
+                ServiceEvent::RadioDirectoryChanged => {}
                 ServiceEvent::LastFm(status) => self.lastfm_status = Some(status),
                 // The answers kept are forgotten by the client; the rows are read anew when
                 // the events above say what changed them.

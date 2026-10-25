@@ -248,6 +248,23 @@ on macOS (a menu bar app, without a Dock icon); both AppImages and `.deb`s built
 (arm64, in Docker); both Windows programs cross-compiled with their icons. The `.msi`s, and
 installing, upgrading and uninstalling each without the other, are first seen in that release.
 
+## Radio directory (R1–R4)
+
+Decided with the user: a large section of radio stations, found by tags rather than by
+categories alone. A station has tags of several kinds at once, "Jazz", "Italy", "Italian" and
+"Lossless", and filtering combines them; the first page's rows are a few tags, or tags
+together, picked by Freya. The stations come from Radio Browser, the open directory anyone may
+add to and read without a key, and from a list Freya picks, whose streams were tried, for the
+lossless and hi-res stations Radio Browser hardly marks. The directory is the server's, as the
+stations kept for its users are; Freya asks it.
+
+| # | Milestone | Done when |
+|---|---|---|
+| **R1** ✓ | **The server's directory**: Radio Browser's stations fetched about once a week, a page at a time from the servers it lists, and kept in the server's folder; its country, languages and codec made tags as they are, and its own tags, written as anyone likes, made the genres, decades and formats Freya knows; one station of a name in a country, and none Freya cannot play (HLS, video). Calls to find stations by tags and words, with the tags of those found, the directory's tags, and its first page; a listener may make them. A server setting turns Radio Browser off, leaving the stations Freya picked | The server finds Italian jazz among some 45,000 stations in a millisecond, and its first page shows without the internet |
+| **R2** | **Stations Freya picks**: 50 to 100 long-running stations whose streams were tried, with Freya's tags; lossless and hi-res ones among them, by their streams' sample rates. They come first, and replace the five a new server started with | Each picked stream plays, and its quality tag is what its stream is |
+| **R3** | **Radio in Freya**: a first page of rows, tags to click and combine, words to search, more stations as the list is scrolled; a station is played from there, and an admin keeps it in the server's stations with a click. The Server tab turns Radio Browser off | A listener finds a station by tags and plays it; an admin keeps it |
+| **R4** | **Finish**: the stations' logos, plays told Radio Browser, the directory's state in the Server tab | Logos show, and a play is counted |
+
 ### Speed between server and client (from 2026-10-22)
 
 Measured on the dev library (7,832 tracks, 782 albums) over TLS with a delay each way: every
