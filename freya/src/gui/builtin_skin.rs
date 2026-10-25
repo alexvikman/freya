@@ -1223,6 +1223,7 @@ skin_api! {
         Server."update-error" => set_update_error, get_update_error;
         Server."update-can-install" => set_update_can_install, get_update_can_install;
         Server."user" => set_user, get_user;
+        Server."user-initial" => set_user_initial, get_user_initial;
         Server."has-password" => set_has_password, get_has_password;
         Server."devices" => set_devices, get_devices;
         Server."password-error" => set_password_error, get_password_error;

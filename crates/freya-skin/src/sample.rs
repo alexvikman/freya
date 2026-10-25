@@ -33,6 +33,9 @@ pub fn fill(ui: &ComponentInstance) {
     // Connected to a server: without one, the skin shows only its welcome view.
     set("Server", "chosen", Value::Bool(true));
     set("Server", "state", text("connected"));
+    set("Server", "name", text("Mini"));
+    set("Server", "user", text("alex"));
+    set("Server", "user-initial", text("A"));
 
     let tracks = [
         ("Kraftwerk - Computer Love", "7:15"),

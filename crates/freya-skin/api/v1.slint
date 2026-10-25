@@ -1262,6 +1262,8 @@ export global Server {
     /// The account this device is connected to: its user, whether they set a password (only then
     /// can they log in on other devices), and the devices connected to it.
     in property <string> user;
+    /// The first letter of `user`, in upper case, for a button standing for the account.
+    in property <string> user-initial;
     in property <bool> has-password;
     in property <[ServerDevice]> devices;
     /// While the page the password is set or changed on is open in the browser; what went wrong

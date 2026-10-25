@@ -457,6 +457,7 @@ The server that keeps the library: Freya Server on this computer, or on another 
 | `start-at-login` | bool | Whether the server starts when its user logs in to its computer |
 | `update-state`, `update-version`, `update-current`, `update-progress`, `update-error`, `update-can-install` | string, string, string, float, string, bool | Updating the server, for an admin: "" while unknown, "idle", "checking", "up-to-date", "available", "downloading", "installed" (it restarts into it) or "failed"; the version available and the running one; 0 to 1 while downloading; why it failed; whether it installs itself, or `install-update()` opens its page |
 | `user`, `has-password` | string, bool | The account this computer is connected to, and whether it has a password; only then can other computers log in |
+| `user-initial` | string | The first letter of `user`, in upper case, for a button standing for the account |
 | `devices` | [`ServerDevice`] | The devices connected to the account: `id`, `name`, `connected` and `used` (dates; `used` is "" when not known), `joined` ("logged-in" in the browser, or "" for a device from before it was kept), `this` |
 | `password-waiting`, `password-error` | bool, string | While the page the password is set or changed on is open in the browser; why it could not be opened |
 | `finding`, `found` | bool, [`FoundServer`] | While looking for servers on the network, and those that answered: `name`, `address`, `fingerprint` |

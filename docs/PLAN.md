@@ -248,6 +248,18 @@ on macOS (a menu bar app, without a Dock icon); both AppImages and `.deb`s built
 (arm64, in Docker); both Windows programs cross-compiled with their icons. The `.msi`s, and
 installing, upgrading and uninstalling each without the other, are first seen in that release.
 
+## The window, as desktop apps have it (W1–W4)
+
+Decided with the user: what a desktop music app's window offers, and Freya's did not. On
+macOS, the app's menu is in the system's menu bar, as Mac apps have it, not in the window.
+
+| # | Milestone | Done when |
+|---|---|---|
+| **W1** ✓ | **The account's button**: the user's initial in a circle at the right of the toolbar; its menu names the user, their role and the server, and opens the account's page in the browser (the password changed there), Settings, Activity and About, and logs out | The account is one click away, and so is logging out |
+| **W2** | **The app's menu**: File, Edit, View, Playback and Help, with keyboard shortcuts: on Windows and Linux from a button at the top left of the window, on macOS in the system's menu bar. What the toolbar's "More" menu held moves there | Everything Freya does is in its menu, with its shortcut |
+| **W3** | **The close button minimizes**: a setting, on at first as other music apps have it, that minimizes the window to the taskbar on close; the music plays on, and Exit in the menu (Ctrl+Shift+Q) quits. On macOS closing the window leaves Freya in the Dock, as Mac apps do | Closing the window does not stop the music |
+| **W4** | **Scrolling by the middle button**: a click with the mouse wheel marks the place, and moving the mouse away scrolls whatever is under it, faster the farther; another click, or Esc, stops it | Every list scrolls so, without each view doing it |
+
 ## Radio directory (R1–R4)
 
 Decided with the user: a large section of radio stations, found by tags rather than by

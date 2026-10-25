@@ -733,6 +733,10 @@ impl ServerPanel {
                 string(account.map(|a| a.user.clone()).unwrap_or_default()),
             ),
             (
+                "user-initial",
+                string(account.map(|a| initial(&a.user)).unwrap_or_default()),
+            ),
+            (
                 "has-password",
                 Value::Bool(account.is_some_and(|a| a.has_password)),
             ),
@@ -969,4 +973,22 @@ fn found_row(found: &Found) -> Value {
         ("address".to_owned(), string(found.address.to_string())),
         ("fingerprint".to_owned(), string(&found.server.fingerprint)),
     ]))
+}
+
+/// The first letter of a user's name, as their account's button shows it: "A" for "alex".
+fn initial(user: &str) -> String {
+    user.chars()
+        .find(|c| c.is_alphanumeric())
+        .map(|c| c.to_uppercase().collect())
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod initial_tests {
+    #[test]
+    fn a_users_initial_is_their_first_letter() {
+        assert_eq!(super::initial("alex"), "A");
+        assert_eq!(super::initial("_émile"), "É");
+        assert_eq!(super::initial(""), "");
+    }
 }

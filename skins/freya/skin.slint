@@ -631,6 +631,13 @@ component MenuItem inherits Rectangle {
     in property <string> text;
     /// Shows a check mark, for choices.
     in property <bool> checked;
+    /// Its keyboard shortcut, at the right: "Ctrl+N".
+    in property <string> shortcut;
+    /// Whether it opens a page in the browser, or a menu of its own: an arrow at the right.
+    in property <bool> external;
+    in property <bool> submenu;
+    /// Whether it is hovered, for a menu of its own to open.
+    out property <bool> hovered: touch.has-hover;
     callback activated;
 
     height: 32px;
@@ -666,6 +673,23 @@ component MenuItem inherits Rectangle {
             vertical-alignment: center;
             // A long name, like a folder's, is cut short inside the menu.
             overflow: elide;
+        }
+        if root.shortcut != "": Text {
+            text: root.shortcut;
+            font-size: 12px;
+            color: Theme.text-secondary;
+            vertical-alignment: center;
+        }
+        if root.external || root.submenu: VerticalLayout {
+            alignment: center;
+
+            Icon {
+                width: 14px;
+                height: 14px;
+                data: root.external ? Icons.external : Icons.chevron;
+                stroked: true;
+                color: Theme.text-secondary;
+            }
         }
     }
 
@@ -9431,6 +9455,37 @@ component AboutView inherits Rectangle {
 
 /// The bar above the content: the navigation button, back, the view's title and actions,
 /// search, and the menu.
+/// The account's button: its user's initial in a circle, which opens the account's menu.
+component AccountButton inherits Rectangle {
+    callback clicked();
+
+    width: 36px;
+    height: 36px;
+    border-radius: 18px;
+    background: touch.has-hover ? Theme.pressed : transparent;
+    accessible-role: button;
+    accessible-label: "Account: " + Server.user;
+    accessible-action-default => { root.clicked(); }
+
+    Rectangle {
+        width: 28px;
+        height: 28px;
+        border-radius: 14px;
+        background: Theme.accent;
+
+        Text {
+            text: Server.user-initial;
+            font-size: 13px;
+            font-weight: 700;
+            color: Theme.on-accent;
+        }
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
 component Toolbar inherits HorizontalLayout {
     /// Room kept free at the left, for the window buttons.
     in property <length> inset;
@@ -9669,6 +9724,13 @@ component Toolbar inherits HorizontalLayout {
         tooltip: "More options";
         clicked => { menu.show(); }
     }
+    if Server.chosen && Server.user != "": VerticalLayout {
+        alignment: center;
+
+        account := AccountButton {
+            clicked => { account-popup.show(); }
+        }
+    }
     if App.window-controls: Rectangle { width: 6px; }
     if App.window-controls: WindowControls { }
 
@@ -9698,6 +9760,81 @@ component Toolbar inherits HorizontalLayout {
                     activated => {
                         activity-popup.close();
                         root.show-view("activity");
+                    }
+                }
+            }
+        }
+    }
+
+    // The account's menu, under its button at the right.
+    account-popup := PopupWindow {
+        // Its right edge under the button's, which follows the menu button.
+        x: more.x + more.width + root.spacing + 36px - self.width;
+        y: more.y + more.height;
+        width: 260px;
+        close-policy: close-on-click-outside;
+
+        MenuSurface {
+            VerticalLayout {
+                padding: 6px;
+
+                VerticalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    padding-top: 8px;
+                    padding-bottom: 8px;
+                    spacing: 2px;
+
+                    Text {
+                        text: Server.user;
+                        font-size: 14px;
+                        font-weight: 600;
+                        color: Theme.text;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: (Server.admin ? "Admin" : "Listener") + " · " + Server.name;
+                        font-size: 12px;
+                        color: Theme.text-secondary;
+                        overflow: elide;
+                    }
+                }
+                MenuDivider { }
+                MenuItem {
+                    text: "Account";
+                    external: true;
+                    activated => {
+                        account-popup.close();
+                        Server.change-password();
+                    }
+                }
+                MenuItem {
+                    text: "Settings";
+                    activated => {
+                        account-popup.close();
+                        root.show-view("settings");
+                    }
+                }
+                MenuItem {
+                    text: "Activity";
+                    activated => {
+                        account-popup.close();
+                        root.show-view("activity");
+                    }
+                }
+                MenuItem {
+                    text: "About Freya";
+                    activated => {
+                        account-popup.close();
+                        root.show-view("about");
+                    }
+                }
+                MenuDivider { }
+                MenuItem {
+                    text: "Log out";
+                    activated => {
+                        account-popup.close();
+                        Server.log-out();
                     }
                 }
             }
