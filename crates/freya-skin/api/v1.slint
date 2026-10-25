@@ -1087,6 +1087,9 @@ export global App {
     in property <string> build-date;
     /// "system", "light" or "dark". Skins that support both color schemes should follow it.
     in property <string> theme: "system";
+    /// Whether closing the window minimizes it to the taskbar, Freya playing on, rather than
+    /// quitting; on macOS closing leaves Freya in the Dock either way. Kept between runs.
+    in property <bool> close-minimizes: true;
     /// Whether the skin shows its equalizer; kept between runs.
     in property <bool> equalizer-visible;
     /// To draw into the window's title bar, set this to the height of the skin's top bar, e.g.
@@ -1132,12 +1135,14 @@ export global App {
     callback show-skins();
     /// "system", "light" or "dark".
     callback set-theme(string);
+    callback set-close-minimizes(bool);
     callback toggle-equalizer();
     /// Call on a mouse press in an empty part of the top bar, when the skin draws into the
     /// title bar: the window follows the mouse, and a double click zooms or minimizes it, as
     /// the system's settings say.
     callback drag-window();
-    /// The window buttons, for a skin that draws them (`window-controls`). Closing quits.
+    /// The window buttons, for a skin that draws them (`window-controls`). Closing does what
+    /// `close-minimizes` says.
     callback minimize-window();
     callback toggle-maximize-window();
     callback close-window();

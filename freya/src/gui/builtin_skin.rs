@@ -1177,6 +1177,7 @@ skin_api! {
         App."version" => set_version, get_version;
         App."build-date" => set_build_date, get_build_date;
         App."theme" => set_theme, get_theme;
+        App."close-minimizes" => set_close_minimizes, get_close_minimizes;
         App."activities" => set_activities, get_activities;
         App."log" => set_log, get_log;
         App."log-level" => set_log_level, get_log_level;
@@ -1394,6 +1395,7 @@ skin_api! {
         App."set-log-level" => on_set_log_level, invoke_set_log_level(level: SharedString);
         App."show-skins" => on_show_skins, invoke_show_skins();
         App."set-theme" => on_set_theme, invoke_set_theme(theme: SharedString);
+        App."set-close-minimizes" => on_set_close_minimizes, invoke_set_close_minimizes(minimizes: bool);
         App."toggle-equalizer" => on_toggle_equalizer, invoke_toggle_equalizer();
         App."drag-window" => on_drag_window, invoke_drag_window();
         App."minimize-window" => on_minimize_window, invoke_minimize_window();

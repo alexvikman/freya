@@ -8918,6 +8918,20 @@ component SettingsView inherits Rectangle {
                         }
                     }
                 }
+                if Platform.os != OperatingSystemType.macos: SettingsRow {
+                    label: "Close button minimizes the window";
+                    detail: "Closing the window keeps Freya playing, in the taskbar. Exit in the menu quits.";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        Toggle {
+                            label: "Close button minimizes the window";
+                            checked: App.close-minimizes;
+                            toggled => { App.set-close-minimizes(!App.close-minimizes); }
+                        }
+                    }
+                }
                 SettingsRow {
                     label: "Skin";
                     detail: "How Freya looks: this one, or one of your own.";
@@ -10478,6 +10492,11 @@ export component FreyaSkin inherits Window {
                 shortcut: @keys(Control + Shift + W);
                 enabled: Server.chosen;
                 activated => { root.menu-action("log-out"); }
+            }
+            if Platform.os == OperatingSystemType.macos: MenuItem {
+                title: "Close Window";
+                shortcut: @keys(Control + W);
+                activated => { App.close-window(); }
             }
             if Platform.os != OperatingSystemType.macos: MenuItem {
                 title: "Exit";

@@ -55,6 +55,15 @@ pub(super) fn bind(b: &Binder) {
     );
     b.bind(
         "App",
+        "set-close-minimizes",
+        Box::new(|app, args| {
+            if let Some(Value::Bool(minimizes)) = args.first() {
+                app.settings.close_minimizes = *minimizes;
+            }
+        }),
+    );
+    b.bind(
+        "App",
         "toggle-equalizer",
         Box::new(|app, _| app.settings.equalizer_visible = !app.settings.equalizer_visible),
     );
@@ -94,11 +103,27 @@ pub(super) fn bind(b: &Binder) {
             Value::Void
         });
     }
-    // As the system's close button: Freya quits.
-    let _ = b.ui.set_global_callback("App", "close-window", |_| {
-        let _ = slint::quit_event_loop();
-        Value::Void
-    });
+    // As the system's close button.
+    {
+        let app = b.weak.clone();
+        let _ = b.ui.set_global_callback("App", "close-window", move |_| {
+            let hide = app.upgrade().and_then(|app| {
+                let mut app = app.try_borrow_mut().ok()?;
+                let response = app.close_window();
+                Some((response, app.view.ui.clone()))
+            });
+            match hide {
+                Some((slint::CloseRequestResponse::HideWindow, ui)) => {
+                    let _ = ui.hide();
+                }
+                Some(_) => {}
+                None => {
+                    let _ = slint::quit_event_loop();
+                }
+            }
+            Value::Void
+        });
+    }
     // The app menu's Exit.
     let _ = b.ui.set_global_callback("App", "quit", |_| {
         let _ = slint::quit_event_loop();

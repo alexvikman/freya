@@ -237,6 +237,10 @@ impl App {
                 ("window-maximized", Value::Bool(ui.window().is_maximized())),
                 ("theme", skin_state::string(&self.settings.theme)),
                 (
+                    "close-minimizes",
+                    Value::Bool(self.settings.close_minimizes),
+                ),
+                (
                     "equalizer-visible",
                     Value::Bool(self.settings.equalizer_visible),
                 ),

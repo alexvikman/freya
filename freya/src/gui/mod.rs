@@ -19,6 +19,7 @@ mod playlists;
 mod radio;
 mod radio_directory;
 mod radio_logos;
+mod reopen;
 mod screen;
 mod server_panel;
 mod skin_state;
@@ -161,7 +162,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
     }
     app.borrow_mut().start(&options.files);
     bindings::connect(&ui, &app);
-    skins::attach_window(&ui);
+    skins::attach_window(&ui, Rc::downgrade(&app));
     app.borrow_mut().media_tries = MEDIA_TRIES;
     {
         let app = Rc::downgrade(&app);
@@ -255,8 +256,12 @@ pub fn run(options: Options) -> anyhow::Result<()> {
 
     ui.show().context("could not show the window")?;
     drop(ui);
-    Timer::single_shot(Duration::ZERO, app_icon::show_in_dock);
-    slint::run_event_loop().context("event loop failed")?;
+    Timer::single_shot(Duration::ZERO, || {
+        app_icon::show_in_dock();
+        reopen::watch();
+    });
+    // Until quit, not when the window closes: on macOS Freya stays in the Dock without it.
+    slint::run_event_loop_until_quit().context("event loop failed")?;
     app.borrow_mut().save();
     Ok(())
 }

@@ -14,11 +14,21 @@ use super::skin_state::string;
 use super::skin_window::SkinWindow;
 use crate::settings;
 
-/// Closing a skin window quits Freya, even if the About or skin picker window is open.
-pub fn attach_window(ui: &SkinWindow) {
-    ui.window().on_close_requested(|| {
-        let _ = slint::quit_event_loop();
-        slint::CloseRequestResponse::HideWindow
+/// Closing a skin window does what the app's settings say (see `App::close_window`); without
+/// the app, Freya quits, even if the About or skin picker window is open.
+pub fn attach_window(ui: &SkinWindow, app: Weak<RefCell<App>>) {
+    ui.window().on_close_requested(move || {
+        match app
+            .upgrade()
+            .as_ref()
+            .and_then(|app| app.try_borrow_mut().ok())
+        {
+            Some(mut app) => app.close_window(),
+            None => {
+                let _ = slint::quit_event_loop();
+                slint::CloseRequestResponse::HideWindow
+            }
+        }
     });
 }
 
@@ -40,7 +50,7 @@ pub fn switch_skin(app: &Rc<RefCell<App>>, source: SkinSource) {
         (window.size(), window.position(), app.skin == source)
     };
     connect(&ui, app);
-    attach_window(&ui);
+    attach_window(&ui, Rc::downgrade(app));
     ui.window().set_position(position);
     // A reloaded skin keeps its size; another skin starts at its own preferred size.
     if same_skin {
