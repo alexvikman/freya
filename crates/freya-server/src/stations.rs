@@ -1,24 +1,12 @@
-//! The internet radio stations the server keeps for its users. They are kept as an M3U
-//! playlist of stream addresses with the stations' names, so other players can read the file
-//! too.
+//! The internet radio stations the server keeps for its users, to play; those to find more in
+//! are the directory's (see `crate::radio`). They are kept as an M3U playlist of stream
+//! addresses with the stations' names, so other players can read the file too.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
 
 use freya_media::{Entry, playlist_file};
 use freya_protocol::RadioStation;
-
-/// The stations a new server starts with: long-running, listener-supported stations.
-const STARTERS: [(&str, &str); 5] = [
-    ("SomaFM: Groove Salad", "https://somafm.com/groovesalad.pls"),
-    ("SomaFM: Drone Zone", "https://somafm.com/dronezone.pls"),
-    (
-        "Radio Paradise",
-        "https://www.radioparadise.com/m3u/mp3-128.m3u",
-    ),
-    ("FIP", "https://icecast.radiofrance.fr/fip-midfi.mp3"),
-    ("KEXP", "https://kexp.streamguys1.com/kexp160.aac"),
-];
 
 /// The stations in a file.
 pub struct Stations {
@@ -35,16 +23,10 @@ impl Stations {
         }
     }
 
-    /// The stations saved, or the starter stations when none are saved yet.
+    /// The stations saved; none at first, the directory's being there to find them in.
     pub fn all(&self) -> Vec<RadioStation> {
         if !self.file.exists() {
-            return STARTERS
-                .iter()
-                .map(|(name, url)| RadioStation {
-                    name: (*name).to_owned(),
-                    url: (*url).to_owned(),
-                })
-                .collect();
+            return Vec::new();
         }
         match playlist_file::load(&self.file) {
             Ok(entries) => entries
@@ -127,19 +109,18 @@ mod tests {
     }
 
     #[test]
-    fn starts_with_starter_stations_and_keeps_changes() {
+    fn keeps_the_stations_saved() {
         let dir = std::env::temp_dir().join(format!("freya-stations-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let stations = Stations::new(dir.join("stations.m3u8"));
-        let mut all = stations.all();
-        assert_eq!(all.len(), STARTERS.len());
+        assert!(stations.all().is_empty());
 
-        all.remove(0);
-        all.push(station("Night Jazz", "https://jazz.example.org/"));
+        let all = vec![
+            station("Night Jazz", "https://jazz.example.org/"),
+            station("Morning Folk", "https://folk.example.org/live"),
+        ];
         stations.save(&all).unwrap();
         assert_eq!(Stations::new(dir.join("stations.m3u8")).all(), all);
-
-        // None kept is none, not the starters again.
         stations.save(&[]).unwrap();
         assert_eq!(stations.all(), Vec::new());
         let _ = std::fs::remove_dir_all(&dir);

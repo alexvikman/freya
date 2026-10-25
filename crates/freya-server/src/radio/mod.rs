@@ -123,7 +123,7 @@ impl Directory {
         self.shared.index().search(query)
     }
 
-    /// The first page's rows: the stations Freya picked, then each row's tags' best known.
+    /// The first page's rows: the stations each names, or the best known with its tags.
     pub fn shelves(&self) -> Vec<RadioShelf> {
         let index = self.shared.index();
         self.shared
@@ -131,13 +131,11 @@ impl Directory {
             .iter()
             .filter_map(|shelf| {
                 let stations = if shelf.tags.is_empty() {
-                    let picked: Vec<_> = self
-                        .shared
-                        .featured
+                    shelf
+                        .stations
                         .iter()
-                        .filter_map(|f| index.get(&format!("freya:{}", f.id)).cloned())
-                        .collect();
-                    picked
+                        .filter_map(|id| index.get(&format!("freya:{id}")).cloned())
+                        .collect()
                 } else {
                     index
                         .search(&RadioQuery {
@@ -375,7 +373,17 @@ mod tests {
         assert!(status.stations > 0);
         let shelves = directory.shelves();
         assert_eq!(shelves[0].title, "Picked by Freya");
-        assert!(shelves[0].stations.iter().all(|s| s.featured));
+        assert!(shelves[0].stations.len() >= FEWEST_ON_SHELF);
+        assert!(
+            shelves
+                .iter()
+                .all(|shelf| shelf.stations.iter().all(|s| s.featured))
+        );
+        let lossless_jazz = shelves.iter().find(|s| s.title == "Lossless jazz").unwrap();
+        assert!(lossless_jazz.stations.iter().all(|s| {
+            s.tags.contains(&"quality:lossless".to_owned())
+                && s.tags.contains(&"genre:jazz".to_owned())
+        }));
         let jazz = directory.search(&RadioQuery {
             tags: vec!["genre:jazz".into()],
             limit: 10,
@@ -420,26 +428,21 @@ mod tests {
         heard.recv_timeout(Duration::from_secs(10)).unwrap();
         let status = directory.status();
         assert_eq!(status.state, "ready");
-        let italy = directory.search(&RadioQuery {
-            tags: vec!["country:it".into(), "genre:jazz".into()],
-            limit: 10,
-            ..RadioQuery::default()
-        });
-        assert_eq!(italy.stations[0].name, "Radio Jazz Italia");
+        let italian_jazz = || {
+            directory.search(&RadioQuery {
+                tags: vec!["country:it".into(), "genre:jazz".into()],
+                limit: 10,
+                ..RadioQuery::default()
+            })
+        };
+        let found = italian_jazz();
+        assert!(found.stations[0].featured, "the picked stations first");
+        assert!(found.stations.iter().any(|s| s.name == "Radio Jazz Italia"));
         // Taken off Radio Browser, only the picked stations are left.
         directory.set_online(false);
         heard.recv_timeout(Duration::from_secs(10)).unwrap();
         assert_eq!(directory.status().state, "off");
-        assert!(
-            directory
-                .search(&RadioQuery {
-                    tags: vec!["country:it".into()],
-                    limit: 10,
-                    ..RadioQuery::default()
-                })
-                .stations
-                .is_empty()
-        );
+        assert!(italian_jazz().stations.iter().all(|s| s.featured));
         drop(directory);
         let _ = std::fs::remove_dir_all(&dir);
     }

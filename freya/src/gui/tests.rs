@@ -491,28 +491,28 @@ export component W inherits Window { Text { text: Player.title; } }
     assert_eq!(titles(&ui), ["mono-22k"]);
     call(&ui, "Library", "show", &[text("artists")]);
 
-    // Radio: the starter stations, saving one, playing it twice without a second entry, and
+    // Radio: none saved at first; saving one, playing it twice without a second entry, and
     // removing it.
     let stations = |ui: &SkinWindow| match global(ui, "Radio", "stations") {
         Value::Model(model) => model.row_count(),
         other => panic!("stations is a model, not {other:?}"),
     };
-    assert_eq!(stations(&ui), 5);
+    assert_eq!(stations(&ui), 0);
     call(&ui, "Radio", "add", &[text("Nothing"), text(" ")]);
     assert_eq!(global(&ui, "Radio", "error"), text("No address given"));
     call(&ui, "Radio", "add", &[text(""), text("127.0.0.1:9/live")]);
     assert_eq!(global(&ui, "Radio", "error"), text(""));
-    assert_eq!(stations(&ui), 6);
+    assert_eq!(stations(&ui), 1);
     let queued = titles(&ui).len();
-    call(&ui, "Radio", "play", &[num(5.0)]);
-    call(&ui, "Radio", "play", &[num(5.0)]);
+    call(&ui, "Radio", "play", &[num(0.0)]);
+    call(&ui, "Radio", "play", &[num(0.0)]);
     assert_eq!(
         titles(&ui).len(),
         queued + 1,
         "a station already queued plays from there"
     );
-    call(&ui, "Radio", "remove", &[num(5.0)]);
-    assert_eq!(stations(&ui), 5);
+    call(&ui, "Radio", "remove", &[num(0.0)]);
+    assert_eq!(stations(&ui), 0);
     call(&ui, "Player", "stop", &[]);
 
     // Playlists: made empty or from Up Next, filled from the library, played, edited, deleted.

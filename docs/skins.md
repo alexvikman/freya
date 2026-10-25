@@ -243,7 +243,7 @@ Playlists the user keeps in Freya, apart from the queue: `Playlist` is what play
 
 ### `Radio`
 
-Internet radio stations, which the server keeps for its users; a new server starts with a few well-known stations. Its admins (`Server.admin`) add and remove them; its listeners play them.
+Internet radio stations, which the server keeps for its users; none at first. Its admins (`Server.admin`) add and remove them; its listeners play them.
 
 | Property | Type | |
 |---|---|---|

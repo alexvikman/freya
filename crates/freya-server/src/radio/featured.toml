@@ -1,12 +1,34 @@
-# The stations Freya picked: long-running stations, most of them listener-supported, whose
-# streams were tried. They come first in the radio directory, and on its first page, whether
-# the server asks Radio Browser for its stations or not.
+# The stations Freya picked: long-running stations, most of them public or listener-supported,
+# whose streams were tried: each was reached, and decoded by Freya, when it was added. They come
+# first in the radio directory, and on its first page, whether the server asks Radio Browser
+# for its stations or not.
 #
 # A station's tags are those Freya knows (see tags.rs), its country and languages apart.
-# "quality:lossless" is for a FLAC stream at CD quality, "quality:hi-res" for one of more.
+# "quality:lossless" is for a FLAC stream, "quality:hi-res" for one of more than 16 bits or
+# 48 kHz besides, as its stream said when it was tried; "quality:high" is added to a lossy one
+# of 256 kbps or more. A row of the first page shows the stations it names, or the best known
+# of its tags together.
 
 [[shelves]]
 title = "Picked by Freya"
+stations = [
+    "radio-paradise-flac",
+    "fip",
+    "kexp",
+    "somafm-groove-salad",
+    "nts-1",
+    "sveriges-radio-p2-flac",
+    "worldwide-fm",
+    "radio-nova",
+    "wfmu",
+    "jazz24",
+    "rai-radio-3",
+    "dublab",
+]
+
+[[shelves]]
+title = "Hi-Res"
+tags = ["quality:hi-res"]
 
 [[shelves]]
 title = "Lossless"
@@ -17,6 +39,10 @@ title = "Jazz"
 tags = ["genre:jazz"]
 
 [[shelves]]
+title = "Lossless jazz"
+tags = ["quality:lossless", "genre:jazz"]
+
+[[shelves]]
 title = "Classical"
 tags = ["genre:classical"]
 
@@ -25,60 +51,512 @@ title = "Ambient"
 tags = ["genre:ambient"]
 
 [[shelves]]
+title = "Chillout"
+tags = ["genre:chillout"]
+
+[[shelves]]
 title = "Electronic"
 tags = ["genre:electronic"]
+
+[[shelves]]
+title = "Indie"
+tags = ["genre:indie"]
 
 [[shelves]]
 title = "Rock"
 tags = ["genre:rock"]
 
 [[shelves]]
+title = "Soul"
+tags = ["genre:soul"]
+
+[[shelves]]
+title = "World"
+tags = ["genre:world"]
+
+[[shelves]]
+title = "From Italy"
+tags = ["country:it"]
+
+[[shelves]]
+title = "From France"
+tags = ["country:fr"]
+
+[[shelves]]
+title = "Community radio"
+tags = ["format:community"]
+
+[[shelves]]
 title = "News"
 tags = ["format:news"]
+
+[[stations]]
+id = "radio-paradise-flac"
+name = "Radio Paradise (FLAC)"
+url = "https://stream.radioparadise.com/flac"
+homepage = "https://radioparadise.com/"
+codec = "FLAC"
+country = "us"
+languages = ["en"]
+tags = ["quality:lossless", "genre:eclectic", "genre:rock"]
+
+[[stations]]
+id = "radio-paradise-mellow-flac"
+name = "Radio Paradise Mellow Mix (FLAC)"
+url = "https://stream.radioparadise.com/mellow-flac"
+homepage = "https://radioparadise.com/"
+codec = "FLAC"
+country = "us"
+languages = ["en"]
+tags = ["quality:lossless", "genre:eclectic", "genre:easy-listening"]
+
+[[stations]]
+id = "radio-paradise-rock-flac"
+name = "Radio Paradise Rock Mix (FLAC)"
+url = "https://stream.radioparadise.com/rock-flac"
+homepage = "https://radioparadise.com/"
+codec = "FLAC"
+country = "us"
+languages = ["en"]
+tags = ["quality:lossless", "genre:rock", "genre:alternative"]
+
+[[stations]]
+id = "radio-paradise-world-flac"
+name = "Radio Paradise World/Etc Mix (FLAC)"
+url = "https://stream.radioparadise.com/world-etc-flac"
+homepage = "https://radioparadise.com/"
+codec = "FLAC"
+country = "us"
+languages = ["en"]
+tags = ["quality:lossless", "genre:world", "genre:eclectic"]
+
+[[stations]]
+id = "radio-paradise-serenity-flac"
+name = "Radio Paradise Serenity (FLAC)"
+url = "https://stream.radioparadise.com/serenity-flac"
+homepage = "https://radioparadise.com/"
+codec = "FLAC"
+country = "us"
+tags = ["quality:lossless", "genre:ambient", "genre:chillout"]
+
+[[stations]]
+id = "sveriges-radio-p2-flac"
+name = "Sveriges Radio P2 (FLAC)"
+url = "https://edge1.sr.se/p2-flac"
+homepage = "https://sverigesradio.se/p2"
+codec = "FLAC"
+country = "se"
+languages = ["sv"]
+tags = ["quality:hi-res", "quality:lossless", "genre:classical", "genre:jazz", "genre:folk", "format:public"]
+
+[[stations]]
+id = "naim-radio-flac"
+name = "Naim Radio (FLAC)"
+url = "http://mscp3.live-streams.nl:8360/flac.flac"
+codec = "FLAC"
+country = "gb"
+tags = ["quality:lossless", "genre:eclectic"]
+
+[[stations]]
+id = "naim-jazz-flac"
+name = "Naim Jazz (FLAC)"
+url = "https://mscp3.live-streams.nl:8342/jazz-flac.flac"
+codec = "FLAC"
+country = "gb"
+tags = ["quality:lossless", "genre:jazz"]
+
+[[stations]]
+id = "naim-classical-flac"
+name = "Naim Classical (FLAC)"
+url = "http://mscp3.live-streams.nl:8250/class-flac.flac"
+codec = "FLAC"
+country = "gb"
+tags = ["quality:lossless", "genre:classical"]
+
+[[stations]]
+id = "cro-d-dur-flac"
+name = "Český rozhlas D-dur (FLAC)"
+url = "http://amp.cesnet.cz:8000/cro-d-dur.flac"
+homepage = "https://ddur.rozhlas.cz/"
+codec = "FLAC"
+country = "cz"
+languages = ["cs"]
+tags = ["quality:lossless", "genre:classical", "format:public"]
+
+[[stations]]
+id = "cro-jazz-flac"
+name = "Český rozhlas Jazz (FLAC)"
+url = "http://amp.cesnet.cz:8000/cro-jazz.flac"
+homepage = "https://jazz.rozhlas.cz/"
+codec = "FLAC"
+country = "cz"
+languages = ["cs"]
+tags = ["quality:lossless", "genre:jazz", "format:public"]
+
+[[stations]]
+id = "radio-x-basel-flac"
+name = "Radio X Basel (FLAC)"
+url = "https://mp3.radiox.ch/standard.ogg"
+homepage = "https://radiox.ch/"
+codec = "FLAC"
+country = "ch"
+languages = ["de"]
+tags = ["quality:hi-res", "quality:lossless", "genre:alternative", "genre:eclectic", "format:community"]
+
+[[stations]]
+id = "frequence-3-world-flac"
+name = "Fréquence 3 World (FLAC)"
+url = "https://frequence3.net-radio.fr/frequence3world.flac"
+codec = "FLAC"
+country = "fr"
+tags = ["quality:hi-res", "quality:lossless", "genre:world"]
+
+[[stations]]
+id = "pure-lounge-flac"
+name = "Pure Lounge (FLAC)"
+url = "https://mscp4.live-streams.nl:8142/lounge.ogg"
+codec = "FLAC"
+country = "nl"
+tags = ["quality:hi-res", "quality:lossless", "genre:lounge", "genre:jazz", "genre:soul"]
+
+[[stations]]
+id = "pure-classix-flac"
+name = "PureClassix (FLAC)"
+url = "http://mscp4.live-streams.nl:8140/flac.ogg"
+codec = "FLAC"
+country = "nl"
+tags = ["quality:hi-res", "quality:lossless", "genre:classical"]
+
+[[stations]]
+id = "radioblues-flac"
+name = "RadioBlues (FLAC)"
+url = "https://streams.radiomast.io/radioblues-flac"
+codec = "FLAC"
+country = "es"
+tags = ["quality:lossless", "genre:blues", "genre:jazz"]
+
+[[stations]]
+id = "djam-radio-flac"
+name = "Djam Radio (FLAC)"
+url = "https://stream10.xdevel.com/audio15s976748-2280/stream/icecast.audio"
+homepage = "https://www.djam.radio/"
+codec = "FLAC"
+country = "fr"
+tags = ["quality:lossless", "genre:eclectic", "genre:soul", "genre:funk"]
+
+[[stations]]
+id = "bfm-flac"
+name = "95bFM (FLAC)"
+url = "https://streams.95bfm.com/stream112"
+homepage = "https://95bfm.com/"
+codec = "FLAC"
+country = "nz"
+languages = ["en"]
+tags = ["quality:lossless", "genre:alternative", "format:community"]
+
+[[stations]]
+id = "bdpst-rock-flac"
+name = "BDPST Rock (FLAC)"
+url = "http://s2.audiostream.hu:8091/bdpstrock_FLAC"
+codec = "FLAC"
+country = "hu"
+languages = ["hu"]
+tags = ["quality:lossless", "genre:rock"]
 
 [[stations]]
 id = "somafm-groove-salad"
 name = "SomaFM: Groove Salad"
 url = "https://somafm.com/groovesalad.pls"
 homepage = "https://somafm.com/groovesalad/"
-codec = "AAC"
+codec = "MP3"
 bitrate = 128
 country = "us"
-languages = ["en"]
-tags = ["genre:chillout", "genre:ambient", "genre:electronic", "format:community"]
+tags = ["genre:chillout", "genre:ambient", "genre:electronic"]
 
 [[stations]]
 id = "somafm-drone-zone"
 name = "SomaFM: Drone Zone"
 url = "https://somafm.com/dronezone.pls"
 homepage = "https://somafm.com/dronezone/"
-codec = "AAC"
-bitrate = 128
-country = "us"
-languages = ["en"]
-tags = ["genre:ambient", "genre:experimental", "format:community"]
-
-[[stations]]
-id = "radio-paradise"
-name = "Radio Paradise"
-url = "https://www.radioparadise.com/m3u/mp3-128.m3u"
-homepage = "https://radioparadise.com/"
 codec = "MP3"
 bitrate = 128
 country = "us"
-languages = ["en"]
-tags = ["genre:eclectic", "genre:rock"]
+tags = ["genre:ambient", "genre:experimental"]
+
+[[stations]]
+id = "somafm-deep-space-one"
+name = "SomaFM: Deep Space One"
+url = "https://somafm.com/deepspaceone.pls"
+homepage = "https://somafm.com/deepspaceone/"
+codec = "MP3"
+bitrate = 128
+country = "us"
+tags = ["genre:ambient", "genre:electronic", "genre:experimental"]
+
+[[stations]]
+id = "somafm-secret-agent"
+name = "SomaFM: Secret Agent"
+url = "https://somafm.com/secretagent.pls"
+homepage = "https://somafm.com/secretagent/"
+codec = "MP3"
+bitrate = 128
+country = "us"
+tags = ["genre:lounge", "genre:soundtrack", "era:60s"]
+
+[[stations]]
+id = "somafm-lush"
+name = "SomaFM: Lush"
+url = "https://somafm.com/lush.pls"
+homepage = "https://somafm.com/lush/"
+codec = "MP3"
+bitrate = 128
+country = "us"
+tags = ["genre:chillout", "genre:electronic"]
+
+[[stations]]
+id = "somafm-indie-pop-rocks"
+name = "SomaFM: Indie Pop Rocks!"
+url = "https://somafm.com/indiepop.pls"
+homepage = "https://somafm.com/indiepop/"
+codec = "MP3"
+bitrate = 128
+country = "us"
+tags = ["genre:indie", "genre:pop"]
+
+[[stations]]
+id = "somafm-underground-80s"
+name = "SomaFM: Underground 80s"
+url = "https://somafm.com/u80s.pls"
+homepage = "https://somafm.com/u80s/"
+codec = "MP3"
+bitrate = 128
+country = "us"
+tags = ["genre:alternative", "era:80s"]
+
+[[stations]]
+id = "somafm-left-coast-70s"
+name = "SomaFM: Left Coast 70s"
+url = "https://somafm.com/seventies.pls"
+homepage = "https://somafm.com/seventies/"
+codec = "MP3"
+bitrate = 128
+country = "us"
+tags = ["genre:rock", "era:70s"]
+
+[[stations]]
+id = "somafm-sonic-universe"
+name = "SomaFM: Sonic Universe"
+url = "https://somafm.com/sonicuniverse.pls"
+homepage = "https://somafm.com/sonicuniverse/"
+codec = "MP3"
+bitrate = 128
+country = "us"
+tags = ["genre:jazz", "genre:experimental"]
+
+[[stations]]
+id = "somafm-fluid"
+name = "SomaFM: Fluid"
+url = "https://somafm.com/fluid.pls"
+homepage = "https://somafm.com/fluid/"
+codec = "MP3"
+bitrate = 128
+country = "us"
+tags = ["genre:hip-hop", "genre:chillout", "genre:instrumental"]
+
+[[stations]]
+id = "somafm-beat-blender"
+name = "SomaFM: Beat Blender"
+url = "https://somafm.com/beatblender.pls"
+homepage = "https://somafm.com/beatblender/"
+codec = "MP3"
+bitrate = 128
+country = "us"
+tags = ["genre:house", "genre:electronic", "genre:chillout"]
+
+[[stations]]
+id = "somafm-boot-liquor"
+name = "SomaFM: Boot Liquor"
+url = "https://somafm.com/bootliquor.pls"
+homepage = "https://somafm.com/bootliquor/"
+codec = "MP3"
+bitrate = 128
+country = "us"
+tags = ["genre:country", "genre:folk"]
+
+[[stations]]
+id = "somafm-folk-forward"
+name = "SomaFM: Folk Forward"
+url = "https://somafm.com/folkfwd.pls"
+homepage = "https://somafm.com/folkfwd/"
+codec = "MP3"
+bitrate = 128
+country = "us"
+tags = ["genre:folk", "genre:indie"]
+
+[[stations]]
+id = "somafm-seven-inch-soul"
+name = "SomaFM: Seven Inch Soul"
+url = "https://somafm.com/7soul.pls"
+homepage = "https://somafm.com/7soul/"
+codec = "MP3"
+bitrate = 160
+country = "us"
+tags = ["genre:soul", "genre:funk", "era:60s"]
+
+[[stations]]
+id = "somafm-heavyweight-reggae"
+name = "SomaFM: Heavyweight Reggae"
+url = "https://somafm.com/reggae.pls"
+homepage = "https://somafm.com/reggae/"
+codec = "MP3"
+bitrate = 160
+country = "us"
+tags = ["genre:reggae"]
+
+[[stations]]
+id = "somafm-suburbs-of-goa"
+name = "SomaFM: Suburbs of Goa"
+url = "https://somafm.com/suburbsofgoa.pls"
+homepage = "https://somafm.com/suburbsofgoa/"
+codec = "MP3"
+bitrate = 128
+country = "us"
+tags = ["genre:world", "genre:electronic"]
+
+[[stations]]
+id = "somafm-metal-detector"
+name = "SomaFM: Metal Detector"
+url = "https://somafm.com/metal.pls"
+homepage = "https://somafm.com/metal/"
+codec = "MP3"
+bitrate = 128
+country = "us"
+tags = ["genre:metal"]
+
+[[stations]]
+id = "somafm-def-con"
+name = "SomaFM: DEF CON Radio"
+url = "https://somafm.com/defcon.pls"
+homepage = "https://somafm.com/defcon/"
+codec = "MP3"
+bitrate = 128
+country = "us"
+tags = ["genre:electronic", "genre:techno"]
+
+[[stations]]
+id = "somafm-bossa-beyond"
+name = "SomaFM: Bossa Beyond"
+url = "https://somafm.com/bossa.pls"
+homepage = "https://somafm.com/bossa/"
+codec = "MP3"
+bitrate = 128
+country = "us"
+tags = ["genre:latin", "genre:jazz", "genre:lounge"]
 
 [[stations]]
 id = "fip"
 name = "FIP"
-url = "https://icecast.radiofrance.fr/fip-midfi.mp3"
+url = "https://icecast.radiofrance.fr/fip-hifi.aac"
 homepage = "https://www.radiofrance.fr/fip"
-codec = "MP3"
-bitrate = 128
+codec = "AAC"
+bitrate = 192
 country = "fr"
 languages = ["fr"]
 tags = ["genre:eclectic", "genre:jazz", "format:public"]
+
+[[stations]]
+id = "fip-jazz"
+name = "FIP Jazz"
+url = "https://icecast.radiofrance.fr/fipjazz-hifi.aac"
+homepage = "https://www.radiofrance.fr/fip"
+codec = "AAC"
+bitrate = 192
+country = "fr"
+tags = ["genre:jazz", "format:public"]
+
+[[stations]]
+id = "fip-rock"
+name = "FIP Rock"
+url = "https://icecast.radiofrance.fr/fiprock-hifi.aac"
+homepage = "https://www.radiofrance.fr/fip"
+codec = "AAC"
+bitrate = 192
+country = "fr"
+tags = ["genre:rock", "format:public"]
+
+[[stations]]
+id = "fip-groove"
+name = "FIP Groove"
+url = "https://icecast.radiofrance.fr/fipgroove-hifi.aac"
+homepage = "https://www.radiofrance.fr/fip"
+codec = "AAC"
+bitrate = 192
+country = "fr"
+tags = ["genre:funk", "genre:soul", "genre:hip-hop", "format:public"]
+
+[[stations]]
+id = "fip-electro"
+name = "FIP Electro"
+url = "https://icecast.radiofrance.fr/fipelectro-hifi.aac"
+homepage = "https://www.radiofrance.fr/fip"
+codec = "AAC"
+bitrate = 192
+country = "fr"
+tags = ["genre:electronic", "format:public"]
+
+[[stations]]
+id = "fip-monde"
+name = "FIP Monde"
+url = "https://icecast.radiofrance.fr/fipworld-hifi.aac"
+homepage = "https://www.radiofrance.fr/fip"
+codec = "AAC"
+bitrate = 192
+country = "fr"
+tags = ["genre:world", "format:public"]
+
+[[stations]]
+id = "france-musique"
+name = "France Musique"
+url = "https://icecast.radiofrance.fr/francemusique-hifi.aac"
+homepage = "https://www.radiofrance.fr/francemusique"
+codec = "AAC"
+bitrate = 192
+country = "fr"
+languages = ["fr"]
+tags = ["genre:classical", "format:public"]
+
+[[stations]]
+id = "france-inter"
+name = "France Inter"
+url = "https://icecast.radiofrance.fr/franceinter-hifi.aac"
+homepage = "https://www.radiofrance.fr/franceinter"
+codec = "AAC"
+bitrate = 192
+country = "fr"
+languages = ["fr"]
+tags = ["format:news", "format:talk", "format:public"]
+
+[[stations]]
+id = "franceinfo"
+name = "franceinfo"
+url = "https://icecast.radiofrance.fr/franceinfo-hifi.aac"
+homepage = "https://www.francetvinfo.fr/"
+codec = "AAC"
+bitrate = 192
+country = "fr"
+languages = ["fr"]
+tags = ["format:news", "format:public"]
+
+[[stations]]
+id = "france-culture"
+name = "France Culture"
+url = "https://icecast.radiofrance.fr/franceculture-hifi.aac"
+homepage = "https://www.radiofrance.fr/franceculture"
+codec = "AAC"
+bitrate = 192
+country = "fr"
+languages = ["fr"]
+tags = ["format:talk", "format:public"]
 
 [[stations]]
 id = "kexp"
@@ -89,4 +567,518 @@ codec = "AAC"
 bitrate = 160
 country = "us"
 languages = ["en"]
-tags = ["genre:indie", "genre:eclectic", "format:community"]
+tags = ["genre:indie", "genre:alternative", "genre:eclectic", "format:community"]
+
+[[stations]]
+id = "kcrw-eclectic-24"
+name = "KCRW Eclectic 24"
+url = "https://streams.kcrw.com/e24_aac"
+homepage = "https://www.kcrw.com/"
+codec = "AAC"
+bitrate = 256
+country = "us"
+languages = ["en"]
+tags = ["genre:eclectic", "genre:indie", "format:public"]
+
+[[stations]]
+id = "wfmu"
+name = "WFMU"
+url = "http://stream2.wfmu.org/freeform-high.aac"
+homepage = "https://wfmu.org/"
+codec = "AAC"
+bitrate = 128
+country = "us"
+languages = ["en"]
+tags = ["genre:eclectic", "genre:experimental", "format:community"]
+
+[[stations]]
+id = "wwoz"
+name = "WWOZ New Orleans"
+url = "https://wwoz-sc.streamguys1.com/wwoz-hi.mp3"
+homepage = "https://www.wwoz.org/"
+codec = "MP3"
+bitrate = 128
+country = "us"
+languages = ["en"]
+tags = ["genre:jazz", "genre:blues", "genre:soul", "format:community"]
+
+[[stations]]
+id = "nts-1"
+name = "NTS Radio 1"
+url = "https://stream-relay-geo.ntslive.net/stream"
+homepage = "https://www.nts.live/"
+codec = "MP3"
+bitrate = 256
+country = "gb"
+languages = ["en"]
+tags = ["genre:eclectic", "genre:electronic"]
+
+[[stations]]
+id = "nts-2"
+name = "NTS Radio 2"
+url = "https://stream-relay-geo.ntslive.net/stream2"
+homepage = "https://www.nts.live/"
+codec = "MP3"
+bitrate = 256
+country = "gb"
+languages = ["en"]
+tags = ["genre:eclectic", "genre:electronic"]
+
+[[stations]]
+id = "worldwide-fm"
+name = "Worldwide FM"
+url = "https://worldwide-fm.radiocult.fm/stream"
+homepage = "https://worldwidefm.net/"
+codec = "MP3"
+bitrate = 320
+country = "gb"
+languages = ["en"]
+tags = ["genre:world", "genre:jazz", "genre:electronic"]
+
+[[stations]]
+id = "dublab"
+name = "dublab"
+url = "https://dublab.out.airtime.pro/dublab_a"
+homepage = "https://www.dublab.com/"
+codec = "MP3"
+bitrate = 192
+country = "us"
+languages = ["en"]
+tags = ["genre:eclectic", "genre:electronic", "genre:experimental", "format:community"]
+
+[[stations]]
+id = "jazz24"
+name = "Jazz24"
+url = "https://knkx-live-a.edge.audiocdn.com/6285_256k"
+homepage = "https://www.jazz24.org/"
+codec = "AAC"
+bitrate = 256
+country = "us"
+languages = ["en"]
+tags = ["genre:jazz", "format:public"]
+
+[[stations]]
+id = "wqxr"
+name = "WQXR"
+url = "https://stream.wqxr.org/wqxr"
+homepage = "https://www.wqxr.org/"
+codec = "MP3"
+bitrate = 128
+country = "us"
+languages = ["en"]
+tags = ["genre:classical", "format:public"]
+
+[[stations]]
+id = "kusc"
+name = "Classical KUSC"
+url = "https://playerservices.streamtheworld.com/api/livestream-redirect/KUSCMP256.mp3"
+homepage = "https://www.kusc.org/"
+codec = "MP3"
+bitrate = 256
+country = "us"
+languages = ["en"]
+tags = ["genre:classical", "format:public"]
+
+[[stations]]
+id = "npr"
+name = "NPR News"
+url = "https://npr-ice.streamguys1.com/live.mp3"
+homepage = "https://www.npr.org/"
+codec = "MP3"
+bitrate = 96
+country = "us"
+languages = ["en"]
+tags = ["format:news", "format:talk", "format:public"]
+
+[[stations]]
+id = "bbc-world-service"
+name = "BBC World Service"
+url = "https://stream.live.vc.bbcmedia.co.uk/bbc_world_service"
+homepage = "https://www.bbc.co.uk/worldserviceradio"
+codec = "MP3"
+bitrate = 56
+country = "gb"
+languages = ["en"]
+tags = ["format:news", "format:talk", "format:public"]
+
+[[stations]]
+id = "radio-caroline"
+name = "Radio Caroline"
+url = "http://sc6.radiocaroline.net:8040/;stream.mp3"
+homepage = "https://www.radiocaroline.co.uk/"
+codec = "MP3"
+bitrate = 128
+country = "gb"
+languages = ["en"]
+tags = ["genre:rock", "genre:oldies"]
+
+[[stations]]
+id = "linn-jazz"
+name = "Linn Jazz"
+url = "http://radio.linn.co.uk:8000/autodj"
+codec = "MP3"
+bitrate = 320
+country = "gb"
+tags = ["genre:jazz"]
+
+[[stations]]
+id = "tsf-jazz"
+name = "TSF Jazz"
+url = "https://tsfjazz.ice.infomaniak.ch/tsfjazz-high.mp3"
+homepage = "https://www.tsfjazz.com/"
+codec = "MP3"
+bitrate = 128
+country = "fr"
+languages = ["fr"]
+tags = ["genre:jazz"]
+
+[[stations]]
+id = "radio-nova"
+name = "Radio Nova"
+url = "https://novazz.ice.infomaniak.ch/novazz-128.mp3"
+homepage = "https://www.nova.fr/"
+codec = "MP3"
+bitrate = 128
+country = "fr"
+languages = ["fr"]
+tags = ["genre:hip-hop", "genre:soul", "genre:world", "genre:eclectic"]
+
+[[stations]]
+id = "radio-meuh"
+name = "Radio Meuh"
+url = "https://radiomeuh.ice.infomaniak.ch/radiomeuh-128.mp3"
+homepage = "https://www.radiomeuh.com/"
+codec = "MP3"
+bitrate = 128
+country = "fr"
+tags = ["genre:eclectic", "genre:funk", "genre:soul"]
+
+[[stations]]
+id = "lyl-radio"
+name = "LYL Radio"
+url = "https://icecast.lyl.live/live"
+homepage = "https://lyl.live/"
+codec = "MP3"
+bitrate = 192
+country = "fr"
+tags = ["genre:experimental", "genre:electronic", "format:community"]
+
+[[stations]]
+id = "radio-swiss-jazz"
+name = "Radio Swiss Jazz"
+url = "https://stream.srg-ssr.ch/m/rsj/mp3_128"
+homepage = "https://www.radioswissjazz.ch/"
+codec = "MP3"
+bitrate = 128
+country = "ch"
+tags = ["genre:jazz", "format:public"]
+
+[[stations]]
+id = "radio-swiss-classic"
+name = "Radio Swiss Classic"
+url = "https://stream.srg-ssr.ch/m/rsc_de/mp3_128"
+homepage = "https://www.radioswissclassic.ch/"
+codec = "MP3"
+bitrate = 128
+country = "ch"
+tags = ["genre:classical", "format:public"]
+
+[[stations]]
+id = "deutschlandfunk"
+name = "Deutschlandfunk"
+url = "https://st01.sslstream.dlf.de/dlf/01/high/aac/stream.aac?aggregator=web"
+homepage = "https://www.deutschlandfunk.de/"
+codec = "AAC"
+bitrate = 192
+country = "de"
+languages = ["de"]
+tags = ["format:news", "format:talk", "format:public"]
+
+[[stations]]
+id = "deutschlandfunk-kultur"
+name = "Deutschlandfunk Kultur"
+url = "https://st02.sslstream.dlf.de/dlf/02/high/aac/stream.aac?aggregator=web"
+homepage = "https://www.deutschlandfunkkultur.de/"
+codec = "AAC"
+bitrate = 256
+country = "de"
+languages = ["de"]
+tags = ["format:talk", "format:public"]
+
+[[stations]]
+id = "bytefm"
+name = "ByteFM"
+url = "https://bytefm.cast.addradio.de/bytefm/main/high/stream"
+homepage = "https://www.byte.fm/"
+codec = "MP3"
+bitrate = 192
+country = "de"
+languages = ["de"]
+tags = ["genre:indie", "genre:eclectic"]
+
+[[stations]]
+id = "br-klassik"
+name = "BR-Klassik"
+url = "https://dispatcher.rndfnk.com/br/brklassik/live/mp3/high"
+homepage = "https://www.br-klassik.de/"
+codec = "MP3"
+bitrate = 256
+country = "de"
+languages = ["de"]
+tags = ["genre:classical", "format:public"]
+
+[[stations]]
+id = "klassik-radio"
+name = "Klassik Radio"
+url = "https://live.streams.klassikradio.de/klassikradio-deutschland/stream/mp3"
+homepage = "https://www.klassikradio.de/"
+codec = "MP3"
+bitrate = 192
+country = "de"
+languages = ["de"]
+tags = ["genre:classical", "genre:soundtrack"]
+
+[[stations]]
+id = "radio-bob"
+name = "Radio Bob!"
+url = "http://streams.radiobob.de/bob-national/mp3-192/mediaplayer"
+homepage = "https://www.radiobob.de/"
+codec = "MP3"
+bitrate = 192
+country = "de"
+languages = ["de"]
+tags = ["genre:rock"]
+
+[[stations]]
+id = "fluxfm-chillhop"
+name = "FluxFM Chillhop"
+url = "https://streams.fluxfm.de/Chillhop/mp3-320/streams.fluxfm.de/"
+homepage = "https://www.fluxfm.de/"
+codec = "MP3"
+bitrate = 320
+country = "de"
+tags = ["genre:chillout", "genre:hip-hop"]
+
+[[stations]]
+id = "oe1"
+name = "Ö1"
+url = "https://orf-live.ors-shoutcast.at/oe1-q2a"
+homepage = "https://oe1.orf.at/"
+codec = "MP3"
+bitrate = 192
+country = "at"
+languages = ["de"]
+tags = ["genre:classical", "format:talk", "format:public"]
+
+[[stations]]
+id = "fm4"
+name = "FM4"
+url = "https://orf-live.ors-shoutcast.at/fm4-q2a"
+homepage = "https://fm4.orf.at/"
+codec = "MP3"
+bitrate = 192
+country = "at"
+languages = ["de", "en"]
+tags = ["genre:alternative", "genre:indie", "format:public"]
+
+[[stations]]
+id = "sveriges-radio-p1"
+name = "Sveriges Radio P1"
+url = "https://live1.sr.se/p1-aac-320"
+homepage = "https://sverigesradio.se/p1"
+codec = "AAC"
+bitrate = 320
+country = "se"
+languages = ["sv"]
+tags = ["format:news", "format:talk", "format:public"]
+
+[[stations]]
+id = "sveriges-radio-p3"
+name = "Sveriges Radio P3"
+url = "https://live1.sr.se/p3-aac-320"
+homepage = "https://sverigesradio.se/p3"
+codec = "AAC"
+bitrate = 320
+country = "se"
+languages = ["sv"]
+tags = ["genre:pop", "format:public"]
+
+[[stations]]
+id = "dr-p8-jazz"
+name = "DR P8 Jazz"
+url = "http://live-icy.dr.dk/A/A22H.mp3"
+homepage = "https://www.dr.dk/lyd/p8jazz"
+codec = "MP3"
+bitrate = 128
+country = "dk"
+languages = ["da"]
+tags = ["genre:jazz", "format:public"]
+
+[[stations]]
+id = "dr-p6-beat"
+name = "DR P6 Beat"
+url = "http://live-icy.dr.dk/A/A29H.mp3"
+homepage = "https://www.dr.dk/lyd/p6beat"
+codec = "MP3"
+bitrate = 128
+country = "dk"
+languages = ["da"]
+tags = ["genre:alternative", "genre:indie", "format:public"]
+
+[[stations]]
+id = "nrk-jazz"
+name = "NRK Jazz"
+url = "https://cdn0-47115-liveicecast0.dna.contentdelivery.net/jazz_mp3_h"
+homepage = "https://radio.nrk.no/"
+codec = "MP3"
+bitrate = 192
+country = "no"
+languages = ["no"]
+tags = ["genre:jazz", "format:public"]
+
+[[stations]]
+id = "npo-radio-2"
+name = "NPO Radio 2"
+url = "https://icecast.omroep.nl/radio2-bb-mp3"
+homepage = "https://www.nporadio2.nl/"
+codec = "MP3"
+bitrate = 192
+country = "nl"
+languages = ["nl"]
+tags = ["genre:pop", "format:public"]
+
+[[stations]]
+id = "rai-radio-3"
+name = "Rai Radio 3"
+url = "http://icestreaming.rai.it/3.mp3"
+homepage = "https://www.raiplaysound.it/radio3"
+codec = "MP3"
+bitrate = 320
+country = "it"
+languages = ["it"]
+tags = ["genre:classical", "genre:jazz", "format:public"]
+
+[[stations]]
+id = "radio-monte-carlo"
+name = "Radio Monte Carlo"
+url = "http://icecast.unitedradio.it/RMC.mp3"
+homepage = "https://www.radiomontecarlo.net/"
+codec = "MP3"
+bitrate = 128
+country = "it"
+languages = ["it"]
+tags = ["genre:pop", "genre:easy-listening"]
+
+[[stations]]
+id = "virgin-radio-italia"
+name = "Virgin Radio Italia"
+url = "http://icecast.unitedradio.it/Virgin.mp3"
+homepage = "https://www.virginradio.it/"
+codec = "MP3"
+bitrate = 128
+country = "it"
+languages = ["it"]
+tags = ["genre:rock"]
+
+[[stations]]
+id = "venice-classic-radio"
+name = "Venice Classic Radio"
+url = "https://uk2.streamingpulse.com/ssl/vcr1"
+homepage = "https://www.veniceclassicradio.eu/"
+codec = "MP3"
+bitrate = 128
+country = "it"
+tags = ["genre:classical"]
+
+[[stations]]
+id = "radio-raheem"
+name = "Radio Raheem"
+url = "https://radioraheem.out.airtime.pro/radioraheem_a"
+homepage = "https://radioraheem.it/"
+codec = "MP3"
+bitrate = 192
+country = "it"
+tags = ["genre:eclectic", "genre:electronic", "format:community"]
+
+[[stations]]
+id = "radio-357"
+name = "Radio 357"
+url = "https://stream.radio357.pl/"
+homepage = "https://radio357.pl/"
+codec = "MP3"
+bitrate = 128
+country = "pl"
+languages = ["pl"]
+tags = ["genre:rock", "genre:pop", "format:talk"]
+
+[[stations]]
+id = "ibiza-global-radio"
+name = "Ibiza Global Radio"
+url = "http://ibizaglobalradio.streaming-pro.com:8024/"
+homepage = "https://www.ibizaglobalradio.com/"
+codec = "MP3"
+bitrate = 128
+country = "es"
+tags = ["genre:house", "genre:electronic"]
+
+[[stations]]
+id = "ambient-sleeping-pill"
+name = "Ambient Sleeping Pill"
+url = "http://radio.stereoscenic.com/asp-h"
+homepage = "https://ambientsleepingpill.com/"
+codec = "MP3"
+bitrate = 256
+country = "us"
+tags = ["genre:ambient"]
+
+[[stations]]
+id = "bassdrive"
+name = "Bassdrive"
+url = "https://ice.bassdrive.net/stream"
+homepage = "https://www.bassdrive.com/"
+codec = "MP3"
+bitrate = 128
+country = "us"
+tags = ["genre:drum-and-bass"]
+
+[[stations]]
+id = "nightride-fm"
+name = "Nightride FM"
+url = "https://stream.nightride.fm/nightride.mp3"
+homepage = "https://nightride.fm/"
+codec = "MP3"
+bitrate = 320
+tags = ["genre:electronic", "era:80s"]
+
+[[stations]]
+id = "shonan-beach-fm"
+name = "Shonan Beach FM"
+url = "http://shonanbeachfm.out.airtime.pro:8000/shonanbeachfm_a"
+homepage = "https://www.beachfm.co.jp/"
+codec = "MP3"
+bitrate = 128
+country = "jp"
+languages = ["ja"]
+tags = ["genre:jazz", "genre:lounge", "genre:easy-listening"]
+
+[[stations]]
+id = "listen-moe"
+name = "LISTEN.moe"
+url = "https://listen.moe/stream"
+homepage = "https://listen.moe/"
+codec = "OGG"
+bitrate = 192
+country = "jp"
+languages = ["ja"]
+tags = ["genre:pop", "genre:soundtrack"]
+
+[[stations]]
+id = "listen-moe-kpop"
+name = "LISTEN.moe K-pop"
+url = "https://listen.moe/kpop/stream"
+homepage = "https://listen.moe/"
+codec = "OGG"
+bitrate = 192
+country = "kr"
+languages = ["ko"]
+tags = ["genre:pop"]

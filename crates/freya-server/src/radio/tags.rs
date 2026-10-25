@@ -711,6 +711,8 @@ const COUNTRIES: &[(&str, &str)] = &[
     ("is", "Iceland"),
     ("pl", "Poland"),
     ("gr", "Greece"),
+    ("hu", "Hungary"),
+    ("nz", "New Zealand"),
 ];
 
 /// A bitrate this high or higher, of a lossy stream, sounds as good as most can hear.

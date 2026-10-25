@@ -263,10 +263,9 @@ fn the_server_is_told_what_to_do_and_tells_what_happens() {
     assert!(remote.playlists().unwrap().is_empty());
     assert!(remote.save_playlist("../escape", &[]).is_err());
 
-    // Radio stations, kept by the server, which starts with some; every client is told of a
-    // change.
+    // Radio stations, kept by the server, none at first; every client is told of a change.
     let mut stations = remote.stations().unwrap();
-    assert!(!stations.is_empty());
+    assert!(stations.is_empty());
     stations.push(freya_protocol::RadioStation {
         name: "Night Jazz".into(),
         url: "https://jazz.example.org/".into(),
@@ -729,8 +728,7 @@ fn only_a_device_with_a_token_is_answered() {
     let at = std::time::SystemTime::now();
     assert!(phone.set_artist_favorite("Sine", true, at).is_err());
     // It plays the radio stations, but does not change them.
-    let stations = phone.stations().unwrap();
-    assert!(!stations.is_empty());
+    assert!(phone.stations().is_ok());
     assert!(phone.save_stations(&[]).is_err());
     // And browses the radio directory.
     let shelves = phone.radio_shelves().unwrap();

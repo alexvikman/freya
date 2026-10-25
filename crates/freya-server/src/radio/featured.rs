@@ -4,7 +4,7 @@
 use freya_protocol::DirectoryStation;
 use serde::Deserialize;
 
-use super::tags::Tags;
+use super::tags::{HIGH_BITRATE, Tags};
 
 const FEATURED: &str = include_str!("featured.toml");
 
@@ -18,9 +18,12 @@ struct File {
 #[derive(Deserialize, Clone, Debug)]
 pub struct Shelf {
     pub title: String,
-    /// The tags its stations have; none for the stations Freya picked.
+    /// The tags its stations have, all of them; the best known of the directory's are shown.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Or the stations Freya picked that it shows, by their ids.
+    #[serde(default)]
+    pub stations: Vec<String>,
 }
 
 /// A station Freya picked.
@@ -48,6 +51,9 @@ pub struct Featured {
 impl Featured {
     pub fn to_station(&self, names: &mut Tags) -> DirectoryStation {
         let mut tags = self.tags.clone();
+        if self.codec != "FLAC" && self.bitrate >= HIGH_BITRATE {
+            tags.insert(0, "quality:high".to_owned());
+        }
         if let Some(country) = self.country.as_deref().and_then(|c| names.country(c, "")) {
             tags.push(country);
         }
@@ -147,8 +153,16 @@ mod tests {
             assert_eq!(lossless, featured.codec == "FLAC", "{}", featured.id);
         }
         for shelf in &shelves {
+            assert!(
+                shelf.tags.is_empty() != shelf.stations.is_empty(),
+                "{}",
+                shelf.title
+            );
             for tag in &shelf.tags {
                 assert!(names.knows(tag), "{}: {tag} is not a tag", shelf.title);
+            }
+            for id in &shelf.stations {
+                assert!(ids.contains(id), "{}: no station {id}", shelf.title);
             }
         }
     }
