@@ -762,6 +762,38 @@ export struct RadioShelfRow {
     tagged: bool,
 }
 
+/// A row of Recents: see `Recents.rows`.
+export struct RecentRow {
+    /// "day" (a day's heading: its title), "album", "playlist", "radio", or "song" (a song
+    /// played, under its album or playlist unfolded).
+    kind: string,
+    title: string,
+    /// "Album · Agalloch · 8 songs played", "Album added · Agalloch", "Playlist made".
+    detail: string,
+    /// What to pass to `Library.cover`; empty for none.
+    cover: string,
+    /// Whether it has songs to unfold, and whether they are.
+    foldable: bool,
+    unfolded: bool,
+}
+
+/// What was played and added lately: a feed by day of the albums and playlists played, the
+/// albums added and the playlists made, and the radio stations listened to; or the albums and
+/// playlists played most. Optional.
+export global Recents {
+    in property <[RecentRow]> rows;
+    /// "all", "played", "added", "radio" or "most-played"; set with `set-filter`.
+    in property <string> filter: "all";
+    in property <string> error;
+    /// While it is first read.
+    in property <bool> loading;
+    callback set-filter(string);
+    /// Unfolds or folds the songs of the `index`th row.
+    callback toggle(int);
+    /// Opens what the `index`th row stands for: its album or playlist, or plays its station.
+    callback open(int);
+}
+
 /// Internet radio: the stations the server keeps for its users, none at first, which its
 /// admins (`Server.admin`) add and remove; and the server's directory of stations to find
 /// more in, by tags and words. Optional.

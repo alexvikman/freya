@@ -5,6 +5,8 @@ use super::*;
 impl App {
     /// Shows the library, if the skin has one.
     pub(super) fn attach_library(&mut self) {
+        // A new skin is given Recents' rows anew.
+        self.recents.show_again();
         if self.view.server_out.available {
             let ui = &self.view.ui;
             let _ =

@@ -4,11 +4,11 @@
 // contrast against the background it is drawn on (WCAG AA), light and dark mode follow the
 // system.
 
-import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, LastFm, Server, ServerDevice, ServerUser, FoundServer, PlaybackState, Shortcuts, TrackRow, LibraryRow, AlbumPage, ArtistPage, ArtistDraft, PictureChoice, MatchChoice, AlbumMatchDraft, AlbumMatchChoice, ArtistMatchDraft, PlaylistRow, PlaylistPage, PlaylistEntryRow, SearchSection, StationRow, DirectoryStationRow, RadioTagRow, RadioTagGroup, NativeSpectrum, NativeOscilloscope, NativeHologram } from "@freya/v1.slint";
+import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, Recents, RecentRow, App, Updates, LastFm, Server, ServerDevice, ServerUser, FoundServer, PlaybackState, Shortcuts, TrackRow, LibraryRow, AlbumPage, ArtistPage, ArtistDraft, PictureChoice, MatchChoice, AlbumMatchDraft, AlbumMatchChoice, ArtistMatchDraft, PlaylistRow, PlaylistPage, PlaylistEntryRow, SearchSection, StationRow, DirectoryStationRow, RadioTagRow, RadioTagGroup, NativeSpectrum, NativeOscilloscope, NativeHologram } from "@freya/v1.slint";
 import { AboutSlint, ListView, Palette, ScrollView } from "std-widgets.slint";
 
 // Every skin re-exports the API globals so the app can reach them.
-export { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, App, Updates, LastFm, Server } from "@freya/v1.slint";
+export { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, Recents, App, Updates, LastFm, Server } from "@freya/v1.slint";
 
 /// Whether the visualizer fills the screen: everything else is hidden, and the skin turns dark,
 /// as fits a TV.
@@ -66,6 +66,8 @@ global Icons {
     out property <string> check: "M5 12.5 L10 17.5 L19 7";
     out property <string> back: "M15 5 L8 12 L15 19";
     out property <string> chevron: "M9 5 L16 12 L9 19";
+    // The chevron pointing down, for what is unfolded.
+    out property <string> chevron-down: "M5 9 L12 16 L19 9";
     // Filled, for 16 pixels: every edge falls on a whole pixel (1.5 units each), so they stay
     // sharp where an outline at that size blurs.
     out property <string> grid: "M1.5 1.5 V10.5 H10.5 V1.5 Z M13.5 1.5 V10.5 H22.5 V1.5 Z M1.5 13.5 V22.5 H10.5 V13.5 Z M13.5 13.5 V22.5 H22.5 V13.5 Z";
@@ -8095,25 +8097,6 @@ component Sidebar inherits Rectangle {
                     selected: (root.view == "library" && Library.section == "playlists") || root.view == "playlist";
                     clicked => { root.show-section("playlists"); }
                 }
-                SidebarHeading { text: "Recents"; }
-                SidebarItem {
-                    icon: Icons.added;
-                    text: "Recently Added";
-                    selected: root.view == "library" && Library.section == "recently-added";
-                    clicked => { root.show-section("recently-added"); }
-                }
-                SidebarItem {
-                    icon: Icons.clock;
-                    text: "Recently Played";
-                    selected: root.view == "library" && Library.section == "recently-played";
-                    clicked => { root.show-section("recently-played"); }
-                }
-                SidebarItem {
-                    icon: Icons.star;
-                    text: "Most Played";
-                    selected: root.view == "library" && Library.section == "most-played";
-                    clicked => { root.show-section("most-played"); }
-                }
                 SidebarHeading { text: "Radio"; }
                 SidebarItem {
                     icon: Icons.radio;
@@ -9739,6 +9722,152 @@ component SettingsView inherits Rectangle {
     }
 }
 
+/// One row of Recents: a day's heading, an album or playlist played or added with its cover,
+/// a station, or a song played under them unfolded.
+component RecentRowView inherits Rectangle {
+    in property <RecentRow> entry;
+    callback opened();
+    callback toggled();
+
+    property <bool> heading: entry.kind == "day";
+    property <bool> song: entry.kind == "song";
+    property <image> cover: entry.cover == "" ? @image-url("") : Library.cover(entry.cover, Library.covers-ready);
+
+    height: heading ? 56px : song ? 40px : 72px;
+    border-radius: 6px;
+    background: !heading && touch.has-hover ? Theme.hover : transparent;
+    accessible-role: button;
+    accessible-label: entry.detail == "" ? entry.title : entry.title + ", " + entry.detail;
+    accessible-action-default => { root.opened(); }
+
+    if root.heading: Text {
+        x: 8px;
+        y: parent.height - self.height - 8px;
+        text: entry.title;
+        font-size: 22px;
+        font-weight: 800;
+        color: Theme.text;
+    }
+    touch := TouchArea {
+        enabled: !root.heading;
+        mouse-cursor: pointer;
+        clicked => { root.opened(); }
+    }
+    if !root.heading: HorizontalLayout {
+        padding-left: root.song ? 80px : 8px;
+        padding-right: 8px;
+        spacing: 14px;
+
+        if !root.song: Rectangle {
+            width: 56px;
+            height: 56px;
+            y: (parent.height - self.height) / 2;
+            border-radius: entry.kind == "radio" ? 28px : 4px;
+            background: Theme.hover;
+            clip: true;
+
+            if root.cover.width == 0: Icon {
+                width: 24px;
+                height: 24px;
+                data: entry.kind == "playlist" ? Icons.playlist : entry.kind == "radio" ? Icons.radio : Icons.album;
+                stroked: true;
+                color: Theme.text-secondary;
+            }
+            Image {
+                width: 100%;
+                height: 100%;
+                source: root.cover;
+                image-fit: ImageFit.cover;
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            min-width: 0;
+            alignment: center;
+            spacing: 3px;
+
+            Text {
+                text: entry.title;
+                font-size: root.song ? 14px : 15px;
+                font-weight: root.song ? 400 : 600;
+                color: Theme.text;
+                overflow: elide;
+            }
+            if entry.detail != "": Text {
+                text: entry.detail;
+                font-size: 13px;
+                color: Theme.text-secondary;
+                overflow: elide;
+            }
+        }
+        if entry.foldable: IconButton {
+            y: (parent.height - self.height) / 2;
+            icon: entry.unfolded ? Icons.chevron-down : Icons.chevron;
+            stroked: true;
+            size: 32px;
+            label: entry.unfolded ? "Hide the songs played" : "Show the songs played";
+            clicked => { root.toggled(); }
+        }
+    }
+}
+
+/// Recents: what was played and added lately, by day, or what was played most.
+component RecentsView inherits Rectangle {
+    VerticalLayout {
+        padding-top: 28px;
+        padding-left: 40px;
+        padding-right: 40px;
+        spacing: 16px;
+
+        Text {
+            text: "Recents";
+            font-size: 32px;
+            font-weight: 800;
+            color: Theme.text;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+
+            for chip in [
+                { name: "all", text: "All" },
+                { name: "played", text: "Played" },
+                { name: "added", text: "Added" },
+                { name: "radio", text: "Radio" },
+                { name: "most-played", text: "Most Played" },
+            ]: FilterChip {
+                text: chip.text;
+                selected: Recents.filter == chip.name;
+                clicked => { Recents.set-filter(chip.name); }
+            }
+        }
+        if Recents.error != "": Text {
+            text: Recents.error;
+            font-size: 13px;
+            color: Theme.danger;
+            wrap: word-wrap;
+        }
+        if Recents.rows.length == 0 && Recents.error == "" && !Recents.loading: Text {
+            text: Recents.filter == "most-played" ? "Nothing has been played yet."
+                : Recents.filter == "radio" ? "No radio was listened to in the last 30 days."
+                : Recents.filter == "added" ? "Nothing was added in the last 30 days."
+                : "Nothing was played or added in the last 30 days.";
+            font-size: 14px;
+            color: Theme.text-secondary;
+        }
+        ListView {
+            vertical-stretch: 1;
+
+            for entry[i] in Recents.rows: RecentRowView {
+                entry: entry;
+                // A song opens the album or playlist it was played from.
+                opened => { Recents.open(i); }
+                toggled => { Recents.toggle(i); }
+            }
+        }
+    }
+}
+
 /// About Freya: its icon and version, updates, links to its pages, and the credits.
 /// What Freya does in the background, and what it logged: in this run and earlier ones.
 component ActivityView inherits Rectangle {
@@ -10311,6 +10440,15 @@ component Toolbar inherits HorizontalLayout {
             : "Freya cannot reach " + Server.name + ". It tries again by itself.";
         clicked => { root.show-server(); }
     }
+    IconButton {
+        icon: Icons.clock;
+        stroked: true;
+        size: 36px;
+        checked: root.view == "recents";
+        label: "Recents";
+        tooltip: "Recents";
+        clicked => { root.menu-action("recents"); }
+    }
     activity := IconButton {
         icon: Icons.activity;
         stroked: true;
@@ -10743,6 +10881,10 @@ export component FreyaSkin inherits Window {
                 activated => { root.menu-action("equalizer"); }
             }
             MenuItem {
+                title: "Recents";
+                activated => { root.menu-action("recents"); }
+            }
+            MenuItem {
                 title: "Activity";
                 activated => { root.menu-action("activity"); }
             }
@@ -10875,7 +11017,7 @@ export component FreyaSkin inherits Window {
                 Library.rescan();
             }
         } else if (name == "settings" || name == "queue" || name == "library" || name == "radio"
-            || name == "visualizer" || name == "equalizer" || name == "activity" || name == "about") {
+            || name == "visualizer" || name == "equalizer" || name == "activity" || name == "recents" || name == "about") {
             root.show(name);
         } else if (name == "navigation") {
             root.sidebar-shown = !root.sidebar-shown;
@@ -10978,7 +11120,7 @@ export component FreyaSkin inherits Window {
                                     : root.view == "radio" ? "Radio"
                                     : root.view == "playlist" ? ""
                                     : root.view == "visualizer" ? "Visualizer"
-                                    : root.view == "settings" || root.view == "about" || root.view == "activity" ? ""
+                                    : root.view == "settings" || root.view == "about" || root.view == "activity" || root.view == "recents" ? ""
                                     : "Equalizer";
                                 subtitle: root.view == "queue" ? Playlist.summary
                                     : root.view == "library" ? (Library.subtitle != "" ? Library.subtitle : Library.status)
@@ -11091,6 +11233,10 @@ export component FreyaSkin inherits Window {
                                 find-servers => { server-popup.show(); }
                             }
                             if root.view == "activity": ActivityView {
+                                width: 100%;
+                                height: 100%;
+                            }
+                            if root.view == "recents": RecentsView {
                                 width: 100%;
                                 height: 100%;
                             }

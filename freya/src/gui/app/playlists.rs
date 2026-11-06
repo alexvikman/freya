@@ -5,19 +5,21 @@ use super::*;
 impl App {
     /// The entries of the playlist shown, in the order its page shows them.
     pub fn shown_playlist_entries(&self) -> Vec<Entry> {
-        let Some(entries) = self
-            .shown_playlist
-            .and_then(|i| self.playlists.get(i))
-            .map(|p| &p.entries)
-        else {
+        let Some(playlist) = self.shown_playlist.and_then(|i| self.playlists.get(i)) else {
             return Vec::new();
         };
-        match self.library.playlist_order() {
+        let entries = &playlist.entries;
+        let mut shown: Vec<Entry> = match self.library.playlist_order() {
             Some(order) if order.len() == entries.len() => {
                 order.iter().map(|&i| entries[i].clone()).collect()
             }
             _ => entries.clone(),
+        };
+        // Played from the playlist, as the history says.
+        for entry in &mut shown {
+            entry.playlist = Some(playlist.name.clone());
         }
+        shown
     }
 
     /// Shows the playlist named `name`, as a search found it.

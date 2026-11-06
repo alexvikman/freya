@@ -21,6 +21,7 @@ mod playlists;
 mod radio;
 mod radio_directory;
 mod radio_logos;
+mod recents;
 mod reopen;
 mod screen;
 mod server_log;

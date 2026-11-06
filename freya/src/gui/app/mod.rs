@@ -22,6 +22,7 @@ use super::library::{self, AlbumSort, LibraryPanel};
 use super::listening::Listening;
 use super::playlists::Playlists;
 use super::radio::{self, Stations};
+use super::recents;
 use super::server_panel::{self, ServerPanel};
 use super::skin_state::{self, GlobalWriter, ModelRows, Rows};
 use super::skin_window::SkinWindow;
@@ -111,6 +112,10 @@ pub struct View {
     eq_out: GlobalWriter,
     library_out: GlobalWriter,
     radio_out: GlobalWriter,
+    recents_out: GlobalWriter,
+    recents_rows: ModelRows,
+    /// Whether Recents was shown at the last refresh: opened again, it is read anew.
+    recents_shown: bool,
     station_rows: ModelRows,
     /// The radio directory's rows: the stations shown, the first page's rows, the tags to
     /// choose and those chosen; and what they were made of when last given to the skin.
@@ -149,6 +154,9 @@ impl View {
             eq_out: GlobalWriter::new(&ui, "Equalizer"),
             library_out: GlobalWriter::new(&ui, "Library"),
             radio_out: GlobalWriter::new(&ui, "Radio"),
+            recents_out: GlobalWriter::new(&ui, "Recents"),
+            recents_rows: ModelRows::new(),
+            recents_shown: false,
             station_rows: ModelRows::new(),
             directory_rows: [
                 ModelRows::new(),
@@ -191,6 +199,11 @@ impl View {
                     .ui
                     .set_global_property("Radio", name, rows.model_value());
             }
+        }
+        if view.recents_out.available {
+            let _ = view
+                .ui
+                .set_global_property("Recents", "rows", view.recents_rows.model_value());
         }
         if view.playlists_out.available {
             let _ = view.ui.set_global_property(
@@ -291,6 +304,7 @@ pub struct App {
     up_next_checked: bool,
     /// Whether the Activity page shows the server's log, for an admin, rather than Freya's.
     log_from_server: bool,
+    pub recents: recents::Recents,
     server_log: super::server_log::ServerLog,
     window_events: WindowEvents,
     /// Whether the skin window is hidden (covered, minimized) and whether it has focus, as
@@ -435,6 +449,7 @@ impl App {
             waiting_files: None,
             up_next_checked: true,
             log_from_server: false,
+            recents: Default::default(),
             server_log: Default::default(),
             window_events,
             window_hidden: false,
@@ -692,7 +707,14 @@ impl App {
         let status = self.player.status();
         let playing = status.state == PlaybackState::Playing;
         if let Some((path, part)) = self.listening.update(status.position, playing) {
-            self.library.record_play(path, part);
+            // From the playlist the entry playing came from, if it did.
+            let playlist = self
+                .playlist
+                .current_entry()
+                .filter(|entry| entry.path == path)
+                .and_then(|entry| entry.playlist.clone());
+            self.library.record_play(path, part, playlist);
+            self.recents.changed();
             self.lastfm_heard();
         }
         // After a pause, Last.fm shows the track as playing again.

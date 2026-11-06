@@ -227,7 +227,7 @@ mod tests {
 
         // Played: the one played last first, those never played after.
         library
-            .record_play(Path::new("/m/Middle.mp3"), None, at(20))
+            .record_play(Path::new("/m/Middle.mp3"), None, at(20), None)
             .unwrap();
         assert_eq!(
             names(&library.albums_by(AlbumOrder::Played).unwrap())[0],

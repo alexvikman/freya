@@ -624,19 +624,6 @@ fn jumps_to_the_first_row_of_each_letter() {
     assert!(letter_jumps(std::iter::empty()).is_empty());
 }
 
-#[test]
-fn says_how_long_ago() {
-    let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
-    let ago = |seconds: u64| ago(now - Duration::from_secs(seconds), now);
-    assert_eq!(ago(5), "Just now");
-    assert_eq!(ago(60), "1 minute ago");
-    assert_eq!(ago(3 * 3600 + 5), "3 hours ago");
-    assert_eq!(ago(86_400), "1 day ago");
-    assert_eq!(ago(20 * 86_400), "2 weeks ago");
-    assert_eq!(ago(100 * 86_400), "3 months ago");
-    assert_eq!(ago(800 * 86_400), "2 years ago");
-}
-
 fn album(name: Option<&str>, year: Option<u32>) -> Album {
     Album {
         artist: Some("Shores of Null".into()),
@@ -795,7 +782,7 @@ fn an_albums_page_has_its_heading_and_each_tracks_plays() {
     let cancel = std::sync::atomic::AtomicBool::new(false);
     freya_library::library::scan(&mut db, std::slice::from_ref(&dir), &cancel, |_| {}).unwrap();
     for _ in 0..1203 {
-        db.record_play(&dir.join("sine.flac"), None, SystemTime::now())
+        db.record_play(&dir.join("sine.flac"), None, SystemTime::now(), None)
             .unwrap();
     }
     let album = db
@@ -872,7 +859,7 @@ fn an_artists_page_has_their_summary_and_most_played_tracks() {
     let cancel = std::sync::atomic::AtomicBool::new(false);
     freya_library::library::scan(&mut db, std::slice::from_ref(&dir), &cancel, |_| {}).unwrap();
     for _ in 0..3 {
-        db.record_play(&dir.join("sine.ogg"), None, SystemTime::now())
+        db.record_play(&dir.join("sine.ogg"), None, SystemTime::now(), None)
             .unwrap();
     }
     let artist = db
@@ -960,14 +947,7 @@ fn typing_a_search_is_one_place() {
 
 #[test]
 fn sections_have_their_own_layouts() {
-    for name in [
-        "artists",
-        "albums",
-        "genres",
-        "recently-added",
-        "recently-played",
-        "most-played",
-    ] {
+    for name in ["artists", "albums", "genres"] {
         assert_eq!(Level::section(name).unwrap().section_name(), name);
     }
     assert_eq!(Level::section("podcasts"), None);
@@ -979,6 +959,9 @@ fn sections_have_their_own_layouts() {
         "songs are not listed on their own"
     );
     assert_eq!(Level::Genres.layout(), "grid");
-    assert_eq!(Level::RecentlyAdded.layout(), "grid");
-    assert_eq!(Level::MostPlayed.layout(), "grid");
+    assert_eq!(
+        Level::section("recently-played"),
+        None,
+        "Recents is a page of its own"
+    );
 }

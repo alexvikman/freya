@@ -14,9 +14,7 @@ impl LibraryPanel {
                 db.album_tracks(album.artist.as_deref(), album.name.as_deref())
             }
             Some(Item::Genre(genre)) => db.genre_tracks(genre.name.as_deref()),
-            Some(item @ (Item::Track(_) | Item::Played(_))) => {
-                Ok(item.track().cloned().into_iter().collect())
-            }
+            Some(item @ Item::Track(_)) => Ok(item.track().cloned().into_iter().collect()),
             // The app has its tracks.
             Some(Item::Playlist(_)) | None => Ok(Vec::new()),
         };
@@ -222,14 +220,12 @@ impl LibraryPanel {
             _ => None,
         };
         let discography = self.discography();
-        let by_count = *self.level() == Level::MostPlayed;
-        let now = SystemTime::now();
         let mut rows = Vec::with_capacity(self.items.len());
         for item in &self.items {
             // In a discography, each album's tracks follow it, numbered as in the album.
             if discography && let Item::Album(album) = item {
                 album_artist = Some(album.artist.as_deref());
-                rows.push(row_value(item, None, |_| String::new(), None));
+                rows.push(row_value(item, None, None));
                 continue;
             }
             let plays = item.track().and_then(|t| {
@@ -237,12 +233,7 @@ impl LibraryPanel {
                     .get(&(t.path.clone(), t.part.map(|p| p.start)))
                     .copied()
             });
-            rows.push(row_value(
-                item,
-                album_artist,
-                |played| played_text(played, by_count, now),
-                plays,
-            ));
+            rows.push(row_value(item, album_artist, plays));
         }
         for (row, item) in rows.iter_mut().zip(&self.items) {
             let favorite = match item {
@@ -350,9 +341,6 @@ impl LibraryPanel {
             Level::Albums => calls.push(ahead("albums_by", &(self.albums_order,))),
             Level::Genres => calls.push(ahead("genres", &())),
             Level::Playlists => {}
-            Level::RecentlyAdded => calls.push(ahead("recently_added", &(RECENT,))),
-            Level::RecentlyPlayed => calls.push(ahead("recently_played", &(RECENT,))),
-            Level::MostPlayed => calls.push(ahead("most_played_albums", &(RECENT,))),
             Level::ArtistAlbums { artist } => {
                 let artist = artist.as_deref();
                 calls.extend([
@@ -403,18 +391,6 @@ impl LibraryPanel {
             Level::Albums => albums(db.albums_by(self.albums_order)?),
             Level::Genres => db.genres()?.into_iter().map(Item::Genre).collect(),
             Level::Playlists => self.playlist_items(),
-            Level::RecentlyAdded => albums(db.recently_added(RECENT)?),
-            Level::RecentlyPlayed => db
-                .recently_played(RECENT)?
-                .into_iter()
-                .map(Item::Played)
-                .collect(),
-            Level::MostPlayed => albums(
-                db.most_played_albums(RECENT)?
-                    .into_iter()
-                    .map(|played| played.album)
-                    .collect(),
-            ),
             Level::ArtistAlbums { artist } => {
                 let mut list = db.albums(artist.as_deref())?;
                 self.album_sort.sort(&mut list);
@@ -479,9 +455,6 @@ impl LibraryPanel {
             Level::Albums => ("Albums".to_owned(), count(n, "album")),
             Level::Genres => ("Genres".to_owned(), count(n, "genre")),
             Level::Playlists => ("Playlists".to_owned(), count(n, "playlist")),
-            Level::RecentlyAdded => ("Recently Added".to_owned(), count(n, "album")),
-            Level::RecentlyPlayed => ("Recently Played".to_owned(), count(n, "track")),
-            Level::MostPlayed => ("Most Played".to_owned(), count(n, "album")),
             Level::ArtistAlbums { artist } => {
                 (self.shown_artist(artist.as_deref()), albums_and_tracks)
             }

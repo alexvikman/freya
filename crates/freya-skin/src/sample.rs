@@ -487,6 +487,65 @@ fn sample_logo(width: u32, height: u32) -> slint::Image {
     slint::Image::from_rgba8(buffer)
 }
 
+/// Recents: a few days of albums and playlists played, an album added, a station, and one
+/// album's songs unfolded.
+pub fn fill_recents(ui: &ComponentInstance) {
+    let row = |kind: &str, title: &str, detail: &str, foldable: bool, unfolded: bool| {
+        Value::Struct(Struct::from_iter([
+            ("kind".to_owned(), text(kind)),
+            ("title".to_owned(), text(title)),
+            ("detail".to_owned(), text(detail)),
+            ("cover".to_owned(), text("")),
+            ("foldable".to_owned(), Value::Bool(foldable)),
+            ("unfolded".to_owned(), Value::Bool(unfolded)),
+        ]))
+    };
+    let rows = vec![
+        row("day", "Today", "", false, false),
+        row(
+            "album",
+            "In the Shadow of Your Shadow",
+            "Album · Cult of Luna · 8 songs played",
+            true,
+            true,
+        ),
+        row("song", "Dark Sun", "Cult of Luna", false, false),
+        row("song", "Sound of Silence", "Cult of Luna", false, false),
+        row(
+            "playlist",
+            "royalcore",
+            "Playlist · 2 songs played",
+            true,
+            false,
+        ),
+        row(
+            "album",
+            "I Thought We Were the Same",
+            "Album added · Ane Brun",
+            false,
+            false,
+        ),
+        row("day", "Yesterday", "", false, false),
+        row(
+            "album",
+            "Estuary",
+            "Album · Wolves in the Throne Room · 5 songs played",
+            true,
+            false,
+        ),
+        row("radio", "SomaFM Groove Salad", "Radio", false, false),
+        row("day", "Wed, Nov 4", "", false, false),
+        row(
+            "playlist",
+            "royalcore",
+            "Playlist · 27 songs played",
+            true,
+            false,
+        ),
+    ];
+    let _ = ui.set_global_property("Recents", "rows", model(rows));
+}
+
 fn model(rows: Vec<Value>) -> Value {
     Value::Model(ModelRc::new(VecModel::from(rows)))
 }

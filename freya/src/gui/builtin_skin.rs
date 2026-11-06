@@ -280,6 +280,31 @@ impl Convert for ServerDevice {
     }
 }
 
+impl Convert for RecentRow {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            kind: field(&s, "kind"),
+            title: field(&s, "title"),
+            detail: field(&s, "detail"),
+            cover: field(&s, "cover"),
+            foldable: field(&s, "foldable"),
+            unfolded: field(&s, "unfolded"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("kind", self.kind.to_value()),
+            ("title", self.title.to_value()),
+            ("detail", self.detail.to_value()),
+            ("cover", self.cover.to_value()),
+            ("foldable", self.foldable.to_value()),
+            ("unfolded", self.unfolded.to_value()),
+        ])
+    }
+}
+
 impl Convert for FolderPlaceRow {
     fn from_value(value: Value) -> Option<Self> {
         let Value::Struct(s) = value else { return None };
@@ -1053,12 +1078,13 @@ macro_rules! skin_api {
     };
 }
 
-const GLOBALS: [&str; 11] = [
+const GLOBALS: [&str; 12] = [
     "Player",
     "Playlist",
     "Playlists",
     "Library",
     "Radio",
+    "Recents",
     "Equalizer",
     "Visualizer",
     "App",
@@ -1109,6 +1135,10 @@ skin_api! {
 
         Radio."stations" => set_stations, get_stations;
         Radio."error" => set_error, get_error;
+        Recents."rows" => set_rows, get_rows;
+        Recents."filter" => set_filter, get_filter;
+        Recents."error" => set_error, get_error;
+        Recents."loading" => set_loading, get_loading;
         Radio."directory" => set_directory, get_directory;
         Radio."summary" => set_summary, get_summary;
         Radio."found" => set_found, get_found;
@@ -1472,6 +1502,9 @@ skin_api! {
         Server."browse-up" => on_browse_up, invoke_browse_up();
         Server."browse-add" => on_browse_add, invoke_browse_add();
         Server."browse-place" => on_browse_place, invoke_browse_place(index: i32);
+        Recents."set-filter" => on_set_filter, invoke_set_filter(filter: SharedString);
+        Recents."toggle" => on_toggle, invoke_toggle(index: i32);
+        Recents."open" => on_open, invoke_open(index: i32);
         Server."browse-path" => on_browse_path, invoke_browse_path(path: SharedString);
         Server."browse-cancel" => on_browse_cancel, invoke_browse_cancel();
     }

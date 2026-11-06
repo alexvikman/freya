@@ -30,7 +30,8 @@ pub use edits::{ArtistEdit, Header};
 pub use favorites::{AlbumKey, AlbumOrder};
 pub use fetch::{LastFm, Online};
 pub use freya_protocol::{
-    Album, AlbumPlayed, Artist, ArtistOrder, ArtistSummary, Genre, Played, Stats, Track,
+    Album, AlbumAdded, AlbumPlayed, Artist, ArtistOrder, ArtistSummary, Genre, Played, PlayedAt,
+    PlaylistPlayed, StationPlayed, Stats, Track,
 };
 pub use genres::{GenreArticle, GenreInfo};
 pub use matches::{AlbumMatch, plain_name, split_artist};
@@ -111,9 +112,18 @@ const HISTORY: &str = "
         -- When, in milliseconds since 1970.
         played INTEGER NOT NULL,
         -- Who played it (see users.rs).
-        user INTEGER NOT NULL DEFAULT 1
+        user INTEGER NOT NULL DEFAULT 1,
+        -- The playlist it was played from; none for an album or a song.
+        playlist TEXT
     );
     CREATE INDEX IF NOT EXISTS plays_by_track ON plays (path, start_ms);
+    -- Internet radio stations listened to, by their name and address.
+    CREATE TABLE IF NOT EXISTS station_plays (
+        name TEXT NOT NULL,
+        url TEXT NOT NULL,
+        played INTEGER NOT NULL,
+        user INTEGER NOT NULL DEFAULT 1
+    );
     -- When things last happened to the library, by name, in milliseconds since 1970:
     -- 'full-scan', when a scan of all its folders last ended.
     CREATE TABLE IF NOT EXISTS library_state (
@@ -243,6 +253,15 @@ impl Library {
             db.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         db.execute_batch(HISTORY)?;
+        let plays_from: bool = db.query_row(
+            "SELECT EXISTS (SELECT 1 FROM pragma_table_info('plays') WHERE name = 'playlist')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !plays_from {
+            log::info!("noting which playlist each play was from");
+            db.execute_batch("ALTER TABLE plays ADD COLUMN playlist TEXT;")?;
+        }
         db.execute_batch(online::SCHEMA)?;
         db.execute_batch(edits::SCHEMA)?;
         edits::migrate(&db)?;
@@ -679,18 +698,116 @@ impl Library {
 
     /// Notes that a track was played, at `at`. It need not be in the library: its plays count
     /// once it is.
-    pub fn record_play(&self, path: &Path, part: Option<Part>, at: SystemTime) -> Result<()> {
+    pub fn record_play(
+        &self,
+        path: &Path,
+        part: Option<Part>,
+        at: SystemTime,
+        playlist: Option<&str>,
+    ) -> Result<()> {
         let Some(path) = path.to_str() else {
             return Ok(());
         };
         self.db
-            .prepare_cached("INSERT INTO plays (path, start_ms, played) VALUES (?1, ?2, ?3)")?
+            .prepare_cached(
+                "INSERT INTO plays (path, start_ms, played, playlist) VALUES (?1, ?2, ?3, ?4)",
+            )?
             .execute(params![
                 path,
                 part.map(|p| p.start.as_millis() as i64),
-                epoch_millis(at)
+                epoch_millis(at),
+                playlist
             ])?;
         Ok(())
+    }
+
+    /// Notes that the radio station `name`, at `url`, was listened to at `at`.
+    pub fn record_station(&self, name: &str, url: &str, at: SystemTime) -> Result<()> {
+        self.db
+            .prepare_cached("INSERT INTO station_plays (name, url, played) VALUES (?1, ?2, ?3)")?
+            .execute(params![name, url, epoch_millis(at)])?;
+        Ok(())
+    }
+
+    /// The library's tracks played since `since`, the latest first, each time it was, with
+    /// the playlist it was played from. At most `limit`.
+    pub fn history(&self, since: SystemTime, limit: usize) -> Result<Vec<PlayedAt>> {
+        let mut query = self.db.prepare_cached(&format!(
+            "SELECT {TRACK_COLUMNS}, plays.played, plays.playlist
+             FROM plays JOIN tracks ON tracks.path = plays.path
+                                   AND tracks.start_ms IS plays.start_ms
+             WHERE plays.played >= ?1
+             ORDER BY plays.played DESC
+             LIMIT ?2"
+        ))?;
+        query
+            .query_map(params![epoch_millis(since), limit as i64], |row| {
+                Ok(PlayedAt {
+                    track: track_from_row(row)?,
+                    at: from_epoch_millis(row.get(12)?),
+                    playlist: row.get(13)?,
+                })
+            })?
+            .collect()
+    }
+
+    /// The radio stations listened to since `since`, the latest first. At most `limit`.
+    pub fn station_history(&self, since: SystemTime, limit: usize) -> Result<Vec<StationPlayed>> {
+        let mut query = self.db.prepare_cached(
+            "SELECT name, url, played FROM station_plays
+             WHERE played >= ?1 ORDER BY played DESC LIMIT ?2",
+        )?;
+        query
+            .query_map(params![epoch_millis(since), limit as i64], |row| {
+                Ok(StationPlayed {
+                    name: row.get(0)?,
+                    url: row.get(1)?,
+                    at: from_epoch_millis(row.get(2)?),
+                })
+            })?
+            .collect()
+    }
+
+    /// The albums that came into the library since `since`, the newest first, with when. At
+    /// most `limit`.
+    pub fn albums_added(&self, since: SystemTime, limit: usize) -> Result<Vec<AlbumAdded>> {
+        let mut query = self.db.prepare_cached(
+            "SELECT album_artist, album, min(year), count(*), min(path), max(added)
+             FROM tracks
+             GROUP BY album_artist, album
+             HAVING max(added) >= ?1
+             ORDER BY max(added) DESC, album COLLATE NOCASE
+             LIMIT ?2",
+        )?;
+        query
+            .query_map(params![epoch_millis(since), limit as i64], |row| {
+                Ok(AlbumAdded {
+                    album: album_from_row(row)?,
+                    at: from_epoch_millis(row.get(5)?),
+                })
+            })?
+            .collect()
+    }
+
+    /// The playlists played from most often; equally often played ones by when they were
+    /// played last. At most `limit`.
+    pub fn most_played_playlists(&self, limit: usize) -> Result<Vec<PlaylistPlayed>> {
+        let mut query = self.db.prepare_cached(
+            "SELECT playlist, count(*), max(played) FROM plays
+             WHERE playlist IS NOT NULL
+             GROUP BY playlist
+             ORDER BY count(*) DESC, max(played) DESC
+             LIMIT ?1",
+        )?;
+        query
+            .query_map([limit as i64], |row| {
+                Ok(PlaylistPlayed {
+                    name: row.get(0)?,
+                    plays: row.get(1)?,
+                    last: from_epoch_millis(row.get(2)?),
+                })
+            })?
+            .collect()
     }
 
     /// How often each played track of an album was played, by its file and where in the file

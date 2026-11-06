@@ -63,32 +63,6 @@ pub(super) fn letter_jumps<'a>(
     jumps
 }
 
-pub(super) fn played_text(played: &Played, by_count: bool, now: SystemTime) -> String {
-    if by_count {
-        count(played.plays as usize, "play")
-    } else {
-        ago(played.last, now)
-    }
-}
-
-/// How long before `now` a time was: "Just now", "5 minutes ago", "3 weeks ago".
-pub(super) fn ago(time: SystemTime, now: SystemTime) -> String {
-    const MINUTE: u64 = 60;
-    const HOUR: u64 = 60 * MINUTE;
-    const DAY: u64 = 24 * HOUR;
-    let seconds = now.duration_since(time).unwrap_or_default().as_secs();
-    let (n, unit) = match seconds {
-        s if s < MINUTE => return "Just now".to_owned(),
-        s if s < HOUR => (s / MINUTE, "minute"),
-        s if s < DAY => (s / HOUR, "hour"),
-        s if s < 7 * DAY => (s / DAY, "day"),
-        s if s < 30 * DAY => (s / (7 * DAY), "week"),
-        s if s < 365 * DAY => (s / (30 * DAY), "month"),
-        s => (s / (365 * DAY), "year"),
-    };
-    format!("{} ago", count(n as usize, unit))
-}
-
 pub(super) fn cover_key(album: &Album) -> String {
     Thumbnails::key(album.artist.as_deref(), album.name.as_deref())
 }

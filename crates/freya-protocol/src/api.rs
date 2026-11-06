@@ -56,6 +56,18 @@ macro_rules! with_library_data {
             /// The albums played most often, their tracks' plays together; equally often played
             /// ones by when they were played last. At most `limit`.
             fn most_played_albums(limit: usize) -> Vec<$crate::AlbumPlayed>;
+            /// The playlists played from most often. At most `limit`.
+            fn most_played_playlists(limit: usize) -> Vec<$crate::PlaylistPlayed>;
+            /// The library's tracks played since `since`, the latest first, each time, with
+            /// the playlist they were played from. At most `limit`.
+            fn history(since: ::std::time::SystemTime, limit: usize) -> Vec<$crate::PlayedAt>;
+            /// The radio stations listened to since `since`, the latest first.
+            fn station_history(
+                since: ::std::time::SystemTime,
+                limit: usize,
+            ) -> Vec<$crate::StationPlayed>;
+            /// The albums that came into the library since `since`, the newest first.
+            fn albums_added(since: ::std::time::SystemTime, limit: usize) -> Vec<$crate::AlbumAdded>;
             fn search(text: &str, limit: usize) -> Vec<$crate::Track>;
             /// How often each of an album's tracks was played, by its file and start.
             fn album_plays(
@@ -139,6 +151,15 @@ macro_rules! with_server_control {
                 part: Option<$crate::Part>,
                 at: ::std::time::SystemTime,
             ) -> bool;
+            /// As `record_play`, noting the playlist it was played from.
+            fn record_play_from(
+                path: &::std::path::Path,
+                part: Option<$crate::Part>,
+                at: ::std::time::SystemTime,
+                playlist: Option<&str>,
+            ) -> bool;
+            /// Notes that the radio station `name`, at `url`, was listened to at `at`.
+            fn record_station(name: &str, url: &str, at: ::std::time::SystemTime) -> ();
             /// Writes the plays noted, whether a scan runs or not.
             fn save() -> ();
             fn is_scanning() -> bool;
@@ -272,6 +293,7 @@ pub const LISTENER_CALLS: &[&str] = &[
     "genre_tracks",
     "all_tracks",
     "recently_added",
+    "albums_added",
     "search",
     "album_covers",
     "artist_mbid",
@@ -320,6 +342,10 @@ pub const CACHED_CALLS: &[&str] = &[
     "recently_played",
     "most_played",
     "most_played_albums",
+    "most_played_playlists",
+    "history",
+    "station_history",
+    "albums_added",
     "search",
     "album_plays",
     "album_covers",
@@ -634,6 +660,11 @@ mod tests {
             "record_play",
             "most_played",
             "most_played_albums",
+            "most_played_playlists",
+            "history",
+            "station_history",
+            "record_play_from",
+            "record_station",
             "album_favorites",
             "set_album_favorite",
             "playlists",

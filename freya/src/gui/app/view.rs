@@ -129,6 +129,32 @@ impl App {
                 ],
             );
         }
+        if view.recents_out.available {
+            // Only while shown: it asks the server.
+            let shown = matches!(
+                ui.get_global_property("App", "view"),
+                Ok(Value::String(shown)) if shown == "recents"
+            );
+            // Opened again: what other devices played since is read too.
+            if shown && !view.recents_shown {
+                self.recents.changed();
+            }
+            view.recents_shown = shown;
+            if shown {
+                let made = (0..self.playlists.len())
+                    .filter_map(|i| {
+                        let playlist = self.playlists.get(i)?;
+                        Some((playlist.name.clone(), self.playlists.created(i)?))
+                    })
+                    .collect();
+                self.recents.set_made(made);
+                let on_network = self.library.remote().is_some();
+                if let Some(rows) = self.recents.poll(self.library.api(), on_network) {
+                    view.recents_rows.sync(rows);
+                }
+            }
+            view.recents_out.write(ui, self.recents.values());
+        }
         if view.radio_out.available {
             view.station_rows.sync(station_rows);
             let mut values = vec![("error", skin_state::string(&self.radio_error))];

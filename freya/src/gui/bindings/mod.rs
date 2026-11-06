@@ -25,6 +25,7 @@ mod player;
 mod playlists;
 mod queue;
 mod radio;
+mod recents;
 mod server;
 mod updates;
 mod visuals;
@@ -93,6 +94,7 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     browse::bind(&b);
     playlists::bind(&b);
     radio::bind(&b);
+    recents::bind(&b);
     server::bind(&b);
     lastfm::bind(&b);
     window::bind(&b);

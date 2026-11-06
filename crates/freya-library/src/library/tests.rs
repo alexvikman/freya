@@ -429,7 +429,7 @@ fn lists_albums_by_when_they_came_and_tracks_by_plays() {
     assert!(library.recently_played(10).unwrap().is_empty());
     let play = |path: &str, seconds: u64| {
         library
-            .record_play(Path::new(path), None, at(seconds))
+            .record_play(Path::new(path), None, at(seconds), None)
             .unwrap();
     };
     play("/m/a1.mp3", 10);
@@ -462,10 +462,10 @@ fn lists_albums_by_when_they_came_and_tracks_by_plays() {
         ["A", "B", "C"]
     );
     library
-        .record_play(Path::new("/m/c1.mp3"), None, at(60))
+        .record_play(Path::new("/m/c1.mp3"), None, at(60), None)
         .unwrap();
     library
-        .record_play(Path::new("/m/c1.mp3"), None, at(70))
+        .record_play(Path::new("/m/c1.mp3"), None, at(70), None)
         .unwrap();
     assert_eq!(
         names(library.artists_by(ArtistOrder::MostPlayed).unwrap()),
@@ -512,7 +512,7 @@ fn plays_of_a_cue_sheet_track_count_for_that_track_only() {
         end: None,
     };
     library
-        .record_play(Path::new("/m/disc.flac"), Some(second), at(1))
+        .record_play(Path::new("/m/disc.flac"), Some(second), at(1), None)
         .unwrap();
     let played = library.recently_played(10).unwrap();
     assert_eq!(played.len(), 1);
@@ -521,7 +521,7 @@ fn plays_of_a_cue_sheet_track_count_for_that_track_only() {
     // Counted for the album, by where in the file the track starts.
     for _ in 0..2 {
         library
-            .record_play(Path::new("/m/disc.flac"), Some(second), at(2))
+            .record_play(Path::new("/m/disc.flac"), Some(second), at(2), None)
             .unwrap();
     }
     let plays = library.album_plays(Some("A"), Some("Live")).unwrap();
@@ -554,7 +554,7 @@ fn rebuilds_a_library_from_an_older_layout() {
     add(&mut library, "/m/1.mp3", &tags("A", "B", "C", 1));
     assert_eq!(library.stats().unwrap().tracks, 1);
     library
-        .record_play(Path::new("/m/1.mp3"), None, at(1))
+        .record_play(Path::new("/m/1.mp3"), None, at(1), None)
         .unwrap();
 
     // A rebuild drops the tracks, which a scan reads again, but never the plays.
@@ -704,7 +704,7 @@ fn ten_thousand_tracks_browse_and_search_quickly() {
             )
             .unwrap();
         library
-            .record_play(Path::new(&path), None, at(i * 600))
+            .record_play(Path::new(&path), None, at(i * 600), None)
             .unwrap();
     }
     assert_eq!(
@@ -1097,10 +1097,10 @@ fn plays_follow_a_file_moved_or_renamed() {
     scan_now(&mut library, std::slice::from_ref(&music));
     let at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
     library
-        .record_play(&before.join("01.mp3"), None, at)
+        .record_play(&before.join("01.mp3"), None, at, None)
         .unwrap();
     library
-        .record_play(&before.join("01.mp3"), None, at)
+        .record_play(&before.join("01.mp3"), None, at, None)
         .unwrap();
     let added = |library: &Library| -> i64 {
         library
@@ -1266,14 +1266,14 @@ fn albums_are_most_played_by_their_tracks_plays_together() {
     // Second's one track three times; First's two tracks twice, once each.
     for second in 1..=3 {
         library
-            .record_play(Path::new("/m/b/1.flac"), None, at(second))
+            .record_play(Path::new("/m/b/1.flac"), None, at(second), None)
             .unwrap();
     }
     library
-        .record_play(Path::new("/m/a/1.flac"), None, at(10))
+        .record_play(Path::new("/m/a/1.flac"), None, at(10), None)
         .unwrap();
     library
-        .record_play(Path::new("/m/a/2.flac"), None, at(11))
+        .record_play(Path::new("/m/a/2.flac"), None, at(11), None)
         .unwrap();
     let most = library.most_played_albums(10).unwrap();
     let names: Vec<_> = most.iter().map(|p| p.album.name.as_deref()).collect();
@@ -1281,4 +1281,77 @@ fn albums_are_most_played_by_their_tracks_plays_together() {
     assert_eq!((most[0].plays, most[1].plays), (3, 2));
     assert_eq!(most[1].album.tracks, 2, "all of its tracks, played or not");
     assert_eq!(most[1].last, at(11));
+}
+
+#[test]
+fn the_history_knows_the_playlist_and_the_stations() {
+    let mut library = Library::open_in_memory().unwrap();
+    add_at(
+        &mut library,
+        "/m/a/1.flac",
+        &tags("A", "First", "One", 1),
+        1_000,
+    );
+    add_at(
+        &mut library,
+        "/m/b/1.flac",
+        &tags("B", "Second", "Two", 1),
+        500_000,
+    );
+    library
+        .record_play(Path::new("/m/a/1.flac"), None, at(100), Some("Mix"))
+        .unwrap();
+    library
+        .record_play(Path::new("/m/b/1.flac"), None, at(200), None)
+        .unwrap();
+    library
+        .record_play(Path::new("/m/gone.flac"), None, at(300), None)
+        .unwrap();
+    library
+        .record_station("SomaFM", "https://ice1.somafm.com/x", at(400))
+        .unwrap();
+    let history = library.history(at(50), 10).unwrap();
+    let played: Vec<_> = history
+        .iter()
+        .map(|p| (p.track.display_title(), p.playlist.as_deref()))
+        .collect();
+    assert_eq!(
+        played,
+        [("Two".to_owned(), None), ("One".to_owned(), Some("Mix"))],
+        "the latest first, and only the library's tracks"
+    );
+    assert!(library.history(at(150), 10).unwrap().len() == 1);
+    let stations = library.station_history(at(0), 10).unwrap();
+    assert_eq!(stations[0].name, "SomaFM");
+    assert_eq!(stations[0].at, at(400));
+    let added = library.albums_added(at(100), 10).unwrap();
+    assert_eq!(added.len(), 1, "only Second came in since");
+    assert_eq!(added[0].album.name.as_deref(), Some("Second"));
+    let playlists = library.most_played_playlists(10).unwrap();
+    assert_eq!(playlists[0].name, "Mix");
+    assert_eq!(playlists[0].plays, 1);
+}
+
+#[test]
+fn plays_kept_before_playlists_were_noted_are_kept() {
+    let dir = temp_dir("plays-before-playlists");
+    let file = dir.join("library.sqlite3");
+    {
+        let db = Connection::open(&file).unwrap();
+        db.execute_batch(
+            "CREATE TABLE plays (path TEXT NOT NULL, start_ms INTEGER,
+                                 played INTEGER NOT NULL, user INTEGER NOT NULL DEFAULT 1);
+             INSERT INTO plays (path, played) VALUES ('/m/a.flac', 1000);",
+        )
+        .unwrap();
+    }
+    let library = Library::open(&file).unwrap();
+    library
+        .record_play(Path::new("/m/a.flac"), None, at(2), Some("Mix"))
+        .unwrap();
+    let kept: i64 = library
+        .db
+        .query_row("SELECT count(*) FROM plays", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(kept, 2);
 }

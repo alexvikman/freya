@@ -335,7 +335,7 @@ impl LibraryPanel {
                     .enumerate()
                     .map(|(i, played)| {
                         let item = Item::Track(played.track.clone());
-                        let mut row = row_value(&item, None, |_| String::new(), Some(played.plays));
+                        let mut row = row_value(&item, None, Some(played.plays));
                         if let Value::Struct(s) = &mut row {
                             s.set_field("number".into(), string((i + 1).to_string()));
                             let album = Album {

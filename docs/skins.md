@@ -161,7 +161,7 @@ Use `ListView` (from `std-widgets.slint`) for the rows: it only creates the rows
 
 ### `Library`
 
-The user's music, read from the folders they chose, browsed in sections (artists, albums, genres and playlists) or searched: songs are reached through their albums, artists and playlists, and a song found by search opens its album at it. Three more sections, the Recents, show the albums added last, the tracks played last, and the albums played most. A track counts as played once it has been listened to for half its length or four minutes; skipping ahead does not count.
+The user's music, read from the folders they chose, browsed in sections (artists, albums, genres and playlists) or searched: songs are reached through their albums, artists and playlists, and a song found by search opens its album at it. What was played and added lately is `Recents`, a global of its own. A track counts as played once it has been listened to for half its length or four minutes; skipping ahead does not count.
 
 | Property | Type | |
 |---|---|---|
@@ -242,6 +242,22 @@ Playlists the user keeps in Freya, apart from the queue: `Playlist` is what play
 | `set-sort(sort)` | Order the tracks shown: "custom" (as the playlist has them), "title", "artist", "album", "added" or "duration" |
 | `edit()`, `save-edit(name, description)`, `cancel-edit()` | Change the playlist shown: its name, description and pictures, kept in Freya beside its file |
 | `pick-picture(kind)`, `clear-picture(kind)` | While changing it, ask the user for a picture file or take one away: "picture" or "backdrop" |
+
+### `Recents`
+
+What was played and added lately, as a feed by day, apart from the library's sections: the albums and playlists played (each with the songs played, to unfold), the albums added and the playlists made, and the radio stations listened to, over the last 30 days; or the albums and playlists played most. Optional: a skin without it shows none.
+
+| Property | Type | Meaning |
+|---|---|---|
+| `rows` | [`RecentRow`] | `kind` ("day", a day's heading; "album", "playlist", "radio", or "song", a song played under its album or playlist unfolded), `title`, `detail` ("Album · Cult of Luna · 8 songs played"), `cover` (for `Library.cover`), `foldable`, `unfolded` |
+| `filter` | string | "all", "played", "added", "radio" or "most-played" |
+| `error`, `loading` | string, bool | Why it could not be read; while it is first read |
+
+| Callback | Does |
+|---|---|
+| `set-filter(name)` | Shows what `filter` names |
+| `toggle(index)` | Unfolds or folds a row's songs |
+| `open(index)` | Opens a row's album or playlist, or plays its station |
 
 ### `Radio`
 

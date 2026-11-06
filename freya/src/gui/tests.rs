@@ -468,41 +468,57 @@ export component W inherits Window { Text { text: Player.title; } }
     assert_eq!(global(&ui, "Library", "title"), text("Albums"));
     assert_eq!(global(&ui, "Library", "can-go-back"), Value::Bool(false));
 
-    // The Recents: albums by when they came, and tracks by when and how often they were
-    // played.
-    call(&ui, "Library", "show", &[text("recently-added")]);
-    assert_eq!(global(&ui, "Library", "layout"), text("grid"));
-    assert_eq!(library_titles(&ui).len(), 2);
-    call(&ui, "Library", "show", &[text("recently-played")]);
-    assert_eq!(global(&ui, "Library", "title"), text("Recently Played"));
-    // More often than what Up Next played above.
+    // Recents: a page of its own, by day. The albums played, from what was played above, and
+    // the albums added.
     for _ in 0..4 {
         app.borrow_mut()
             .library
-            .record_play(music.join("mono-22k.wav"), None);
+            .record_play(music.join("mono-22k.wav"), None, None);
     }
-    app.borrow_mut().tick();
-    // Before what Up Next played above.
-    assert_eq!(library_titles(&ui)[0], "mono-22k");
-    let played = |ui: &SkinWindow| -> Vec<Value> {
-        let Value::Model(model) = global(ui, "Library", "rows") else {
-            panic!("Library.rows is a model");
+    app.borrow_mut().recents.changed();
+    ui.set_global_property("App", "view", text("recents"))
+        .unwrap();
+    app.borrow_mut().refresh();
+    let recents = |ui: &SkinWindow| -> Vec<(String, String)> {
+        let Value::Model(model) = global(ui, "Recents", "rows") else {
+            panic!("Recents.rows is a model");
         };
         model
             .iter()
             .map(|row| match row {
-                Value::Struct(row) => field(&row, "played"),
+                Value::Struct(row) => match (field(&row, "kind"), field(&row, "title")) {
+                    (Value::String(kind), Value::String(title)) => {
+                        (kind.to_string(), title.to_string())
+                    }
+                    other => panic!("a row of strings, not {other:?}"),
+                },
                 other => panic!("row is not a struct: {other:?}"),
             })
             .collect()
     };
-    assert_eq!(played(&ui)[0], text("Just now"));
+    let rows = recents(&ui);
+    assert_eq!(rows[0], ("day".to_owned(), "Today".to_owned()));
+    assert_eq!(rows[1], ("album".to_owned(), "Unknown album".to_owned()));
+    call(&ui, "Recents", "set-filter", &[text("added")]);
+    app.borrow_mut().refresh();
+    assert!(
+        recents(&ui)
+            .iter()
+            .filter(|(kind, _)| kind == "album")
+            .count()
+            >= 2,
+        "the albums the scans added"
+    );
     // Most played: albums, their tracks' plays together.
-    call(&ui, "Library", "show", &[text("most-played")]);
-    assert_eq!(global(&ui, "Library", "layout"), text("grid"));
-    assert_eq!(library_titles(&ui)[0], "Unknown album");
-    call(&ui, "Library", "play", &[num(0.0)]);
-    assert_eq!(titles(&ui), ["mono-22k", "sine"]);
+    call(&ui, "Recents", "set-filter", &[text("most-played")]);
+    app.borrow_mut().refresh();
+    assert_eq!(
+        recents(&ui)[0],
+        ("album".to_owned(), "Unknown album".to_owned())
+    );
+    call(&ui, "Recents", "open", &[num(0.0)]);
+    assert_eq!(global(&ui, "App", "view"), text("library"));
+    assert_eq!(library_titles(&ui), ["mono-22k", "sine"]);
     call(&ui, "Library", "show", &[text("artists")]);
 
     // Radio: none saved at first; saving one, playing it twice without a second entry, and

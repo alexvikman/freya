@@ -139,6 +139,8 @@ impl App {
             return;
         };
         let url = station.url.clone();
+        self.library.record_station(&station.name.clone(), &url);
+        self.recents.changed();
         let stream = self.station_streams.get(&url).unwrap_or(&url).clone();
         match self.entry_for(&stream) {
             Some(index) => self.play_index(index),
@@ -161,12 +163,34 @@ impl App {
             return;
         };
         let (url, id) = (station.url.clone(), station.id.clone());
+        self.library.record_station(&station.name.clone(), &url);
+        self.recents.changed();
         let stream = self.station_streams.get(&url).unwrap_or(&url).clone();
         match self.entry_for(&stream) {
             Some(index) => self.play_index(index),
             None => self.add_url(&url),
         }
         self.radio.played(&id);
+    }
+
+    /// Opens what the `row`th row of Recents stands for: an album, a playlist, or a station,
+    /// which plays.
+    pub fn open_recent(&mut self, row: usize) {
+        match self.recents.target(row) {
+            Some(recents::Target::Album { artist, album }) => {
+                self.library.open_album(artist, album);
+                self.show_view("library");
+            }
+            Some(recents::Target::Playlist(name)) => self.show_playlist_named(&name),
+            Some(recents::Target::Station { url, .. }) => {
+                let saved = self.stations.iter().position(|s| s.url == url);
+                match saved {
+                    Some(index) => self.play_station(index),
+                    None => self.add_url(&url),
+                }
+            }
+            None => {}
+        }
     }
 
     /// Keeps the radio directory's `index`th station shown among the server's stations, or no

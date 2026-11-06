@@ -136,6 +136,39 @@ pub struct Played {
     pub last: SystemTime,
 }
 
+/// A track played, once.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct PlayedAt {
+    pub track: Track,
+    pub at: SystemTime,
+    /// The playlist it was played from; none for an album or a song.
+    pub playlist: Option<String>,
+}
+
+/// A radio station listened to, once.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct StationPlayed {
+    pub name: String,
+    pub url: String,
+    pub at: SystemTime,
+}
+
+/// An album that came into the library.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct AlbumAdded {
+    pub album: Album,
+    /// When its last track came in.
+    pub at: SystemTime,
+}
+
+/// A playlist played from.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct PlaylistPlayed {
+    pub name: String,
+    pub plays: u32,
+    pub last: SystemTime,
+}
+
 /// An album whose tracks have been played.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct AlbumPlayed {

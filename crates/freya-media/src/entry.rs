@@ -22,6 +22,9 @@ pub struct Entry {
     pub selected: bool,
     /// Whether tags have been read from the file (as opposed to coming from a playlist file).
     pub tags_loaded: bool,
+    /// The playlist it was played from, for the history: none for an album or a song. Not
+    /// part of what makes entries equal.
+    pub playlist: Option<String>,
 }
 
 impl PartialEq for Entry {
@@ -29,6 +32,7 @@ impl PartialEq for Entry {
         // Everything but `id`.
         let Self {
             id: _,
+            playlist: _,
             path,
             part,
             title,
@@ -72,6 +76,7 @@ impl Entry {
             duration: None,
             selected: false,
             tags_loaded: false,
+            playlist: None,
         }
     }
 

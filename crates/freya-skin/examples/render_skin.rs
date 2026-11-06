@@ -3,7 +3,7 @@
 //! Usage: cargo run -p freya-skin --example render_skin -- <out.png> [skin | builtin | picker]
 //!        [scale] [width] [height]
 //!        [library | library-search | albums | songs | most-played | stations | playlist | visualizer
-//!        | equalizer | radio | directory | directory-search | error]
+//!        | equalizer | radio | directory | directory-search | recents | error]
 //!
 //! The last argument shows another of the built-in skin's views than Up Next (the library at an
 //! album, its search, its albums, songs or most played, the radio directory's first page or a
@@ -48,7 +48,7 @@ fn main() {
             let view = match panel.as_str() {
                 "library" | "library-search" | "albums" | "songs" | "most-played" => "library",
                 "stations" | "directory" | "directory-search" => "radio",
-                "playlist" | "visualizer" | "equalizer" => panel.as_str(),
+                "playlist" | "visualizer" | "equalizer" | "recents" => panel.as_str(),
                 _ => "queue",
             };
             let _ = ui.set_property("view", slint_interpreter::Value::String(view.into()));
@@ -58,6 +58,7 @@ fn main() {
                 "directory-search" => freya_skin::sample::fill_directory_search(ui),
                 "error" => freya_skin::sample::fill_error(ui),
                 "welcome" => freya_skin::sample::fill_welcome(ui),
+                "recents" => freya_skin::sample::fill_recents(ui),
                 _ => {}
             }
         })

@@ -261,10 +261,27 @@ impl ServerControl for Service {
 
     /// While a scan writes, the play waits for it.
     fn record_play(&self, path: &Path, part: Option<Part>, at: SystemTime) -> ApiResult<bool> {
+        self.record_play_from(path, part, at, None)
+    }
+
+    fn record_play_from(
+        &self,
+        path: &Path,
+        part: Option<Part>,
+        at: SystemTime,
+        playlist: Option<&str>,
+    ) -> ApiResult<bool> {
         Ok(self.with(|state| {
-            state.plays.push((path.to_owned(), part, at));
+            state
+                .plays
+                .push((path.to_owned(), part, at, playlist.map(str::to_owned)));
             !state.scanning && state.write_plays()
         }))
+    }
+
+    fn record_station(&self, name: &str, url: &str, at: SystemTime) -> ApiResult<()> {
+        self.with(|state| state.db.record_station(name, url, at))
+            .map_err(api_error)
     }
 
     fn save(&self) -> ApiResult<()> {
@@ -656,7 +673,8 @@ struct State {
     /// When it was last looked into whether the whole library is due to be scanned.
     scan_checked: Option<Instant>,
     /// Plays not yet written: a scan may be writing to the database.
-    plays: Vec<(PathBuf, Option<Part>, SystemTime)>,
+    /// Plays noted and not written yet: the track, when, and the playlist it was from.
+    plays: Vec<(PathBuf, Option<Part>, SystemTime, Option<String>)>,
     /// What to tell the listeners.
     outbox: Vec<ServiceEvent>,
 }
@@ -904,8 +922,8 @@ impl State {
     /// Writes the plays noted. Returns true when any were written.
     fn write_plays(&mut self) -> bool {
         let mut written = false;
-        while let Some((path, part, at)) = self.plays.first() {
-            if let Err(e) = self.db.record_play(path, *part, *at) {
+        while let Some((path, part, at, playlist)) = self.plays.first() {
+            if let Err(e) = self.db.record_play(path, *part, *at, playlist.as_deref()) {
                 log::warn!("could not note a play of {}: {e}", path.display());
                 break;
             }

@@ -84,7 +84,7 @@ impl LibraryPanel {
                 }
             }
             // The tracks shown, or in a discography the album's, playing from this one.
-            Item::Track(_) | Item::Played(_) => {
+            Item::Track(_) => {
                 let section = self.section_of(row);
                 let tracks: Vec<Track> = self.items[section.clone()]
                     .iter()
@@ -179,6 +179,19 @@ impl LibraryPanel {
     pub(super) fn shown_artist(&self, name: Option<&str>) -> String {
         name.and_then(|n| self.edits.get(n)?.name.clone())
             .unwrap_or_else(|| artist_name(name))
+    }
+
+    /// Opens the album `album` of `artist`, from their page, as from Recents.
+    pub fn open_album(&mut self, artist: Option<String>, album: Option<String>) {
+        self.opened = vec![
+            Level::Artists,
+            Level::ArtistAlbums {
+                artist: artist.clone(),
+            },
+            Level::AlbumTracks { artist, album },
+        ];
+        self.query.clear();
+        self.reload();
     }
 
     /// Opens the artist of the album shown.

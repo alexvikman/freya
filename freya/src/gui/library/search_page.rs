@@ -295,7 +295,7 @@ impl LibraryPanel {
         let rows = self
             .suggestions
             .iter()
-            .map(|item| super::row_value(item, None, |_| String::new(), None))
+            .map(|item| super::row_value(item, None, None))
             .collect();
         self.suggestion_rows.sync(rows);
         for item in &self.suggestions {
@@ -330,7 +330,7 @@ impl LibraryPanel {
             ),
             Item::Genre(genre) => (Level::Genres, Level::GenreAlbums { genre: genre.name }),
             Item::Playlist(playlist) => return Some(Opened::Playlist(playlist.name)),
-            Item::Track(track) | Item::Played(freya_protocol::Played { track, .. }) => {
+            Item::Track(track) => {
                 return Some(Opened::Play(vec![track], 0));
             }
         };

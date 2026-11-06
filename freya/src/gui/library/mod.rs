@@ -67,8 +67,6 @@ const RECENT_COVERS: usize = 256;
 const DECODE_AHEAD: usize = 64;
 /// Covers handed to the decoder each time the library is polled.
 const DECODE_AT_ONCE: usize = 24;
-/// How many albums or tracks the Recents sections show.
-const RECENT: usize = 200;
 
 /// A list the library can show. The first six start a section; the others are opened from a
 /// row.
@@ -78,9 +76,6 @@ enum Level {
     Albums,
     Genres,
     Playlists,
-    RecentlyAdded,
-    RecentlyPlayed,
-    MostPlayed,
     ArtistAlbums {
         artist: Option<String>,
     },
@@ -101,9 +96,6 @@ impl Level {
             "albums" => Self::Albums,
             "genres" => Self::Genres,
             "playlists" => Self::Playlists,
-            "recently-added" => Self::RecentlyAdded,
-            "recently-played" => Self::RecentlyPlayed,
-            "most-played" => Self::MostPlayed,
             _ => return None,
         })
     }
@@ -113,9 +105,6 @@ impl Level {
             Self::Albums => "albums",
             Self::Genres => "genres",
             Self::Playlists => "playlists",
-            Self::RecentlyAdded => "recently-added",
-            Self::RecentlyPlayed => "recently-played",
-            Self::MostPlayed => "most-played",
             _ => "artists",
         }
     }
@@ -123,12 +112,7 @@ impl Level {
     /// How the skin best shows this list: see `Library.layout`.
     fn layout(&self) -> &'static str {
         match self {
-            Self::Albums
-            | Self::RecentlyAdded
-            | Self::MostPlayed
-            | Self::ArtistAlbums { .. }
-            | Self::GenreAlbums { .. } => "grid",
-            Self::RecentlyPlayed => "table",
+            Self::Albums | Self::ArtistAlbums { .. } | Self::GenreAlbums { .. } => "grid",
             Self::Genres | Self::Playlists => "grid",
             Self::Artists | Self::AlbumTracks { .. } => "list",
         }
@@ -194,8 +178,6 @@ enum Item {
     Album(Album),
     Genre(Genre),
     Track(Track),
-    /// A track in Recently Played or Most Played.
-    Played(Played),
     /// A playlist a search found.
     Playlist(FoundPlaylist),
 }
@@ -203,7 +185,7 @@ enum Item {
 impl Item {
     fn track(&self) -> Option<&Track> {
         match self {
-            Self::Track(track) | Self::Played(Played { track, .. }) => Some(track),
+            Self::Track(track) => Some(track),
             _ => None,
         }
     }
@@ -624,15 +606,8 @@ impl LibraryPanel {
             }
         }
         self.take_typed();
-        if self
-            .plays_written
-            .1
-            .try_iter()
-            .fold(false, |any, written| any | written)
-            && self.shows_plays()
-        {
-            self.reload();
-        }
+        // Plays written change no rows the library shows: Recents reads them itself.
+        self.plays_written.1.try_iter().for_each(drop);
         let answered = |asking: &Option<std::sync::mpsc::Receiver<()>>| {
             asking.as_ref().is_some_and(|asking| {
                 !matches!(asking.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty))
@@ -795,7 +770,7 @@ impl LibraryPanel {
                     finished = true;
                 }
                 // Plays noted while the scan wrote.
-                ServiceEvent::PlaysWritten => self.stale |= self.shows_plays(),
+                ServiceEvent::PlaysWritten => {}
                 ServiceEvent::PlaylistsChanged => self.playlists_changed = true,
                 ServiceEvent::StationsChanged => self.stations_changed = true,
                 ServiceEvent::RadioDirectoryChanged => self.radio_changed = true,
@@ -835,18 +810,20 @@ impl LibraryPanel {
 
     // ----- History -----------------------------------------------------------------------------
 
-    /// Notes that a track was played just now.
-    pub fn record_play(&mut self, path: PathBuf, part: Option<Part>) {
+    /// Notes that a track was played just now, from `playlist` if from one.
+    pub fn record_play(&mut self, path: PathBuf, part: Option<Part>, playlist: Option<String>) {
         let Some(server) = self.server.clone() else {
             return;
         };
         let at = SystemTime::now();
         let note = move || {
             // While a scan writes, the play waits rather than the window.
-            server.record_play(&path, part, at).unwrap_or_else(|e| {
-                log::warn!("could not note a play of {}: {e}", path.display());
-                false
-            })
+            server
+                .record_play_from(&path, part, at, playlist.as_deref())
+                .unwrap_or_else(|e| {
+                    log::warn!("could not note a play of {}: {e}", path.display());
+                    false
+                })
         };
         // A server reached over the network is told on the errands' thread, and the rows made
         // of plays read again when it was.
@@ -857,14 +834,25 @@ impl LibraryPanel {
             });
             return;
         }
-        if note() && self.shows_plays() {
-            self.reload();
-        }
+        note();
     }
 
-    /// Whether the rows shown are made from plays.
-    fn shows_plays(&self) -> bool {
-        !self.searching() && matches!(self.level(), Level::RecentlyPlayed | Level::MostPlayed)
+    /// Notes that the radio station `name`, at `url`, is listened to now.
+    pub fn record_station(&self, name: &str, url: &str) {
+        let Some(server) = self.server.clone() else {
+            return;
+        };
+        let (name, url, at) = (name.to_owned(), url.to_owned(), SystemTime::now());
+        let note = move || {
+            if let Err(e) = server.record_station(&name, &url, at) {
+                log::warn!("could not note that {name} was listened to: {e}");
+            }
+        };
+        if self.remote.is_some() {
+            crate::errands::run(note);
+        } else {
+            note();
+        }
     }
 
     /// Writes the plays noted, waiting for a scan if one is running. For when Freya quits.

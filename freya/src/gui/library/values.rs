@@ -186,11 +186,9 @@ impl LibraryPanel {
 pub(super) fn row_value(
     item: &Item,
     album_artist: Option<Option<&str>>,
-    played: impl Fn(&Played) -> String,
     plays: Option<u32>,
 ) -> Value {
     let in_album = album_artist.is_some();
-    let mut played_text = String::new();
     let mut artist = String::new();
     let mut album = String::new();
     let mut cover = String::new();
@@ -241,10 +239,7 @@ pub(super) fn row_value(
             cover = cover_key(a);
             ("album", album_name(a.name.as_deref()), detail)
         }
-        Item::Track(t) | Item::Played(Played { track: t, .. }) => {
-            if let Item::Played(p) = item {
-                played_text = played(p);
-            }
+        Item::Track(t) => {
             artist = t.artist.clone().unwrap_or_default();
             album = t.album.clone().unwrap_or_default();
             let detail = match album_artist {
@@ -279,7 +274,8 @@ pub(super) fn row_value(
         ("favorite".to_owned(), Value::Bool(false)),
         ("number".to_owned(), string(number)),
         ("duration".to_owned(), string(duration)),
-        ("played".to_owned(), string(played_text)),
+        // Kept for skins that show it: nothing lists plays by track any more.
+        ("played".to_owned(), string("")),
         (
             "plays".to_owned(),
             string(
@@ -292,7 +288,6 @@ pub(super) fn row_value(
     ]))
 }
 
-/// "12 plays", or when the track was played last: "3 days ago".
 /// The wide picture across the top of `page`: an artist's or a genre's.
 pub(super) fn page_backdrop<'a>(
     page: &ArtistPage,
