@@ -88,11 +88,7 @@ impl Library {
     }
 
     /// What MusicBrainz said the album was, of which release group, and when it was asked.
-    pub fn album_online_kind(
-        &self,
-        album_artist: &str,
-        album: &str,
-    ) -> Result<Option<OnlineKind>> {
+    pub fn album_online_kind(&self, album_artist: &str, album: &str) -> Result<Option<OnlineKind>> {
         self.db
             .prepare_cached(
                 "SELECT release_group, kind, asked FROM album_kinds
