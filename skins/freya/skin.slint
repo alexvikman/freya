@@ -519,13 +519,6 @@ component PlayerBar inherits Rectangle {
                     clicked => { Player.toggle-pause(); }
                 }
                 IconButton {
-                    icon: Icons.stop;
-                    size: 36px;
-                    label: "Stop";
-                    tooltip: "Stop (S)";
-                    clicked => { Player.stop(); }
-                }
-                IconButton {
                     icon: Icons.next;
                     size: 36px;
                     label: "Next";
@@ -8543,13 +8536,6 @@ component StageBar inherits Rectangle {
                         label: Player.state == PlaybackState.playing ? "Pause" : "Play";
                         tooltip: self.label + " (Space)";
                         clicked => { Player.toggle-pause(); }
-                    }
-                    IconButton {
-                        icon: Icons.stop;
-                        size: 44px;
-                        label: "Stop";
-                        tooltip: "Stop (S)";
-                        clicked => { Player.stop(); }
                     }
                     IconButton {
                         icon: Icons.next;
