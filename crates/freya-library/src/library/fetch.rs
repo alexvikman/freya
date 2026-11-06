@@ -9,7 +9,9 @@ use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use super::{ArtistText, GenreArticle, Library, PictureKind, Result, ScanEvent, plain_name};
+use super::{
+    AlbumKind, ArtistText, GenreArticle, Library, PictureKind, Result, ScanEvent, plain_name,
+};
 use crate::artist_image::{self, Online as Answer};
 use crate::pictures::Pictures;
 use crate::wikipedia::{self, Article};
@@ -48,6 +50,8 @@ pub struct Online {
     pub fanart_key: Option<String>,
     pub lastfm: Option<Arc<dyn LastFm>>,
     pub wikipedia: bool,
+    /// MusicBrainz, for what kind of release albums whose tags do not say are.
+    pub album_kinds: bool,
 }
 
 impl std::fmt::Debug for Online {
@@ -57,6 +61,7 @@ impl std::fmt::Debug for Online {
             .field("fanart", &self.fanart_key.is_some())
             .field("lastfm", &self.lastfm.is_some())
             .field("wikipedia", &self.wikipedia)
+            .field("album_kinds", &self.album_kinds)
             .finish()
     }
 }
@@ -64,7 +69,11 @@ impl std::fmt::Debug for Online {
 impl Online {
     /// Whether any service may be asked.
     pub fn any(&self) -> bool {
-        self.deezer || self.fanart_key.is_some() || self.lastfm.is_some() || self.wikipedia
+        self.deezer
+            || self.fanart_key.is_some()
+            || self.lastfm.is_some()
+            || self.wikipedia
+            || self.album_kinds
     }
 
     /// Whether anything needs an artist's MusicBrainz id.
@@ -337,6 +346,129 @@ pub(super) fn fetch_album_covers(
     Ok(())
 }
 
+/// Asks MusicBrainz what kind of release each album is whose tags do not say: the release
+/// group the user matched it to, else the one its search finds of that title by that artist.
+/// One it found none of is asked again after a while, and a matched one when it is matched
+/// to another. Stops early when `cancel` is set, or when MusicBrainz cannot be reached.
+pub(super) fn fetch_album_kinds(
+    library: &Library,
+    online: &Online,
+    cancel: &AtomicBool,
+    progress: &mut impl FnMut(ScanEvent),
+) -> Result<()> {
+    if !online.album_kinds {
+        return Ok(());
+    }
+    let mut lacking = Vec::new();
+    for album in library.untyped_albums()? {
+        let kept = library.album_online_kind(&album.album_artist, &album.album)?;
+        let ask = kept.is_none_or(|(group, kept)| {
+            album
+                .matched
+                .as_ref()
+                .is_some_and(|m| group.as_ref() != Some(m))
+                || (kept.answer.is_none() && !kept.recent())
+        });
+        if ask {
+            lacking.push(album);
+        }
+    }
+    let total = lacking.len();
+    if total == 0 {
+        return Ok(());
+    }
+    progress(ScanEvent::Albums { done: 0, total });
+    let pace = Pace::new(artist_image::MUSICBRAINZ_INTERVAL);
+    let mut told = Instant::now();
+    let mut failed = 0;
+    for (done, album) in (1..).zip(&lacking) {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        pace.wait();
+        let found = match &album.matched {
+            Some(group) => artist_image::musicbrainz_album(group),
+            None => artist_image::musicbrainz_albums(&album.album, &album.album_artist).map(
+                |candidates| {
+                    let mbid = library
+                        .artist_mbid(Some(&album.album_artist))
+                        .ok()
+                        .flatten();
+                    same_album(
+                        candidates,
+                        &album.album_artist,
+                        &album.album,
+                        mbid.as_deref(),
+                    )
+                },
+            ),
+        };
+        match found {
+            Ok(found) => {
+                failed = 0;
+                let kind = found.as_ref().and_then(|c| {
+                    AlbumKind::from_release_types(
+                        std::iter::once(c.kind.as_str())
+                            .chain(c.secondary.iter().map(String::as_str)),
+                    )
+                });
+                library.set_album_online_kind(
+                    &album.album_artist,
+                    &album.album,
+                    found.as_ref().map(|c| c.release_group.as_str()),
+                    kind,
+                    SystemTime::now(),
+                )?;
+            }
+            Err(e) => {
+                log::debug!(
+                    "could not ask MusicBrainz of {} – {}: {e}",
+                    album.album_artist,
+                    album.album
+                );
+                failed += 1;
+                // Asked again at the next scan, when it may be reached.
+                if failed == 3 {
+                    log::info!(
+                        "MusicBrainz could not be reached; albums' kinds are asked again later"
+                    );
+                    break;
+                }
+            }
+        }
+        if told.elapsed() >= TELL_INTERVAL || done == total {
+            told = Instant::now();
+            progress(ScanEvent::Albums { done, total });
+        }
+    }
+    Ok(())
+}
+
+/// The release group among `candidates` that is the album `album` of `artist`: the first, as
+/// MusicBrainz ranks them, of that title, by the artist of the MusicBrainz id `mbid` when it is
+/// known, else by one of that name.
+fn same_album(
+    candidates: Vec<freya_protocol::AlbumCandidate>,
+    artist: &str,
+    album: &str,
+    mbid: Option<&str>,
+) -> Option<freya_protocol::AlbumCandidate> {
+    let words = |text: &str| -> String {
+        text.chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect()
+    };
+    let (artist, album) = (words(artist), words(album));
+    candidates.into_iter().find(|c| {
+        words(&c.title) == album
+            && match mbid {
+                Some(mbid) => c.artist.mbid == mbid,
+                None => words(&c.artist.name) == artist,
+            }
+    })
+}
+
 /// Asks the internet what each genre lacks: what Wikipedia says of it, else Last.fm. A genre
 /// it found nothing of is asked again after a while. Stops early when `cancel` is set.
 pub(super) fn fetch_genres(
@@ -515,5 +647,44 @@ fn keep(url: &str, pictures: &Pictures, name: &str) -> Option<String> {
             log::debug!("could not download a picture of {name}: {e}");
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use freya_protocol::{AlbumCandidate, ArtistMatch};
+
+    use super::same_album;
+
+    fn candidate(group: &str, title: &str, artist: &str, mbid: &str) -> AlbumCandidate {
+        AlbumCandidate {
+            release_group: group.into(),
+            title: title.into(),
+            kind: "Album".into(),
+            secondary: Vec::new(),
+            date: String::new(),
+            artist: ArtistMatch {
+                mbid: mbid.into(),
+                name: artist.into(),
+                ..ArtistMatch::default()
+            },
+        }
+    }
+
+    #[test]
+    fn the_same_album_is_of_that_title_by_that_artist() {
+        let candidates = || {
+            vec![
+                candidate("other-title", "Pale Folklore (Live)", "Agalloch", "ag"),
+                candidate("other-artist", "Pale Folklore", "Someone", "so"),
+                candidate("it", "Pale  folklore", "Agalloch", "ag"),
+                candidate("later", "Pale Folklore", "Agalloch", "ag"),
+            ]
+        };
+        let found = |mbid| same_album(candidates(), "agalloch", "Pale Folklore", mbid);
+        assert_eq!(found(None).unwrap().release_group, "it");
+        assert_eq!(found(Some("ag")).unwrap().release_group, "it");
+        assert_eq!(found(Some("so")).unwrap().release_group, "other-artist");
+        assert!(found(Some("nobody")).is_none());
     }
 }

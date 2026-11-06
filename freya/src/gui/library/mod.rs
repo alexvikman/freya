@@ -10,9 +10,9 @@ use std::time::{Duration, Instant, SystemTime};
 use freya_media::Entry;
 use freya_media::thumbnails::{ArtistSource, Thumbnail, Thumbnails};
 use freya_protocol::{
-    Album, AlbumKey, AlbumMatch, AlbumOrder, Artist, ArtistEdit, ArtistOrder, CHOSEN, Genre,
-    Header, LibraryApi, Part, PictureKind, PictureRow, Played, ScanEvent, Server, ServerSettings,
-    ServiceEvent, Track, plain_name, split_artist,
+    Album, AlbumKey, AlbumKind, AlbumMatch, AlbumOrder, Artist, ArtistEdit, ArtistOrder, CHOSEN,
+    Genre, Header, LibraryApi, Part, PictureKind, PictureRow, Played, ScanEvent, Server,
+    ServerSettings, ServiceEvent, Track, plain_name, split_artist,
 };
 #[cfg(test)]
 use freya_server::{Service, ServiceConfig};
@@ -131,6 +131,45 @@ impl LibraryPlace {
     /// Whether `next` is this search typed on: the same lists, searching still.
     pub fn continued_by(&self, next: &Self) -> bool {
         !self.query.trim().is_empty() && !next.query.trim().is_empty() && self.opened == next.opened
+    }
+}
+
+/// Which of an artist's albums show, by the kind of release they are.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AlbumFilter {
+    #[default]
+    All,
+    Albums,
+    /// Singles and EPs.
+    Singles,
+    Compilations,
+}
+
+impl AlbumFilter {
+    pub const ALL: [Self; 4] = [Self::All, Self::Albums, Self::Singles, Self::Compilations];
+
+    /// By its name in the skin API: "all", "albums", "singles" or "compilations".
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|f| f.name() == name)
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Albums => "albums",
+            Self::Singles => "singles",
+            Self::Compilations => "compilations",
+        }
+    }
+
+    /// Whether an album of `kind` shows.
+    pub fn admits(self, kind: AlbumKind) -> bool {
+        match self {
+            Self::All => true,
+            Self::Albums => kind == AlbumKind::Album,
+            Self::Singles => matches!(kind, AlbumKind::Single | AlbumKind::Ep),
+            Self::Compilations => kind == AlbumKind::Compilation,
+        }
     }
 }
 
@@ -347,6 +386,13 @@ pub struct LibraryPanel {
     /// with their tracks rather than a grid of covers.
     album_sort: AlbumSort,
     album_list: bool,
+    /// What kind of release each of the shown artist's albums is, by title, where it is
+    /// known; the filters their kinds offer, none with one kind alone; the one chosen, and
+    /// the artist it was chosen for.
+    album_kinds: HashMap<Option<String>, AlbumKind>,
+    album_filters: Vec<AlbumFilter>,
+    album_filter: AlbumFilter,
+    album_filter_of: Option<Option<String>>,
     /// A scan was started and its end not yet taken in.
     scanning: bool,
     /// How the server keeps the library, as the user set it: its folders, scans, and what may
@@ -358,6 +404,7 @@ pub struct LibraryPanel {
     covers_progress: Option<(usize, usize)>,
     artists_progress: Option<(usize, usize)>,
     genres_progress: Option<(usize, usize)>,
+    albums_progress: Option<(usize, usize)>,
     /// Whether the covers and pictures in the library changed since they were last read, and
     /// when they were.
     pictures_stale: bool,
@@ -422,6 +469,8 @@ pub struct LibraryPanel {
     popular_rows: ModelRows,
     /// The letters to jump to in the artists or albums shown, for `Library.letters`.
     letter_rows: ModelRows,
+    /// `Library.album-filters`.
+    album_filter_rows: ModelRows,
     /// The playlist shown, its tracks' rows for `Playlists.entries` and how they are ordered;
     /// the one being changed; and each playlist's picture, by its key.
     playlist_page: Option<PlaylistPage>,
@@ -535,8 +584,13 @@ impl LibraryPanel {
             covers_progress: None,
             artists_progress: None,
             genres_progress: None,
+            albums_progress: None,
             pictures_stale: true,
             album_sort: AlbumSort::ReleaseDate,
+            album_kinds: HashMap::new(),
+            album_filters: Vec::new(),
+            album_filter: AlbumFilter::All,
+            album_filter_of: None,
             album_list: false,
             playing: None,
             playing_row: -1,
@@ -578,6 +632,7 @@ impl LibraryPanel {
             album_rows: ModelRows::new(),
             popular_rows: ModelRows::new(),
             letter_rows: ModelRows::new(),
+            album_filter_rows: ModelRows::new(),
             playlist_page: None,
             playlist_rows: ModelRows::new(),
             playlist_sort: PlaylistSort::Custom,
@@ -757,6 +812,12 @@ impl LibraryPanel {
                     self.scan_folder = None;
                     self.pictures_stale = true;
                 }
+                ServiceEvent::Scan(ScanEvent::Albums { done, total }) => {
+                    self.albums_progress = Some((done, total));
+                    self.scan_folder = None;
+                    // The artist's page filters by them.
+                    self.stale = true;
+                }
                 ServiceEvent::Scan(ScanEvent::Genres { done, total }) => {
                     self.genres_progress = Some((done, total));
                     self.scan_folder = None;
@@ -803,6 +864,7 @@ impl LibraryPanel {
             self.covers_progress = None;
             self.artists_progress = None;
             self.genres_progress = None;
+            self.albums_progress = None;
         }
         if finished {
             self.prepare_all();

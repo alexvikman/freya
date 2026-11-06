@@ -44,6 +44,7 @@ impl CueTrack {
             year: tags.year.or(file.year),
             disc: tags.disc.or(file.disc),
             duration: self.part.duration(file.duration),
+            album_kind: tags.album_kind.or(file.album_kind),
             ..tags
         }
     }
@@ -337,6 +338,7 @@ impl Sheet {
             track: Some(track.number).filter(|&n| n > 0),
             disc: self.disc,
             duration: part.duration(None),
+            album_kind: None,
         }
     }
 }

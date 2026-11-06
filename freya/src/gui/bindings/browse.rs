@@ -37,6 +37,11 @@ pub(super) fn bind(b: &Binder) {
     );
     b.bind(
         "Library",
+        "set-album-filter",
+        Box::new(|app, args| app.library.set_album_filter(&text_arg(args, 0))),
+    );
+    b.bind(
+        "Library",
         "set-playlists-sort",
         Box::new(|app, args| {
             let sort = text_arg(args, 0);
@@ -224,6 +229,15 @@ pub(super) fn bind(b: &Binder) {
         Box::new(|app, args| {
             if let Some(Value::Bool(online)) = args.first() {
                 app.library.set_online_bios(*online);
+            }
+        }),
+    );
+    b.bind(
+        "Library",
+        "set-album-kinds-online",
+        Box::new(|app, args| {
+            if let Some(Value::Bool(online)) = args.first() {
+                app.library.set_online_album_kinds(*online);
             }
         }),
     );

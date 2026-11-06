@@ -965,3 +965,83 @@ fn sections_have_their_own_layouts() {
         "Recents is a page of its own"
     );
 }
+
+#[test]
+fn an_artists_albums_are_filtered_by_their_kind() {
+    let fixtures =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-audio/tests/fixtures");
+    let mut db = Library::open_in_memory().unwrap();
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    freya_library::library::scan(&mut db, &[fixtures], &cancel, |_| {}).unwrap();
+    // The artist with an album of a name, and another album.
+    let (artist, named) = db
+        .artists()
+        .unwrap()
+        .into_iter()
+        .find_map(|a| {
+            let albums = db.albums(a.name.as_deref()).ok()?;
+            let named = albums.iter().find_map(|album| album.name.clone())?;
+            (albums.len() > 1).then_some((a.name, named))
+        })
+        .expect("an artist with two albums");
+    let all = db.albums(artist.as_deref()).unwrap().len();
+    // MusicBrainz said one is a single: the others are albums.
+    db.set_album_online_kind(
+        artist.as_deref().unwrap(),
+        &named,
+        Some("rg"),
+        Some(AlbumKind::Single),
+        SystemTime::now(),
+    )
+    .unwrap();
+    let mut panel = LibraryPanel::new(None, None);
+    panel.open(local(db, None));
+    let albums = |panel: &LibraryPanel| -> Vec<Option<String>> {
+        panel
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Album(album) => Some(album.name.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let filters = |panel: &LibraryPanel| -> Vec<&str> {
+        panel.album_filters.iter().map(|f| f.name()).collect()
+    };
+    panel.opened = vec![
+        Level::Artists,
+        Level::ArtistAlbums {
+            artist: artist.clone(),
+        },
+    ];
+    panel.reload();
+    assert_eq!(albums(&panel).len(), all);
+    assert_eq!(filters(&panel), ["all", "albums", "singles"]);
+    panel.set_album_filter("singles");
+    assert_eq!(albums(&panel), [Some(named.clone())]);
+    panel.set_album_filter("albums");
+    assert_eq!(albums(&panel).len(), all - 1);
+    assert!(!albums(&panel).contains(&Some(named.clone())));
+    // A kind the artist has none of shows them all.
+    panel.set_album_filter("compilations");
+    assert_eq!(panel.album_filter, AlbumFilter::All);
+    assert_eq!(albums(&panel).len(), all);
+
+    // On another artist's page, all again.
+    panel.set_album_filter("singles");
+    panel.opened = vec![
+        Level::Artists,
+        Level::ArtistAlbums {
+            artist: Some("Someone else".into()),
+        },
+    ];
+    panel.reload();
+    assert!(
+        filters(&panel).is_empty(),
+        "no albums of more than one kind: no filters"
+    );
+    panel.opened = vec![Level::Artists, Level::ArtistAlbums { artist }];
+    panel.reload();
+    assert_eq!(panel.album_filter, AlbumFilter::All);
+}

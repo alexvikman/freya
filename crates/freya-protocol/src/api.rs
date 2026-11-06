@@ -36,6 +36,9 @@ macro_rules! with_library_data {
             fn albums(artist: Option<&str>) -> Vec<$crate::Album>;
             fn albums_by(order: $crate::AlbumOrder) -> Vec<$crate::Album>;
             fn all_albums() -> Vec<$crate::Album>;
+            /// What kind of release each album of `artist` is, by the album's title: as its
+            /// tags say, else MusicBrainz. Albums neither says anything of are left out.
+            fn album_kinds(artist: Option<&str>) -> Vec<(Option<String>, $crate::AlbumKind)>;
             /// The track of the file at `path` that starts at `start`.
             fn track_at(path: &::std::path::Path, start: ::std::time::Duration) -> Option<$crate::Track>;
             fn album_tracks(artist: Option<&str>, album: Option<&str>) -> Vec<$crate::Track>;
@@ -302,6 +305,7 @@ pub const LISTENER_CALLS: &[&str] = &[
     "albums",
     "albums_by",
     "all_albums",
+    "album_kinds",
     "track_at",
     "album_tracks",
     "artist_tracks",
@@ -361,6 +365,7 @@ pub const CACHED_CALLS: &[&str] = &[
     "albums",
     "albums_by",
     "all_albums",
+    "album_kinds",
     "track_at",
     "album_tracks",
     "artist_tracks",

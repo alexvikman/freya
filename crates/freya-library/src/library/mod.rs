@@ -10,6 +10,7 @@ mod edits;
 mod favorites;
 mod fetch;
 mod genres;
+mod kinds;
 mod matches;
 mod online;
 mod playlists;
@@ -35,6 +36,7 @@ pub use freya_protocol::{
     PlaylistPlayed, StationPlayed, Stats, Track,
 };
 pub use genres::{GenreArticle, GenreInfo};
+pub use kinds::{AlbumKind, Untyped};
 pub use matches::{AlbumMatch, plain_name, split_artist};
 pub use online::{ASK_AGAIN_AFTER, ArtistText, Asked, CHOSEN, FOLDER, PictureKind, PictureRow};
 pub use playlists::{PlaylistInfo, PlaylistTrack};
@@ -44,7 +46,7 @@ pub use scan::{ScanEvent, ScanOptions, ScanSummary, Scanner, scan, scan_with};
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Bumped whenever the tracks' tables change; they are then rebuilt.
-const SCHEMA_VERSION: i32 = 6;
+const SCHEMA_VERSION: i32 = 7;
 /// The most tracks [`Library::tracks_under`] gives, for a folder dropped on Freya.
 pub const MOST_TRACKS_UNDER: usize = 100_000;
 
@@ -82,6 +84,9 @@ const SCHEMA: &str = "
         album_artist TEXT,
         -- MusicBrainz's id of the album artist, from the tags.
         artist_mbid TEXT,
+        -- The kind of release the tags say the album is: 'album', 'single', 'ep' or
+        -- 'compilation'; NULL when they do not say.
+        album_kind TEXT,
         genre TEXT,
         year INTEGER,
         track INTEGER,
@@ -241,6 +246,15 @@ impl Library {
             version = 6;
             db.pragma_update(None, "user_version", version)?;
         }
+        if version == 6 {
+            log::info!("adding the kinds of the albums to the library");
+            db.execute_batch(
+                "ALTER TABLE tracks ADD COLUMN album_kind TEXT;
+                 UPDATE tracks SET modified = -1;",
+            )?;
+            version = 7;
+            db.pragma_update(None, "user_version", version)?;
+        }
         if version != SCHEMA_VERSION {
             if version != 0 {
                 log::info!("rebuilding the library (layout {version} → {SCHEMA_VERSION})");
@@ -267,6 +281,7 @@ impl Library {
         db.execute_batch(edits::SCHEMA)?;
         edits::migrate(&db)?;
         db.execute_batch(matches::SCHEMA)?;
+        db.execute_batch(kinds::SCHEMA)?;
         db.execute_batch(covers::SCHEMA)?;
         db.execute_batch(playlists::SCHEMA)?;
         db.execute_batch(genres::SCHEMA)?;
@@ -898,9 +913,9 @@ fn put(
         .prepare_cached(
             "INSERT INTO tracks (path, start_ms, end_ms, source, size, modified, title, artist,
                                  album, album_artist, artist_mbid, genre, year, track, disc,
-                                 duration_ms, added, fingerprint)
+                                 duration_ms, added, fingerprint, album_kind)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-                     ?18)
+                     ?18, ?19)
              RETURNING id",
         )?
         .query_row(
@@ -923,6 +938,7 @@ fn put(
                 tags.duration.map(millis),
                 added,
                 track.fingerprint,
+                tags.album_kind.map(AlbumKind::name),
             ],
             |row| row.get(0),
         )?;

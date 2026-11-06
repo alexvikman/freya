@@ -9,6 +9,11 @@ impl LibraryPanel {
         let _ = ui.set_global_property("Library", "rows", self.rows.model_value());
         let _ = ui.set_global_property("Library", "popular", self.popular_rows.model_value());
         let _ = ui.set_global_property("Library", "letters", self.letter_rows.model_value());
+        let _ = ui.set_global_property(
+            "Library",
+            "album-filters",
+            self.album_filter_rows.model_value(),
+        );
         let _ = ui.set_global_property("Playlists", "entries", self.playlist_rows.model_value());
         let _ = ui.set_global_property(
             "Library",

@@ -480,6 +480,13 @@ impl LibraryPanel {
         self.tell_settings();
     }
 
+    /// Whether a scan may ask MusicBrainz what kind of release albums are: allowed, it is
+    /// asked now for those whose tags do not say.
+    pub fn set_online_album_kinds(&mut self, online: bool) {
+        self.settings.album_kinds_online = online;
+        self.tell_settings();
+    }
+
     /// Whether the server's radio directory has Radio Browser's stations.
     pub fn set_radio_directory_online(&mut self, online: bool) {
         self.settings.radio_directory_online = online;

@@ -201,6 +201,9 @@ pub struct AlbumCandidate {
     pub title: String,
     /// "Album", "EP", "Single".
     pub kind: String,
+    /// "Compilation", "Live", "Soundtrack"…
+    #[serde(default)]
+    pub secondary: Vec<String>,
     /// When it first came out: "2010-01-18".
     pub date: String,
     pub artist: ArtistMatch,

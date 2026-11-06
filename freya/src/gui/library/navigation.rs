@@ -256,6 +256,17 @@ impl LibraryPanel {
         }
     }
 
+    /// Shows those of an artist's albums `name` admits: "all", "albums", "singles" (and EPs)
+    /// or "compilations".
+    pub fn set_album_filter(&mut self, name: &str) {
+        if let Some(filter) = AlbumFilter::from_name(name)
+            && self.album_filter != filter
+        {
+            self.album_filter = filter;
+            self.reload_albums();
+        }
+    }
+
     /// Shows an artist's albums as a list, each with its tracks, or as a grid of covers.
     pub fn set_album_list(&mut self, list: bool) {
         if self.album_list != list {

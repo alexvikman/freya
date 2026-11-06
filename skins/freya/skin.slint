@@ -2018,6 +2018,33 @@ component PopularRow inherits Rectangle {
     }
 }
 
+/// One of the kinds of match a search shows, as a chip above them.
+component FilterChip inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    callback clicked;
+
+    height: 32px;
+    width: label.preferred-width + 28px;
+    border-radius: 16px;
+    background: root.selected ? Theme.text : touch.has-hover ? Theme.pressed : Theme.hover;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-checked: root.selected;
+    accessible-action-default => { root.clicked(); }
+
+    label := Text {
+        text: root.text;
+        font-size: 13px;
+        font-weight: 600;
+        color: root.selected ? Theme.background : Theme.text;
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
 /// The top of an artist's page: their picture across the page with their name large on it,
 /// play, shuffle and add, what Last.fm says of them, their most played tracks, and the heading
 /// of their albums. As tall as `head-height` says.
@@ -2376,6 +2403,23 @@ component ArtistPageHead inherits Rectangle {
                     mouse-cursor: pointer;
                     clicked => { root.options(); }
                 }
+            }
+        }
+        // Which of their albums show, when they have more than one kind.
+        if Library.album-filters.length > 0: HorizontalLayout {
+            height: 44px;
+            padding-left: root.pad;
+            padding-right: root.pad;
+            padding-bottom: 12px;
+            spacing: 8px;
+            alignment: start;
+
+            for filter in Library.album-filters: FilterChip {
+                text: filter == "albums" ? "Albums"
+                    : filter == "singles" ? "Singles and EPs"
+                    : filter == "compilations" ? "Compilations" : "All";
+                selected: Library.album-filter == filter;
+                clicked => { Library.set-album-filter(filter); }
             }
         }
     }
@@ -2984,33 +3028,6 @@ global Matches {
     }
 }
 
-/// One of the kinds of match a search shows, as a chip above them.
-component FilterChip inherits Rectangle {
-    in property <string> text;
-    in property <bool> selected;
-    callback clicked;
-
-    height: 32px;
-    width: label.preferred-width + 28px;
-    border-radius: 16px;
-    background: root.selected ? Theme.text : touch.has-hover ? Theme.pressed : Theme.hover;
-    accessible-role: button;
-    accessible-label: root.text;
-    accessible-checked: root.selected;
-    accessible-action-default => { root.clicked(); }
-
-    label := Text {
-        text: root.text;
-        font-size: 13px;
-        font-weight: 600;
-        color: root.selected ? Theme.background : Theme.text;
-    }
-    touch := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
-    }
-}
-
 /// A match under the search field: its picture, name and what it is.
 component SuggestionRow inherits Rectangle {
     in property <LibraryRow> entry;
@@ -3476,7 +3493,8 @@ component LibraryPanel inherits FocusScope {
     property <length> artist-head-height: 340px + 88px
         + (Library.artist-page.summary != "" ? 150px : 0)
         + (Library.popular.length > 0 ? 48px + Library.popular.length * 56px + (Library.artist-page.popular-count > 5 ? 40px : 0) : 0)
-        + 56px;
+        + 56px
+        + (Library.album-filters.length > 0 ? 44px : 0);
     /// Over the artists, and an artist's albums: how they are ordered and shown. The artist's
     /// page has these in its albums' heading.
     property <bool> options-shown: ((Library.album-options || Library.artist-options || Library.albums-options || Library.playlists-options) && !artist-page-shown) || Library.search-shown;
@@ -9469,6 +9487,20 @@ component SettingsView inherits Rectangle {
                         TextButton {
                             text: "Rescan";
                             clicked => { Library.rescan-files(); }
+                        }
+                    }
+                }
+                SettingsRow {
+                    label: "Album, single, EP or compilation from MusicBrainz";
+                    detail: "For albums whose tags do not say what kind of release they are, to filter an artist's albums by. MusicBrainz is told the albums' artists and titles.";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        Toggle {
+                            label: "Album, single, EP or compilation from MusicBrainz";
+                            checked: Library.album-kinds-online;
+                            toggled => { Library.set-album-kinds-online(!Library.album-kinds-online); }
                         }
                     }
                 }

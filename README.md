@@ -30,7 +30,7 @@ To give someone else in your home their own account, an admin invites them under
 
 ## What it does
 
-**Library.** Browse by artist, album, genre or playlist, or search as you type: every word you type matches the start of a word in the artist, album, title or genre, and accents don't matter. Click an artist or album to open it, double-click a track to play it, or use **+** to add it to Up Next. Artists get a picture, a biography and their most played tracks. Freya keeps the library in step with your folders: it notices new and changed files, and you can set how often it reads them all again.
+**Library.** Browse by artist, album, genre or playlist, or search as you type: every word you type matches the start of a word in the artist, album, title or genre, and accents don't matter. Click an artist or album to open it, double-click a track to play it, or use **+** to add it to Up Next. Artists get a picture, a biography and their most played tracks, and their albums can be narrowed to albums, singles and EPs, or compilations. Freya keeps the library in step with your folders: it notices new and changed files, and you can set how often it reads them all again.
 
 **Up Next.** What plays next. Drop files, folders or playlist files (M3U, M3U8, PLS) on the window to add what of them is in your library. Click, Shift-click and Ctrl/Cmd-click to select, drag to reorder, Delete to remove. Keep Up Next as a playlist from the File menu.
 
@@ -40,7 +40,7 @@ To give someone else in your home their own account, an admin invites them under
 
 **Equalizer and visualizer.** Ten bands from 60 Hz to 16 kHz and a preamp: drag across several bands in one sweep, double-click one to reset it, pick a preset or load Winamp `.eqf` preset files. The visualizer shows a spectrum, an oscilloscope or a hologram; press `F` to fill the screen with it, for a TV, with what plays in large letters below.
 
-**Artist information.** Freya can fetch biographies from Wikipedia and Last.fm and pictures from Deezer and fanart.tv, for the artists that lack them. Each source is a switch in Settings › Library, and each says what it is told.
+**Artist information.** Freya can fetch biographies from Wikipedia and Last.fm and pictures from Deezer and fanart.tv, for the artists that lack them, and ask MusicBrainz whether an album is an album, a single, an EP or a compilation when its tags do not say. Each source is a switch in Settings › Library, and each says what it is told.
 
 **Last.fm.** Scrobble what you play to your Last.fm profile (Settings › Account).
 

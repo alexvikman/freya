@@ -68,6 +68,7 @@ impl ServiceConfig {
             fanart_key: settings.fanart_key.clone(),
             lastfm: self.lastfm.clone().filter(|_| settings.artist_bios_online),
             wikipedia: settings.artist_wikipedia_online,
+            album_kinds: settings.album_kinds_online,
         }
     }
 
@@ -982,6 +983,7 @@ impl State {
         let allowed = (now.artist_pictures_online && !before.artist_pictures_online)
             || (now.artist_bios_online && !before.artist_bios_online)
             || (now.artist_wikipedia_online && !before.artist_wikipedia_online)
+            || (now.album_kinds_online && !before.album_kinds_online)
             || (now.fanart_key.is_some() && now.fanart_key != before.fanart_key);
         self.start_watching();
         if allowed {

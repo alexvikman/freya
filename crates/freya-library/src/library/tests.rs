@@ -584,6 +584,7 @@ fn adds_artist_ids_to_a_library_and_reads_every_file_again() {
             "DROP INDEX tracks_by_fingerprint;
              ALTER TABLE tracks DROP COLUMN fingerprint;
              ALTER TABLE tracks DROP COLUMN artist_mbid;
+             ALTER TABLE tracks DROP COLUMN album_kind;
              PRAGMA user_version = 3;",
         )
         .unwrap();
@@ -1439,4 +1440,75 @@ fn what_users_made_moves_to_a_library_elsewhere() {
         })
         .unwrap();
     assert_eq!((again.plays, again.favorites), (0, 0));
+}
+
+#[test]
+fn an_albums_kind_is_what_most_of_its_tags_say_else_what_musicbrainz_said() {
+    let mut library = Library::open_in_memory().unwrap();
+    let kind = |kind: Option<AlbumKind>, album: &str, title: &str| TagInfo {
+        album_kind: kind,
+        ..tags("A", album, title, 1)
+    };
+    // Two tracks say single, one album: a single.
+    add(
+        &mut library,
+        "/m/1.mp3",
+        &kind(Some(AlbumKind::Single), "One", "a"),
+    );
+    add(
+        &mut library,
+        "/m/2.mp3",
+        &kind(Some(AlbumKind::Single), "One", "b"),
+    );
+    add(
+        &mut library,
+        "/m/3.mp3",
+        &kind(Some(AlbumKind::Album), "One", "c"),
+    );
+    // Untagged, and one MusicBrainz is asked of.
+    add(&mut library, "/m/4.mp3", &kind(None, "Two", "d"));
+    add(&mut library, "/m/5.mp3", &kind(None, "Three", "e"));
+    // Matched by the user to a release group.
+    add(&mut library, "/m/6.mp3", &kind(None, "Four", "f"));
+    library
+        .match_album(&AlbumMatch {
+            album_artist: "A".into(),
+            album: "Four".into(),
+            release_group: Some("rg-four".into()),
+            artist_mbid: "a-id".into(),
+            artist_key: None,
+        })
+        .unwrap();
+
+    let untyped = library.untyped_albums().unwrap();
+    let names: Vec<(&str, Option<&str>)> = untyped
+        .iter()
+        .map(|u| (u.album.as_str(), u.matched.as_deref()))
+        .collect();
+    assert_eq!(
+        names,
+        [("Four", Some("rg-four")), ("Three", None), ("Two", None)]
+    );
+
+    library
+        .set_album_online_kind("A", "Two", Some("rg-two"), Some(AlbumKind::Ep), at(10))
+        .unwrap();
+    library
+        .set_album_online_kind("A", "Three", None, None, at(10))
+        .unwrap();
+    let (group, asked) = library.album_online_kind("A", "Three").unwrap().unwrap();
+    assert_eq!((group, asked.answer), (None, None));
+    assert!(!asked.recent(), "asked long ago: asked again");
+
+    let mut kinds = library.album_kinds(Some("A")).unwrap();
+    kinds.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(
+        kinds,
+        [
+            (Some("One".to_owned()), AlbumKind::Single),
+            (Some("Two".to_owned()), AlbumKind::Ep),
+        ],
+        "an album nothing says anything of is left out"
+    );
+    assert!(library.album_kinds(Some("Z")).unwrap().is_empty());
 }

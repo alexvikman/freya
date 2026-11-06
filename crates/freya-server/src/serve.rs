@@ -951,6 +951,7 @@ fn for_listeners(event: &ServiceEvent) -> bool {
                 | ScanEvent::Covers { .. }
                 | ScanEvent::Artists { .. }
                 | ScanEvent::Genres { .. }
+                | ScanEvent::Albums { .. }
                 | ScanEvent::Finished(_)
         ),
         ServiceEvent::Lost

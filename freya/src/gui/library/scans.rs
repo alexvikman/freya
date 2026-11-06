@@ -75,6 +75,13 @@ impl LibraryPanel {
         if !self.scanning {
             return None;
         }
+        if let Some((done, total)) = self.albums_progress {
+            return Some(format!(
+                "Asking MusicBrainz what kind of release albums are: {} of {}",
+                thousands(done),
+                thousands(total)
+            ));
+        }
         if let Some((done, total)) = self.genres_progress {
             return Some(format!(
                 "Asking the internet about genres: {} of {}",

@@ -36,6 +36,59 @@ impl LibraryPanel {
 
     // ----- What the skin shows -----------------------------------------------------------------
 
+    /// Reads what kind of release each of the shown artist's albums is, and the filters their
+    /// kinds offer: All, and each kind they have, when they have more than one. The filter
+    /// chosen goes back to All on another artist's page, and when it offers nothing now.
+    pub(super) fn load_album_kinds(&mut self) {
+        let artist = match self.level() {
+            Level::ArtistAlbums { artist } if !self.searching() => Some(artist.clone()),
+            _ => None,
+        };
+        let (Some(artist), Some(db)) = (artist, self.db.clone()) else {
+            self.album_kinds.clear();
+            self.album_filters.clear();
+            self.album_filter_rows.sync(Vec::new());
+            return;
+        };
+        if self.album_filter_of.as_ref() != Some(&artist) {
+            self.album_filter = AlbumFilter::All;
+            self.album_filter_of = Some(artist.clone());
+        }
+        self.album_kinds = db
+            .album_kinds(artist.as_deref())
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        let albums = db.albums(artist.as_deref()).unwrap_or_default();
+        let offered: Vec<AlbumFilter> = AlbumFilter::ALL[1..]
+            .iter()
+            .copied()
+            .filter(|filter| albums.iter().any(|a| filter.admits(self.album_kind(a))))
+            .collect();
+        self.album_filters = if offered.len() > 1 {
+            std::iter::once(AlbumFilter::All).chain(offered).collect()
+        } else {
+            Vec::new()
+        };
+        if !self.album_filters.contains(&self.album_filter) {
+            self.album_filter = AlbumFilter::All;
+        }
+        let rows = self
+            .album_filters
+            .iter()
+            .map(|f| string(f.name()))
+            .collect();
+        self.album_filter_rows.sync(rows);
+    }
+
+    /// What kind of release `album` of the shown artist is: an album, unless known otherwise.
+    pub(super) fn album_kind(&self, album: &Album) -> AlbumKind {
+        self.album_kinds
+            .get(&album.name)
+            .copied()
+            .unwrap_or_default()
+    }
+
     /// Reads the rows for the current level or search from the database.
     /// Asks a server reached over the network for what `ask` asks of it, on a thread of its
     /// own: told when it was. None for a library asked here and now.
@@ -152,6 +205,7 @@ impl LibraryPanel {
             });
         self.artist_favorites = db.artist_favorites().unwrap_or_default();
         self.playlist_favorites = db.playlist_favorites().unwrap_or_default();
+        self.load_album_kinds();
         let result = if self.searching() {
             Ok(self.search_items())
         } else {
@@ -345,6 +399,7 @@ impl LibraryPanel {
                 let artist = artist.as_deref();
                 calls.extend([
                     ahead("albums", &(artist,)),
+                    ahead("album_kinds", &(artist,)),
                     ahead("artist_summary", &(artist, 3usize)),
                     ahead("artist_popular", &(artist, POPULAR_MORE)),
                     ahead("artist_mbid", &(artist,)),
@@ -393,6 +448,7 @@ impl LibraryPanel {
             Level::Playlists => self.playlist_items(),
             Level::ArtistAlbums { artist } => {
                 let mut list = db.albums(artist.as_deref())?;
+                list.retain(|album| self.album_filter.admits(self.album_kind(album)));
                 self.album_sort.sort(&mut list);
                 if !self.album_list {
                     return Ok(albums(list));

@@ -1167,6 +1167,7 @@ skin_api! {
         Library."popular" => set_popular, get_popular;
         Library."artist-bios-online" => set_artist_bios_online, get_artist_bios_online;
         Library."artist-wikipedia-online" => set_artist_wikipedia_online, get_artist_wikipedia_online;
+        Library."album-kinds-online" => set_album_kinds_online, get_album_kinds_online;
         Library."radio-directory-online" => set_radio_directory_online, get_radio_directory_online;
         Library."fanart-key" => set_fanart_key, get_fanart_key;
         Library."artist-draft" => set_artist_draft, get_artist_draft;
@@ -1188,6 +1189,8 @@ skin_api! {
         Library."artist-pictures-online" => set_artist_pictures_online, get_artist_pictures_online;
         Library."album-sort" => set_album_sort, get_album_sort;
         Library."album-view" => set_album_view, get_album_view;
+        Library."album-filter" => set_album_filter, get_album_filter;
+        Library."album-filters" => set_album_filters, get_album_filters;
         Library."scanning" => set_scanning, get_scanning;
         Library."letters" => set_letters, get_letters;
         Library."albums-options" => set_albums_options, get_albums_options;
@@ -1398,11 +1401,13 @@ skin_api! {
         Radio."save-found" => on_save_found, invoke_save_found(row: i32);
         Library."back" => on_back, invoke_back();
         Library."set-album-sort" => on_set_album_sort, invoke_set_album_sort(sort: SharedString);
+        Library."set-album-filter" => on_set_album_filter, invoke_set_album_filter(filter: SharedString);
         Library."shuffle-all" => on_shuffle_all, invoke_shuffle_all();
         Library."play-popular" => on_play_popular, invoke_play_popular(index: i32);
         Library."more-popular" => on_more_popular, invoke_more_popular();
         Library."set-artist-bios-online" => on_set_artist_bios_online, invoke_set_artist_bios_online(online: bool);
         Library."set-artist-wikipedia-online" => on_set_artist_wikipedia_online, invoke_set_artist_wikipedia_online(online: bool);
+        Library."set-album-kinds-online" => on_set_album_kinds_online, invoke_set_album_kinds_online(online: bool);
         Library."set-radio-directory-online" => on_set_radio_directory_online, invoke_set_radio_directory_online(online: bool);
         Library."set-fanart-key" => on_set_fanart_key, invoke_set_fanart_key(key: SharedString);
         Library."edit-artist" => on_edit_artist, invoke_edit_artist();

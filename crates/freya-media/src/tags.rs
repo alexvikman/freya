@@ -39,7 +39,24 @@ pub fn read_tags(path: &Path) -> Option<TagInfo> {
         track: tag.and_then(|t| t.track()),
         disc: tag.and_then(|t| t.disk()),
         duration,
+        album_kind: tag.and_then(album_kind),
     })
+}
+
+/// The kind of release the tags say the album is: MusicBrainz's release type as Picard writes
+/// it (`RELEASETYPE`, "MusicBrainz Album Type"), else a compilation when the compilation flag
+/// is set (`TCMP`, `cpil`, `COMPILATION`).
+fn album_kind(tag: &lofty::tag::Tag) -> Option<freya_protocol::AlbumKind> {
+    let flagged = tag
+        .get_string(ItemKey::FlagCompilation)
+        .is_some_and(|flag| matches!(flag.trim(), "1" | "true" | "True" | "TRUE"));
+    let typed = freya_protocol::AlbumKind::from_release_types(
+        tag.get_strings(ItemKey::MusicBrainzReleaseType),
+    );
+    match typed {
+        Some(kind) => Some(kind),
+        None => flagged.then_some(freya_protocol::AlbumKind::Compilation),
+    }
 }
 
 /// The first MusicBrainz id in a tag's text: one with several artists holds an id for each.
@@ -119,6 +136,37 @@ mod tests {
             let secs = tags.duration.unwrap().as_secs_f64();
             assert!((secs - 1.0).abs() < 0.1, "{name}: {secs}");
         }
+    }
+
+    #[test]
+    fn reads_what_kind_of_release_the_album_is() {
+        use lofty::config::WriteOptions;
+        use lofty::tag::TagExt;
+
+        let dir = std::env::temp_dir().join(format!("freya-kind-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let tagged = |name: &str, items: &[(ItemKey, &str)]| {
+            let path = dir.join(name);
+            std::fs::copy(fixture(name), &path).unwrap();
+            let mut file = lofty::read_from_path(&path).unwrap();
+            let tag = file.primary_tag_mut().unwrap();
+            for (key, value) in items {
+                tag.insert_text(*key, (*value).to_owned());
+            }
+            tag.save_to_path(&path, WriteOptions::default()).unwrap();
+            read_tags(&path).unwrap().album_kind
+        };
+        use freya_protocol::AlbumKind;
+        assert_eq!(
+            tagged("sine.flac", &[(ItemKey::MusicBrainzReleaseType, "single")]),
+            Some(AlbumKind::Single)
+        );
+        assert_eq!(
+            tagged("sine.mp3", &[(ItemKey::FlagCompilation, "1")]),
+            Some(AlbumKind::Compilation)
+        );
+        assert_eq!(read_tags(&fixture("sine.mp3")).unwrap().album_kind, None);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

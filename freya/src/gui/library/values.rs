@@ -132,6 +132,10 @@ impl LibraryPanel {
                 Value::Bool(self.settings.artist_wikipedia_online),
             ),
             (
+                "album-kinds-online",
+                Value::Bool(self.settings.album_kinds_online),
+            ),
+            (
                 "radio-directory-online",
                 Value::Bool(self.settings.radio_directory_online),
             ),
@@ -172,6 +176,7 @@ impl LibraryPanel {
             ),
             ("scan-at-start", Value::Bool(self.settings.scan_at_start)),
             ("album-sort", string(self.album_sort.name())),
+            ("album-filter", string(self.album_filter.name())),
             (
                 "album-view",
                 string(if self.album_list { "list" } else { "grid" }),

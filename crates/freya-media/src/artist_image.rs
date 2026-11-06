@@ -247,36 +247,63 @@ pub fn musicbrainz_albums(title: &str, artist: &str) -> Result<Vec<AlbumCandidat
     )?))
 }
 
+/// The release group `group` in MusicBrainz, with its types; none when it has no such group.
+/// Callers wait [`MUSICBRAINZ_INTERVAL`] between calls.
+pub fn musicbrainz_album(group: &str) -> Result<Option<AlbumCandidate>, String> {
+    // An id, never anything to be read as part of the address.
+    if group.len() != 36 || !group.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+        return Ok(None);
+    }
+    let answer = get_json(
+        &format!("{MUSICBRAINZ_ALBUMS}{group}"),
+        &[("fmt", "json"), ("inc", "artist-credits")],
+    );
+    match answer {
+        Ok(answer) => Ok(album_candidate(&answer)),
+        Err(e) if e.contains("404") => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 fn album_candidates(answer: &serde_json::Value) -> Vec<AlbumCandidate> {
+    answer
+        .get("release-groups")
+        .and_then(|g| g.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(album_candidate)
+        .collect()
+}
+
+fn album_candidate(group: &serde_json::Value) -> Option<AlbumCandidate> {
     let text = |value: Option<&serde_json::Value>| {
         value
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
             .to_owned()
     };
-    answer
-        .get("release-groups")
-        .and_then(|g| g.as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(|group| {
-            // The first credited artist: the one the album is filed under.
-            let credit = group.get("artist-credit")?.as_array()?.first()?;
-            let artist = credit.get("artist")?;
-            Some(AlbumCandidate {
-                release_group: group.get("id")?.as_str()?.to_owned(),
-                title: text(group.get("title")),
-                kind: text(group.get("primary-type")),
-                date: text(group.get("first-release-date")),
-                artist: ArtistMatch {
-                    mbid: artist.get("id")?.as_str()?.to_owned(),
-                    name: text(artist.get("name")),
-                    disambiguation: text(artist.get("disambiguation")),
-                    ..ArtistMatch::default()
-                },
-            })
-        })
-        .collect()
+    // The first credited artist: the one the album is filed under.
+    let credit = group.get("artist-credit")?.as_array()?.first()?;
+    let artist = credit.get("artist")?;
+    Some(AlbumCandidate {
+        release_group: group.get("id")?.as_str()?.to_owned(),
+        title: text(group.get("title")),
+        kind: text(group.get("primary-type")),
+        secondary: group
+            .get("secondary-types")
+            .and_then(|t| t.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|t| t.as_str().map(str::to_owned))
+            .collect(),
+        date: text(group.get("first-release-date")),
+        artist: ArtistMatch {
+            mbid: artist.get("id")?.as_str()?.to_owned(),
+            name: text(artist.get("name")),
+            disambiguation: text(artist.get("disambiguation")),
+            ..ArtistMatch::default()
+        },
+    })
 }
 
 /// The JSON answer at `address` with the `query` given, asked again while the service is busy.

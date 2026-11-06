@@ -351,6 +351,10 @@ export global Library {
     /// Whether a scan asks Wikipedia for the opening of artists' articles, found by their
     /// MusicBrainz id, which their pages show before what Last.fm says. Kept between runs.
     in property <bool> artist-wikipedia-online: true;
+    /// Whether a scan asks MusicBrainz what kind of release albums are (album, single, EP or
+    /// compilation) whose tags do not say, telling it their artist and title. Kept between
+    /// runs.
+    in property <bool> album-kinds-online: true;
     /// Whether the server's radio directory has Radio Browser's stations, which it fetches about
     /// once a week and tells which are played; only the stations Freya picked otherwise.
     in property <bool> radio-directory-online: true;
@@ -386,6 +390,13 @@ export global Library {
     /// How an artist's albums are shown: "grid" (covers) or "list" (layout "discography").
     /// Kept between runs.
     in property <string> album-view: "grid";
+    /// Which of an artist's albums show: "all", "albums", "singles" (singles and EPs) or
+    /// "compilations"; set with `set-album-filter`. All again on another artist's page.
+    in property <string> album-filter: "all";
+    /// The filters an artist's albums offer: "all" and each of the others they have albums
+    /// of; empty when they have one kind alone.
+    in property <[string]> album-filters;
+    callback set-album-filter(string);
     /// Heading for the rows: "Artists", "Albums", "Songs", "Genres", "Recently Added",
     /// "Recently Played", "Most Played", an artist, a genre, an album, or "Search".
     in property <string> title;
@@ -495,6 +506,7 @@ export global Library {
     callback more-popular();
     callback set-artist-bios-online(bool);
     callback set-artist-wikipedia-online(bool);
+    callback set-album-kinds-online(bool);
     callback set-radio-directory-online(bool);
     callback set-fanart-key(string);
     /// Start changing the artist whose page is shown: Freya sets `artist-draft` to what was

@@ -22,6 +22,62 @@ impl Part {
     }
 }
 
+/// What kind of release an album is, as its tags or MusicBrainz say; an album when neither
+/// says.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum AlbumKind {
+    #[default]
+    Album,
+    Single,
+    Ep,
+    Compilation,
+}
+
+impl AlbumKind {
+    /// The kind MusicBrainz's release types name, as tags and its answers give them: a
+    /// primary type ("album", "single", "ep", "broadcast", "other") and secondary ones
+    /// ("compilation", "live", "soundtrack"…), in any case, each a word of its own. A
+    /// compilation is one whatever its primary type; live albums, soundtracks and the rest
+    /// are albums. None when no word is a release type.
+    pub fn from_release_types<'a>(types: impl IntoIterator<Item = &'a str>) -> Option<Self> {
+        let words: Vec<String> = types
+            .into_iter()
+            .flat_map(|t| t.split(|c: char| !c.is_alphanumeric() && c != '-'))
+            .map(str::to_lowercase)
+            .filter(|w| !w.is_empty())
+            .collect();
+        let has = |word: &str| words.iter().any(|w| w == word);
+        if has("compilation") {
+            Some(Self::Compilation)
+        } else if has("ep") {
+            Some(Self::Ep)
+        } else if has("single") {
+            Some(Self::Single)
+        } else if ["album", "broadcast", "other"].iter().any(|w| has(w)) {
+            Some(Self::Album)
+        } else {
+            None
+        }
+    }
+
+    /// Its name, as the library keeps it and skins are given it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Album => "album",
+            Self::Single => "single",
+            Self::Ep => "ep",
+            Self::Compilation => "compilation",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        [Self::Album, Self::Single, Self::Ep, Self::Compilation]
+            .into_iter()
+            .find(|kind| kind.name() == name)
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct TagInfo {
     pub title: Option<String>,
@@ -36,6 +92,10 @@ pub struct TagInfo {
     pub track: Option<u32>,
     pub disc: Option<u32>,
     pub duration: Option<Duration>,
+    /// The kind of release its album is, as the tags say: MusicBrainz's release type, or the
+    /// compilation flag.
+    #[serde(default)]
+    pub album_kind: Option<AlbumKind>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -73,6 +133,7 @@ impl Track {
             track: self.track,
             disc: self.disc,
             duration: self.duration,
+            album_kind: None,
         }
     }
 }
@@ -275,4 +336,36 @@ pub struct SavedPlaylist {
     /// When it was made, as its file says.
     pub created: Option<SystemTime>,
     pub entries: Vec<PlaylistEntry>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_release_type_makes_a_kind() {
+        let kind = |types: &[&str]| AlbumKind::from_release_types(types.iter().copied());
+        assert_eq!(kind(&["album"]), Some(AlbumKind::Album));
+        assert_eq!(kind(&["Single"]), Some(AlbumKind::Single));
+        assert_eq!(kind(&["EP"]), Some(AlbumKind::Ep));
+        // As Picard writes several in one tag, or as several values.
+        assert_eq!(kind(&["album; compilation"]), Some(AlbumKind::Compilation));
+        assert_eq!(kind(&["album/live"]), Some(AlbumKind::Album));
+        assert_eq!(
+            kind(&["Album", "Compilation"]),
+            Some(AlbumKind::Compilation)
+        );
+        assert_eq!(kind(&["Album", "Soundtrack"]), Some(AlbumKind::Album));
+        assert_eq!(kind(&["Broadcast"]), Some(AlbumKind::Album));
+        assert_eq!(kind(&["", "nonsense"]), None);
+        assert_eq!(kind(&[]), None);
+        for kind in [
+            AlbumKind::Album,
+            AlbumKind::Single,
+            AlbumKind::Ep,
+            AlbumKind::Compilation,
+        ] {
+            assert_eq!(AlbumKind::from_name(kind.name()), Some(kind));
+        }
+    }
 }
