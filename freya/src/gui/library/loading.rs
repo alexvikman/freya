@@ -269,6 +269,18 @@ impl LibraryPanel {
             self.reveal_row = if album { self.playing_row } else { -1 };
             self.reveals += 1;
         }
+        if let Some((path, start)) = self.reveal_track.take() {
+            self.reveal_row = self
+                .items
+                .iter()
+                .position(|item| {
+                    item.track().is_some_and(|t| {
+                        t.path == path && t.part.map_or(Duration::ZERO, |p| p.start) == start
+                    })
+                })
+                .map_or(-1, |row| row as i32);
+            self.reveals += 1;
+        }
         log::debug!("library rows loaded in {:?}", started.elapsed());
     }
 
@@ -336,12 +348,11 @@ impl LibraryPanel {
         match self.level() {
             Level::Artists => calls.push(ahead("artists_by", &(self.artist_order,))),
             Level::Albums => calls.push(ahead("albums_by", &(self.albums_order,))),
-            Level::Songs => calls.push(ahead("all_tracks", &())),
             Level::Genres => calls.push(ahead("genres", &())),
             Level::Playlists => {}
             Level::RecentlyAdded => calls.push(ahead("recently_added", &(RECENT,))),
             Level::RecentlyPlayed => calls.push(ahead("recently_played", &(RECENT,))),
-            Level::MostPlayed => calls.push(ahead("most_played", &(RECENT,))),
+            Level::MostPlayed => calls.push(ahead("most_played_albums", &(RECENT,))),
             Level::ArtistAlbums { artist } => {
                 let artist = artist.as_deref();
                 calls.extend([
@@ -390,7 +401,6 @@ impl LibraryPanel {
                 .map(Item::Artist)
                 .collect(),
             Level::Albums => albums(db.albums_by(self.albums_order)?),
-            Level::Songs => tracks(db.all_tracks()?),
             Level::Genres => db.genres()?.into_iter().map(Item::Genre).collect(),
             Level::Playlists => self.playlist_items(),
             Level::RecentlyAdded => albums(db.recently_added(RECENT)?),
@@ -399,11 +409,12 @@ impl LibraryPanel {
                 .into_iter()
                 .map(Item::Played)
                 .collect(),
-            Level::MostPlayed => db
-                .most_played(RECENT)?
-                .into_iter()
-                .map(Item::Played)
-                .collect(),
+            Level::MostPlayed => albums(
+                db.most_played_albums(RECENT)?
+                    .into_iter()
+                    .map(|played| played.album)
+                    .collect(),
+            ),
             Level::ArtistAlbums { artist } => {
                 let mut list = db.albums(artist.as_deref())?;
                 self.album_sort.sort(&mut list);
@@ -440,10 +451,6 @@ impl LibraryPanel {
         if self.searching() {
             let subtitle = match self.search_filter {
                 SearchFilter::All => String::new(),
-                SearchFilter::Songs if n >= SEARCH_LIMIT => {
-                    format!("The first {} matching tracks", thousands(n))
-                }
-                SearchFilter::Songs => count(n, "matching track"),
                 _ => count(n, "match"),
             };
             return ("Search".to_owned(), subtitle);
@@ -470,12 +477,11 @@ impl LibraryPanel {
         match self.level() {
             Level::Artists => ("Artists".to_owned(), count(n, "artist")),
             Level::Albums => ("Albums".to_owned(), count(n, "album")),
-            Level::Songs => ("Songs".to_owned(), count(n, "track")),
             Level::Genres => ("Genres".to_owned(), count(n, "genre")),
             Level::Playlists => ("Playlists".to_owned(), count(n, "playlist")),
             Level::RecentlyAdded => ("Recently Added".to_owned(), count(n, "album")),
             Level::RecentlyPlayed => ("Recently Played".to_owned(), count(n, "track")),
-            Level::MostPlayed => ("Most Played".to_owned(), count(n, "track")),
+            Level::MostPlayed => ("Most Played".to_owned(), count(n, "album")),
             Level::ArtistAlbums { artist } => {
                 (self.shown_artist(artist.as_deref()), albums_and_tracks)
             }

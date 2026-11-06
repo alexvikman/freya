@@ -136,6 +136,16 @@ pub struct Played {
     pub last: SystemTime,
 }
 
+/// An album whose tracks have been played.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct AlbumPlayed {
+    pub album: Album,
+    /// How many times its tracks were, together.
+    pub plays: u32,
+    /// When one of them was last played.
+    pub last: SystemTime,
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Stats {
     pub tracks: u32,

@@ -70,13 +70,12 @@ const DECODE_AT_ONCE: usize = 24;
 /// How many albums or tracks the Recents sections show.
 const RECENT: usize = 200;
 
-/// A list the library can show. The first seven start a section; the others are opened from a
+/// A list the library can show. The first six start a section; the others are opened from a
 /// row.
 #[derive(Clone, Debug, PartialEq)]
 enum Level {
     Artists,
     Albums,
-    Songs,
     Genres,
     Playlists,
     RecentlyAdded,
@@ -100,7 +99,6 @@ impl Level {
         Some(match name {
             "artists" => Self::Artists,
             "albums" => Self::Albums,
-            "songs" => Self::Songs,
             "genres" => Self::Genres,
             "playlists" => Self::Playlists,
             "recently-added" => Self::RecentlyAdded,
@@ -113,7 +111,6 @@ impl Level {
     fn section_name(&self) -> &'static str {
         match self {
             Self::Albums => "albums",
-            Self::Songs => "songs",
             Self::Genres => "genres",
             Self::Playlists => "playlists",
             Self::RecentlyAdded => "recently-added",
@@ -128,9 +125,10 @@ impl Level {
         match self {
             Self::Albums
             | Self::RecentlyAdded
+            | Self::MostPlayed
             | Self::ArtistAlbums { .. }
             | Self::GenreAlbums { .. } => "grid",
-            Self::Songs | Self::RecentlyPlayed | Self::MostPlayed => "table",
+            Self::RecentlyPlayed => "table",
             Self::Genres | Self::Playlists => "grid",
             Self::Artists | Self::AlbumTracks { .. } => "list",
         }
@@ -306,6 +304,8 @@ pub struct LibraryPanel {
     /// Whether the row of the track playing is to be shown once the rows are read, and in its
     /// album.
     reveal_playing: Option<bool>,
+    /// A track to mark once its album's rows are read: a song found by search, opened there.
+    reveal_track: Option<(PathBuf, Duration)>,
     /// Text typed while searching or suggesting, waiting for a pause in the typing, and when
     /// each was last done: a key pressed after a pause is answered at once, those typed fast
     /// after it once the typing pauses.
@@ -509,6 +509,7 @@ impl LibraryPanel {
             asking_playing: None,
             asking_playlist: None,
             reveal_playing: None,
+            reveal_track: None,
             typed: None,
             searched: Instant::now() - TYPING_PAUSE,
             typed_suggest: None,

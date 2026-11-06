@@ -429,14 +429,15 @@ export component W inherits Window { Text { text: Player.title; } }
     call(&ui, "Library", "search", &[text("sine te")]);
     assert_eq!(library_titles(&ui), ["Sine Test"]);
     assert_eq!(global(&ui, "Library", "query"), text("sine te"));
-    call(&ui, "Library", "activate", &[num(0.0)]);
-    assert_eq!(
-        titles(&ui),
-        ["Freya - Sine Test"],
-        "the playlist becomes the results"
-    );
+    let queued = titles(&ui).len();
     call(&ui, "Library", "enqueue", &[num(0.0)]);
-    assert_eq!(titles(&ui).len(), 2);
+    assert_eq!(titles(&ui).len(), queued + 1);
+    // A song found opens its album, at the song; Up Next stays as it is.
+    call(&ui, "Library", "activate", &[num(0.0)]);
+    assert_eq!(titles(&ui).len(), queued + 1);
+    let album = library_titles(&ui);
+    let at = album.iter().position(|t| t == "Sine Test").unwrap();
+    assert_eq!(global(&ui, "Library", "reveal-row"), num(at as f64));
     call(&ui, "Library", "back", &[]);
     assert_eq!(
         global(&ui, "Library", "query"),
@@ -450,10 +451,9 @@ export component W inherits Window { Text { text: Player.title; } }
     assert_eq!(titles(&ui), ["mono-22k", "sine"]);
 
     // The other sections, and back retracing the way in.
+    // Songs are reached through their albums: there is no list of them alone.
     call(&ui, "Library", "show", &[text("songs")]);
-    assert_eq!(global(&ui, "Library", "layout"), text("table"));
-    // Untitled tracks (named by their files) come last.
-    assert_eq!(library_titles(&ui), ["Sine Test", "mono-22k", "sine"]);
+    assert_eq!(global(&ui, "Library", "section"), text("artists"));
     call(&ui, "Library", "show", &[text("genres")]);
     assert_eq!(global(&ui, "Library", "section"), text("genres"));
     assert_eq!(library_titles(&ui), ["Unknown genre"]);
@@ -497,12 +497,12 @@ export component W inherits Window { Text { text: Player.title; } }
             .collect()
     };
     assert_eq!(played(&ui)[0], text("Just now"));
+    // Most played: albums, their tracks' plays together.
     call(&ui, "Library", "show", &[text("most-played")]);
-    assert_eq!(global(&ui, "Library", "layout"), text("table"));
-    // And once as the artist was played above.
-    assert_eq!(played(&ui)[0], text("5 plays"));
-    call(&ui, "Library", "activate", &[num(0.0)]);
-    assert_eq!(titles(&ui), ["mono-22k"]);
+    assert_eq!(global(&ui, "Library", "layout"), text("grid"));
+    assert_eq!(library_titles(&ui)[0], "Unknown album");
+    call(&ui, "Library", "play", &[num(0.0)]);
+    assert_eq!(titles(&ui), ["mono-22k", "sine"]);
     call(&ui, "Library", "show", &[text("artists")]);
 
     // Radio: none saved at first; saving one, playing it twice without a second entry, and

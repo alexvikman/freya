@@ -25,7 +25,6 @@ const SUGGESTED: usize = 6;
 pub enum SearchFilter {
     #[default]
     All,
-    Songs,
     Artists,
     Albums,
     Playlists,
@@ -36,7 +35,6 @@ impl SearchFilter {
     pub fn from_name(name: &str) -> Option<Self> {
         Some(match name {
             "all" => Self::All,
-            "songs" => Self::Songs,
             "artists" => Self::Artists,
             "albums" => Self::Albums,
             "playlists" => Self::Playlists,
@@ -48,7 +46,6 @@ impl SearchFilter {
     pub fn name(self) -> &'static str {
         match self {
             Self::All => "all",
-            Self::Songs => "songs",
             Self::Artists => "artists",
             Self::Albums => "albums",
             Self::Playlists => "playlists",
@@ -192,7 +189,8 @@ impl LibraryPanel {
             };
         let top = all.then(|| top_of(&found)).flatten();
         let show = |kind: SearchFilter| all || filter == kind;
-        if show(SearchFilter::Songs) {
+        // Songs only among all that was found, leading to their albums: no list of them alone.
+        if all {
             section(
                 &mut items,
                 "songs",

@@ -1252,3 +1252,33 @@ fn tracks_under_a_folder_or_a_file_are_the_librarys() {
     assert_eq!(under(&[r"C:\Music"]), ["Windows"]);
     assert!(under(&["/"]).is_empty(), "the root is not every track");
 }
+
+#[test]
+fn albums_are_most_played_by_their_tracks_plays_together() {
+    let mut library = Library::open_in_memory().unwrap();
+    add(&mut library, "/m/a/1.flac", &tags("A", "First", "One", 1));
+    add(&mut library, "/m/a/2.flac", &tags("A", "First", "Two", 2));
+    add(
+        &mut library,
+        "/m/b/1.flac",
+        &tags("B", "Second", "Single", 1),
+    );
+    // Second's one track three times; First's two tracks twice, once each.
+    for second in 1..=3 {
+        library
+            .record_play(Path::new("/m/b/1.flac"), None, at(second))
+            .unwrap();
+    }
+    library
+        .record_play(Path::new("/m/a/1.flac"), None, at(10))
+        .unwrap();
+    library
+        .record_play(Path::new("/m/a/2.flac"), None, at(11))
+        .unwrap();
+    let most = library.most_played_albums(10).unwrap();
+    let names: Vec<_> = most.iter().map(|p| p.album.name.as_deref()).collect();
+    assert_eq!(names, [Some("Second"), Some("First")]);
+    assert_eq!((most[0].plays, most[1].plays), (3, 2));
+    assert_eq!(most[1].album.tracks, 2, "all of its tracks, played or not");
+    assert_eq!(most[1].last, at(11));
+}

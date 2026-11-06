@@ -161,7 +161,7 @@ Use `ListView` (from `std-widgets.slint`) for the rows: it only creates the rows
 
 ### `Library`
 
-The user's music, read from the folders they chose, browsed in four sections (artists, albums, songs and genres) or searched. Three more sections, the Recents, show the albums added last and the tracks played last and most. A track counts as played once it has been listened to for half its length or four minutes; skipping ahead does not count.
+The user's music, read from the folders they chose, browsed in sections (artists, albums, genres and playlists) or searched: songs are reached through their albums, artists and playlists, and a song found by search opens its album at it. Three more sections, the Recents, show the albums added last, the tracks played last, and the albums played most. A track counts as played once it has been listened to for half its length or four minutes; skipping ahead does not count.
 
 | Property | Type | |
 |---|---|---|

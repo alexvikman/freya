@@ -53,6 +53,9 @@ macro_rules! with_library_data {
             fn recently_added(limit: usize) -> Vec<$crate::Album>;
             fn recently_played(limit: usize) -> Vec<$crate::Played>;
             fn most_played(limit: usize) -> Vec<$crate::Played>;
+            /// The albums played most often, their tracks' plays together; equally often played
+            /// ones by when they were played last. At most `limit`.
+            fn most_played_albums(limit: usize) -> Vec<$crate::AlbumPlayed>;
             fn search(text: &str, limit: usize) -> Vec<$crate::Track>;
             /// How often each of an album's tracks was played, by its file and start.
             fn album_plays(
@@ -316,6 +319,7 @@ pub const CACHED_CALLS: &[&str] = &[
     "recently_added",
     "recently_played",
     "most_played",
+    "most_played_albums",
     "search",
     "album_plays",
     "album_covers",
@@ -629,6 +633,7 @@ mod tests {
             // The owner's own, until each user has theirs.
             "record_play",
             "most_played",
+            "most_played_albums",
             "album_favorites",
             "set_album_favorite",
             "playlists",

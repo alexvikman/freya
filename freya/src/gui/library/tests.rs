@@ -154,19 +154,17 @@ fn a_server_is_asked_off_the_windows_thread() {
         }
     };
     answered(&mut panel);
-    panel.show("songs");
+    panel.show("albums");
     assert!(
         panel.asking.is_some(),
         "the rows shown stay until the new ones come"
     );
     answered(&mut panel);
-    let tracks = panel.db.as_ref().unwrap().all_tracks().unwrap();
-    assert!(!tracks.is_empty());
-    assert_eq!(panel.items.len(), tracks.len());
+    let albums = panel.db.as_ref().unwrap().all_albums().unwrap();
+    assert!(!albums.is_empty());
+    assert_eq!(panel.items.len(), albums.len());
 
     // A favourite made is kept on the errands' thread, then the rows read again.
-    panel.show("albums");
-    answered(&mut panel);
     let Some(Item::Album(album)) = panel.items.first().cloned() else {
         panic!("an album row");
     };
@@ -965,7 +963,6 @@ fn sections_have_their_own_layouts() {
     for name in [
         "artists",
         "albums",
-        "songs",
         "genres",
         "recently-added",
         "recently-played",
@@ -976,8 +973,12 @@ fn sections_have_their_own_layouts() {
     assert_eq!(Level::section("podcasts"), None);
     assert_eq!(Level::Albums.layout(), "grid");
     assert_eq!(Level::GenreAlbums { genre: None }.layout(), "grid");
-    assert_eq!(Level::Songs.layout(), "table");
+    assert_eq!(
+        Level::section("songs"),
+        None,
+        "songs are not listed on their own"
+    );
     assert_eq!(Level::Genres.layout(), "grid");
     assert_eq!(Level::RecentlyAdded.layout(), "grid");
-    assert_eq!(Level::MostPlayed.layout(), "table");
+    assert_eq!(Level::MostPlayed.layout(), "grid");
 }

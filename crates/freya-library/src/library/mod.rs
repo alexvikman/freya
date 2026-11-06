@@ -29,7 +29,9 @@ pub use covers::AlbumCover;
 pub use edits::{ArtistEdit, Header};
 pub use favorites::{AlbumKey, AlbumOrder};
 pub use fetch::{LastFm, Online};
-pub use freya_protocol::{Album, Artist, ArtistOrder, ArtistSummary, Genre, Played, Stats, Track};
+pub use freya_protocol::{
+    Album, AlbumPlayed, Artist, ArtistOrder, ArtistSummary, Genre, Played, Stats, Track,
+};
 pub use genres::{GenreArticle, GenreInfo};
 pub use matches::{AlbumMatch, plain_name, split_artist};
 pub use online::{ASK_AGAIN_AFTER, ArtistText, Asked, CHOSEN, FOLDER, PictureKind, PictureRow};
@@ -503,6 +505,30 @@ impl Library {
 
     /// The tracks played most often; equally often played ones by when they were played last.
     /// At most `limit`.
+    /// The albums played most often, their tracks' plays together; equally often played ones
+    /// by when they were played last. At most `limit`.
+    pub fn most_played_albums(&self, limit: usize) -> Result<Vec<AlbumPlayed>> {
+        let mut query = self.db.prepare_cached(&format!(
+            "SELECT tracks.album_artist, tracks.album, min(tracks.year),
+                    (SELECT count(*) FROM tracks AS t
+                     WHERE t.album_artist IS tracks.album_artist AND t.album IS tracks.album),
+                    min(tracks.path), sum(plays.n), max(plays.last)
+             FROM {PLAYED}
+             GROUP BY tracks.album_artist, tracks.album
+             ORDER BY sum(plays.n) DESC, max(plays.last) DESC
+             LIMIT ?1"
+        ))?;
+        query
+            .query_map([limit as i64], |row| {
+                Ok(AlbumPlayed {
+                    album: album_from_row(row)?,
+                    plays: row.get(5)?,
+                    last: from_epoch_millis(row.get(6)?),
+                })
+            })?
+            .collect()
+    }
+
     pub fn most_played(&self, limit: usize) -> Result<Vec<Played>> {
         self.played("plays.n DESC, plays.last DESC", limit)
     }

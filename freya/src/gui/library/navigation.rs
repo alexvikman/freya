@@ -71,6 +71,18 @@ impl LibraryPanel {
                 self.open_playlist = Some(playlist.name.clone());
                 return None;
             }
+            // A song found by search: its album, at the song. Songs are reached through their
+            // albums, not listed on their own.
+            Item::Track(track) if self.searching() => {
+                self.reveal_track = Some((
+                    track.path.clone(),
+                    track.part.map_or(Duration::ZERO, |p| p.start),
+                ));
+                Level::AlbumTracks {
+                    artist: track.album_artist.clone(),
+                    album: track.album.clone(),
+                }
+            }
             // The tracks shown, or in a discography the album's, playing from this one.
             Item::Track(_) | Item::Played(_) => {
                 let section = self.section_of(row);

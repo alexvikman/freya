@@ -3916,7 +3916,6 @@ component LibraryPanel inherits FocusScope {
 
         for chip in [
             { name: "all", text: "All" },
-            { name: "songs", text: "Songs" },
             { name: "artists", text: "Artists" },
             { name: "albums", text: "Albums" },
             { name: "playlists", text: "Playlists" },
@@ -8033,7 +8032,7 @@ component Sidebar inherits Rectangle {
     in property <string> view;
     /// A view chosen: "radio", "queue", "playlist", "visualizer" or "equalizer".
     callback selected(string);
-    /// A library section chosen: "songs", "albums", "artists", "genres", "recently-added",
+    /// A library section chosen: "albums", "artists", "genres", "recently-added",
     /// "recently-played" or "most-played".
     callback show-section(string);
     /// The note that an update is available was clicked.
@@ -8072,12 +8071,6 @@ component Sidebar inherits Rectangle {
                 alignment: start;
 
                 SidebarHeading { text: "Library"; }
-                SidebarItem {
-                    icon: Icons.note;
-                    text: "Songs";
-                    selected: root.view == "library" && Library.section == "songs";
-                    clicked => { root.show-section("songs"); }
-                }
                 SidebarItem {
                     icon: Icons.album;
                     text: "Albums";

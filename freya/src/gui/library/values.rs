@@ -33,7 +33,6 @@ impl LibraryPanel {
         let layout = if self.searching() {
             match self.search_filter {
                 SearchFilter::All => "search",
-                SearchFilter::Songs => "table",
                 _ => "grid",
             }
         } else if self.discography() {
