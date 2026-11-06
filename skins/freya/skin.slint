@@ -18,10 +18,13 @@ global Stage {
 
 global Theme {
     out property <bool> dark: Stage.on || App.theme == "dark" || (App.theme != "light" && Palette.color-scheme == ColorScheme.dark);
-    out property <color> background: dark ? #15171a : #f6f7f9;
+    // The window itself, around the panels; the toolbar and the player are on it.
+    out property <color> base: dark ? #000000 : #e4e7eb;
+    // The panels: the page, and the navigation beside it, of one colour.
+    out property <color> background: dark ? #15171a : #ffffff;
     out property <color> surface: dark ? #1f2226 : #ffffff;
-    // Behind the navigation: text-secondary keeps 10:1 (dark) and 6.7:1 (light) on it.
-    out property <color> sidebar: dark ? #111316 : #eceef2;
+    // Behind the navigation: text-secondary keeps 9.6:1 (dark) and 7.9:1 (light) on it.
+    out property <color> sidebar: background;
     out property <color> divider: dark ? #2b2f35 : #e1e4e9;
     out property <color> text: dark ? #f3f5f8 : #121418;
     // 9.6:1 on the dark background, 7.3:1 on the light one; 6:1 on the selection.
@@ -392,7 +395,8 @@ component PlayerBar inherits Rectangle {
     }
 
     height: 88px;
-    background: Theme.surface;
+    // On the window's base, as the toolbar is.
+    background: transparent;
 
     HorizontalLayout {
         padding-left: 16px;
@@ -8041,15 +8045,15 @@ component Sidebar inherits Rectangle {
     callback show-update();
     /// An item of the app's menu chosen.
     callback menu-action(string);
-
-    background: Theme.sidebar;
+    /// As high as the toolbar beside it, so the panels below them start level.
+    in property <length> top-height: 48px;
 
     VerticalLayout {
         // The window buttons, when the skin draws into the title bar, then back and forward;
         // empty room there moves the window, as a title bar would. Under the system's own
         // title bar, back and forward have a row of their own.
         Rectangle {
-            height: App.window-buttons-width > 0 || App.window-controls ? App.title-bar-height : 48px;
+            height: max(root.top-height, App.window-buttons-width > 0 || App.window-controls ? App.title-bar-height : 48px);
 
             if App.window-buttons-width > 0 || App.window-controls: TitleBarArea { }
             HorizontalLayout {
@@ -8061,9 +8065,17 @@ component Sidebar inherits Rectangle {
                 }
             }
         }
-        // All of it scrolls when the window is too low for everything, playlists included.
-        ScrollView {
+        // All of it scrolls when the window is too low for everything, playlists included: in
+        // a panel of its own, as the page beside it is.
+        Rectangle {
             vertical-stretch: 1;
+            background: Theme.sidebar;
+            border-radius: 8px;
+            clip: true;
+
+        ScrollView {
+            width: 100%;
+            height: 100%;
             content-width: self.visible-width;
 
             VerticalLayout {
@@ -8156,6 +8168,7 @@ component Sidebar inherits Rectangle {
                     clicked => { root.show-update(); }
                 }
             }
+        }
         }
     }
 }
@@ -10651,7 +10664,7 @@ export component FreyaSkin inherits Window {
     preferred-height: 720px;
     min-width: 760px;
     min-height: 520px;
-    background: Theme.background;
+    background: Theme.base;
     default-font-size: 14px;
     forward-focus: shortcuts;
     // On Windows the skin draws the window buttons itself, without the system's frame.
@@ -11086,9 +11099,14 @@ export component FreyaSkin inherits Window {
             VerticalLayout {
                 HorizontalLayout {
                     vertical-stretch: 1;
+                    // The panels, apart on the window's base.
+                    padding-left: root.stage ? 0 : 8px;
+                    padding-right: root.stage ? 0 : 8px;
+                    spacing: root.stage ? 0 : 8px;
 
                     if root.sidebar-shown && !root.stage: Sidebar {
                         width: 220px;
+                        top-height: toolbar.height;
                         view: root.view;
                         selected(view) => { root.show(view); }
                         show-section(section) => {
@@ -11097,10 +11115,6 @@ export component FreyaSkin inherits Window {
                         }
                         show-update => { update-popup.show(); }
                         menu-action(name) => { root.menu-action(name); }
-                    }
-                    if root.sidebar-shown && !root.stage: Rectangle {
-                        width: 1px;
-                        background: Theme.divider;
                     }
                     VerticalLayout {
                         horizontal-stretch: 1;
@@ -11158,14 +11172,13 @@ export component FreyaSkin inherits Window {
                                 menu-action(name) => { root.menu-action(name); }
                             }
                         }
-                        Rectangle {
-                            height: root.stage ? 0 : 1px;
-                            background: Theme.divider;
-                        }
-                        // The views. The ones with lists stay alive while hidden, so they keep
-                        // their scroll position and selection.
+                        // The views, in a panel. The ones with lists stay alive while hidden,
+                        // so they keep their scroll position and selection.
                         Rectangle {
                             vertical-stretch: 1;
+                            background: Theme.background;
+                            border-radius: root.stage ? 0 : 8px;
+                            clip: true;
 
                             TrackList {
                                 width: 100%;
@@ -11247,10 +11260,6 @@ export component FreyaSkin inherits Window {
                             }
                         }
                     }
-                }
-                Rectangle {
-                    height: root.stage ? 0 : 1px;
-                    background: Theme.divider;
                 }
                 PlayerBar {
                     height: root.stage ? 0 : 88px;

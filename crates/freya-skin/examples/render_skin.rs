@@ -52,6 +52,14 @@ fn main() {
                 _ => "queue",
             };
             let _ = ui.set_property("view", slint_interpreter::Value::String(view.into()));
+            // FREYA_RENDER_THEME=dark draws the dark theme.
+            if let Ok(theme) = std::env::var("FREYA_RENDER_THEME") {
+                let _ = ui.set_global_property(
+                    "App",
+                    "theme",
+                    slint_interpreter::Value::String(theme.into()),
+                );
+            }
             match panel.as_str() {
                 "radio" => freya_skin::sample::fill_radio(ui),
                 "directory" => freya_skin::sample::fill_directory(ui),
