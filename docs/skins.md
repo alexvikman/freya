@@ -176,6 +176,7 @@ The user's music, read from the folders they chose, browsed in four sections (ar
 | `folders-offered` | `int` | Counts up when a folder given to Freya is not in the library and the user may add it: `folders-draft` holds it, for the skin to show its folders dialog |
 | `scanning` | bool | True while Freya reads the folders |
 | `status` | string | "10,412 tracks · 682 albums", or "Reading 1,234 of 5,000 files" during a scan |
+| `last-scan` | string | How the last scan ended: "Scanned at 18:41: 12 tracks added." Empty before one did |
 
 | Callback | |
 |---|---|

@@ -47,6 +47,7 @@ mod server;
 mod skin;
 mod updates;
 mod view;
+pub(crate) use view::LOG_SHOWN;
 
 use covers::*;
 
@@ -288,6 +289,9 @@ pub struct App {
     waiting_files: Option<Vec<PathBuf>>,
     /// Whether Up Next, as restored, was checked against the library: only its tracks stay.
     up_next_checked: bool,
+    /// Whether the Activity page shows the server's log, for an admin, rather than Freya's.
+    log_from_server: bool,
+    server_log: super::server_log::ServerLog,
     window_events: WindowEvents,
     /// Whether the skin window is hidden (covered, minimized) and whether it has focus, as
     /// far as the system says.
@@ -430,6 +434,8 @@ impl App {
             settings,
             waiting_files: None,
             up_next_checked: true,
+            log_from_server: false,
+            server_log: Default::default(),
             window_events,
             window_hidden: false,
             window_closed: false,

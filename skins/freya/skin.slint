@@ -708,49 +708,6 @@ component MenuRow inherits Rectangle {
     }
 }
 
-/// One thing Freya is doing, in the activity menu: what, where, and a dot while it goes on.
-component ActivityRow inherits HorizontalLayout {
-    in property <string> text;
-    in property <string> detail;
-    in property <bool> busy;
-
-    padding-left: 12px;
-    padding-right: 12px;
-    padding-top: 4px;
-    padding-bottom: 8px;
-    spacing: 10px;
-    accessible-role: AccessibleRole.text;
-    accessible-label: detail == "" ? text : text + ", " + detail;
-
-    VerticalLayout {
-        horizontal-stretch: 1;
-        min-width: 0;
-        spacing: 2px;
-
-        Text {
-            text: root.text;
-            font-size: 13px;
-            color: Theme.text;
-            overflow: elide;
-        }
-        if root.detail != "": Text {
-            text: root.detail;
-            font-size: 12px;
-            color: Theme.text-secondary;
-            overflow: elide;
-        }
-    }
-    if root.busy: VerticalLayout {
-        alignment: center;
-
-        Rectangle {
-            width: 7px;
-            height: 7px;
-            border-radius: 3.5px;
-            background: Theme.accent;
-        }
-    }
-}
 
 /// A rounded text button.
 component TextButton inherits Rectangle {
@@ -779,6 +736,60 @@ component TextButton inherits Rectangle {
 
     touch := TouchArea {
         clicked => { root.clicked(); }
+    }
+}
+
+/// One thing Freya is doing, in the activity menu: what, where, and a dot while it goes on.
+component ActivityRow inherits HorizontalLayout {
+    in property <string> text;
+    in property <string> detail;
+    in property <bool> busy;
+    /// What `App.cancel-activity` stops it by; empty when it cannot be stopped.
+    in property <string> cancel;
+
+    padding-left: 12px;
+    padding-right: 12px;
+    padding-top: 4px;
+    padding-bottom: 8px;
+    spacing: 10px;
+    accessible-role: AccessibleRole.text;
+    accessible-label: detail == "" ? text : text + ", " + detail;
+
+    VerticalLayout {
+        horizontal-stretch: 1;
+        min-width: 0;
+        spacing: 2px;
+
+        Text {
+            text: root.text;
+            font-size: 13px;
+            color: Theme.text;
+            overflow: elide;
+        }
+        if root.detail != "": Text {
+            text: root.detail;
+            font-size: 12px;
+            color: Theme.text-secondary;
+            overflow: elide;
+        }
+    }
+    if root.busy && root.cancel == "": VerticalLayout {
+        alignment: center;
+
+        Rectangle {
+            width: 7px;
+            height: 7px;
+            border-radius: 3.5px;
+            background: Theme.accent;
+        }
+    }
+    if root.cancel != "": VerticalLayout {
+        alignment: center;
+
+        TextButton {
+            text: "Cancel";
+            clicked => { App.cancel-activity(root.cancel); }
+        }
     }
 }
 
@@ -9119,6 +9130,7 @@ component SettingsView inherits Rectangle {
                 SettingsRow {
                     label: Library.scanning ? Library.status
                         : "A scan reads new and changed files, makes their albums' covers, takes in the pictures in artists' folders, and asks the internet for what artists lack, as allowed below.";
+                    detail: Library.scanning ? "" : Library.last-scan;
 
                     VerticalLayout {
                         alignment: center;
@@ -9761,10 +9773,6 @@ component ActivityView inherits Rectangle {
                 vertical-alignment: center;
                 horizontal-stretch: 1;
             }
-            if Library.scanning: TextButton {
-                text: "Stop Scan";
-                clicked => { Library.stop-scan(); }
-            }
         }
         Rectangle {
             background: Theme.surface;
@@ -9780,11 +9788,18 @@ component ActivityView inherits Rectangle {
                     text: doing.title;
                     detail: doing.detail;
                     busy: true;
+                    cancel: doing.cancel;
                 }
                 if App.activities.length == 0: ActivityRow {
                     text: "Nothing is running in the background";
                 }
             }
+        }
+        if Library.last-scan != "" && !Library.scanning: Text {
+            text: Library.last-scan;
+            font-size: 13px;
+            color: Theme.text-secondary;
+            wrap: word-wrap;
         }
         HorizontalLayout {
             spacing: 4px;
@@ -9798,6 +9813,18 @@ component ActivityView inherits Rectangle {
                 vertical-alignment: center;
                 horizontal-stretch: 1;
             }
+            // An admin reads the server's log here too.
+            if Server.admin: ChoiceButton {
+                text: "Freya";
+                selected: App.log-source == "freya";
+                clicked => { App.set-log-source("freya"); }
+            }
+            if Server.admin: ChoiceButton {
+                text: "Server";
+                selected: App.log-source == "server";
+                clicked => { App.set-log-source("server"); }
+            }
+            if Server.admin: Rectangle { width: 12px; }
             ChoiceButton {
                 text: "Errors";
                 selected: App.log-level == "error";
@@ -10329,6 +10356,7 @@ component Toolbar inherits HorizontalLayout {
                     text: doing.title;
                     detail: doing.detail;
                     busy: true;
+                    cancel: doing.cancel;
                 }
                 if App.activities.length == 0: ActivityRow {
                     text: "Nothing is running in the background";

@@ -23,6 +23,7 @@ mod radio_directory;
 mod radio_logos;
 mod reopen;
 mod screen;
+mod server_log;
 mod server_panel;
 mod skin_state;
 mod skin_window;

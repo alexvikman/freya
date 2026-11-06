@@ -160,6 +160,7 @@ fn run(address: &str, data: &Path) -> Result<(), String> {
         stations: Some(data.join("stations.m3u8")),
         radio_directory: Some(data.join("radio-directory.json")),
         scrobbles: Some(scrobbles),
+        log: Some(data.join("server.log")),
     };
     let service = Arc::new(Service::start(
         data.join("library.sqlite3"),

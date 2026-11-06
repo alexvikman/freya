@@ -105,6 +105,7 @@ impl LibraryPanel {
                 Value::Number(f64::from(self.folders_offered)),
             ),
             ("status", string(status)),
+            ("last-scan", string(&self.last_scan)),
             ("album-options", Value::Bool(shown.album_options)),
             ("albums-options", Value::Bool(shown.albums_options)),
             ("albums-sort", string(albums_order_name(self.albums_order))),

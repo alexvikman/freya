@@ -11,6 +11,7 @@ mod folders;
 mod hostile;
 pub use freya_http as http;
 mod lastfm;
+mod log_lines;
 #[cfg(any(target_os = "macos", windows))]
 pub mod menu;
 mod pages;

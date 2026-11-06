@@ -225,10 +225,18 @@ impl App {
             ui.get_global_property("App", "view"),
             Ok(Value::String(shown)) if shown == "activity"
         );
-        let logged = (log_level, crate::log_capture::count());
-        if log_shown && view.log_shown != Some(logged) {
-            view.log_shown = Some(logged);
-            view.log_rows.sync(log_rows(log_level));
+        if log_shown && self.log_from_server {
+            let remote = self.library.remote();
+            if let Some(lines) = self.server_log.poll(remote, log_level) {
+                view.log_shown = None;
+                view.log_rows.sync(lines);
+            }
+        } else {
+            let logged = (log_level, crate::log_capture::count());
+            if log_shown && view.log_shown != Some(logged) {
+                view.log_shown = Some(logged);
+                view.log_rows.sync(log_rows(log_level));
+            }
         }
         view.app_out.write(
             ui,
@@ -251,6 +259,14 @@ impl App {
                 ("can-go-back", Value::Bool(self.history.can_go_back())),
                 ("can-go-forward", Value::Bool(self.history.can_go_forward())),
                 ("log-level", skin_state::string(level_name(log_level))),
+                (
+                    "log-source",
+                    skin_state::string(if self.log_from_server {
+                        "server"
+                    } else {
+                        "freya"
+                    }),
+                ),
             ],
         );
     }
@@ -259,6 +275,16 @@ impl App {
     pub fn set_log_level(&mut self, level: &str) {
         if let Some(level) = level_of(level) {
             self.log_level = level;
+        }
+    }
+
+    /// Shows Freya's log, or, for an admin, the server's: "freya" or "server".
+    pub fn set_log_source(&mut self, source: &str) {
+        let server = source == "server" && self.server.is_admin();
+        if server != self.log_from_server {
+            self.log_from_server = server;
+            self.server_log.forget();
+            self.view.log_shown = None;
         }
     }
 
@@ -272,20 +298,32 @@ impl App {
             } else {
                 lastfm.error.clone()
             };
-            activities.push(("Sending plays to Last.fm".to_owned(), detail));
+            activities.push(("Sending plays to Last.fm".to_owned(), detail, ""));
         }
         if let update::State::Downloading { release, .. } = self.updater.state() {
-            activities.push(("Downloading an update".to_owned(), release.tag_name.clone()));
+            activities.push((
+                "Downloading an update".to_owned(),
+                release.tag_name.clone(),
+                "",
+            ));
         }
         activities
             .into_iter()
-            .map(|(title, detail)| {
+            .map(|(title, detail, cancel)| {
                 Value::Struct(slint_interpreter::Struct::from_iter([
                     ("title".to_owned(), skin_state::string(title)),
                     ("detail".to_owned(), skin_state::string(detail)),
+                    ("cancel".to_owned(), skin_state::string(cancel)),
                 ]))
             })
             .collect()
+    }
+
+    /// Stops what runs in the background as `App.activities` names it.
+    pub fn cancel_activity(&mut self, id: &str) {
+        if !self.library.cancel(id) {
+            log::debug!("nothing to cancel as {id:?}");
+        }
     }
 
     pub fn show_about(&mut self) {
@@ -326,7 +364,7 @@ pub(super) fn log_rows(level: log::Level) -> Vec<Value> {
 }
 
 /// How many entries of the log the Activity page shows at most.
-pub(super) const LOG_SHOWN: usize = 1_000;
+pub(crate) const LOG_SHOWN: usize = 1_000;
 
 pub(super) fn level_name(level: log::Level) -> &'static str {
     match level {

@@ -330,6 +330,8 @@ pub struct LibraryPanel {
     shown: Shown,
     /// Goes up when a folder given to Freya is offered to the admin as a music folder.
     folders_offered: u32,
+    /// How the last scan ended, since Freya started: see `Library.last-scan`.
+    last_scan: String,
     /// Folders last given to the skin, in use and being edited.
     folders_shown: Option<Vec<PathBuf>>,
     draft_shown: Option<Vec<PathBuf>>,
@@ -521,6 +523,7 @@ impl LibraryPanel {
             reloaded: Instant::now(),
             shown: Shown::default(),
             folders_offered: 0,
+            last_scan: String::new(),
             pictures_loaded: Instant::now(),
             folders_shown: None,
             draft_shown: None,
@@ -776,11 +779,15 @@ impl LibraryPanel {
                     self.pictures_stale = true;
                 }
                 ServiceEvent::Scan(ScanEvent::Finished(summary)) => {
+                    self.scan_ended(Ok(&summary));
                     self.progress = None;
                     // A scan that found nothing new leaves the rows as they are.
                     self.stale |= summary.added + summary.updated + summary.removed > 0;
                 }
-                ServiceEvent::Scan(ScanEvent::Failed(_)) => self.progress = None,
+                ServiceEvent::Scan(ScanEvent::Failed(e)) => {
+                    self.scan_ended(Err(&e));
+                    self.progress = None;
+                }
                 ServiceEvent::ScanEnded => {
                     self.progress = None;
                     self.scanning = false;

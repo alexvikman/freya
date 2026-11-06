@@ -14,6 +14,24 @@ pub(super) fn bind(b: &Binder) {
             }
         }),
     );
+    b.bind(
+        "App",
+        "set-log-source",
+        Box::new(|app, args| {
+            if let Some(Value::String(source)) = args.first() {
+                app.set_log_source(source);
+            }
+        }),
+    );
+    b.bind(
+        "App",
+        "cancel-activity",
+        Box::new(|app, args| {
+            if let Some(Value::String(id)) = args.first() {
+                app.cancel_activity(id);
+            }
+        }),
+    );
     b.bind("App", "go-back", Box::new(|app, _| app.go_back()));
     b.bind("App", "go-forward", Box::new(|app, _| app.go_forward()));
     // The skin changed its view; noted after every callback.

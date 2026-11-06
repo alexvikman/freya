@@ -14,7 +14,7 @@ use freya_library::library::{LastFm, Online, ScanOptions, Scanner};
 use freya_media::pictures::Pictures;
 use freya_protocol::{
     ApiError, ApiResult, FolderListing, LastFmStatus, LastFmTrack, LibraryApi, LibraryData,
-    LibraryPictures, Part, PlaylistEntry, RadioDirectoryStatus, RadioQuery, RadioResults,
+    LibraryPictures, LogLine, Part, PlaylistEntry, RadioDirectoryStatus, RadioQuery, RadioResults,
     RadioShelf, RadioStation, RadioTag, SavedPlaylist, ScanEvent, Scrobble, ServerControl,
     ServerEvents, ServerSettings, ServiceEvent,
 };
@@ -53,6 +53,8 @@ pub struct ServiceConfig {
     /// Where scrobbling to Last.fm keeps the session and the plays waiting; without, the server
     /// does not scrobble.
     pub scrobbles: Option<PathBuf>,
+    /// The server's log, which an admin reads in Freya; without, it reads nothing.
+    pub log: Option<PathBuf>,
 }
 
 impl ServiceConfig {
@@ -343,6 +345,13 @@ impl ServerControl for Service {
 
     fn server_folders(&self, folder: Option<&Path>) -> ApiResult<FolderListing> {
         Ok(crate::folders::listing(folder))
+    }
+
+    fn server_log(&self, lines: usize) -> ApiResult<Vec<LogLine>> {
+        let file = lock(&self.shared.state).config.log.clone();
+        Ok(file
+            .map(|file| crate::log_lines::read(&file, lines))
+            .unwrap_or_default())
     }
 
     fn lastfm_status(&self) -> ApiResult<LastFmStatus> {

@@ -491,6 +491,7 @@ impl Convert for Activity {
         Some(Self {
             title: field(&s, "title"),
             detail: field(&s, "detail"),
+            cancel: field(&s, "cancel"),
         })
     }
 
@@ -498,6 +499,7 @@ impl Convert for Activity {
         structure(vec![
             ("title", self.title.to_value()),
             ("detail", self.detail.to_value()),
+            ("cancel", self.cancel.to_value()),
         ])
     }
 }
@@ -1128,6 +1130,7 @@ skin_api! {
         Library."reveal-row" => set_reveal_row, get_reveal_row;
         Library."reveals" => set_reveals, get_reveals;
         Library."folders-offered" => set_folders_offered, get_folders_offered;
+        Library."last-scan" => set_last_scan, get_last_scan;
         Library."album-page" => set_album_page, get_album_page;
         Library."artist-options" => set_artist_options, get_artist_options;
         Library."artist-page" => set_artist_page, get_artist_page;
@@ -1204,6 +1207,7 @@ skin_api! {
         App."activities" => set_activities, get_activities;
         App."log" => set_log, get_log;
         App."log-level" => set_log_level, get_log_level;
+        App."log-source" => set_log_source, get_log_source;
         App."equalizer-visible" => set_equalizer_visible, get_equalizer_visible;
         App."title-bar-height" => set_title_bar_height, get_title_bar_height;
         App."window-buttons-width" => set_window_buttons_width, get_window_buttons_width;
@@ -1419,6 +1423,8 @@ skin_api! {
 
         App."show-about" => on_show_about, invoke_show_about();
         App."set-log-level" => on_set_log_level, invoke_set_log_level(level: SharedString);
+        App."set-log-source" => on_set_log_source, invoke_set_log_source(source: SharedString);
+        App."cancel-activity" => on_cancel_activity, invoke_cancel_activity(id: SharedString);
         App."show-skins" => on_show_skins, invoke_show_skins();
         App."set-theme" => on_set_theme, invoke_set_theme(theme: SharedString);
         App."set-close-minimizes" => on_set_close_minimizes, invoke_set_close_minimizes(minimizes: bool);

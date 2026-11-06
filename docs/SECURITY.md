@@ -186,6 +186,7 @@ Nobody can wear it out before logging in:
 - Accounts, the certificate or the key that cannot be read stop the server rather than being
   made anew, which would lose the users or break every device's pin.
 - No secret is logged; names lose control characters before they are.
+  An admin reads the server's log in Freya's Activity page; listeners cannot.
 - An admin chooses music folders among the server's as the server sees them, network
   shares too: on Windows a computer typed as `\\computer` is asked for the folders it shares,
   as the server's user, and a share is read with that user's own access to it. Listeners

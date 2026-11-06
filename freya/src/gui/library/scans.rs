@@ -102,18 +102,20 @@ impl LibraryPanel {
         )
     }
 
-    /// What the library is doing in the background, for the user to see: what, and of what.
-    pub fn activities(&self) -> Vec<(String, String)> {
+    /// What the library is doing in the background, for the user to see: what, of what, and
+    /// what [`Self::cancel`] stops it by, if it can be.
+    pub fn activities(&self) -> Vec<(String, String, &'static str)> {
         let mut activities = Vec::new();
         if let Some(what) = self.scan_phase() {
             let folder = self.scan_folder.as_deref().map(folder_name);
-            activities.push((what, folder.unwrap_or_default()));
+            activities.push((what, folder.unwrap_or_default(), "scan"));
         }
         let pending = self.thumbnails.as_ref().map_or(0, Thumbnails::pending);
         if pending > 0 {
             activities.push((
                 "Making covers and pictures".to_owned(),
                 count(pending, "picture"),
+                "",
             ));
         }
         let page_name = || {
@@ -123,10 +125,18 @@ impl LibraryPanel {
                 .unwrap_or_default()
         };
         if self.draft.is_some() && self.finder.searching() {
-            activities.push(("Looking for pictures".to_owned(), page_name()));
+            activities.push((
+                "Looking for pictures".to_owned(),
+                page_name(),
+                "picture-search",
+            ));
         }
         if self.match_finder.searching() {
-            activities.push(("Asking MusicBrainz about an artist".to_owned(), page_name()));
+            activities.push((
+                "Asking MusicBrainz about an artist".to_owned(),
+                page_name(),
+                "artist-match",
+            ));
         }
         if self.album_finder.searching() {
             let title = self
@@ -134,9 +144,50 @@ impl LibraryPanel {
                 .clone()
                 .and_then(|(_, album)| album)
                 .unwrap_or_default();
-            activities.push(("Asking MusicBrainz about an album".to_owned(), title));
+            activities.push((
+                "Asking MusicBrainz about an album".to_owned(),
+                title,
+                "album-match",
+            ));
         }
         activities
+    }
+
+    /// Stops what [`Self::activities`] named `id`. Returns whether it was the library's.
+    pub fn cancel(&mut self, id: &str) -> bool {
+        match id {
+            "scan" => self.stop_scan(),
+            "picture-search" => self.finder.stop(),
+            "artist-match" => self.match_finder.stop(),
+            "album-match" => self.album_finder.stop(),
+            _ => return false,
+        }
+        true
+    }
+
+    /// How the last scan ended, for `Library.last-scan`: when, and what it changed.
+    pub(super) fn scan_ended(&mut self, summary: Result<&freya_protocol::ScanSummary, &str>) {
+        let at = jiff::Zoned::now().strftime("%H:%M").to_string();
+        self.last_scan = match summary {
+            Ok(summary) if summary.added + summary.updated + summary.removed == 0 => {
+                format!("Scanned at {at}: nothing new or changed.")
+            }
+            Ok(summary) => {
+                let mut parts = Vec::new();
+                if summary.added > 0 {
+                    parts.push(format!("{} added", count(summary.added, "track")));
+                }
+                if summary.updated > 0 {
+                    parts.push(format!("{} changed", count(summary.updated, "track")));
+                }
+                if summary.removed > 0 {
+                    parts.push(format!("{} removed", count(summary.removed, "track")));
+                }
+                format!("Scanned at {at}: {}.", parts.join(", "))
+            }
+            Err(e) => format!("The scan at {at} failed: {e}"),
+        };
+        log::info!("{}", self.last_scan);
     }
 
     /// Gives the skin the folders in use, and those being edited, when they changed.

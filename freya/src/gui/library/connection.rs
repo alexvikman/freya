@@ -397,6 +397,7 @@ pub(super) fn connect(
                 stations: database.parent().map(|dir| dir.join("stations.m3u8")),
                 radio_directory: None,
                 scrobbles: None,
+                log: None,
             };
             let service = Service::start(database, pictures, config).map_err(|e| {
                 log::warn!("{e}");

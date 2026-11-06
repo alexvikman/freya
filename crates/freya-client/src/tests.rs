@@ -175,6 +175,7 @@ fn the_server_is_told_what_to_do_and_tells_what_happens() {
         stations: Some(dir.join("stations.m3u8")),
         radio_directory: None,
         scrobbles: None,
+        log: None,
     };
     let service = Arc::new(Service::start(dir.join("library.db"), None, config).unwrap());
     let served = Served {
@@ -234,7 +235,12 @@ fn the_server_is_told_what_to_do_and_tells_what_happens() {
     // The server's folders, to choose the music's from another computer.
     let listing = remote.server_folders(Some(&dir)).unwrap();
     assert!(listing.folders.contains(&dir.join("music")));
-    assert!(remote.server_folders(None).unwrap().folder.is_none());
+    // Where to start: the home folder, with the places to start from.
+    let start = remote.server_folders(None).unwrap();
+    assert!(start.folder.is_some());
+    assert!(start.places.iter().any(|place| place.kind == "home"));
+    // The server's log, for an admin; this server keeps none.
+    assert!(remote.server_log(10).unwrap().is_empty());
 
     // Playlists, kept by the server; every client is told of a change.
     let entry = freya_protocol::PlaylistEntry {

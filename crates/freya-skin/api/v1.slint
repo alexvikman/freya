@@ -576,6 +576,8 @@ export global Library {
     /// user may add it: `folders-draft` holds it, added to `folders`, for the skin to show its
     /// dialog with Cancel and Save.
     in property <int> folders-offered;
+    /// How the last scan ended: "Scanned at 18:41: 12 tracks added." Empty before one did.
+    in property <string> last-scan;
     callback edit-folders();
     callback remove-draft-folder(int);
     callback save-folders();
@@ -1064,6 +1066,8 @@ export struct Activity {
     title: string,
     /// Of what: "Peter Gabriel / So"; may be empty.
     detail: string,
+    /// What `App.cancel-activity` stops it by; empty when it cannot be stopped.
+    cancel: string,
 }
 
 /// Something Freya logged: see `App.log`.
@@ -1086,6 +1090,12 @@ export global App {
     /// "debug", "info", "warning" or "error"; set with `set-log-level`.
     in property <string> log-level: "info";
     callback set-log-level(string);
+    /// Whose log `log` is: "freya", or "server", the server's, for an admin; set with
+    /// `set-log-source`.
+    in property <string> log-source: "freya";
+    callback set-log-source(string);
+    /// Stops something `activities` lists, by its `cancel`.
+    callback cancel-activity(string);
     in property <string> version;
     /// When this copy of Freya was built, as "2026-10-17"; empty when unknown.
     in property <string> build-date;

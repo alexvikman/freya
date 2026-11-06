@@ -163,6 +163,8 @@ macro_rules! with_server_control {
             fn radio_played(id: &str) -> ();
             /// The folders in `folder` on the server, or where to start looking when none.
             fn server_folders(folder: Option<&::std::path::Path>) -> $crate::FolderListing;
+            /// The last `lines` the server logged, the newest last: for an admin's Activity page.
+            fn server_log(lines: usize) -> Vec<$crate::LogLine>;
             /// How scrobbling to Last.fm goes.
             fn lastfm_status() -> $crate::LastFmStatus;
             /// Starts connecting the user's Last.fm account: the page, for the user's browser,
@@ -622,6 +624,7 @@ mod tests {
             "settings",
             "rescan",
             "server_folders",
+            "server_log",
             "set_artist_edit",
             // The owner's own, until each user has theirs.
             "record_play",

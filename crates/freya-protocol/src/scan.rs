@@ -301,6 +301,16 @@ pub struct FolderListing {
     pub error: Option<String>,
 }
 
+/// Something the server logged.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct LogLine {
+    /// As the server wrote it, in UTC: "2026-11-06T18:41:33Z".
+    pub time: String,
+    /// "error", "warning", "info" or "debug".
+    pub level: String,
+    pub message: String,
+}
+
 /// A place on the server to start choosing a folder from.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct FolderPlace {
