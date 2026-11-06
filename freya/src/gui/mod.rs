@@ -316,7 +316,9 @@ pub fn run(options: Options) -> anyhow::Result<()> {
         reopen::watch();
     });
     // Until quit, not when the window closes: on macOS Freya stays in the Dock without it.
-    slint::run_event_loop_until_quit().context("event loop failed")?;
+    let ran = slint::run_event_loop_until_quit();
+    one_freya::forget();
+    ran.context("event loop failed")?;
     app.borrow_mut().save();
     Ok(())
 }

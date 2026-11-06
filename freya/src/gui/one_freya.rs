@@ -3,9 +3,11 @@
 //! already running, which opens its window and plays them, and quits. macOS brings a running app
 //! forward itself.
 //!
-//! The first listens on this computer's loopback, at a port it writes with a secret into a file
-//! in its folder, which only its user can read; one started later sends the secret and its files
-//! there, and is answered once they are taken.
+//! The first listens on this computer's loopback, at a port it writes with two secrets into a
+//! file in its folder, which only its user can read, and takes away when it quits. One started
+//! later sends the first secret there, and its files only once it is answered with the second:
+//! so that whatever else holds that port, as another user's program might once Freya is gone,
+//! learns nothing and keeps no Freya from starting.
 
 #![cfg_attr(
     windows,
@@ -18,19 +20,21 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 /// How long one started later waits for the running Freya, which answers at once when it is
 /// there: one that does not is taken for gone.
 const PATIENCE: Duration = Duration::from_secs(2);
-/// What one started later sends at most: the secret and its files' paths.
+/// What one started later sends at most: the first secret and its files' paths.
 const MOST_BYTES: u64 = 1024 * 1024;
 const GREETING: &str = "freya-open 1";
 const TAKEN: &str = "taken";
 
 /// The files the running Freya was asked to open since this was last asked, its window too.
 static ASKED: Mutex<Option<Vec<PathBuf>>> = Mutex::new(None);
+/// Where this Freya, the first, said how it is reached, and what it wrote there.
+static KEPT: OnceLock<(PathBuf, String)> = OnceLock::new();
 
 /// Before anything else: hands `files` to the Freya already running, and returns true, for this
 /// one to quit; or, being the first, listens for those started later and returns false.
@@ -55,26 +59,45 @@ pub fn hand_over(files: &[PathBuf]) -> bool {
     false
 }
 
+/// Once Freya quits: takes away what says how it is reached, unless one started since wrote its
+/// own there.
+pub fn forget() {
+    if let Some((path, written)) = KEPT.get()
+        && std::fs::read_to_string(path).is_ok_and(|kept| kept == *written)
+    {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 /// Whether one started later asked this Freya to open its window, and the files it gave, since
 /// this was last asked.
 pub fn take() -> Option<Vec<PathBuf>> {
     ASKED.lock().unwrap_or_else(|e| e.into_inner()).take()
 }
 
-/// Sends `files` to the Freya whose port and secret are in the file at `path`.
+/// Sends `files` to the Freya whose port and secrets are in the file at `path`, once it proves
+/// it is that Freya.
 fn send(path: &Path, files: &[PathBuf]) -> std::io::Result<()> {
     let kept = std::fs::read_to_string(path)?;
     let mut fields = kept.split_whitespace();
-    let (Some(port), Some(secret), Some(process)) = (fields.next(), fields.next(), fields.next())
+    let (Some(port), Some(ask), Some(proof), Some(process)) =
+        (fields.next(), fields.next(), fields.next(), fields.next())
     else {
         return Err(std::io::ErrorKind::InvalidData.into());
     };
     let port: u16 = port.parse().map_err(|_| std::io::ErrorKind::InvalidData)?;
-    let mut stream =
+    let stream =
         TcpStream::connect_timeout(&SocketAddr::from((Ipv4Addr::LOCALHOST, port)), PATIENCE)?;
     stream.set_read_timeout(Some(PATIENCE))?;
     stream.set_write_timeout(Some(PATIENCE))?;
-    let mut message = format!("{GREETING}\n{secret}\n");
+    let mut answers = BufReader::new((&stream).take(256));
+    (&stream).write_all(format!("{GREETING}\n{ask}\n").as_bytes())?;
+    let mut proven = String::new();
+    answers.read_line(&mut proven)?;
+    if !same(proven.trim_end().as_bytes(), proof.as_bytes()) {
+        return Err(std::io::ErrorKind::PermissionDenied.into());
+    }
+    let mut message = String::new();
     for file in files {
         // A path that is not Unicode, or that has a line break in it, cannot be sent: it stays
         // out, and the window opens all the same.
@@ -86,10 +109,10 @@ fn send(path: &Path, files: &[PathBuf]) -> std::io::Result<()> {
             _ => log::warn!("not handed to the running Freya: {}", file.display()),
         }
     }
-    stream.write_all(message.as_bytes())?;
+    (&stream).write_all(message.as_bytes())?;
     stream.shutdown(std::net::Shutdown::Write)?;
     let mut answer = String::new();
-    stream.take(64).read_to_string(&mut answer)?;
+    answers.read_to_string(&mut answer)?;
     if answer.trim() != TAKEN {
         return Err(std::io::ErrorKind::InvalidData.into());
     }
@@ -101,13 +124,15 @@ fn send(path: &Path, files: &[PathBuf]) -> std::io::Result<()> {
 fn listen(path: &Path) -> std::io::Result<()> {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
     let port = listener.local_addr()?.port();
-    let secret = secret()?;
-    write_private(path, &format!("{port} {secret} {}\n", std::process::id()))?;
+    let (ask, proof) = (secret()?, secret()?);
+    let written = format!("{port} {ask} {proof} {}\n", std::process::id());
+    write_private(path, &written)?;
+    let _ = KEPT.set((path.to_owned(), written));
     std::thread::Builder::new()
         .name("freya-one".into())
         .spawn(move || {
             for stream in listener.incoming().flatten() {
-                if let Err(e) = answer(stream, &secret) {
+                if let Err(e) = answer(stream, &ask, &proof) {
                     log::debug!("not asked by Freya started again: {e}");
                 }
             }
@@ -115,18 +140,20 @@ fn listen(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Takes the files of one started later, when it knows the secret, and says so.
-fn answer(stream: TcpStream, secret: &str) -> std::io::Result<()> {
+/// Takes the files of one started later, when it knows the first secret, once this one has
+/// answered with the second, and says so.
+fn answer(stream: TcpStream, ask: &str, proof: &str) -> std::io::Result<()> {
     stream.set_read_timeout(Some(PATIENCE))?;
     stream.set_write_timeout(Some(PATIENCE))?;
     let mut lines = BufReader::new((&stream).take(MOST_BYTES)).lines();
     let greeting = lines.next().transpose()?;
     let given = lines.next().transpose()?;
     if greeting.as_deref() != Some(GREETING)
-        || !given.is_some_and(|given| same(given.as_bytes(), secret.as_bytes()))
+        || !given.is_some_and(|given| same(given.as_bytes(), ask.as_bytes()))
     {
         return Err(std::io::ErrorKind::PermissionDenied.into());
     }
+    (&stream).write_all(format!("{proof}\n").as_bytes())?;
     let files: Vec<PathBuf> = lines
         .map_while(Result::ok)
         .filter(|line| !line.is_empty())
@@ -206,12 +233,44 @@ mod tests {
         send(&path, &files).unwrap();
         assert_eq!(take(), Some(files.to_vec()));
         assert_eq!(take(), None);
-        // Without the secret, nothing is taken.
+        // Without the first secret, nothing is taken.
         let kept = std::fs::read_to_string(&path).unwrap();
         let wrong = kept.replacen(kept.split_whitespace().nth(1).unwrap(), "0", 1);
         std::fs::write(&path, wrong).unwrap();
         assert!(send(&path, &files).is_err());
         assert_eq!(take(), None);
+        // Quitting takes the file away, but not one written since by another Freya.
+        std::fs::write(&path, &kept).unwrap();
+        forget();
+        assert!(!path.exists());
+        std::fs::write(&path, "another").unwrap();
+        forget();
+        assert!(path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn whatever_else_holds_the_port_learns_no_files_and_stops_no_freya() {
+        let dir = std::env::temp_dir().join(format!("freya-squat-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // A Freya that quit without taking its file away, and another program at its port that
+        // answers as Freya would, without knowing the second secret.
+        let squatter = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = squatter.local_addr().unwrap().port();
+        let path = dir.join("one-freya");
+        std::fs::write(&path, format!("{port} ask proof 1\n")).unwrap();
+        let heard = std::thread::spawn(move || {
+            let (stream, _) = squatter.accept().unwrap();
+            stream.set_read_timeout(Some(PATIENCE)).unwrap();
+            (&stream).write_all(b"guess\ntaken\n").unwrap();
+            let mut heard = String::new();
+            let _ = (&stream).take(4096).read_to_string(&mut heard);
+            heard
+        });
+        assert!(send(&path, &[PathBuf::from("/music/private.flac")]).is_err());
+        let heard = heard.join().unwrap();
+        assert!(!heard.contains("private"), "{heard:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

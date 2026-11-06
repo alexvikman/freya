@@ -250,8 +250,7 @@ pub(crate) fn package_cache() -> Result<PathBuf, Error> {
 fn extract(package: &Path, out: &Path) -> Result<(), Error> {
     std::fs::create_dir_all(out).map_err(|e| io(out, e))?;
     let file = std::fs::File::open(package).map_err(|e| io(package, e))?;
-    let mut archive = zip::ZipArchive::new(std::io::BufReader::new(file))
-        .map_err(|e| Error::Package(e.to_string()))?;
+    let mut archive = open_package(file)?;
     if archive.len() > MAX_ENTRIES {
         return Err(Error::Package(format!("more than {MAX_ENTRIES} files")));
     }
@@ -313,10 +312,23 @@ fn safe_relative_path(name: &str) -> Option<PathBuf> {
     (!path.as_os_str().is_empty()).then_some(path)
 }
 
-fn read_package_file(package: &Path, name: &str) -> Result<Option<Vec<u8>>, Error> {
-    let file = std::fs::File::open(package).map_err(|e| io(package, e))?;
+/// A package's archive, refused when its entries' local headers and its central directory
+/// disagree (names, sizes, duplicates or overlapping entries): another unzipper would then read
+/// other files from it than Freya checked.
+fn open_package(
+    file: std::fs::File,
+) -> Result<zip::ZipArchive<std::io::BufReader<std::fs::File>>, Error> {
     let mut archive = zip::ZipArchive::new(std::io::BufReader::new(file))
         .map_err(|e| Error::Package(e.to_string()))?;
+    archive
+        .validate_header_consistency()
+        .map_err(|e| Error::Package(e.to_string()))?;
+    Ok(archive)
+}
+
+fn read_package_file(package: &Path, name: &str) -> Result<Option<Vec<u8>>, Error> {
+    let file = std::fs::File::open(package).map_err(|e| io(package, e))?;
+    let mut archive = open_package(file)?;
     let Ok(entry) = archive.by_name(name) else {
         return Ok(None);
     };
@@ -419,5 +431,46 @@ mod path_tests {
         ] {
             assert_eq!(safe_relative_path(unsafe_name), None, "{unsafe_name:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod package_tests {
+    use std::io::Write;
+
+    /// A package with `skin.slint` and `extra.slint`, as zip writes it.
+    fn package() -> Vec<u8> {
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        for (name, text) in [("skin.slint", "// main"), ("extra.slint", "// more")] {
+            zip.start_file(name, options).unwrap();
+            zip.write_all(text.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    }
+
+    fn opens(bytes: &[u8]) -> bool {
+        let dir = std::env::temp_dir().join(format!("freya-cloaked-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("p.freyaskin");
+        std::fs::write(&path, bytes).unwrap();
+        let opened = super::open_package(std::fs::File::open(&path).unwrap()).is_ok();
+        let _ = std::fs::remove_dir_all(&dir);
+        opened
+    }
+
+    #[test]
+    fn a_package_whose_headers_disagree_is_refused() {
+        let bytes = package();
+        assert!(opens(&bytes));
+        // The first entry's local header names another file than the central directory does,
+        // as a package made to look different to different unzippers would.
+        let at = bytes
+            .windows(b"skin.slint".len())
+            .position(|w| w == b"skin.slint")
+            .unwrap();
+        let mut cloaked = bytes.clone();
+        cloaked[at..at + 10].copy_from_slice(b"evil.slint");
+        assert!(!opens(&cloaked));
     }
 }

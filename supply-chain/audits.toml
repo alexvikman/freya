@@ -547,6 +547,12 @@ criteria = "safe-to-deploy"
 delta = "9.0.1 -> 9.0.4"
 notes = '''Security fixes: enclosed_name and simplified_components now reject a separator inside one component (a verbatim \\?\ path such as \\?\C:\../b could pass enclosed_name in 9.0.1 and, joined onto a normal path on Windows, write one level above the target); symlink extraction no longer lets '..' after a missing component escape the target. Also checked_add for header offsets, a cached parse of central-directory chains (bounded work on crafted archives), read-only handling on non-Unix, lazy zstd init, and the legacy decoders (feature-gated) rewritten as streams. No new unsafe or network access; file writes only in the existing extract path.'''
 
+[[audits.zip]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "9.0.4 -> 9.0.5"
+notes = "Fix for GHSA-m665-v7pm-7grj (zip cloaking): an opt-in check that each entry's local header agrees with the central directory (name, Unicode path, method, flags, time, CRC and sizes), duplicate names and overlapping entries, which Freya's skin unpacking turns on; ZIP64 extra fields bounds-checked; AES extra field accepted once and only with method 99; constant-time AES password check; fchmodat mode typed as mode_t. New dev-dependency count_instructions only. No new unsafe, build script, environment or network access."
+
 [[trusted.aho-corasick]]
 criteria = "safe-to-deploy"
 user-id = 189 # Andrew Gallant (BurntSushi)

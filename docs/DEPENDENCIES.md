@@ -50,7 +50,9 @@ Since then (2026-10-16):
   anyhow, serde, log and objc2 (the step from the last audited version), and spin_on, ctrlc,
   directories and realfft (in full). Later the same day, zip's step from 9.0.1 (yanked) to
   9.0.4, which closes a path check that let a skin package write outside its folder; a test
-  in `freya-skin` now guards that. These were AI-assisted reviews (by Claude) of every
+  in `freya-skin` now guards that. On 2026-11-06, its step to 9.0.5, for GHSA-m665-v7pm-7grj:
+  a check, which Freya turns on, that a package's local headers agree with its central
+  directory, so it cannot show other unzippers other files than Freya checked. These were AI-assisted reviews (by Claude) of every
   changed line, looking at `unsafe`, build scripts, file and network access; each entry's
   notes say what was found.
 - **Trusted by publisher:** crates published by Microsoft's windows-rs maintainer

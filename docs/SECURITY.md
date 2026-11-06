@@ -226,6 +226,20 @@ Nobody can wear it out before logging in:
   cache made small, named by its address's SHA-256. A station's site learns that a logo was
   asked, as it does when the station plays.
 
+## On the user's computer
+
+- A skin package is unpacked only when every entry's local header agrees with the zip's
+  central directory (names, sizes, flags; no duplicate or overlapping entries), so it cannot
+  show one set of files to another unzipper and another to Freya; each name is then checked by
+  Freya's own rules (plain names only, no `..`, no `:`) as well as zip's, only regular files
+  are written, and their count and sizes are bounded.
+- On Windows and Linux, Freya started again hands its files to the one running through this
+  computer's loopback. The port is in a file in Freya's folder, readable by the user alone,
+  with two random secrets: the one started later sends the first, and its files only once the
+  running Freya has answered with the second. A program that took the port of a Freya that
+  quit learns no files and keeps no Freya from starting, and the file is taken away when
+  Freya quits.
+
 ## Not guarded against
 
 - **Another program of the same user** can read the token file, the adoption code while the
