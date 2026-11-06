@@ -157,15 +157,11 @@ component LinkText inherits Text {
 component TooltipBox inherits Rectangle {
     in property <string> text;
 
-    // In the dark, set apart by a lighter fill: a thin rounded edge is drawn with light
-    // corners there.
+    // In the dark, set apart by a lighter fill. Square, without a shadow: the popup is as
+    // large as the box, and rounded corners showed light in it.
     background: Theme.dark ? #2d3137 : Theme.surface;
-    border-radius: 6px;
     border-width: Theme.dark ? 0 : 1px;
     border-color: Theme.divider;
-    drop-shadow-blur: 8px;
-    drop-shadow-offset-y: 2px;
-    drop-shadow-color: Theme.dark ? #00000066 : #00000030;
 
     HorizontalLayout {
         padding-left: 8px;
