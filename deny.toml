@@ -28,6 +28,12 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant: unmaintained (merged into zbus 6), no known flaw; goes when Slint and accesskit move to zbus 6" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names: unmaintained (merged into zbus 6), no known flaw; goes when Slint and accesskit move to zbus 6" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: unmaintained (merged into zbus 6), no known flaw; goes when Slint and accesskit move to zbus 6" },
+    # `pin-utils`, via spin_on, which Slint's build and Freya's skin compiler use.
+    { id = "RUSTSEC-2026-0441", reason = "pin-utils: unmaintained (archived), no known flaw; goes when spin_on drops it" },
+    # `pulldown-cmark`, via Slint's styled text (i-slint-common), which turns on strikethrough
+    # alone (styled_text.rs): both flaws need ENABLE_WIKILINKS. Update with Slint.
+    { id = "RUSTSEC-2026-0414", reason = "pulldown-cmark: only with ENABLE_WIKILINKS, which Slint does not turn on" },
+    { id = "RUSTSEC-2026-0433", reason = "pulldown-cmark: only with ENABLE_WIKILINKS, which Slint does not turn on" },
 ]
 
 [licenses]
