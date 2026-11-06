@@ -260,6 +260,23 @@ macOS, the app's menu is in the system's menu bar, as Mac apps have it, not in t
 | **W3** ✓ | **The close button keeps Freya running**: a setting, on at first as music apps have it. Freya's close button leaves Freya playing in the notification area on Windows, with an icon there that opens the window again and plays, skips and quits from its menu; minimized in the taskbar on Linux, where not every desktop has a notification area. The system asking the window to close (the taskbar's Close window, Alt+F4) quits, as does Exit (Ctrl+Shift+Q). On macOS closing the window (or File → Close Window, ⌘W) leaves Freya in the Dock, and a click there opens it again, as Mac apps do. One module decides what closing does, by what asked and on which system | Closing the window does not stop the music, and Freya can always be quit |
 | **W4** ✓ | **Scrolling by the middle button**: a click with the mouse wheel marks the place, and moving the mouse away scrolls whatever is under it, faster the farther; another click, any other button, or Esc stops it; held down, it scrolls until let go. Freya takes the button from the window's events and asks the window as by the wheel, at the mark, every frame while it scrolls; the skin marks the place | Every list scrolls so, without each view doing it |
 
+## After trying Freya on Windows (T1–T8)
+
+Decided with the user, trying the `.msi`s on a Windows computer with a library on a network
+drive. Music files play only from the library; radio and streams are the exception. A song is
+always reached through its artist, album or playlist; only Up Next lists songs.
+
+| # | Milestone | Done when |
+|---|---|---|
+| **T1** ✓ | **Small things**: no tooltip on the volume slider; the window dragged by its top while a dialog is open; one Scan button for the library in Settings; Stop ends a run of tracks that cannot be opened, and Freya gives up after a few of them in a row, saying how many; the artist page and the grids show only what there is, without placeholders, and their headers do not move | Nothing jumps or blinks, and nothing keeps trying behind the user's back |
+| **T2** | **Only the library's files play**: files dropped, opened or given to Freya are added as the library's tracks they are; a folder not in the library is offered to an admin as a music folder; anything else is left out, and Freya says how much. Up Next keeps only the library's tracks. Up Next never asks the server for a file it does not know | Every track that plays is the library's |
+| **T3** | **The folder picker**: places on the left (home, drives, network drives, mounted volumes) and the folders where it is on the right; a path to type or paste, a Windows share's `\\server` listing its shares; its own dialog with Cancel and Add. What it shows is the server's view, and the server takes network paths as music folders | A network share is added from the server's own view, as Plex does |
+| **T4** | **Activity**: each thing running has its own Cancel; a scan's result shows when it ends, in Activity and by the Scan button; an admin sees the server's log among Freya's | What runs can be stopped, and a scan shows what it did |
+| **T5** | **No lists of songs**: Songs is gone; a song found by search opens its album at the song; Most Played lists albums and playlists | Songs are reached through their albums, artists and playlists |
+| **T6** | **Recents**: a feed by day, of the albums and playlists played (with the songs played, folded) and of albums added and playlists made, filtered by played, added, radio and most played; opened from the toolbar, not the sidebar. The server keeps what each play was played from | What was played and added lately is one page, out of the way |
+| **T7** | **Two panels on black**: the sidebar and the page as two panels of one colour with rounded corners, on the window's black, the toolbar and the player on it too; light in the light theme | Freya's window looks as current music apps do |
+| **T8** | **Backup, export and import**: planned with the user first. A backup of everything the server keeps, the pictures and covers too, to a folder on its computer, and restored from it; an export of what the users made (playlists, plays, stations, edits), imported into another library by tags and paths | A server is moved to another computer without losing anything |
+
 ## Radio directory (R1–R4)
 
 Decided with the user: a large section of radio stations, found by tags rather than by

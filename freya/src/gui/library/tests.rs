@@ -724,6 +724,8 @@ fn a_track_in_a_discography_plays_its_own_album() {
         Item::Track(track("Quiescence", 1)),
         Item::Track(track("Quiescence", 2)),
     ];
+    // As the rows are read.
+    panel.shown = panel.shown_now();
     assert_eq!(panel.values()[1].1, string("discography"));
     let (tracks, start) = panel.activate(5).unwrap();
     let titles: Vec<_> = tracks.iter().filter_map(|t| t.title.clone()).collect();
@@ -735,6 +737,12 @@ fn a_track_in_a_discography_plays_its_own_album() {
 
     // As a grid, the same level is covers.
     panel.album_list = false;
+    assert_eq!(
+        panel.values()[1].1,
+        string("discography"),
+        "as the rows were read, until they are read again"
+    );
+    panel.shown = panel.shown_now();
     assert_eq!(panel.values()[1].1, string("grid"));
 }
 

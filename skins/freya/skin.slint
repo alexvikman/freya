@@ -565,10 +565,6 @@ component PlayerBar inherits Rectangle {
                     label: "Volume";
                     value: Player.volume;
                     changed(v) => { Player.set-volume(v); }
-
-                    Tooltip {
-                        TooltipBox { text: "Volume (Up and Down arrows)"; }
-                    }
                 }
             }
             Rectangle { width: 4px; }
@@ -3434,6 +3430,18 @@ component LibraryPanel inherits FocusScope {
     /// An artist's page over their albums; its height, by what it holds.
     property <bool> artist-page-shown: Library.artist-page.shown && (grid-shown || discography-shown);
     property <int> head-lines: artist-page-shown ? 1 : 0;
+    // An artist's albums switched between the grid and the list keep the page where it was, as
+    // far as its head goes: the head does not move.
+    changed discography-shown => {
+        if (root.discography-shown && root.artist-page-shown) {
+            discography.content-y = max(grid.content-y, -root.artist-head-height);
+        }
+    }
+    changed grid-shown => {
+        if (root.grid-shown && root.artist-page-shown) {
+            grid.content-y = max(discography.content-y, -root.artist-head-height);
+        }
+    }
     property <length> artist-head-height: 340px + 88px
         + (Library.artist-page.summary != "" ? 150px : 0)
         + (Library.popular.length > 0 ? 48px + Library.popular.length * 56px + (Library.artist-page.popular-count > 5 ? 40px : 0) : 0)
@@ -7401,6 +7409,17 @@ component TitleBarArea inherits TouchArea {
     }
 }
 
+/// The dimmed window behind a dialog. Its top, where the toolbar is, still moves the window,
+/// as a title bar would.
+component DialogScrim inherits Rectangle {
+    background: #00000059;
+
+    TitleBarArea {
+        y: 0;
+        height: App.title-bar-height;
+    }
+}
+
 /// One of the window buttons a frameless window has on Windows: as wide as the system's, the
 /// height of the top bar, with a glyph drawn in a 10-pixel box.
 component WindowButton inherits Rectangle {
@@ -8993,11 +9012,12 @@ component SettingsView inherits Rectangle {
                 for folder[i] in Library.folders: SettingsRow {
                     label: folder;
 
-                    if !Library.scanning: VerticalLayout {
+                    // With one folder, the library's Scan below is that folder's.
+                    if !Library.scanning && Library.folders.length > 1: VerticalLayout {
                         alignment: center;
 
                         TextButton {
-                            text: "Scan";
+                            text: "Scan Folder";
                             clicked => { Library.scan-one-folder(i); }
                         }
                     }
@@ -9017,7 +9037,7 @@ component SettingsView inherits Rectangle {
                                 clicked => { Library.stop-scan(); }
                             }
                             if !Library.scanning: TextButton {
-                                text: "Scan";
+                                text: "Scan Library";
                                 clicked => { Library.rescan(); }
                             }
                             TextButton {
@@ -11015,8 +11035,7 @@ export component FreyaSkin inherits Window {
                 reject
             }
 
-            Rectangle {
-                background: #00000059;
+            DialogScrim {
 
                 FoldersForm {
                     width: min(560px, parent.width - 48px);
@@ -11047,8 +11066,7 @@ export component FreyaSkin inherits Window {
                 reject
             }
 
-            Rectangle {
-                background: #00000059;
+            DialogScrim {
 
                 artist-match-form := ArtistMatchForm {
                     width: min(720px, parent.width - 48px);
@@ -11078,8 +11096,7 @@ export component FreyaSkin inherits Window {
                 reject
             }
 
-            Rectangle {
-                background: #00000059;
+            DialogScrim {
 
                 album-match-form := AlbumMatchForm {
                     width: min(760px, parent.width - 48px);
@@ -11112,8 +11129,7 @@ export component FreyaSkin inherits Window {
                 reject
             }
 
-            Rectangle {
-                background: #00000059;
+            DialogScrim {
 
                 artist-form := ArtistEditForm {
                     tab: root.artist-tab;
@@ -11144,8 +11160,7 @@ export component FreyaSkin inherits Window {
                 reject
             }
 
-            Rectangle {
-                background: #00000059;
+            DialogScrim {
 
                 genre-form := GenreEditForm {
                     width: min(560px, parent.width - 48px);
@@ -11175,8 +11190,7 @@ export component FreyaSkin inherits Window {
                 reject
             }
 
-            Rectangle {
-                background: #00000059;
+            DialogScrim {
 
                 playlist-form := PlaylistEditForm {
                     width: min(560px, parent.width - 48px);
@@ -11206,8 +11220,7 @@ export component FreyaSkin inherits Window {
                 reject
             }
 
-            Rectangle {
-                background: #00000059;
+            DialogScrim {
 
                 FanartKeyForm {
                     width: min(480px, parent.width - 48px);
@@ -11237,8 +11250,7 @@ export component FreyaSkin inherits Window {
                 reject
             }
 
-            Rectangle {
-                background: #00000059;
+            DialogScrim {
 
                 ServerForm {
                     width: min(520px, parent.width - 48px);

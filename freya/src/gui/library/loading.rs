@@ -175,6 +175,7 @@ impl LibraryPanel {
                 self.items.clear();
             }
         }
+        self.shown = self.shown_now();
         // The genres' covers, shown with them.
         if *self.level() == Level::Genres && !self.searching() {
             let genres = self.items.iter().filter_map(|item| match item {

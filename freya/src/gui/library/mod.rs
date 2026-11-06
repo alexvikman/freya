@@ -324,6 +324,10 @@ pub struct LibraryPanel {
     /// Rows need reloading, e.g. because a scan wrote more tracks.
     stale: bool,
     reloaded: Instant,
+    /// How the rows shown are laid out, as of when they were read: what is opened changes at
+    /// once, but a server's rows come a little later, and until then the old rows are shown
+    /// as they were, not in the new list's layout.
+    shown: Shown,
     /// Folders last given to the skin, in use and being edited.
     folders_shown: Option<Vec<PathBuf>>,
     draft_shown: Option<Vec<PathBuf>>,
@@ -513,6 +517,7 @@ impl LibraryPanel {
             progress: None,
             stale: false,
             reloaded: Instant::now(),
+            shown: Shown::default(),
             pictures_loaded: Instant::now(),
             folders_shown: None,
             draft_shown: None,

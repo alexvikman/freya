@@ -56,6 +56,8 @@ const SKIN_WATCH_INTERVAL: Duration = Duration::from_secs(1);
 /// How often Freya looks whether Freya Server answers on this computer, while its library is
 /// not the one shown.
 const LOOK_HERE_EVERY: Duration = Duration::from_secs(2);
+/// How many entries in a row that cannot be opened make Freya stop trying the ones after them.
+const MOST_FAILURES: usize = 5;
 
 /// A downloaded station playlist, or why it could not be read.
 /// `path` from the root, as the working folder makes it; addresses are kept as they are.
@@ -537,10 +539,16 @@ impl App {
                     log::warn!("{msg}");
                     self.error = msg;
                     self.failures += 1;
-                    if self.failures >= self.playlist.len().max(1) {
-                        // None of them plays: stop rather than try them round and round.
-                        self.requested = None;
-                        self.skip_after = None;
+                    if self.failures >= self.playlist.len().clamp(1, MOST_FAILURES) {
+                        // A few in a row do not play, or none: stop rather than try them all,
+                        // or round and round.
+                        if self.failures > 1 {
+                            self.error = format!(
+                                "{} tracks in a row could not be played, so Freya stopped. {}",
+                                self.failures, self.error
+                            );
+                        }
+                        self.stop();
                     } else if self.requested == Some(id) {
                         // Asked to play, and nothing plays: skip to the entry after it.
                         self.requested = None;

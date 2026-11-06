@@ -2,12 +2,34 @@
 
 use super::*;
 
+/// How the rows shown are laid out, and which options are over them: see
+/// [`LibraryPanel::shown`].
+#[derive(Clone, Debug)]
+pub(super) struct Shown {
+    layout: &'static str,
+    album_options: bool,
+    albums_options: bool,
+    playlists_options: bool,
+    artist_options: bool,
+}
+
+impl Default for Shown {
+    fn default() -> Self {
+        Self {
+            layout: "list",
+            album_options: false,
+            albums_options: false,
+            playlists_options: false,
+            artist_options: false,
+        }
+    }
+}
+
 impl LibraryPanel {
-    /// Values for the `Library` global, except the rows and folders.
-    pub fn values(&self) -> Vec<(&'static str, Value)> {
-        let status = self
-            .scan_phase()
-            .unwrap_or_else(|| self.stats.clone().unwrap_or_default());
+    /// How the rows of what is opened now are laid out: taken as [`Self::shown`] once they are
+    /// read.
+    pub(super) fn shown_now(&self) -> Shown {
+        let listed = !self.searching();
         let layout = if self.searching() {
             match self.search_filter {
                 SearchFilter::All => "search",
@@ -21,9 +43,24 @@ impl LibraryPanel {
         } else {
             self.level().layout()
         };
+        Shown {
+            layout,
+            album_options: listed && matches!(self.level(), Level::ArtistAlbums { .. }),
+            albums_options: listed && *self.level() == Level::Albums,
+            playlists_options: listed && *self.level() == Level::Playlists,
+            artist_options: listed && *self.level() == Level::Artists,
+        }
+    }
+
+    /// Values for the `Library` global, except the rows and folders.
+    pub fn values(&self) -> Vec<(&'static str, Value)> {
+        let status = self
+            .scan_phase()
+            .unwrap_or_else(|| self.stats.clone().unwrap_or_default());
+        let shown = &self.shown;
         vec![
             ("section", string(self.opened[0].section_name())),
-            ("layout", string(layout)),
+            ("layout", string(shown.layout)),
             ("search-shown", Value::Bool(self.searching())),
             ("search-filter", string(self.search_filter.name())),
             (
@@ -64,21 +101,10 @@ impl LibraryPanel {
             ),
             ("covers-ready", Value::Number(f64::from(self.covers_ready))),
             ("status", string(status)),
-            (
-                "album-options",
-                Value::Bool(
-                    !self.searching() && matches!(self.level(), Level::ArtistAlbums { .. }),
-                ),
-            ),
-            (
-                "albums-options",
-                Value::Bool(!self.searching() && *self.level() == Level::Albums),
-            ),
+            ("album-options", Value::Bool(shown.album_options)),
+            ("albums-options", Value::Bool(shown.albums_options)),
             ("albums-sort", string(albums_order_name(self.albums_order))),
-            (
-                "playlists-options",
-                Value::Bool(!self.searching() && *self.level() == Level::Playlists),
-            ),
+            ("playlists-options", Value::Bool(shown.playlists_options)),
             (
                 "playlists-sort",
                 string(if self.playlists_by_name {
@@ -125,10 +151,7 @@ impl LibraryPanel {
                 Value::Bool(self.album_finder.searching()),
             ),
             ("album-match-error", string(&self.album_match_error)),
-            (
-                "artist-options",
-                Value::Bool(!self.searching() && *self.level() == Level::Artists),
-            ),
+            ("artist-options", Value::Bool(shown.artist_options)),
             ("artist-sort", string(artist_order_name(self.artist_order))),
             (
                 "artist-view",

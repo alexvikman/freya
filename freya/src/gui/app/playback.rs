@@ -18,9 +18,14 @@ impl App {
         self.queue_next();
     }
 
+    /// Stops, and with it whatever was to follow: an entry queued next that cannot be opened
+    /// does not move playback on after Stop.
     pub fn stop(&mut self) {
         self.requested = None;
         self.skip_after = None;
+        self.armed = None;
+        self.failures = 0;
+        self.player.set_next(None);
         self.player.stop();
     }
 
