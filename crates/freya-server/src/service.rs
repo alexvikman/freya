@@ -799,6 +799,10 @@ impl LibraryPictures for LocalLibrary {
     }
 
     fn put_picture(&self, bytes: &[u8]) -> ApiResult<String> {
+        // Only a picture is kept, and given to every device as one: its head says so, within
+        // the bounds a picture is decoded in.
+        freya_media::picture_dimensions(bytes)
+            .map_err(|e| ApiError(format!("not a picture Freya shows: {e}")))?;
         self.pictures()?.put(bytes).map_err(api_error)
     }
 

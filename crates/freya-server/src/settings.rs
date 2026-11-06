@@ -34,15 +34,11 @@ pub fn load(file: &Path) -> (ServerSettings, bool) {
 }
 
 /// Keeps `settings` in `file`, through a new file renamed over it, so a crash leaves the old
-/// settings or the new ones, never half of them.
+/// settings or the new ones, never half of them; readable by the user alone, as they hold the
+/// user's keys.
 pub fn save(file: &Path, settings: &ServerSettings) -> std::io::Result<()> {
     let text = toml::to_string_pretty(settings).map_err(std::io::Error::other)?;
-    if let Some(dir) = file.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let partial = file.with_extension("toml.partial");
-    std::fs::write(&partial, text)?;
-    std::fs::rename(&partial, file)
+    crate::accounts::write_private(file, text.as_bytes())
 }
 
 #[cfg(test)]

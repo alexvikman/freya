@@ -327,14 +327,9 @@ impl ServerPanel {
         let page = match self.proxy() {
             Ok(proxy) => {
                 let login = Login::new(&proxy.callback());
-                let (page, ticket) = match claim {
-                    // Adopting or joining the server: its page logs in too.
-                    Some((ticket, _)) => (login.join_page(), Some(ticket)),
-                    None => (login.page(), None),
-                };
-                let page = format!("{}{page}", proxy.origin());
-                proxy.claim(Http::pinned(pin), login, ticket);
-                page
+                // Adopting or joining the server: its page logs in too.
+                let ticket = claim.map(|(ticket, _)| ticket);
+                proxy.claim(Http::pinned(pin), login, ticket)
             }
             Err(e) => {
                 self.login_error = e;

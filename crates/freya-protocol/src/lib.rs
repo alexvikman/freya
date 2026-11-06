@@ -33,6 +33,13 @@ pub const CERTIFICATE_FILE: &str = "tls-certificate.der";
 /// user types no code there.
 pub const ADOPTION_CODE: &str = "adoption-code";
 
+/// Whether `given` is the secret `secret`, compared in the same time whatever they are: so how
+/// far a guess at a ticket, a cookie or a state got does not show in how long the answer took.
+pub fn same_secret(given: &[u8], secret: &[u8]) -> bool {
+    use subtle::ConstantTimeEq;
+    given.ct_eq(secret).into()
+}
+
 /// The SHA-256 of a certificate in DER, in groups of four hex digits: shown by both sides, to
 /// compare.
 pub fn fingerprint(certificate: &[u8]) -> String {

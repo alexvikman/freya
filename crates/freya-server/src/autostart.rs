@@ -105,31 +105,26 @@ mod platform {
         false
     }
 
-    /// The user's launchd domain.
-    fn domain() -> Result<String, String> {
-        let out = std::process::Command::new("id")
-            .arg("-u")
-            .output()
-            .map_err(|e| e.to_string())?;
-        Ok(format!(
-            "gui/{}",
-            String::from_utf8_lossy(&out.stdout).trim()
-        ))
+    /// The user's launchd domain, by their id as the system has it.
+    #[allow(unsafe_code, reason = "asks the system the user's id")]
+    fn domain() -> String {
+        // SAFETY: a plain query, which cannot fail.
+        format!("gui/{}", unsafe { libc::getuid() })
     }
+
+    /// Where launchctl is: the system's own, not one found on the path.
+    const LAUNCHCTL: &str = "/bin/launchctl";
 
     pub fn install(launch: &Launch) -> Result<(), String> {
         let file = file().ok_or("no home folder")?;
         if !write_if_changed(&file, &plist(launch))? {
             return Ok(());
         }
-        let domain = domain()?;
+        let domain = domain();
         // Loaded anew, as launchd reads the file when it loads it.
-        let _ = run("launchctl", &["bootout", &format!("{domain}/{LABEL}")]);
-        run(
-            "launchctl",
-            &["bootstrap", &domain, &file.to_string_lossy()],
-        )
-        .map_err(|e| format!("launchd did not take the server: {e}"))
+        let _ = run(LAUNCHCTL, &["bootout", &format!("{domain}/{LABEL}")]);
+        run(LAUNCHCTL, &["bootstrap", &domain, &file.to_string_lossy()])
+            .map_err(|e| format!("launchd did not take the server: {e}"))
     }
 
     /// Only the file goes: launchd forgets the agent at logout, and the server running now
@@ -209,12 +204,21 @@ mod platform {
         false
     }
 
+    /// Where systemctl is: the system's own, where the system keeps it, rather than one found
+    /// on the path.
+    fn systemctl() -> &'static str {
+        ["/usr/bin/systemctl", "/bin/systemctl"]
+            .into_iter()
+            .find(|path| std::path::Path::new(path).is_file())
+            .unwrap_or("systemctl")
+    }
+
     pub fn install(launch: &Launch) -> Result<(), String> {
         let file = file().ok_or("no settings folder")?;
         if write_if_changed(&file, &unit(launch))? {
-            run("systemctl", &["--user", "daemon-reload"])?;
+            run(systemctl(), &["--user", "daemon-reload"])?;
         }
-        run("systemctl", &["--user", "enable", UNIT])
+        run(systemctl(), &["--user", "enable", UNIT])
             .map_err(|e| format!("systemd did not take the server: {e}"))
     }
 
@@ -224,9 +228,9 @@ mod platform {
         if !file.exists() {
             return Ok(());
         }
-        let _ = run("systemctl", &["--user", "disable", UNIT]);
+        let _ = run(systemctl(), &["--user", "disable", UNIT]);
         std::fs::remove_file(&file).map_err(|e| e.to_string())?;
-        run("systemctl", &["--user", "daemon-reload"])
+        run(systemctl(), &["--user", "daemon-reload"])
     }
 
     /// The unit: started at login, and again only when it fails.

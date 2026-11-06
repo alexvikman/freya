@@ -5,7 +5,9 @@
 //!
 //! Only questions from this network are answered, from a private, link-local or this computer's
 //! own address, and from one address at most twice a second: so the server cannot be used to
-//! flood another computer with answers to questions sent in its name.
+//! flood another computer with answers to questions sent in its name. All told, at most a few
+//! hundred answers a second, and a few thousand addresses remembered: questions sent in the
+//! names of a whole network at once neither fill the memory nor keep the server answering.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, UdpSocket};
@@ -16,6 +18,11 @@ use std::time::{Duration, Instant};
 
 /// How often one address is answered at most.
 const ANSWER_EVERY: Duration = Duration::from_millis(500);
+/// How many addresses are remembered as answered at most; a question from one more while they
+/// are all recent is not answered.
+const MOST_REMEMBERED: usize = 4096;
+/// How many questions are answered a second at most, from every address together.
+const MOST_A_SECOND: u32 = 200;
 
 use freya_protocol::{DISCOVERY_PORT, DISCOVERY_QUESTION, ServerFound};
 
@@ -42,6 +49,8 @@ impl Discovery {
             .spawn(move || {
                 let mut question = [0; 64];
                 let mut answered: HashMap<IpAddr, Instant> = HashMap::new();
+                // The second being counted, and how many were answered in it.
+                let mut second = (Instant::now(), 0u32);
                 while !stopped.load(Ordering::Relaxed) {
                     let Ok((read, from)) = socket.recv_from(&mut question) else {
                         continue;
@@ -50,16 +59,23 @@ impl Discovery {
                         continue;
                     }
                     let now = Instant::now();
-                    if answered.len() > 1024 {
-                        answered.retain(|_, at| now.duration_since(*at) < ANSWER_EVERY);
+                    if now.duration_since(second.0) >= Duration::from_secs(1) {
+                        second = (now, 0);
                     }
-                    if answered
-                        .get(&from.ip())
-                        .is_some_and(|at| now.duration_since(*at) < ANSWER_EVERY)
-                    {
+                    if second.1 >= MOST_A_SECOND {
                         continue;
                     }
+                    if answered.len() >= MOST_REMEMBERED / 2 {
+                        answered.retain(|_, at| now.duration_since(*at) < ANSWER_EVERY);
+                    }
+                    match answered.get(&from.ip()) {
+                        Some(at) if now.duration_since(*at) < ANSWER_EVERY => continue,
+                        // Not remembered: full of addresses answered just now.
+                        None if answered.len() >= MOST_REMEMBERED => continue,
+                        _ => {}
+                    }
                     answered.insert(from.ip(), now);
+                    second.1 += 1;
                     if let Ok(answer) = serde_json::to_vec(&found()) {
                         let _ = socket.send_to(&answer, from);
                     }

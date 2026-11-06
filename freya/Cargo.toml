@@ -127,6 +127,12 @@ wayland-backend = { version = "0.3.17", features = ["client_system"] }
 wayland-client = "0.31.15"
 x11rb = { version = "0.13.2", features = ["shape"] }
 
+[target.'cfg(unix)'.dependencies]
+# The computer's name for the server's list of devices (see settings.rs), asked of the system
+# rather than of a program on the path; and on macOS the hologram's drawing thread measures its
+# own CPU time with it (see gui/hologram/metal.rs).
+libc = "0.2.190"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # The spectrum drawn with Core Animation (see gui/native_spectrum.rs), media keys and Now
 # Playing through the MediaPlayer framework (see gui/system_media/now_playing.rs), and skins
@@ -139,8 +145,6 @@ objc2-core-graphics = { version = "0.3.2", default-features = false, features = 
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSBundle", "NSData", "NSDictionary", "NSKeyValueObserving", "NSObject", "NSProcessInfo", "NSString", "NSUserDefaults", "NSValue"] }
 objc2-media-player = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "MPMediaItem", "MPNowPlayingInfoCenter", "MPRemoteCommand", "MPRemoteCommandCenter", "MPRemoteCommandEvent"] }
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CALayer", "CAMetalLayer", "CAShapeLayer", "CATransaction", "objc2-core-foundation", "objc2-core-graphics", "objc2-metal"] }
-# The hologram's drawing thread measures its own CPU time (see gui/hologram/metal.rs).
-libc = "0.2.190"
 # The hologram, drawn by the graphics card (see gui/hologram/metal.rs). Already in the tree through
 # Slint's renderers.
 objc2-metal = { version = "0.3.2", default-features = false, features = ["std", "MTLAllocation", "MTLBlitCommandEncoder", "MTLCommandBuffer", "MTLCommandEncoder", "MTLCommandQueue", "MTLDevice", "MTLDrawable", "MTLLibrary", "MTLPixelFormat", "MTLRenderCommandEncoder", "MTLRenderPass", "MTLRenderPipeline", "MTLResource", "MTLTexture", "MTLTypes", "objc2-core-foundation"] }

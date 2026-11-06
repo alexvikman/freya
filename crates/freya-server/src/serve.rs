@@ -92,7 +92,21 @@ pub trait Updating: Send + Sync {
 /// Answers requests to the API as `served` says.
 pub fn handler(served: Served) -> Handler {
     let answers = Answers::default();
-    Arc::new(move |request| answer(&served, &answers, request))
+    Arc::new(move |request| {
+        let mut response = answer(&served, &answers, request);
+        // Never kept by anything between: an answer may hold a token or an account. The
+        // library's answers are kept by Freya's clients themselves, by their tags.
+        if !response
+            .headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("cache-control"))
+        {
+            response
+                .headers
+                .push(("Cache-Control", "no-store".to_owned()));
+        }
+        response
+    })
 }
 
 /// The largest cover asked for, wide or high: more makes the server work for nothing.
@@ -724,14 +738,32 @@ fn computer_name() -> String {
 }
 
 fn ask_computer_name() -> String {
-    let named = std::env::var("COMPUTERNAME").ok().or_else(|| {
-        let out = std::process::Command::new("hostname").output().ok()?;
-        Some(String::from_utf8_lossy(&out.stdout).trim().to_owned())
-    });
-    named
-        .map(|name| name.trim_end_matches(".local").to_owned())
+    std::env::var("COMPUTERNAME")
+        .ok()
+        .or_else(host_name)
+        .map(|name| name.trim().trim_end_matches(".local").to_owned())
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| "Freya".into())
+}
+
+/// The computer's name as the system has it, asked of the system itself: no program on the
+/// path is run for it.
+#[cfg(unix)]
+#[allow(unsafe_code, reason = "asks the system the computer's name")]
+fn host_name() -> Option<String> {
+    let mut name = vec![0u8; 256];
+    // SAFETY: a buffer of the length given, which the system fills, NUL-terminated unless the
+    // name fills it whole.
+    if unsafe { libc::gethostname(name.as_mut_ptr().cast(), name.len()) } != 0 {
+        return None;
+    }
+    let length = name.iter().position(|b| *b == 0).unwrap_or(name.len());
+    Some(String::from_utf8_lossy(&name[..length]).into_owned())
+}
+
+#[cfg(not(unix))]
+fn host_name() -> Option<String> {
+    None
 }
 
 /// `{"nonce"}`: the proof that this server knows the connection code its computer shows, over
