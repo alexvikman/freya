@@ -14,6 +14,7 @@ mod listening;
 mod match_finder;
 mod native_oscilloscope;
 mod native_spectrum;
+mod one_freya;
 mod page_proxy;
 mod picture_finder;
 mod playlists;
@@ -84,6 +85,9 @@ pub struct Options {
 }
 
 pub fn run(options: Options) -> anyhow::Result<()> {
+    if one_freya::hand_over(&options.files) {
+        return Ok(());
+    }
     let started = Instant::now();
     let _ = app::STARTED.set(started);
     freya_client::window_draws_on_this_thread();

@@ -203,8 +203,8 @@ pub fn skin_picker_window() -> Result<ComponentInstance, Error> {
         .create()?)
 }
 
-/// Creates Freya's icon in the notification area, not yet shown: its `icon` is to be set, and
-/// its `visible` turned on when it is wanted.
+/// Creates Freya's icon in the notification area, not yet shown: its `app-icon` is to be set
+/// at once, and it is shown when it is wanted, by its `show()`.
 pub fn tray_icon() -> Result<ComponentInstance, Error> {
     let result = spin_on::spin_on(
         compiler().build_from_source(TRAY.to_owned(), PathBuf::from("builtin/tray.slint")),
@@ -278,6 +278,16 @@ mod tests {
         );
         let diagnostics: Vec<String> = result.diagnostics().map(|d| d.to_string()).collect();
         assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+        // What Freya sets; the icon's own `icon` and `visible` cannot be set from outside.
+        let mut properties: Vec<String> = result
+            .components()
+            .last()
+            .unwrap()
+            .properties()
+            .map(|(name, _)| name)
+            .collect();
+        properties.sort();
+        assert_eq!(properties, ["app-icon", "playing"]);
     }
 
     #[test]

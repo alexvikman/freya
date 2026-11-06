@@ -13,7 +13,7 @@ Freya's `.msi` adds `freya/wix/freya-cli.wxs`, which installs `freya-cli.exe` an
 
 Install the tool once with `cargo install cargo-packager --locked`. Packages land in `target/packages/`. The [Release workflow](../.github/workflows/release.yml) builds and signs all of them on GitHub: run by hand it keeps them as downloadable artifacts, and for a version tag it publishes them as a release (see [RELEASING.md](RELEASING.md)).
 
-Building needs CMake (for the Opus decoder) besides Rust; on Linux also the ALSA, fontconfig and xkbcommon headers, and FUSE to build the AppImage (see the workflow).
+Building needs CMake (for the Opus decoder) besides Rust; on Linux also the ALSA, fontconfig and xkbcommon headers, and FUSE to build the AppImage (see the workflow). On Windows the C runtime is linked into the programs ([`.cargo/config.toml`](../.cargo/config.toml)), so they need no Visual C++ Redistributable, which a fresh Windows does not have.
 
 Without GitHub, `ci/check.sh package` builds the Linux AppImage and `.deb` in Docker, for the machine's architecture (arm64 on Apple Silicon; x86-64 needs Docker's emulation and is slow). Packages land in the `freya-ci-target` Docker volume, under `/target/packages`.
 
@@ -37,4 +37,4 @@ Freya also carries its icon itself, for where the system takes it from the runni
 
 - **macOS:** `.app` and `.dmg` built; the app starts from the bundle and saves its settings when quit from the system.
 - **Linux (arm64, in Docker):** all checks and tests pass on Ubuntu 22.04. The `.deb` installs on a clean Ubuntu 22.04 with its dependencies, finds all libraries, and `freya --version` and `freya skin check` work; the AppImage runs. The window itself was not opened (no display in the container). x86-64 packages were not built.
-- **Windows:** cross-compiled with MinGW: clippy passes and `freya.exe` links as a window app. Not run, and the MSVC build and `.msi` need a Windows machine.
+- **Windows:** cross-compiled with MinGW: clippy passes and `freya.exe` links as a window app. The `.msi` packages from the release workflow install and run on a fresh Windows 11 (arm64, in a VM, through Windows' x64 emulation): Freya Server, adopting it in the browser, adding a music folder, playing, the app's menu, scrolling by the middle button, and closing to the notification area.

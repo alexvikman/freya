@@ -1,0 +1,5 @@
+# Windows' C runtime is linked into Freya's programs, so they start on a Windows that has no
+# Visual C++ Redistributable, as a fresh install has not: without it they stop at once, asking
+# for VCRUNTIME140.dll. The C code Freya's crates build follows this (the cc crate reads it).
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

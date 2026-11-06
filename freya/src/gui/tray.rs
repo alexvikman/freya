@@ -5,6 +5,7 @@
 use std::cell::RefCell;
 use std::rc::Weak;
 
+use slint::ComponentHandle;
 use slint_interpreter::{ComponentInstance, Value};
 
 use super::app::App;
@@ -31,10 +32,13 @@ impl Tray {
                 return None;
             }
         };
-        if let Some(icon) = super::app_icon::image() {
-            let _ = instance.set_property("icon", Value::Image(icon));
+        // Before the event loop next runs, which puts it in the notification area with the icon
+        // it has then.
+        if let Some(icon) = super::app_icon::image()
+            && let Err(e) = instance.set_property("app-icon", Value::Image(icon))
+        {
+            log::warn!("no picture for the icon in the notification area: {e}");
         }
-        let _ = instance.set_property("visible", Value::Bool(false));
         let actions: [(&str, Action); 5] = [
             ("open", App::open_window),
             ("toggle-pause", App::toggle_pause),
@@ -66,7 +70,16 @@ impl Tray {
             return;
         }
         self.shown = Some((shown, playing));
-        let _ = self.instance.set_property("visible", Value::Bool(shown));
-        let _ = self.instance.set_property("playing", Value::Bool(playing));
+        let shown = if shown {
+            self.instance.show()
+        } else {
+            self.instance.hide()
+        };
+        if let Err(e) = shown {
+            log::warn!("could not show or hide the icon in the notification area: {e}");
+        }
+        if let Err(e) = self.instance.set_property("playing", Value::Bool(playing)) {
+            log::warn!("could not tell the notification area's menu what plays: {e}");
+        }
     }
 }

@@ -115,7 +115,7 @@ pub fn listing(folder: Option<&Path>) -> FolderListing {
         .into_iter()
         .flatten()
         .flatten()
-        .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+        .filter(|entry| !hidden(entry))
         .map(|entry| entry.path())
         .filter(|path| path.is_dir())
         .collect();
@@ -125,6 +125,26 @@ pub fn listing(folder: Option<&Path>) -> FolderListing {
         parent: folder.parent().map(Path::to_owned),
         folders,
     }
+}
+
+/// Whether `entry` is hidden: by a dot before its name, and on Windows by its attribute too, as
+/// the links an account's folder keeps for old programs are ("Cookies", "Application Data").
+fn hidden(entry: &std::fs::DirEntry) -> bool {
+    if entry.file_name().to_string_lossy().starts_with('.') {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN;
+        if entry
+            .metadata()
+            .is_ok_and(|metadata| metadata.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Where to start looking: the user's home, and the drives mounted on the computer.
@@ -162,6 +182,17 @@ mod tests {
             std::fs::create_dir_all(dir.join(name)).unwrap();
         }
         std::fs::write(dir.join("file.flac"), b"").unwrap();
+        #[cfg(windows)]
+        {
+            let hidden = dir.join("Hidden by attribute");
+            std::fs::create_dir_all(&hidden).unwrap();
+            let status = std::process::Command::new("attrib")
+                .arg("+h")
+                .arg(&hidden)
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
         let listing = listing(Some(&dir));
         assert_eq!(listing.folders, [dir.join("A"), dir.join("b")]);
         assert_eq!(listing.parent.as_deref(), dir.parent());

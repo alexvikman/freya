@@ -30,7 +30,7 @@ use super::system_media::{MediaRequest, SystemMedia};
 use super::title_bar::TitleBar;
 use super::visualizer::{self, Visualizer};
 use super::window_events::{WindowEvent, WindowEvents};
-use super::{radio_directory, radio_logos, reopen};
+use super::{one_freya, radio_directory, radio_logos, reopen};
 use crate::lastfm::{self, LastFm};
 use crate::playlist::Playlist;
 use crate::settings::{self, Settings};
@@ -692,6 +692,12 @@ impl App {
         }
         if self.window_closed && reopen::take() {
             self.open_window();
+        }
+        if let Some(files) = one_freya::take() {
+            self.open_window();
+            if !files.is_empty() {
+                self.replace_and_play(&files);
+            }
         }
         self.radio.poll();
         self.radio_logos.poll();

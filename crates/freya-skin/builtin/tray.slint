@@ -1,8 +1,13 @@
 // Freya's icon in the notification area, where closing the window leaves Freya on Windows: a
 // click opens the window again, and its menu plays, skips and quits.
 
+// Shown and hidden by the component's show() and hide(): its own `visible`, like `icon`, is not
+// one of its public properties, which Freya sets.
 export component FreyaTray inherits SystemTrayIcon {
+    in property <image> app-icon;
     in property <bool> playing;
+
+    icon: root.app-icon;
     callback open();
     callback toggle-pause();
     callback next();

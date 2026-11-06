@@ -26,8 +26,18 @@ pub fn place(window: &slint::Window, settings: &Settings) -> bool {
         Some((w, h)) => window.set_size(slint::LogicalSize::new(w, h)),
         None => match free_area() {
             Some(area) => {
-                let (w, h) = first_size(area);
+                let (w, h) = first_size(area.size);
                 window.set_size(slint::LogicalSize::new(w, h));
+                // Windows opens a new window down and to the right of the last one, which
+                // takes a window this large past the task bar: in the middle of the area instead.
+                if settings.window_position.is_none()
+                    && let Some((x, y)) = area.origin
+                {
+                    window.set_position(slint::PhysicalPosition::new(
+                        x + ((area.size.0 - w) * area.scale / 2.0) as i32,
+                        y + ((area.size.1 - h) * area.scale / 2.0) as i32,
+                    ));
+                }
             }
             None => later = true,
         },
@@ -84,17 +94,36 @@ fn first_size(area: (f32, f32)) -> (f32, f32) {
     )
 }
 
-/// The main screen's area free of the menu bar and the Dock, in points.
-#[cfg(target_os = "macos")]
-fn free_area() -> Option<(f32, f32)> {
-    let mtm = objc2::MainThreadMarker::new()?;
-    let frame = objc2_app_kit::NSScreen::mainScreen(mtm)?.visibleFrame();
-    Some((frame.size.width as f32, frame.size.height as f32))
+/// The main screen's area free of the menu bar and the Dock, or the task bar.
+#[cfg_attr(
+    not(any(target_os = "macos", windows)),
+    allow(
+        dead_code,
+        reason = "elsewhere the screen is known only once the window is open"
+    )
+)]
+struct FreeArea {
+    /// Its width and height, in points.
+    size: (f32, f32),
+    /// Where it starts, in pixels, where Freya places the window itself.
+    origin: Option<(i32, i32)>,
+    /// Pixels to the point.
+    scale: f32,
 }
 
-/// The main screen's area free of the task bar, in points.
+#[cfg(target_os = "macos")]
+fn free_area() -> Option<FreeArea> {
+    let mtm = objc2::MainThreadMarker::new()?;
+    let frame = objc2_app_kit::NSScreen::mainScreen(mtm)?.visibleFrame();
+    Some(FreeArea {
+        size: (frame.size.width as f32, frame.size.height as f32),
+        origin: None,
+        scale: 1.0,
+    })
+}
+
 #[cfg(windows)]
-fn free_area() -> Option<(f32, f32)> {
+fn free_area() -> Option<FreeArea> {
     use windows_sys::Win32::Foundation::RECT;
     use windows_sys::Win32::UI::HiDpi::GetDpiForSystem;
     use windows_sys::Win32::UI::WindowsAndMessaging::{SPI_GETWORKAREA, SystemParametersInfoW};
@@ -108,17 +137,19 @@ fn free_area() -> Option<(f32, f32)> {
     let found = unsafe { SystemParametersInfoW(SPI_GETWORKAREA, 0, (&raw mut area).cast(), 0) };
     // SAFETY: a plain query.
     let scale = unsafe { GetDpiForSystem() } as f32 / 96.0;
-    (found != 0 && scale > 0.0).then(|| {
-        (
+    (found != 0 && scale > 0.0).then(|| FreeArea {
+        size: (
             (area.right - area.left) as f32 / scale,
             (area.bottom - area.top) as f32 / scale,
-        )
+        ),
+        origin: Some((area.left, area.top)),
+        scale,
     })
 }
 
 /// Elsewhere the screen is known only once the window is open.
 #[cfg(not(any(target_os = "macos", windows)))]
-fn free_area() -> Option<(f32, f32)> {
+fn free_area() -> Option<FreeArea> {
     None
 }
 

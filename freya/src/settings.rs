@@ -188,6 +188,11 @@ pub fn log_path() -> Option<PathBuf> {
     dirs().map(|d| d.data_dir().join("freya.log"))
 }
 
+/// Where the running Freya says how one started later reaches it (see gui/one_freya.rs).
+pub fn one_freya_path() -> Option<PathBuf> {
+    dirs().map(|d| d.data_local_dir().join("one-freya"))
+}
+
 /// Where the playlist is kept between runs.
 pub fn playlist_path() -> Option<PathBuf> {
     dirs().map(|d| d.data_dir().join("playlist.m3u8"))
