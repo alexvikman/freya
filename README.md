@@ -6,102 +6,80 @@
   <img src="assets/readme/listener.png" alt="A listener with headphones" width="320">
 </p>
 
-A cross-platform music player written in Rust, with its own skin format. Readability and efficiency come first: the interface is drawn at the screen's physical resolution and stays crisp at any size.
+Freya is a music player for your own music collection, on macOS, Windows and Linux. Your library lives on one computer and plays on every computer in your home, for everyone you invite. The interface is drawn at your screen's full resolution, so it stays sharp at any size, and it is light on the computer while it plays.
 
-Status: early, but in use. [Download the latest release](https://github.com/alexvikman/freya/releases/latest) for macOS, Windows or Linux. It comes in two packages: **Freya Server** keeps your music library, on the computer the music is on, with or without a screen; **Freya** plays it, on that computer and on others on the network, and connects to a server first. Both find and install their updates themselves, when you say so. The interface is built with [Slint](https://slint.dev). See [docs/PLAN.md](docs/PLAN.md) for the architecture and milestones.
+Status: early, but in use.
 
-## Building
+## Download
 
-Requires Rust ([rustup](https://rustup.rs) installs the version in `rust-toolchain.toml` by itself) and [CMake](https://cmake.org), which builds the Opus decoder (`brew install cmake` on macOS; build without Opus with `--no-default-features` on `freya-audio`). On Linux, install the ALSA, fontconfig and xkbcommon development headers (`libasound2-dev libfontconfig1-dev libxkbcommon-dev` on Debian/Ubuntu).
+[Download the latest release](https://github.com/alexvikman/freya/releases/latest). It comes in two parts:
 
-```sh
-cargo build --release
-```
+- **Freya Server** keeps your music library. Install it on the computer your music is on, or that reaches it on a network drive. It runs in the background, with or without a screen.
+- **Freya** plays the music. Install it on that computer and on any other computer in your home.
 
-`ci/check.sh` runs the checks for Linux and cross-compiles for Windows in Docker, so other systems can be checked from a Mac: `ci/check.sh linux`, `ci/check.sh windows`, `ci/check.sh deps` (dependency checks), `ci/check.sh secrets` (credentials in any commit), `ci/check.sh workflows` (the GitHub workflows, with actionlint), or all five without an argument. `ci/check.sh gui` runs Freya on virtual X11 and Wayland screens and saves screenshots and CPU use in `target/ci-gui/`.
+macOS takes the `.dmg`, Windows the `.msi`, Linux the `.AppImage` or `.deb`. Both apps check for updates and install them when you say so.
 
-Installers of Freya and of Freya Server for macOS (`.dmg`), Windows (`.msi`) and Linux (`.AppImage`, `.deb`) are made with cargo-packager; see [docs/PACKAGING.md](docs/PACKAGING.md).
+## Getting started
 
-Commits are checked for credentials before they are made: after cloning, turn the hook on with `git config core.hooksPath .githooks` (it needs [gitleaks](https://github.com/gitleaks/gitleaks), e.g. `brew install gitleaks`). See [docs/RELEASING.md](docs/RELEASING.md).
+1. Install and start **Freya Server** on the computer with your music. In Freya's settings you can have it start at login.
+2. Open **Freya**. It finds the server on this computer or on your network; you can also type its address. The first time, you choose a name and password for the server.
+3. On another computer, Freya asks for the **connection code** of the server: Freya Server shows it in its menu (Show Connection Code), and Freya on the server's computer under Settings › Server › Add a device. This proves you reached your own server, and nobody else's.
+4. Go to Settings › Library › **Manage Folders…** and choose your music folders. They are browsed from the server's side, so network drives the server reaches show up too. Freya reads them, finds the covers, and lists your music by artist and album.
 
-Dependencies are pinned, checked against the RustSec database and recorded as audited or knowingly exempted; see [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md).
+To give someone else in your home their own account, an admin invites them under Settings › Account › Users: they type the invitation code on their computer and choose a password.
 
-## Usage
+## What it does
 
-```sh
-cargo run --release -p freya-server &   # the library, in the background
-cargo run --release -p freya
-```
+**Library.** Browse by artist, album, genre or playlist, or search as you type: every word you type matches the start of a word in the artist, album, title or genre, and accents don't matter. Click an artist or album to open it, double-click a track to play it, or use **+** to add it to Up Next. Artists get a picture, a biography and their most played tracks. Freya keeps the library in step with your folders: it notices new and changed files, and you can set how often it reads them all again.
 
-The first time, Freya asks which server to use: this computer's, one found on the network, or one typed in, proved by the code its computer shows.
+**Up Next.** What plays next. Drop files, folders or playlist files (M3U, M3U8, PLS) on the window to add what of them is in your library. Click, Shift-click and Ctrl/Cmd-click to select, drag to reorder, Delete to remove. Keep Up Next as a playlist from the File menu.
 
-Music plays only from the library: files, folders or playlists (M3U, M3U8, PLS) dropped on the window add the library's tracks of them, and what the library does not have is left out, and said. A folder the library does not have, dropped by an admin on the computer the server runs on, opens the music folders with it added, to save. In the playlist, click, Shift-click and Cmd/Ctrl-click to select, double-click or Enter to play, drag rows to reorder, Delete to remove. Cover art is read from the files' tags or from a `cover.jpg`/`folder.jpg` next to them. The equalizer (the sliders button) has ten bands from 60 Hz to 16 kHz and a preamp, ±12 dB each: drag across several bands in one sweep, double-click a band to reset it, pick one of Winamp's presets, or load and save Winamp `.eqf` files. The visualizer shows a spectrum, an oscilloscope or the hologram. Its full-screen button, `F` or a double-click fills the screen with it, for a TV: what plays shows below it in large letters, and moving the mouse brings up the controls, the visualizations and Up Next. It runs at 30 frames per second (`visualizer_fps` in `settings.toml`), at most 15 while another app is in front, and not at all while the window is hidden; turn it off to save the rest of its CPU. The built-in skin's spectrum is drawn by Freya in its own layer on top of the window, so it costs almost nothing (set `FREYA_NATIVE_SPECTRUM=off` to have the skin draw it instead). Appearance follows the system, or can be set to light or dark in the playlist's "more" menu. The playlist, volume, shuffle, repeat, equalizer and appearance are kept between runs, and the window opens where it was, as large, maximized if it was; the first time, it takes most of the screen.
+**Recents.** The clock in the toolbar shows what you played and added lately, by day, and what you play most.
 
-The **Library** tab lists the music in the folders you choose ("Add music folder…"), by artist and album, and searches it as you type: every word you type must start a word of the artist, album, title, genre or file name, and accents are ignored. Click an artist or album to open it, double-click a track to play it with the tracks around it, or use **+** to add anything to the playlist. **Backups**: an admin backs up everything the server keeps (Settings › Server), the library, pictures, playlists, stations, users and the server's certificate, into one file in a folder on the server's computer, under a password if wanted, and restores it there or on another computer; or exports what the users made (playlists, plays, favourites, stations and changes, no passwords) for another library to take in, its tracks found again by their place in the music folder or by their tags. **Recents** (the clock in the toolbar) shows what was played and added lately, by day: the albums and playlists played, each with the songs played, the albums added and the playlists made, and the radio listened to; and the albums and playlists played most. Freya reads new and changed files each time it starts, in the background; files on a drive that is not plugged in stay in the library. A disc ripped as one file with a CUE sheet next to it (`Album.flac` or `Album.ape`, and `Album.cue`) shows as an album of its tracks, here and when its folder or sheet is dropped on the playlist, and its tracks play one after the other without a gap.
+**Radio.** Browse almost a hundred picked stations, lossless and hi-res among them, and tens of thousands more from Radio Browser, by genre, country, language, decade and quality. An admin saves stations for everyone on the server; any stream address plays with File › Play Stream URL…. The song title follows the station as it plays.
 
-**Internet radio:** Radio browses the server's directory of stations: almost a hundred Freya picked, lossless and hi-res ones among them, and the tens of thousands of Radio Browser (radio-browser.info), found by genre, country, language, decade and quality, all together, or by name. An admin saves stations to the server, for every user of it. Any stream plays too: choose "Play stream URL…" in the playlist's "more" menu and paste the address of a stream (like `https://ice1.somafm.com/groovesalad-128-mp3`) or of a station's `.pls` or `.m3u` file from a radio directory (like `https://somafm.com/groovesalad.pls`). The song title updates as the station announces each song, at the moment it starts playing. MP3, AAC, FLAC, Ogg Vorbis and Ogg Opus streams over HTTP and HTTPS work; `freya play <url>` plays a stream in the terminal (on Windows, `freya-cli play <url>`).
+**Equalizer and visualizer.** Ten bands from 60 Hz to 16 kHz and a preamp: drag across several bands in one sweep, double-click one to reset it, pick a preset or load Winamp `.eqf` preset files. The visualizer shows a spectrum, an oscilloscope or a hologram; press `F` to fill the screen with it, for a TV, with what plays in large letters below.
 
-Freya shows what plays in the system's media controls (Now Playing on macOS, the media overlay on Windows, MPRIS on Linux), with cover art, and the keyboard's media keys control it.
+**Artist information.** Freya can fetch biographies from Wikipedia and Last.fm and pictures from Deezer and fanart.tv, for the artists that lack them. Each source is a switch in Settings › Library, and each says what it is told.
 
-Keys: `space` play/pause, `←`/`→` seek 5 s, `↑`/`↓` volume, `M` mute, `N`/`P` next/previous, `S` stop, `O` open files, `F` full-screen visualizer (`Esc` leaves it), `F1` about, `F2` skins. In the playlist: arrows, Page Up/Down, Home/End, Enter, Delete, `Esc`, `Cmd/Ctrl+A`. In the library: arrows, Page Up/Down, Enter, `Esc` to go back, `Cmd/Ctrl+F` to search.
+**Last.fm.** Scrobble what you play to your Last.fm profile (Settings › Account).
 
-Options: `--skin path` loads a skin (a `.slint` file, a skin folder or a `.freyaskin` package) and remembers it; `--renderer femtovg|software` picks the renderer (the default is software on macOS, where it keeps the window steady while it is resized, and FemtoVG on the GPU elsewhere).
+**Media keys.** Freya shows what plays in the system's media controls (Now Playing on macOS, the media overlay on Windows, MPRIS on Linux), with cover art, and the keyboard's media keys control it.
 
-There is also a terminal player, without a window:
+**Backups.** The server's owner backs up everything the server keeps (Settings › Server): the library, pictures, playlists, stations and users, in one file, with a password if you want one. Restore it on the same computer or a new one. You can also export what the users made (playlists, plays, favourites, stations and changes, without passwords) and import it into another Freya Server, which finds the same tracks in its own folders.
 
-```sh
-cargo run --release -- play ~/Music/some-album
-```
+**Skins.** Press `F2` to change how Freya looks, or install a `.freyaskin` file someone shared. Want to make one? See the [skin guide](docs/skins.md).
 
-Installed, that is `freya play ~/Music/some-album`. On Windows, where Freya is a window app the terminal does not wait for, use `freya-cli` instead: the installer puts it next to Freya and adds Freya's folder to the PATH, and it works for every command, `freya-cli skin pack` too.
+**In the terminal.** `freya play ~/Music/some-album` plays music or a radio stream without a window (on Windows, `freya-cli play …`).
 
-Supported formats: MP3, FLAC, Monkey's Audio (APE, from version 3.95), WAV, AIFF, Ogg Vorbis, Opus, AAC and ALAC (M4A/MP4), CAF, MKV/WebM audio, and Shoutcast/Icecast radio streams, plus CUE sheets for discs ripped as one file. Playback is gapless.
+## Keyboard shortcuts
 
-## Skins
-
-Freya's look comes from a skin: a [Slint](https://slint.dev) file, compiled when Freya starts, that connects to the player through a small API. Press `F2` (or choose "Skins…" in the playlist's "more" menu) to switch skins, install a `.freyaskin` package or open the skins folder. A skin used from a folder reloads as soon as one of its files is saved, so skins can be designed with Freya running. A skin that fails to load never keeps Freya from starting: the built-in skin takes over and the picker shows the error.
-
-```slint
-import { Player, Shortcuts } from "@freya/v1.slint";
-export { Player } from "@freya/v1.slint";
-
-export component MySkin inherits Window {
-    Text { text: Player.title; }
-}
-```
-
-```sh
-freya skin check path/to/my-skin    # compile and list errors and warnings
-freya skin pack path/to/my-skin     # make my-skin.freyaskin for sharing
-```
-
-[docs/skins.md](docs/skins.md) is the full guide for skin authors. The API is defined in [`crates/freya-skin/api/v1.slint`](crates/freya-skin/api/v1.slint); [`skins/freya/`](skins/freya/skin.slint) is the built-in skin and [`skins/mini/`](skins/mini/skin.slint) a small example.
-
-## Layout
-
-| Path | Contents |
+| Key | Does |
 |---|---|
-| `freya/` | Freya, the player: its window, Up Next, the equalizer's presets and `.eqf` files, and the terminal player |
-| `crates/freya-audio/` | Audio engine: decoding, resampling, 10-band equalizer, output, gapless playback |
-| `crates/freya-client/` | The client's side of the library: a Freya server's library, called over HTTP |
-| `crates/freya-http/` | A small HTTP/1.1 server, over TLS or not: Freya Server's, and Freya's login proxy |
-| `crates/freya-lastfm/` | Last.fm's web service: what it says of artists and genres, signing in and scrobbles |
-| `crates/freya-library/` | Freya Server's media library: the tracks, albums, artists, plays and playlists in SQLite, the scans, and what is fetched online for it |
-| `crates/freya-media/` | Music files, for both: finding them, tags, CUE sheets, playlist entries and M3U/PLS files, covers, pictures of artists |
-| `crates/freya-protocol/` | What client and server say to each other: the library's tracks, artists, albums, genres and playlists, and how scans go |
-| `crates/freya-server/` | `freya-server`: the library as a service over HTTP, with the scans that keep it in line with the music's folders, the folders' watch and the schedule |
-| `crates/freya-skin/` | Skin API, skin folders and packages, the skin picker, headless rendering for previews and tests |
-| `crates/freya-update/` | Finding, verifying and installing releases, for Freya and Freya Server |
-| `skins/` | The built-in skin (`freya/`) and an example skin (`mini/`) |
-| `docs/` | Plan, design notes, the skin authoring guide, packaging and dependency policy |
-| `deny.toml`, `supply-chain/` | Dependency checks: cargo-deny rules and cargo-vet audits |
-| `assets/` | The app icon (the artwork and the sizes made from it by `ci/make-icons.swift`), and the logo and illustration in this README |
-| `ci/` | Docker image and script that check Linux and Windows builds locally |
+| `Space` | Play or pause |
+| `←` / `→` | Seek 5 seconds |
+| `↑` / `↓` | Volume |
+| `M` | Mute |
+| `N` / `P` | Next / previous track |
+| `S` | Stop |
+| `O` | Open files |
+| `F` | Full-screen visualizer (`Esc` leaves it) |
+| `Ctrl/Cmd+F` | Search the library |
+| `Ctrl/Cmd+,` | Settings |
+| `Alt+←` / `Alt+→` (`Cmd+[` / `Cmd+]` on macOS) | Back and forward |
+| `F1` | About Freya |
+| `F2` | Skins |
 
-## History
+In lists: the arrow keys, Page Up/Down, Home/End, Enter to play or open, `Esc` to go back, `Ctrl/Cmd+A` to select all in Up Next.
 
-Freya started out as *ampwin*, a Winamp 2.x clone with support for classic `.wsz` skins (milestones M0–M5, up to commit `c7de778`). That approach was dropped because Winamp skins are pixel art made for CRT screens and cannot become crisp on modern displays.
+## Supported formats
+
+MP3, FLAC, Monkey's Audio (APE, from version 3.95), WAV, AIFF, Ogg Vorbis, Opus, AAC and ALAC (M4A/MP4), CAF and MKV/WebM audio. A disc ripped as one file with a CUE sheet beside it shows as an album of its tracks. Radio streams in MP3, AAC, FLAC, Ogg Vorbis and Opus over HTTP and HTTPS. Playback is gapless.
+
+## For developers
+
+Building from source, the checks, packaging and how the code is laid out: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## License
 
-MIT OR Apache-2.0. The graphical interface uses Slint under its royalty-free license, which requires crediting Slint in the application.
+MIT OR Apache-2.0. The interface uses [Slint](https://slint.dev) under its royalty-free license, which asks that Slint is credited in the app.
