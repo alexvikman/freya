@@ -237,6 +237,7 @@ component IconButton inherits Rectangle {
         }
 
         touch := TouchArea {
+            mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
             enabled: root.enabled;
             clicked => { root.clicked(); }
         }
@@ -279,6 +280,7 @@ component MuteButton inherits Rectangle {
         }
 
         touch := TouchArea {
+            mouse-cursor: pointer;
             clicked => { Player.toggle-mute(); }
         }
     }
@@ -351,6 +353,7 @@ component Slider inherits Rectangle {
     }
 
     touch := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
         enabled: root.enabled;
         pointer-event(event) => {
             if (event.button != PointerEventButton.left) {
@@ -709,6 +712,7 @@ component MenuRow inherits Rectangle {
     }
 
     touch := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
         enabled: root.enabled;
         clicked => { root.activated(); }
     }
@@ -741,6 +745,7 @@ component TextButton inherits Rectangle {
     }
 
     touch := TouchArea {
+        mouse-cursor: pointer;
         clicked => { root.clicked(); }
     }
 }
@@ -826,6 +831,7 @@ component Toggle inherits Rectangle {
     }
 
     TouchArea {
+        mouse-cursor: pointer;
         clicked => { root.toggled(); }
     }
 }
@@ -855,6 +861,10 @@ component MenuSurface inherits Rectangle {
     drop-shadow-blur: 16px;
     drop-shadow-offset-y: 4px;
     drop-shadow-color: #00000040;
+
+    // Takes the clicks on it, so they do not reach what is behind: a dialog's dimmed window
+    // closes it.
+    TouchArea { }
 }
 
 /// Gain in dB to a position in a slider track: +12 dB at 5 %, 0 dB at 50 %, -12 dB at 95 %,
@@ -978,6 +988,7 @@ component EqualizerView inherits VerticalLayout {
                 accessible-action-decrement => { Equalizer.set-preamp(Equalizer.preamp - 1); }
 
                 TouchArea {
+                    mouse-cursor: pointer;
                     pointer-event(event) => {
                         if (event.kind == PointerEventKind.down) {
                             root.active = 10;
@@ -1078,6 +1089,7 @@ component EqualizerView inherits VerticalLayout {
             }
 
             TouchArea {
+                mouse-cursor: pointer;
                 height: bands.track-height;
                 y: 0;
                 pointer-event(event) => {
@@ -1224,6 +1236,7 @@ component TrackRowView inherits Rectangle {
     property <bool> was-selected;
 
     background: entry.selected ? Theme.selection : (touch.has-hover ? Theme.hover : transparent);
+    border-radius: 6px;
     accessible-role: list-item;
     accessible-label: entry.title + (entry.duration == "" ? "" : ", " + entry.duration);
     accessible-action-default => { Playlist.activate(root.index); }
@@ -1396,7 +1409,12 @@ component TrackList inherits FocusScope {
         accept
     }
 
+    // Inset from the panel's edges, so the rows' rounded highlights sit inside its corners.
     list := ListView {
+        x: 8px;
+        y: 8px;
+        width: root.width - 16px;
+        height: root.height - 16px;
         changed content-y => {
             if (root.shown) {
                 App.scroll = -self.content-y;
@@ -1560,6 +1578,7 @@ component LibraryRowView inherits Rectangle {
 
     // Below the buttons, so they get their own clicks.
     touch := TouchArea {
+        mouse-cursor: root.entry.kind != "track" ? MouseCursor.pointer : MouseCursor.default;
         pointer-event(event) => {
             if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
                 root.pressed();
@@ -1598,7 +1617,7 @@ component LibraryRowView inherits Rectangle {
                 vertical-alignment: center;
             }
             if root.playing: Icon {
-                x: parent.width - self.width;
+                x: parent.width - self.width / 2 - 4px;
                 width: 16px;
                 height: 16px;
                 data: Icons.spectrum;
@@ -1892,6 +1911,7 @@ component AlbumTile inherits Rectangle {
     }
 
     touch := TouchArea {
+        mouse-cursor: pointer;
         pointer-event(event) => {
             if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
                 root.pressed();
@@ -1938,7 +1958,7 @@ component PopularRow inherits Rectangle {
                 width: 24px;
 
                 if touch.has-hover: IconButton {
-                    x: parent.width - self.width + 4px;
+                    x: parent.width - self.width / 2 - 4px;
                     y: (parent.height - self.height) / 2;
                     icon: Icons.play;
                     size: 28px;
@@ -2364,6 +2384,7 @@ component ArtistPageHead inherits Rectangle {
                     }
                 }
                 albums-touch := TouchArea {
+                    mouse-cursor: pointer;
                     clicked => { root.options(); }
                 }
             }
@@ -2658,7 +2679,7 @@ component AlbumTrackRow inherits Rectangle {
                 width: 30px;
 
                 if root.playing: Icon {
-                    x: parent.width - self.width;
+                    x: parent.width - self.width / 2 - 4px;
                     width: 16px;
                     height: 16px;
                     data: Icons.spectrum;
@@ -2666,7 +2687,7 @@ component AlbumTrackRow inherits Rectangle {
                     color: Theme.accent;
                 }
                 if !root.playing && touch.has-hover: IconButton {
-                    x: parent.width - self.width + 6px;
+                    x: parent.width - self.width / 2 - 4px;
                     y: (parent.height - self.height) / 2;
                     icon: Icons.play;
                     size: 28px;
@@ -4016,6 +4037,7 @@ component LibraryPanel inherits FocusScope {
                 }
             }
             options-touch := TouchArea {
+                mouse-cursor: pointer;
                 clicked => { options-menu.show(); }
             }
         }
@@ -4344,6 +4366,7 @@ component StationRowView inherits Rectangle {
 
     // Below the button, so it gets its own clicks.
     touch := TouchArea {
+        mouse-cursor: pointer;
         clicked => { Radio.play(root.index); }
     }
 
@@ -4435,6 +4458,7 @@ component PageTab inherits Rectangle {
     }
 
     touch := TouchArea {
+        mouse-cursor: pointer;
         clicked => { root.clicked(); }
     }
 }
@@ -4630,6 +4654,7 @@ component DirectoryStationView inherits Rectangle {
 
     // Below the button, so it gets its own clicks.
     touch := TouchArea {
+        mouse-cursor: pointer;
         clicked => { Radio.play-found(root.index); }
     }
 
@@ -5998,6 +6023,7 @@ component SidebarItem inherits Rectangle {
     }
 
     touch := TouchArea {
+        mouse-cursor: pointer;
         clicked => { root.clicked(); }
     }
 }
@@ -6552,6 +6578,7 @@ component FormTab inherits Rectangle {
     }
 
     touch := TouchArea {
+        mouse-cursor: pointer;
         clicked => { root.clicked(); }
     }
 }
@@ -6962,6 +6989,7 @@ component ChoiceButton inherits Rectangle {
     }
 
     touch := TouchArea {
+        mouse-cursor: pointer;
         clicked => { root.clicked(); }
     }
 }
@@ -7743,8 +7771,14 @@ component TitleBarArea inherits TouchArea {
 /// The dimmed window behind a dialog. Its top, where the toolbar is, still moves the window,
 /// as a title bar would.
 component DialogScrim inherits Rectangle {
+    /// A click on it, beside the dialog: as Cancel.
+    callback dismissed();
+
     background: #00000059;
 
+    TouchArea {
+        clicked => { root.dismissed(); }
+    }
     TitleBarArea {
         y: 0;
         height: App.title-bar-height;
@@ -7820,13 +7854,13 @@ component AppMenuButton inherits Rectangle {
 
     property <string> open;
     property <int> open-at;
-    /// The menu pointed at, opened a moment later unless another is pointed at meanwhile, so
-    /// the mouse can cross another on its way to the items.
+    /// The menu pointed at: opened at once when none is open, else a moment later unless
+    /// another is pointed at meanwhile, so the mouse can cross another on its way to the items.
     property <string> pointed;
     property <int> pointed-at;
 
     pointing := Timer {
-        interval: 250ms;
+        interval: 120ms;
         running: false;
         triggered => {
             self.running = false;
@@ -7872,7 +7906,11 @@ component AppMenuButton inherits Rectangle {
                             submenu: true;
                             background: root.open == menu ? Theme.hover : transparent;
                             changed hovered => {
-                                if (self.hovered && root.open != menu) {
+                                if (self.hovered && root.open == "") {
+                                    pointing.running = false;
+                                    root.open = menu;
+                                    root.open-at = i;
+                                } else if (self.hovered && root.open != menu) {
                                     root.pointed = menu;
                                     root.pointed-at = i;
                                     pointing.running = false;
@@ -8386,6 +8424,7 @@ component Sidebar inherits Rectangle {
                     overflow: elide;
                 }
                 pill-touch := TouchArea {
+                    mouse-cursor: pointer;
                     clicked => { root.show-update(); }
                 }
             }
@@ -9343,9 +9382,9 @@ component SettingsView inherits Rectangle {
                     }
                 }
                 SettingsRow {
-                    label: Library.scanning ? Library.status
-                        : "A scan reads new and changed files, makes their albums' covers, takes in the pictures in artists' folders, and asks the internet for what artists lack, as allowed below.";
-                    detail: Library.scanning ? "" : Library.last-scan;
+                    label: Library.scanning ? Library.status : "Scan the library";
+                    detail: Library.scanning ? ""
+                        : "Reads new and changed files, makes their albums' covers, takes in the pictures in artists' folders, and asks the internet for what artists lack, as allowed below.";
 
                     VerticalLayout {
                         alignment: center;
@@ -9367,6 +9406,10 @@ component SettingsView inherits Rectangle {
                             }
                         }
                     }
+                }
+                if Library.last-scan != "" && !Library.scanning: SettingsRow {
+                    label: "Last scan";
+                    detail: Library.last-scan;
                 }
                 SettingsRow {
                     label: "Scan when files change";
@@ -11606,6 +11649,15 @@ export component FreyaSkin inherits Window {
             }
 
             DialogScrim {
+                // A click beside the dialog, as Escape.
+                dismissed => {
+                    // Out of the browser first, back to the folders.
+                    if (Server.browsing) {
+                        Server.browse-cancel();
+                    } else {
+                        folders-popup.close();
+                    }
+                }
 
                 if !Server.browsing: FoldersForm {
                     width: min(560px, parent.width - 48px);
@@ -11647,6 +11699,14 @@ export component FreyaSkin inherits Window {
             }
 
             DialogScrim {
+                // A click beside the dialog, as Escape.
+                dismissed => {
+                    if (Server.browsing) {
+                        Server.browse-cancel();
+                    } else {
+                        backup-popup.close();
+                    }
+                }
                 if !Server.browsing: BackupForm {
                     width: min(560px, parent.width - 48px);
                     height: self.preferred-height;
@@ -11683,6 +11743,11 @@ export component FreyaSkin inherits Window {
             }
 
             DialogScrim {
+                // A click beside the dialog, as Escape.
+                dismissed => {
+                    Server.browse-cancel();
+                    transfer-popup.close();
+                }
                 FolderBrowser {
                     width: min(780px, parent.width - 48px);
                     height: self.preferred-height;
@@ -11719,6 +11784,14 @@ export component FreyaSkin inherits Window {
             }
 
             DialogScrim {
+                // A click beside the dialog, as Escape.
+                dismissed => {
+                    if (Server.browsing) {
+                        Server.browse-cancel();
+                    } else {
+                        restore-popup.close();
+                    }
+                }
                 if !Server.browsing: RestoreForm {
                     width: min(560px, parent.width - 48px);
                     height: self.preferred-height;
@@ -11754,6 +11827,10 @@ export component FreyaSkin inherits Window {
             }
 
             DialogScrim {
+                // A click beside the dialog, as Escape.
+                dismissed => {
+                    artist-match-form.cancel();
+                }
 
                 artist-match-form := ArtistMatchForm {
                     width: min(720px, parent.width - 48px);
@@ -11784,6 +11861,10 @@ export component FreyaSkin inherits Window {
             }
 
             DialogScrim {
+                // A click beside the dialog, as Escape.
+                dismissed => {
+                    album-match-form.cancel();
+                }
 
                 album-match-form := AlbumMatchForm {
                     width: min(760px, parent.width - 48px);
@@ -11817,6 +11898,10 @@ export component FreyaSkin inherits Window {
             }
 
             DialogScrim {
+                // A click beside the dialog, as Escape.
+                dismissed => {
+                    artist-form.cancel();
+                }
 
                 artist-form := ArtistEditForm {
                     tab: root.artist-tab;
@@ -11848,6 +11933,10 @@ export component FreyaSkin inherits Window {
             }
 
             DialogScrim {
+                // A click beside the dialog, as Escape.
+                dismissed => {
+                    genre-form.cancel();
+                }
 
                 genre-form := GenreEditForm {
                     width: min(560px, parent.width - 48px);
@@ -11878,6 +11967,10 @@ export component FreyaSkin inherits Window {
             }
 
             DialogScrim {
+                // A click beside the dialog, as Escape.
+                dismissed => {
+                    playlist-form.cancel();
+                }
 
                 playlist-form := PlaylistEditForm {
                     width: min(560px, parent.width - 48px);
@@ -11908,6 +12001,10 @@ export component FreyaSkin inherits Window {
             }
 
             DialogScrim {
+                // A click beside the dialog, as Escape.
+                dismissed => {
+                    fanart-popup.close();
+                }
 
                 FanartKeyForm {
                     width: min(480px, parent.width - 48px);
@@ -11938,6 +12035,11 @@ export component FreyaSkin inherits Window {
             }
 
             DialogScrim {
+                // A click beside the dialog, as Escape.
+                dismissed => {
+                    Server.cancel-login();
+                    server-popup.close();
+                }
 
                 ServerForm {
                     width: min(520px, parent.width - 48px);

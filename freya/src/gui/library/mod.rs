@@ -383,6 +383,8 @@ pub struct LibraryPanel {
     full_covers: (Sender<FullCover>, Receiver<FullCover>),
     /// The artist page's pictures a thread made, by the page's picture's key.
     page_pictures: (Sender<MadePage>, Receiver<MadePage>),
+    /// The pages' pictures made last, shown at once when a page opens again.
+    recent_pages: RecentPages,
     /// What the user changed about artists, by the tags' name for them.
     edits: HashMap<String, ArtistEdit>,
     /// While the user changes an artist: who, by the tags' name, and what the internet says
@@ -548,6 +550,7 @@ impl LibraryPanel {
             artist_keys: HashMap::new(),
             artist_page: None,
             page_pictures: std::sync::mpsc::channel(),
+            recent_pages: RecentPages::default(),
             full_covers: std::sync::mpsc::channel(),
             edits: HashMap::new(),
             draft: None,
@@ -644,6 +647,7 @@ impl LibraryPanel {
             .unwrap_or_default()
         {
             self.recent_covers.remove(&key);
+            self.recent_pages.clear();
         }
         if !self.scanning {
             self.prepare_some();
@@ -658,6 +662,7 @@ impl LibraryPanel {
         {
             for key in thumbnails.take_remade() {
                 self.recent_covers.remove(&key);
+                self.recent_pages.clear();
             }
             self.covers_ready += 1;
             self.color_album_page();

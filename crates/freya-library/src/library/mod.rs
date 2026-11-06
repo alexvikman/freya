@@ -453,24 +453,17 @@ impl Library {
         query.query_map([], album_from_row)?.collect()
     }
 
-    /// Every genre, alphabetically, with tracks without one last.
+    /// Every genre, alphabetically. Tracks without one are in none: they are reached through
+    /// their artists and albums.
     pub fn genres(&self) -> Result<Vec<Genre>> {
         let mut query = self.db.prepare_cached(
-            "SELECT name, albums, tracks FROM (
-                 SELECT g.genre AS name,
-                        count(DISTINCT ifnull(album_artist, '') || char(0) || ifnull(album, ''))
-                            AS albums,
-                        count(DISTINCT t.id) AS tracks
-                 FROM track_genres g JOIN tracks t ON t.id = g.track
-                 GROUP BY g.genre COLLATE NOCASE
-                 UNION ALL
-                 SELECT NULL,
-                        count(DISTINCT ifnull(album_artist, '') || char(0) || ifnull(album, '')),
-                        count(*)
-                 FROM tracks WHERE id NOT IN (SELECT track FROM track_genres)
-                 HAVING count(*) > 0
-             )
-             ORDER BY name IS NULL, name COLLATE NOCASE",
+            "SELECT g.genre AS name,
+                    count(DISTINCT ifnull(album_artist, '') || char(0) || ifnull(album, ''))
+                        AS albums,
+                    count(DISTINCT t.id) AS tracks
+             FROM track_genres g JOIN tracks t ON t.id = g.track
+             GROUP BY g.genre COLLATE NOCASE
+             ORDER BY name COLLATE NOCASE",
         )?;
         query
             .query_map([], |row| {

@@ -330,9 +330,12 @@ fn browses_all_albums_genres_and_songs() {
 
     let genres = library.genres().unwrap();
     let names: Vec<Option<&str>> = genres.iter().map(|g| g.name.as_deref()).collect();
-    assert_eq!(names, [Some("Electronic"), Some("pop"), None]);
+    assert_eq!(
+        names,
+        [Some("Electronic"), Some("pop")],
+        "untagged is no genre"
+    );
     assert_eq!((genres[0].albums, genres[0].tracks), (2, 3));
-    assert_eq!((genres[2].albums, genres[2].tracks), (1, 1));
 
     let electronic = library.genre_albums(Some("Electronic")).unwrap();
     let names: Vec<Option<&str>> = electronic.iter().map(|a| a.name.as_deref()).collect();
@@ -1203,10 +1206,9 @@ fn a_track_of_many_genres_is_in_each() {
     add(&mut library, "/m/3.mp3", &tags("C", "Third", "Three", 1));
     let genres = library.genres().unwrap();
     let names: Vec<Option<&str>> = genres.iter().map(|g| g.name.as_deref()).collect();
-    assert_eq!(names.len(), 3, "{names:?}");
+    assert_eq!(names.len(), 2, "{names:?}");
     assert_eq!(names[0], Some("Ambient"));
     assert!(names[1].is_some_and(|n| n.eq_ignore_ascii_case("black metal")));
-    assert_eq!(names[2], None, "untagged last");
     assert_eq!((genres[1].albums, genres[1].tracks), (2, 2));
     assert_eq!(library.genre_albums(Some("BLACK METAL")).unwrap().len(), 2);
     assert_eq!(library.genre_tracks(Some("Ambient")).unwrap().len(), 1);

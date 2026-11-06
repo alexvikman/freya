@@ -116,8 +116,8 @@ export global Playlist {
 export struct LibraryRow {
     /// "artist", "album", "genre" or "track".
     kind: string,
-    /// The artist's, album's, genre's or track's name; "Unknown artist", "Unknown album" or
-    /// "Unknown genre" when untagged.
+    /// The artist's, album's, genre's or track's name; "Unknown artist" or "Unknown album" when
+    /// untagged. Tracks without a genre are in none.
     title: string,
     /// "3 albums · 41 tracks" for artists and genres, "1997 · 12 tracks" for albums, and for
     /// tracks the artist and album when they are not already clear from the heading. May be

@@ -272,6 +272,15 @@ impl LibraryPanel {
             order,
         });
         self.show_playlist_picture();
+        // Shown with its pictures, rather than a moment before them.
+        if let Some(page) = &self.playlist_page
+            && page.asked.is_some()
+            && page.banner.is_none()
+            && page.color.is_none()
+        {
+            let key = page.picture.clone();
+            self.await_page_pictures(&key);
+        }
     }
 
     /// The covers of the first albums of `entries`, at most four, among Freya's pictures.
@@ -398,15 +407,7 @@ impl LibraryPanel {
             return;
         }
         page.asked = Some(files.clone());
-        let made = self.page_pictures.0.clone();
-        let started = std::thread::Builder::new()
-            .name("freya-playlist-page".into())
-            .spawn(move || {
-                let _ = made.send((key, PagePictures::make(&files)));
-            });
-        if let Err(e) = started {
-            log::warn!("could not make the playlist page's pictures: {e}");
-        }
+        self.make_page_pictures(key, files);
     }
 
     /// Shows pictures a thread made for the playlist's page, when they are of it still.

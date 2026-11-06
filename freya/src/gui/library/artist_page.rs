@@ -77,14 +77,17 @@ pub(super) type PageFiles = (Option<PathBuf>, Option<(PathBuf, bool)>);
 
 /// An artist's pictures as their page shows them, made on a thread: decoding them on the
 /// window's thread held up the page as it opened.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct PagePictures {
+    /// The files they were made from.
+    pub(super) files: PageFiles,
     /// Their wide picture, and its color.
     pub(super) banner: Option<(slint::SharedPixelBuffer<slint::Rgb8Pixel>, Option<[u8; 3]>)>,
     pub(super) portrait: Option<PagePortrait>,
 }
 
 /// An artist's picture as their page shows it.
+#[derive(Clone)]
 pub(super) struct PagePortrait {
     /// Cut round.
     pub(super) round: slint::SharedPixelBuffer<slint::Rgba8Pixel>,
@@ -97,8 +100,42 @@ pub(super) struct PagePortrait {
 /// An artist page's pictures made, by the page's picture's key.
 pub(super) type MadePage = (String, PagePictures);
 
+/// How many pages' pictures are kept made, to show at once when a page opens again.
+const RECENT_PAGES: usize = 8;
+
+/// How long a page opened waits for its pictures before it shows without them: shown with
+/// the rest, rather than a moment after it.
+const PAGE_WAIT: Duration = Duration::from_millis(150);
+
+/// The pictures made for the pages shown last, by the files they were made from.
+#[derive(Default)]
+pub(super) struct RecentPages(VecDeque<PagePictures>);
+
+impl RecentPages {
+    pub(super) fn get(&mut self, files: &PageFiles) -> Option<PagePictures> {
+        let at = self.0.iter().position(|made| &made.files == files)?;
+        let made = self.0.remove(at)?;
+        self.0.push_back(made.clone());
+        Some(made)
+    }
+
+    pub(super) fn put(&mut self, made: PagePictures) {
+        self.0.retain(|kept| kept.files != made.files);
+        if self.0.len() >= RECENT_PAGES {
+            self.0.pop_front();
+        }
+        self.0.push_back(made);
+    }
+
+    /// Forgets them all: a picture they were made from was made anew.
+    pub(super) fn clear(&mut self) {
+        self.0.clear();
+    }
+}
+
 impl PagePictures {
-    pub(super) fn make((banner, portrait): &PageFiles) -> Self {
+    pub(super) fn make(files: &PageFiles) -> Self {
+        let (banner, portrait) = files;
         let color = |picture: &image::DynamicImage| {
             freya_media::cover::page_color(picture.thumbnail(64, 64).to_rgb8().as_raw())
         };
@@ -112,6 +149,7 @@ impl PagePictures {
                 .ok()
         };
         Self {
+            files: files.clone(),
             banner: banner
                 .as_deref()
                 .and_then(open)
@@ -141,6 +179,7 @@ impl LibraryPanel {
         if let Level::GenreAlbums { genre: Some(genre) } = self.level().clone() {
             self.load_genre_page(genre, more);
             self.show_artist_picture();
+            self.await_artist_pictures();
             self.show_artist_info();
             self.show_popular();
             return;
@@ -185,6 +224,7 @@ impl LibraryPanel {
             more,
         });
         self.show_artist_picture();
+        self.await_artist_pictures();
         self.show_artist_info();
         self.show_popular();
     }
@@ -225,40 +265,87 @@ impl LibraryPanel {
             return;
         }
         page.asked = Some(files.clone());
+        self.make_page_pictures(key, files);
+    }
+
+    /// Makes the pictures of the page whose picture's key is `key` from `files` on a thread;
+    /// or, made lately, shows them now.
+    pub(super) fn make_page_pictures(&mut self, key: String, files: PageFiles) {
+        if let Some(made) = self.recent_pages.get(&files) {
+            self.take_page_picture(key, made);
+            return;
+        }
         let made = self.page_pictures.0.clone();
         let started = std::thread::Builder::new()
-            .name("freya-artist-page".into())
+            .name("freya-page-pictures".into())
             .spawn(move || {
                 let _ = made.send((key, PagePictures::make(&files)));
             });
         if let Err(e) = started {
-            log::warn!("could not make the artist page's pictures: {e}");
+            log::warn!("could not make the page's pictures: {e}");
         }
     }
 
-    /// Shows the page's pictures a thread made, if they are of the artist shown still.
+    /// Waits a moment for the pictures of the artist's or genre's page just opened, so it
+    /// shows with them.
+    fn await_artist_pictures(&mut self) {
+        let waiting = |panel: &Self| {
+            panel.artist_page.as_ref().is_some_and(|page| {
+                page.asked.is_some() && page.banner.is_none() && page.portrait.is_none()
+            })
+        };
+        if waiting(self) {
+            let key = self.artist_page.as_ref().map(|p| p.picture.clone());
+            self.await_page_pictures(key.as_deref().unwrap_or_default());
+        }
+    }
+
+    /// Waits a moment for the pictures of the page whose picture's key is `key`, taking in
+    /// those of other pages that come meanwhile.
+    pub(super) fn await_page_pictures(&mut self, key: &str) {
+        let until = Instant::now() + PAGE_WAIT;
+        while let Some(left) = until.checked_duration_since(Instant::now()) {
+            let Ok((made_for, made)) = self.page_pictures.1.recv_timeout(left) else {
+                return;
+            };
+            let came = made_for == key;
+            self.take_page_picture(made_for, made);
+            if came {
+                return;
+            }
+        }
+    }
+
+    /// Shows the pages' pictures threads made, if they are of the pages shown still.
     pub(super) fn take_page_pictures(&mut self) {
         while let Ok((key, made)) = self.page_pictures.1.try_recv() {
-            let Some(made) = self.take_playlist_pictures(&key, made) else {
-                continue;
-            };
-            let Some(page) = self.artist_page.as_mut().filter(|page| page.picture == key) else {
-                continue;
-            };
-            if let Some((banner, color)) = made.banner {
-                page.banner = Some(Image::from_rgb8(banner));
-                page.color = color.or(page.color);
-            }
-            if let Some(portrait) = made.portrait {
-                page.portrait = Some(Image::from_rgba8_premultiplied(portrait.round));
-                page.portrait_large = portrait.large;
-                page.picture_full = portrait.full.map(Image::from_rgb8);
-                // Without a wide picture: the color of their picture.
-                let wide =
-                    page_backdrop(page, &self.backdrops, &self.edits, &self.genre_infos).is_some();
-                if !wide {
-                    page.color = Some(portrait.color);
-                }
+            self.take_page_picture(key, made);
+        }
+    }
+
+    /// Shows a page's pictures, if they are of a page shown still, and keeps them for when it
+    /// opens again.
+    fn take_page_picture(&mut self, key: String, made: PagePictures) {
+        self.recent_pages.put(made.clone());
+        let Some(made) = self.take_playlist_pictures(&key, made) else {
+            return;
+        };
+        let Some(page) = self.artist_page.as_mut().filter(|page| page.picture == key) else {
+            return;
+        };
+        if let Some((banner, color)) = made.banner {
+            page.banner = Some(Image::from_rgb8(banner));
+            page.color = color.or(page.color);
+        }
+        if let Some(portrait) = made.portrait {
+            page.portrait = Some(Image::from_rgba8_premultiplied(portrait.round));
+            page.portrait_large = portrait.large;
+            page.picture_full = portrait.full.map(Image::from_rgb8);
+            // Without a wide picture: the color of their picture.
+            let wide =
+                page_backdrop(page, &self.backdrops, &self.edits, &self.genre_infos).is_some();
+            if !wide {
+                page.color = Some(portrait.color);
             }
         }
     }

@@ -254,6 +254,9 @@ impl LibraryPanel {
         self.portraits = portraits;
         self.backdrops = backdrops;
         let shown = self.artist_page.as_ref().and_then(|p| p.name.clone());
+        if !changed.is_empty() {
+            self.recent_pages.clear();
+        }
         for artist in changed {
             let key = Thumbnails::artist_key(Some(&artist));
             if let Some(thumbnails) = &mut self.thumbnails {

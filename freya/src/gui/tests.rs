@@ -456,14 +456,10 @@ export component W inherits Window { Text { text: Player.title; } }
     assert_eq!(global(&ui, "Library", "section"), text("artists"));
     call(&ui, "Library", "show", &[text("genres")]);
     assert_eq!(global(&ui, "Library", "section"), text("genres"));
-    assert_eq!(library_titles(&ui), ["Unknown genre"]);
-    call(&ui, "Library", "activate", &[num(0.0)]);
-    assert_eq!(global(&ui, "Library", "layout"), text("grid"));
-    assert_eq!(library_titles(&ui), ["Fixtures", "Unknown album"]);
-    call(&ui, "Library", "activate", &[num(1.0)]);
-    assert_eq!(global(&ui, "Library", "layout"), text("list"));
-    call(&ui, "Library", "back", &[]);
-    assert_eq!(global(&ui, "Library", "title"), text("Unknown genre"));
+    assert!(
+        library_titles(&ui).is_empty(),
+        "the fixtures have no genre, and untagged is none"
+    );
     call(&ui, "Library", "show", &[text("albums")]);
     assert_eq!(global(&ui, "Library", "title"), text("Albums"));
     assert_eq!(global(&ui, "Library", "can-go-back"), Value::Bool(false));
