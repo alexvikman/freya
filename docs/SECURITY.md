@@ -197,6 +197,12 @@ Nobody can wear it out before logging in:
   each with its own nonce (and a flag on the last, so one cannot be dropped, swapped or cut
   off), under a key from the password by PBKDF2-HMAC-SHA256 with 600,000 rounds and a random
   salt. Without the password nothing of it can be read, nor restored.
+- An export holds what every user made (plays, favourites, playlists, stations, and what was
+  changed of artists, albums and genres) and no account, password or key. Only the owner
+  exports or imports, in a folder on the server's computer. Importing checks the zip's headers,
+  takes at most 512 MB of data and 64 MB a picture, keeps only pictures whose SHA-256 is their
+  name, maps users by name (others' rows are left out), adds and never removes, and refuses an
+  export from a later Freya.
 - Restoring checks the backup first (its name; the password, asking only the key's rounds
   Freya makes; that the zip's local headers agree with its directory; that it names no file
   outside it, and none of the server's own working folders; that it holds a library and

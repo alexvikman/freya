@@ -14,6 +14,7 @@ mod matches;
 mod online;
 mod playlists;
 mod scan;
+pub mod transfer;
 pub mod users;
 
 use std::collections::HashMap;

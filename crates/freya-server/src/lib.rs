@@ -26,6 +26,7 @@ mod stations;
 #[cfg(windows)]
 pub mod stop;
 pub mod tls;
+pub mod transfer;
 pub mod updates;
 
 pub use lastfm::lastfm;

@@ -1174,6 +1174,15 @@ impl Accounts {
             .retain(|g| g.user != user);
     }
 
+    /// The server's users by id and name, as the library's rows and exports name them.
+    pub fn names(&self) -> Vec<(i64, String)> {
+        self.kept()
+            .users
+            .iter()
+            .map(|u| (i64::from(u.id), u.name.clone()))
+            .collect()
+    }
+
     /// The server's users, the owner first.
     pub fn users(&self) -> Vec<UserInfo> {
         let kept = self.kept();

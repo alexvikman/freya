@@ -60,6 +60,10 @@ enum Done {
     BackupStarted(Result<(), String>),
     /// A backup checked and to be taken in as the server starts again, or why not.
     Restored(Result<(), String>),
+    /// What the users made, exported to a file; or why not.
+    Exported(Result<PathBuf, String>),
+    /// An export taken in, and what it took; or why not.
+    Imported(Result<freya_protocol::ImportSummary, String>),
 }
 
 /// A server the user logged in to, for the app to show the library of.
@@ -121,6 +125,9 @@ pub struct ServerPanel {
     backup_error: String,
     restoring: bool,
     restore_error: String,
+    /// While exporting or importing, and how it went.
+    transferring: bool,
+    transfer_detail: String,
     pub browse_backups: ModelRows,
     done: (Sender<Done>, Receiver<Done>),
     pub device_rows: ModelRows,
@@ -171,6 +178,8 @@ impl ServerPanel {
             backup_error: String::new(),
             restoring: false,
             restore_error: String::new(),
+            transferring: false,
+            transfer_detail: String::new(),
             browse_backups: ModelRows::new(),
             browse_places: ModelRows::new(),
         }
@@ -415,6 +424,20 @@ impl ServerPanel {
                 Done::Restored(Err(e)) => {
                     self.restoring = false;
                     self.restore_error = e;
+                }
+                Done::Exported(done) => {
+                    self.transferring = false;
+                    self.transfer_detail = match done {
+                        Ok(file) => format!("Exported to {}", file.display()),
+                        Err(e) => format!("Could not export: {e}"),
+                    };
+                }
+                Done::Imported(done) => {
+                    self.transferring = false;
+                    self.transfer_detail = match done {
+                        Ok(summary) => imported_text(&summary),
+                        Err(e) => format!("Could not import: {e}"),
+                    };
                 }
                 Done::Update(Ok(update)) => self.update = Some(update),
                 Done::Update(Err(e)) => {
@@ -689,16 +712,19 @@ impl ServerPanel {
         self.browse.as_ref()?.folders.get(index).cloned()
     }
 
-    /// Starts choosing a folder for `purpose`: "music", "backup" or "restore".
+    /// Starts choosing a folder for `purpose`: "music", "backup", "restore", "export" (the
+    /// folder an export goes to) or "import" (an export to take in, among the files).
     pub fn browse_for(&mut self, remote: Option<&Remote<Http>>, purpose: &str) {
         self.browse_purpose = match purpose {
             "backup" => "backup",
             "restore" => "restore",
+            "export" => "export",
+            "import" => "import",
             _ => "music",
         };
         let start = match self.browse_purpose {
-            "backup" => self.backup_folder.clone(),
-            "restore" => self
+            "backup" | "export" => self.backup_folder.clone(),
+            "restore" | "import" => self
                 .restore_file
                 .as_ref()
                 .and_then(|f| f.parent().map(Path::to_owned)),
@@ -707,26 +733,62 @@ impl ServerPanel {
         self.browse(remote, start.as_deref());
     }
 
-    /// The folder shown, as where a backup goes.
-    pub fn choose_backup_folder(&mut self) {
-        if let Some(folder) = self.browsed() {
-            self.backup_folder = Some(folder);
-            self.backup_error.clear();
-        }
+    /// The folder shown, as where a backup goes; or where an export goes, which starts it.
+    pub fn choose_folder(&mut self, remote: Option<Arc<Remote<Http>>>) {
+        let folder = self.browsed();
+        let exporting = self.browse_purpose == "export";
         self.stop_browsing();
+        let Some(folder) = folder else {
+            return;
+        };
+        self.backup_folder = Some(folder.clone());
+        self.backup_error.clear();
+        if exporting && let Some(remote) = remote {
+            self.transferring = true;
+            self.transfer_detail.clear();
+            self.spawn(move || {
+                Done::Exported(remote.export_data(&folder).map_err(|e| e.to_string()))
+            });
+        }
     }
 
-    /// The `index`th backup in the folder shown, as the one to restore.
-    pub fn choose_restore_file(&mut self, index: usize) {
-        if let Some(file) = self
-            .browse
-            .as_ref()
-            .and_then(|b| b.backups.get(index).cloned())
-        {
+    /// The `index`th file shown: as the backup to restore, or the export to take in, which
+    /// starts it.
+    pub fn choose_file(&mut self, remote: Option<Arc<Remote<Http>>>, index: usize) {
+        let file = self.shown_files().get(index).cloned();
+        let importing = self.browse_purpose == "import";
+        self.stop_browsing();
+        let Some(file) = file else {
+            return;
+        };
+        if !importing {
             self.restore_file = Some(file);
             self.restore_error.clear();
+            return;
         }
-        self.stop_browsing();
+        let Some(remote) = remote else {
+            return;
+        };
+        self.transferring = true;
+        self.transfer_detail.clear();
+        self.spawn(move || Done::Imported(remote.import_data(&file).map_err(|e| e.to_string())));
+    }
+
+    /// The files of the folder shown that what is chosen for takes: backups to restore,
+    /// exports to take in.
+    fn shown_files(&self) -> Vec<PathBuf> {
+        let wanted = |file: &PathBuf| {
+            let export = file.extension().is_some_and(|e| e == "freyaexport");
+            if self.browse_purpose == "import" {
+                export
+            } else {
+                !export
+            }
+        };
+        self.browse
+            .as_ref()
+            .map(|b| b.backups.iter().filter(|f| wanted(f)).cloned().collect())
+            .unwrap_or_default()
     }
 
     /// Asks how large a backup is, on a thread.
@@ -836,6 +898,8 @@ impl ServerPanel {
             ("backup-error", string(&self.backup_error)),
             ("restoring", Value::Bool(self.restoring)),
             ("restore-error", string(&self.restore_error)),
+            ("transferring", Value::Bool(self.transferring)),
+            ("transfer-detail", string(&self.transfer_detail)),
         ]
     }
 
@@ -877,8 +941,8 @@ impl ServerPanel {
         );
         self.browse_backups.sync(
             browse
-                .map(|b| {
-                    b.backups
+                .map(|_| {
+                    self.shown_files()
                         .iter()
                         .map(|f| {
                             string(
@@ -1214,6 +1278,30 @@ fn initial(user: &str) -> String {
         .find(|c| c.is_alphanumeric())
         .map(|c| c.to_uppercase().collect())
         .unwrap_or_default()
+}
+
+/// What an import took, in a line, the tracks it found nowhere written to the log.
+fn imported_text(summary: &freya_protocol::ImportSummary) -> String {
+    for missing in &summary.missing {
+        log::info!("not found here, so not taken in: {missing}");
+    }
+    let mut text = format!(
+        "Took in {} plays, {} playlists, {} stations, {} favourites and {} changes.",
+        summary.plays, summary.playlists, summary.stations, summary.favorites, summary.edits
+    );
+    if summary.missing_count > 0 {
+        text.push_str(&format!(
+            " {} tracks were not found here: Activity's log names them.",
+            summary.missing_count
+        ));
+    }
+    if !summary.users_left_out.is_empty() {
+        text.push_str(&format!(
+            " Left out, as this server has no such user: {}.",
+            summary.users_left_out.join(", ")
+        ));
+    }
+    text
 }
 
 /// "1.2 GB", "340 MB".

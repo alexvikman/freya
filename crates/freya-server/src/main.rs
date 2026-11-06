@@ -200,6 +200,10 @@ fn run(address: &str, data: &Path) -> Result<(), String> {
     })
     .map_err(|e| format!("could not listen for being stopped: {e}"))?;
     let accounts = Arc::new(Accounts::open(Some(data.join("accounts.json"))));
+    {
+        let accounts = Arc::clone(&accounts);
+        service.on_users(move || accounts.names());
+    }
     // A key Freya on this computer paired with once: nothing takes it now.
     let _ = std::fs::remove_file(data.join("pairing.key"));
     keep_adoption_code(Arc::clone(&accounts), data.join(ADOPTION_CODE));

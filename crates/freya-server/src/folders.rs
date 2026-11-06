@@ -150,7 +150,10 @@ pub fn listing(folder: Option<&Path>) -> FolderListing {
     folders.sort_by_key(|path| path.to_string_lossy().to_lowercase());
     let mut backups: Vec<PathBuf> = entries
         .into_iter()
-        .filter(|path| path.is_file() && crate::backup::is_backup_name(path))
+        .filter(|path| {
+            path.is_file()
+                && (crate::backup::is_backup_name(path) || crate::transfer::is_export_name(path))
+        })
         .collect();
     backups.sort_by_key(|path| path.to_string_lossy().to_lowercase());
     FolderListing {

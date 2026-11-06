@@ -13,10 +13,10 @@ use freya_library::Library;
 use freya_library::library::{LastFm, Online, ScanOptions, Scanner};
 use freya_media::pictures::Pictures;
 use freya_protocol::{
-    ApiError, ApiResult, BackupStatus, FolderListing, LastFmStatus, LastFmTrack, LibraryApi,
-    LibraryData, LibraryPictures, LogLine, Part, PlaylistEntry, RadioDirectoryStatus, RadioQuery,
-    RadioResults, RadioShelf, RadioStation, RadioTag, SavedPlaylist, ScanEvent, Scrobble,
-    ServerControl, ServerEvents, ServerSettings, ServiceEvent,
+    ApiError, ApiResult, BackupStatus, FolderListing, ImportSummary, LastFmStatus, LastFmTrack,
+    LibraryApi, LibraryData, LibraryPictures, LogLine, Part, PlaylistEntry, RadioDirectoryStatus,
+    RadioQuery, RadioResults, RadioShelf, RadioStation, RadioTag, SavedPlaylist, ScanEvent,
+    Scrobble, ServerControl, ServerEvents, ServerSettings, ServiceEvent,
 };
 
 use crate::folder_watch::FolderWatch;
@@ -99,7 +99,12 @@ struct Shared {
     backup_cancel: Arc<AtomicBool>,
     /// What has the server start again, once a backup is to be restored.
     restart: Mutex<Option<Restart>>,
+    /// The server's users, by id and name, for exports.
+    users: Mutex<Option<Users>>,
 }
+
+/// The server's users, by id and name.
+type Users = Box<dyn Fn() -> Vec<(i64, String)> + Send + Sync>;
 
 /// Has the server start again.
 type Restart = Box<dyn Fn() + Send + Sync>;
@@ -108,6 +113,18 @@ impl Service {
     /// Has `restart` called once a backup is to be restored: it has the server start again.
     pub fn on_restart(&self, restart: impl Fn() + Send + Sync + 'static) {
         *lock(&self.shared.restart) = Some(Box::new(restart));
+    }
+
+    /// Has `users` asked for the server's users, by id and name, as exports name them.
+    pub fn on_users(&self, users: impl Fn() -> Vec<(i64, String)> + Send + Sync + 'static) {
+        *lock(&self.shared.users) = Some(Box::new(users));
+    }
+
+    fn users(&self) -> Vec<(i64, String)> {
+        lock(&self.shared.users)
+            .as_ref()
+            .map(|users| users())
+            .unwrap_or_default()
     }
 
     /// The server's folder, for backups and restores.
@@ -185,6 +202,7 @@ impl Service {
             }),
             backup_cancel: Arc::new(AtomicBool::new(false)),
             restart: Mutex::new(None),
+            users: Mutex::new(None),
         });
         let mut service = Self {
             shared,
@@ -487,6 +505,72 @@ impl ServerControl for Service {
             None => log::warn!("the backup is taken in when the server next starts"),
         }
         Ok(())
+    }
+
+    fn export_data(&self, folder: &Path) -> ApiResult<PathBuf> {
+        let users = self
+            .users()
+            .into_iter()
+            .map(|(id, name)| freya_protocol::ExportedUser { id, name })
+            .collect();
+        let playlists = self
+            .shared
+            .playlists
+            .as_ref()
+            .map(Playlists::all)
+            .unwrap_or_default();
+        let stations = self
+            .shared
+            .stations
+            .as_ref()
+            .map(Stations::all)
+            .unwrap_or_default();
+        let state = lock(&self.shared.state);
+        let folders = state.config.settings.library_folders.clone();
+        let kept = crate::transfer::Kept {
+            folders: &folders,
+            users,
+            playlists,
+            stations,
+            pictures: state.pictures.as_ref(),
+        };
+        let file = crate::transfer::export(&state.db, kept, folder).map_err(ApiError)?;
+        log::info!("exported what the users made to {}", file.display());
+        Ok(file)
+    }
+
+    fn import_data(&self, file: &Path) -> ApiResult<ImportSummary> {
+        let playlists = self
+            .shared
+            .playlists
+            .as_ref()
+            .ok_or_else(|| ApiError("this server keeps no playlists".into()))?;
+        let users = self.users();
+        let summary = self.with(|state| {
+            let folders = state.config.settings.library_folders.clone();
+            let into = crate::transfer::ImportInto {
+                folders: &folders,
+                users,
+                playlists,
+                stations: self.shared.stations.as_ref(),
+                pictures: state.pictures.as_ref(),
+            };
+            crate::transfer::import(&mut state.db, into, file)
+        });
+        let summary = summary.map_err(ApiError)?;
+        log::info!(
+            "took in an export: {} plays, {} playlists, {} stations, {} favourites, {} changes; {} tracks not found",
+            summary.plays,
+            summary.playlists,
+            summary.stations,
+            summary.favorites,
+            summary.edits,
+            summary.missing_count
+        );
+        tell_all(&self.shared.listeners, ServiceEvent::PlaylistsChanged);
+        tell_all(&self.shared.listeners, ServiceEvent::StationsChanged);
+        tell_all(&self.shared.listeners, ServiceEvent::Changed);
+        Ok(summary)
     }
 
     fn server_log(&self, lines: usize) -> ApiResult<Vec<LogLine>> {

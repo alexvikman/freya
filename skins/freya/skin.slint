@@ -6195,6 +6195,8 @@ component FolderBrowser inherits MenuSurface {
             Text {
                 text: Server.browse-purpose == "backup" ? "Where the Backup Goes"
                     : Server.browse-purpose == "restore" ? "Choose a Backup"
+                    : Server.browse-purpose == "export" ? "Where the Export Goes"
+                    : Server.browse-purpose == "import" ? "Choose an Export"
                     : "Add Folder";
                 font-size: 17px;
                 font-weight: 600;
@@ -6324,7 +6326,7 @@ component FolderBrowser inherits MenuSurface {
                             }
                         }
                         // The backups in it, to restore one.
-                        for name[i] in Server.browse-purpose == "restore" ? Server.browse-backups : []: Rectangle {
+                        for name[i] in Server.browse-purpose == "restore" || Server.browse-purpose == "import" ? Server.browse-backups : []: Rectangle {
                             height: 36px;
                             border-radius: 6px;
                             background: backup-touch.has-hover ? Theme.hover : transparent;
@@ -6382,6 +6384,11 @@ component FolderBrowser inherits MenuSurface {
             }
             if Server.browse-purpose == "backup" && Server.browse-folder != "" && Server.browse-error == "": TextButton {
                 text: "Back Up Here";
+                primary: true;
+                clicked => { Server.browse-choose-folder(); }
+            }
+            if Server.browse-purpose == "export" && Server.browse-folder != "" && Server.browse-error == "": TextButton {
+                text: "Export Here";
                 primary: true;
                 clicked => { Server.browse-choose-folder(); }
             }
@@ -9192,9 +9199,11 @@ component SettingsView inherits Rectangle {
     callback edit-fanart-key();
     /// Open the dialog for finding a server.
     callback find-servers();
-    /// Open the dialog for backing up the server, or for restoring a backup.
+    /// Open the dialog for backing up the server, or for restoring a backup; or the folder
+    /// browser for exporting ("export") or importing ("import") what the users made.
     callback back-up();
     callback restore();
+    callback transfer(string);
 
     property <string> server-name;
     property <string> invite-name;
@@ -9593,6 +9602,29 @@ component SettingsView inherits Rectangle {
                         TextButton {
                             text: "Restore…";
                             clicked => { root.restore(); }
+                        }
+                    }
+                }
+                SettingsRow {
+                    label: "Export what the users made";
+                    detail: Server.transferring ? "Working…"
+                        : Server.transfer-detail != "" ? Server.transfer-detail
+                        : "Every user's playlists, plays, favourites and stations, and what was changed of artists, albums and genres, for another library to take in. No passwords.";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        HorizontalLayout {
+                            spacing: 8px;
+
+                            TextButton {
+                                text: "Export…";
+                                clicked => { root.transfer("export"); }
+                            }
+                            TextButton {
+                                text: "Import…";
+                                clicked => { root.transfer("import"); }
+                            }
                         }
                     }
                 }
@@ -11499,6 +11531,10 @@ export component FreyaSkin inherits Window {
                                 find-servers => { server-popup.show(); }
                                 back-up => { backup-popup.show(); }
                                 restore => { restore-popup.show(); }
+                                transfer(purpose) => {
+                                    Server.browse-for(purpose);
+                                    transfer-popup.show();
+                                }
                             }
                             if root.view == "activity": ActivityView {
                                 width: 100%;
@@ -11625,6 +11661,41 @@ export component FreyaSkin inherits Window {
                     y: max(24px, (parent.height - self.preferred-height) / 3);
                 }
             }
+        }
+    }
+    // Choosing where an export goes, or an export to take in: the browser alone, which ends
+    // as it starts the export or the import.
+    transfer-popup := PopupWindow {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        close-policy: no-auto-close;
+
+        DialogFocus {
+            key-pressed(event) => {
+                if (event.text == Key.Escape) {
+                    Server.browse-cancel();
+                    transfer-popup.close();
+                    return accept;
+                }
+                reject
+            }
+
+            DialogScrim {
+                FolderBrowser {
+                    width: min(780px, parent.width - 48px);
+                    height: self.preferred-height;
+                    x: (parent.width - self.width) / 2;
+                    y: max(24px, (parent.height - self.preferred-height) / 3);
+                }
+            }
+        }
+    }
+    property <bool> browsing: Server.browsing;
+    changed browsing => {
+        if (!self.browsing) {
+            transfer-popup.close();
         }
     }
     restore-popup := PopupWindow {

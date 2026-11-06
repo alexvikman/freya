@@ -1326,6 +1326,8 @@ skin_api! {
         Server."restore-sealed" => set_restore_sealed, get_restore_sealed;
         Server."restoring" => set_restoring, get_restoring;
         Server."restore-error" => set_restore_error, get_restore_error;
+        Server."transferring" => set_transferring, get_transferring;
+        Server."transfer-detail" => set_transfer_detail, get_transfer_detail;
     }
     callbacks {
         Player."play" => on_play, invoke_play();

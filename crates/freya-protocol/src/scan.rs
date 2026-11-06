@@ -318,7 +318,7 @@ pub struct FolderListing {
     /// Why the folder could not be listed.
     #[serde(default)]
     pub error: Option<String>,
-    /// The server's backups in it, by name, to restore one.
+    /// The server's backups and exports in it, by name, to restore or take one in.
     #[serde(default)]
     pub backups: Vec<PathBuf>,
 }

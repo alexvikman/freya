@@ -1433,9 +1433,10 @@ export global Server {
     in property <string> browse-error;
     /// Whether `browse-up` has a folder to go up to.
     in property <bool> browse-has-parent;
-    /// What the folder is chosen for: "music" (`browse-start`, `browse-add`), "backup" (where
-    /// a backup goes: `browse-choose-folder`) or "restore" (a backup to restore, among
-    /// `browse-backups`, the backups in the folder shown: `browse-choose-backup`).
+    /// What the folder is chosen for: "music" (`browse-start`, `browse-add`), "backup" or
+    /// "export" (where it goes: `browse-choose-folder`), or "restore" or "import" (a backup to
+    /// restore, or an export to take in, among `browse-backups`, those in the folder shown:
+    /// `browse-choose-backup`).
     in property <string> browse-purpose;
     in property <[string]> browse-backups;
     callback browse-for(string /* purpose */);
@@ -1463,6 +1464,11 @@ export global Server {
     in property <bool> restoring;
     in property <string> restore-error;
     callback restore(string /* password */);
+    /// Exporting what every user made, for the owner: chosen as `browse-for("export")` and
+    /// `browse-choose-folder`; taking an export in: `browse-for("import")` and
+    /// `browse-choose-backup`. `transferring` while it runs, and `transfer-detail` how it went.
+    in property <bool> transferring;
+    in property <string> transfer-detail;
     callback browse-start();
     /// Into the `index`th folder shown, or up to the one the folder shown is in.
     callback browse-into(int);

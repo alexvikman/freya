@@ -147,12 +147,18 @@ pub(super) fn bind(b: &Binder) {
     b.bind(
         "Server",
         "browse-choose-folder",
-        Box::new(|app, _| app.server.choose_backup_folder()),
+        Box::new(|app, _| {
+            let remote = app.library.remote();
+            app.server.choose_folder(remote);
+        }),
     );
     b.bind(
         "Server",
         "browse-choose-backup",
-        Box::new(|app, args| app.server.choose_restore_file(index(args, 0))),
+        Box::new(|app, args| {
+            let remote = app.library.remote();
+            app.server.choose_file(remote, index(args, 0));
+        }),
     );
     b.bind(
         "Server",

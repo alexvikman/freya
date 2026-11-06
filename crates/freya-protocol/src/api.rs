@@ -199,6 +199,13 @@ macro_rules! with_server_control {
             /// then taken in as the server starts again, what it had kept beside. Fails when it
             /// is not a backup of a Freya Server, or the password is not its.
             fn restore_backup(file: &::std::path::Path, password: Option<&str>) -> ();
+            /// Exports what every user made with the library (plays, favourites, playlists,
+            /// stations, and what was changed of artists, albums and genres; no account) into a
+            /// new file in `folder` on the server's computer. Returns the file.
+            fn export_data(folder: &::std::path::Path) -> ::std::path::PathBuf;
+            /// Takes in another server's export `file`: adds, never removes, and says what it
+            /// took and what found no track here.
+            fn import_data(file: &::std::path::Path) -> $crate::ImportSummary;
             /// The last `lines` the server logged, the newest last: for an admin's Activity page.
             fn server_log(lines: usize) -> Vec<$crate::LogLine>;
             /// How scrobbling to Last.fm goes.
@@ -338,6 +345,8 @@ pub const OWNER_CALLS: &[&str] = &[
     "cancel_backup",
     "backup_status",
     "restore_backup",
+    "export_data",
+    "import_data",
 ];
 
 /// The calls that only read what the library's database holds, and answer every caller the
@@ -683,6 +692,8 @@ mod tests {
             "cancel_backup",
             "backup_status",
             "restore_backup",
+            "export_data",
+            "import_data",
             "set_artist_edit",
             // The owner's own, until each user has theirs.
             "record_play",

@@ -1355,3 +1355,86 @@ fn plays_kept_before_playlists_were_noted_are_kept() {
         .unwrap();
     assert_eq!(kept, 2);
 }
+
+#[test]
+fn what_users_made_moves_to_a_library_elsewhere() {
+    use std::collections::HashMap;
+    let mut here = Library::open_in_memory().unwrap();
+    add(
+        &mut here,
+        "/old/Agalloch/01.flac",
+        &tags("Agalloch", "Pale Folklore", "One", 1),
+    );
+    add(
+        &mut here,
+        "/old/Agalloch/02.flac",
+        &tags("Agalloch", "Pale Folklore", "Two", 2),
+    );
+    add(
+        &mut here,
+        "/old/Other/x.flac",
+        &tags("Other", "Gone", "Lost", 1),
+    );
+    here.record_play(
+        Path::new("/old/Agalloch/01.flac"),
+        None,
+        at(10),
+        Some("Mix"),
+    )
+    .unwrap();
+    here.record_play(Path::new("/old/Agalloch/02.flac"), None, at(20), None)
+        .unwrap();
+    here.record_play(Path::new("/old/Other/x.flac"), None, at(30), None)
+        .unwrap();
+    here.set_album_favorite(Some("Agalloch"), Some("Pale Folklore"), true, at(40))
+        .unwrap();
+    let made = here.made(&[PathBuf::from("/old")]).unwrap();
+    assert_eq!(made.plays.len(), 3);
+    assert_eq!(
+        made.plays[0].track.within.as_deref(),
+        Some("Agalloch/01.flac")
+    );
+    assert_eq!(made.favorites.len(), 1);
+
+    // Elsewhere: the same music in another folder, one track renamed, one not there.
+    let mut there = Library::open_in_memory().unwrap();
+    add(
+        &mut there,
+        "/new/Agalloch/01.flac",
+        &tags("Agalloch", "Pale Folklore", "One", 1),
+    );
+    add(
+        &mut there,
+        "/new/Agalloch/two.flac",
+        &tags("agalloch", "Pale Folklore", "TWO", 2),
+    );
+    let folders = [PathBuf::from("/new")];
+    let users = HashMap::from([(1, 1)]);
+    let playlists = HashMap::from([("Mix".to_owned(), "Mix (imported)".to_owned())]);
+    let found = there
+        .find_tracks(made.plays.iter().map(|play| &play.track), &folders)
+        .unwrap();
+    let missing: Vec<_> = found
+        .iter()
+        .filter(|(_, here)| here.is_none())
+        .map(|(track, _)| track.title.clone())
+        .collect();
+    let taken = there
+        .take_made(&made, &users, &playlists, &mut |track| {
+            found.get(track).cloned().flatten()
+        })
+        .unwrap();
+    assert_eq!(taken.plays, 2);
+    assert_eq!(taken.favorites, 1);
+    assert_eq!(missing, [Some("Lost".to_owned())]);
+    let history = there.history(at(0), 10).unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[1].playlist.as_deref(), Some("Mix (imported)"));
+    // Taken in again, nothing is counted twice.
+    let again = there
+        .take_made(&made, &users, &playlists, &mut |track| {
+            found.get(track).cloned().flatten()
+        })
+        .unwrap();
+    assert_eq!((again.plays, again.favorites), (0, 0));
+}

@@ -8,6 +8,7 @@ pub mod lastfm;
 pub mod library;
 pub mod radio;
 pub mod scan;
+pub mod transfer;
 
 pub use api::*;
 pub use artists::*;
@@ -15,6 +16,7 @@ pub use lastfm::*;
 pub use library::*;
 pub use radio::*;
 pub use scan::*;
+pub use transfer::*;
 
 /// What Freya Server's own folders are named after, apart from Freya's: its library, users and
 /// certificate, which Freya on its computer reads the certificate from.
