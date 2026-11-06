@@ -1108,6 +1108,7 @@ skin_api! {
         Library."playing-known" => set_playing_known, get_playing_known;
         Library."reveal-row" => set_reveal_row, get_reveal_row;
         Library."reveals" => set_reveals, get_reveals;
+        Library."folders-offered" => set_folders_offered, get_folders_offered;
         Library."album-page" => set_album_page, get_album_page;
         Library."artist-options" => set_artist_options, get_artist_options;
         Library."artist-page" => set_artist_page, get_artist_page;

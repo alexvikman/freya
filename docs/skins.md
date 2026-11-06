@@ -173,6 +173,7 @@ The user's music, read from the folders they chose, browsed in four sections (ar
 | `covers-ready` | int | Goes up when new covers are ready; pass it to `cover()` |
 | `query` | string | `in-out`: the search text. Bind a text field to it with `<=>` |
 | `folders` | `[string]` | The music folders, like "~/Music" |
+| `folders-offered` | `int` | Counts up when a folder given to Freya is not in the library and the user may add it: `folders-draft` holds it, for the skin to show its folders dialog |
 | `scanning` | bool | True while Freya reads the folders |
 | `status` | string | "10,412 tracks · 682 albums", or "Reading 1,234 of 5,000 files" during a scan |
 

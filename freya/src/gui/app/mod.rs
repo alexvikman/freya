@@ -8,8 +8,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use freya_audio::{Event, Media, MediaTags, PlaybackState, Player, TrackInfo};
 use freya_media::cover::{Cover, cover_from, read_cover};
-use freya_media::cue::{self, Found};
-use freya_media::{Entry, TagLoader, playlist_file};
+use freya_media::{Entry, playlist_file};
 use freya_protocol::{LibraryApi, Part, Track};
 use freya_skin::SkinSource;
 use slint::winit_030::WinitWindowAccessor;
@@ -59,13 +58,24 @@ const LOOK_HERE_EVERY: Duration = Duration::from_secs(2);
 /// How many entries in a row that cannot be opened make Freya stop trying the ones after them.
 const MOST_FAILURES: usize = 5;
 
-/// A downloaded station playlist, or why it could not be read.
 /// `path` from the root, as the working folder makes it; addresses are kept as they are.
 fn absolute(path: &Path) -> PathBuf {
     if freya_audio::is_url(&path.to_string_lossy()) {
         return path.to_owned();
     }
-    std::path::absolute(path).unwrap_or_else(|_| path.to_owned())
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
+    // Without `.` and `..`, as the library names its files: Windows takes them out itself.
+    let mut clean = PathBuf::new();
+    for part in absolute.components() {
+        match part {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                clean.pop();
+            }
+            part => clean.push(part),
+        }
+    }
+    clean
 }
 
 /// Adds `folder` to `folders`, kept sorted. A folder inside one already there adds nothing;
@@ -273,7 +283,11 @@ pub struct App {
     pub settle_window: Option<bool>,
     pub playlist: Playlist,
     pub settings: Settings,
-    tags: TagLoader,
+    /// Files given to Freya before the library could be asked which tracks they are: played
+    /// once it can.
+    waiting_files: Option<Vec<PathBuf>>,
+    /// Whether Up Next, as restored, was checked against the library: only its tracks stay.
+    up_next_checked: bool,
     window_events: WindowEvents,
     /// Whether the skin window is hidden (covered, minimized) and whether it has focus, as
     /// far as the system says.
@@ -414,7 +428,8 @@ impl App {
             settle_window: None,
             playlist: Playlist::new(),
             settings,
-            tags: TagLoader::new(),
+            waiting_files: None,
+            up_next_checked: true,
             window_events,
             window_hidden: false,
             window_closed: false,
@@ -469,7 +484,8 @@ impl App {
         app
     }
 
-    /// Plays files from the command line, or restores the saved playlist.
+    /// Plays files from the command line, or restores the saved playlist: both once the library
+    /// can be asked which tracks they are.
     pub fn start(&mut self, files: &[PathBuf]) {
         if !files.is_empty() {
             self.replace_and_play(files);
@@ -484,18 +500,29 @@ impl App {
             return;
         }
         match playlist_file::load(&path) {
-            Ok(entries) => {
-                self.playlist.insert(None, entries);
-                self.request_missing_tags();
-                self.playlist_dirty = true;
-            }
+            Ok(entries) => self.restore_up_next(entries),
             Err(e) => log::warn!("could not restore playlist: {e}"),
         }
+    }
+
+    /// Up Next as it was saved: kept once the library says which of it are its tracks.
+    pub fn restore_up_next(&mut self, entries: Vec<Entry>) {
+        self.playlist.insert(None, entries);
+        self.up_next_checked = false;
+        self.playlist_dirty = true;
     }
 
     pub fn tick(&mut self) {
         self.player.rest_device_when_idle();
         self.look_for_server_here();
+        if self.library.ready() {
+            if let Some(files) = self.waiting_files.take() {
+                self.replace_and_play(&files);
+            }
+            if !self.up_next_checked {
+                self.check_up_next();
+            }
+        }
         if let Some(make_large) = self.settle_window
             && self.view.ui.window().with_winit_window(|_| ()).is_some()
         {
@@ -583,12 +610,6 @@ impl App {
                     self.error = format!("Could not read the station list: {e}");
                 }
             }
-        }
-
-        let tags: HashMap<PathBuf, freya_media::TagInfo> = self.tags.poll().collect();
-        if !tags.is_empty() {
-            self.playlist.apply_all_tags(&tags);
-            self.playlist_dirty = true;
         }
 
         let mut dropped = Vec::new();

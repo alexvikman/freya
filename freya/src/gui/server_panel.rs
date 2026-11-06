@@ -637,6 +637,11 @@ impl ServerPanel {
     }
 
     /// The folder shown, the `index`th in it, or the one it is in.
+    /// Whether the account is one of the server's admins.
+    pub fn is_admin(&self) -> bool {
+        self.account.as_ref().is_some_and(|a| a.role == Role::Admin)
+    }
+
     pub fn browsed(&self) -> Option<PathBuf> {
         self.browse.as_ref()?.folder.clone()
     }

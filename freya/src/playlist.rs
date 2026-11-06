@@ -1,7 +1,6 @@
 //! The playlist: entries, selection, current track and next/previous with shuffle and repeat.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use freya_media::Entry;
@@ -126,7 +125,7 @@ impl Playlist {
     }
 
     /// Keeps only entries for which `keep` returns true, tracking the current entry.
-    fn retain(&mut self, mut keep: impl FnMut(&Entry) -> bool) {
+    pub fn retain(&mut self, mut keep: impl FnMut(&Entry) -> bool) {
         let current = self.current;
         let mut new_current = None;
         // The entry that plays was removed: the next one is the first kept after it.
@@ -269,13 +268,15 @@ impl Playlist {
 
     /// Applies the tags of many files in one pass over the entries: one pass per file made
     /// restoring a long Up Next take minutes.
-    pub fn apply_all_tags(&mut self, tags: &HashMap<PathBuf, TagInfo>) {
-        if tags.is_empty() {
-            return;
-        }
+    /// Takes the tags of each entry `known` gives, as the library has them.
+    pub fn refresh_from<'a>(&mut self, known: impl Fn(&Entry) -> Option<&'a Entry>) {
         for e in &mut self.entries {
-            if let Some(tags) = tags.get(&e.path) {
-                e.apply_tags(tags);
+            if let Some(known) = known(e) {
+                e.title.clone_from(&known.title);
+                e.artist.clone_from(&known.artist);
+                e.album.clone_from(&known.album);
+                e.duration = known.duration;
+                e.tags_loaded = known.tags_loaded;
             }
         }
     }

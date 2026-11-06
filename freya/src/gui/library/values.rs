@@ -100,6 +100,10 @@ impl LibraryPanel {
                 ),
             ),
             ("covers-ready", Value::Number(f64::from(self.covers_ready))),
+            (
+                "folders-offered",
+                Value::Number(f64::from(self.folders_offered)),
+            ),
             ("status", string(status)),
             ("album-options", Value::Bool(shown.album_options)),
             ("albums-options", Value::Bool(shown.albums_options)),

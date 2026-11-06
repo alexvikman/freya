@@ -328,6 +328,8 @@ pub struct LibraryPanel {
     /// once, but a server's rows come a little later, and until then the old rows are shown
     /// as they were, not in the new list's layout.
     shown: Shown,
+    /// Goes up when a folder given to Freya is offered to the admin as a music folder.
+    folders_offered: u32,
     /// Folders last given to the skin, in use and being edited.
     folders_shown: Option<Vec<PathBuf>>,
     draft_shown: Option<Vec<PathBuf>>,
@@ -518,6 +520,7 @@ impl LibraryPanel {
             stale: false,
             reloaded: Instant::now(),
             shown: Shown::default(),
+            folders_offered: 0,
             pictures_loaded: Instant::now(),
             folders_shown: None,
             draft_shown: None,

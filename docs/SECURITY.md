@@ -189,8 +189,10 @@ Nobody can wear it out before logging in:
 
 ## A client and a server it may not trust
 
-- A library on another computer is always streamed through its server: a path it names is
-  never looked for on the client, where it could name a local file or a Windows share. Up Next
+- Music plays only from the library, always through its server: a file given to Freya is
+  added only as the library's track of that path, and a path the server names is never looked
+  for on the client, where it could name a local file or a Windows share. Up Next restored
+  keeps only the library's tracks. Up Next
   is restored only for the library it was saved from, and emptied when another is chosen.
 - A stream a server elsewhere names is asked only of addresses beyond this computer and its
   network: each name is resolved and every near address dropped, a redirect's too, and no

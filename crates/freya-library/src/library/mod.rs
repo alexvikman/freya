@@ -41,6 +41,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Bumped whenever the tracks' tables change; they are then rebuilt.
 const SCHEMA_VERSION: i32 = 6;
+/// The most tracks [`Library::tracks_under`] gives, for a folder dropped on Freya.
+pub const MOST_TRACKS_UNDER: usize = 100_000;
 
 /// Each genre a track's tags give, as its own: "Alternative Metal, Industrial Metal" is two.
 const GENRES: &str = "
@@ -352,6 +354,51 @@ impl Library {
             .db
             .prepare_cached("SELECT EXISTS (SELECT 1 FROM tracks WHERE path = ?1)")?;
         query.query_row([path.to_string_lossy()], |row| row.get(0))
+    }
+
+    /// The tracks of the files and folders at `paths`: a file's tracks (a CUE sheet's parts
+    /// too), and every track under a folder, in the order of their paths. Paths the library does
+    /// not have are left out. At most [`MOST_TRACKS_UNDER`].
+    pub fn tracks_under(&self, paths: &[PathBuf]) -> Result<Vec<Track>> {
+        let mut query = self.db.prepare_cached(&format!(
+            "SELECT {TRACK_COLUMNS} FROM tracks
+             WHERE path = ?1 OR (path >= ?2 AND path < ?3)
+             ORDER BY path, ifnull(start_ms, 0)
+             LIMIT ?4"
+        ))?;
+        let mut tracks = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for path in paths {
+            let Some(path) = path.to_str() else {
+                continue;
+            };
+            let path = path.trim_end_matches(['/', '\\']);
+            if path.is_empty() {
+                continue;
+            }
+            // Under a folder: from its name and a separator up to the next character after the
+            // separator, without LIKE and its wildcards.
+            let mut found = Vec::new();
+            for separator in ['/', '\\'] {
+                let from = format!("{path}{separator}");
+                let to = format!("{path}{}", char::from(separator as u8 + 1));
+                let left = MOST_TRACKS_UNDER.saturating_sub(tracks.len() + found.len());
+                found.extend(
+                    query
+                        .query_map(params![path, from, to, left as i64], track_from_row)?
+                        .collect::<Result<Vec<_>>>()?,
+                );
+            }
+            for track in found {
+                if seen.insert(track.id) {
+                    tracks.push(track);
+                }
+            }
+            if tracks.len() >= MOST_TRACKS_UNDER {
+                break;
+            }
+        }
+        Ok(tracks)
     }
 
     pub fn artist_tracks(&self, artist: Option<&str>) -> Result<Vec<Track>> {

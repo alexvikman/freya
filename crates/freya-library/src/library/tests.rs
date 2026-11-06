@@ -1216,3 +1216,39 @@ fn a_track_of_many_genres_is_in_each() {
         2
     );
 }
+
+#[test]
+fn tracks_under_a_folder_or_a_file_are_the_librarys() {
+    let mut library = Library::open_in_memory().unwrap();
+    for (path, title, number) in [
+        ("/music/Agalloch/Pale Folklore/02.flac", "Two", 2),
+        ("/music/Agalloch/Pale Folklore/01.flac", "One", 1),
+        ("/music/Agalloch/The Mantle/01.flac", "Mantle", 1),
+        ("/music/Agalloch-B/01.flac", "Elsewhere", 1),
+        (r"C:\Music\Opeth\01.flac", "Windows", 1),
+    ] {
+        add(
+            &mut library,
+            path,
+            &tags("Agalloch", "Pale Folklore", title, number),
+        );
+    }
+    let under = |paths: &[&str]| {
+        let paths: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
+        titles(&library.tracks_under(&paths).unwrap())
+    };
+    // A folder, by path; not the folder whose name only starts the same.
+    assert_eq!(under(&["/music/Agalloch"]), ["One", "Two", "Mantle"]);
+    assert_eq!(under(&["/music/Agalloch/"]), ["One", "Two", "Mantle"]);
+    // A file, a folder given twice, and what the library does not have.
+    assert_eq!(
+        under(&[
+            "/music/Agalloch/The Mantle/01.flac",
+            "/music/Agalloch/The Mantle",
+            "/elsewhere/song.flac",
+        ]),
+        ["Mantle"]
+    );
+    assert_eq!(under(&[r"C:\Music"]), ["Windows"]);
+    assert!(under(&["/"]).is_empty(), "the root is not every track");
+}

@@ -42,6 +42,10 @@ macro_rules! with_library_data {
             fn artist_tracks(artist: Option<&str>) -> Vec<$crate::Track>;
             /// Whether the file at `path` is one of the library's tracks.
             fn knows_file(path: &::std::path::Path) -> bool;
+            /// The library's tracks of the files and folders at `paths`, as the server calls them:
+            /// a file's, and every track under a folder, by path. What is not the library's is
+            /// left out.
+            fn tracks_under(paths: &[::std::path::PathBuf]) -> Vec<$crate::Track>;
             fn genres() -> Vec<$crate::Genre>;
             fn genre_albums(genre: Option<&str>) -> Vec<$crate::Album>;
             fn genre_tracks(genre: Option<&str>) -> Vec<$crate::Track>;
@@ -257,6 +261,7 @@ pub const LISTENER_CALLS: &[&str] = &[
     "album_tracks",
     "artist_tracks",
     "knows_file",
+    "tracks_under",
     "genres",
     "genre_albums",
     "genre_tracks",
@@ -301,6 +306,7 @@ pub const CACHED_CALLS: &[&str] = &[
     "album_tracks",
     "artist_tracks",
     "knows_file",
+    "tracks_under",
     "genres",
     "genre_albums",
     "genre_tracks",

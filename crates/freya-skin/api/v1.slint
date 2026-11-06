@@ -572,6 +572,10 @@ export global Library {
     /// runs, `remove-draft-folder` takes one away, and only `save-folders` puts them in use
     /// and reads them. Cancelling is not saving.
     in property <[string]> folders-draft;
+    /// Counts up when a folder given to Freya (dropped, opened) is not in the library and the
+    /// user may add it: `folders-draft` holds it, added to `folders`, for the skin to show its
+    /// dialog with Cancel and Save.
+    in property <int> folders-offered;
     callback edit-folders();
     callback remove-draft-folder(int);
     callback save-folders();

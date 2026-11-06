@@ -6,6 +6,7 @@
 use std::path::Path;
 
 use crate::eq_presets::builtin_presets;
+use freya_media::Entry;
 use freya_skin::SkinSource;
 use slint::Model;
 use slint_interpreter::{Struct, Value};
@@ -178,16 +179,26 @@ fn skin_callbacks_drive_the_app() {
         },
     )));
     bindings::connect(&ui, &app);
+    app.borrow_mut().refresh();
 
-    // Adding files shows them as rows.
+    // Adding the library's files shows them as rows.
+    let first = scanned(
+        &app,
+        &[
+            ("mono-22k.wav", "mono-22k.wav"),
+            ("sine-96k-24bit.wav", "sine-96k-24bit.wav"),
+            ("sine.flac", "sine.flac"),
+        ],
+    );
     app.borrow_mut().add_paths(&[
-        fixture("mono-22k.wav"),
-        fixture("sine-96k-24bit.wav"),
-        fixture("sine.flac"),
+        first.join("mono-22k.wav"),
+        first.join("sine-96k-24bit.wav"),
+        first.join("sine.flac"),
     ]);
     app.borrow_mut().refresh();
     assert_eq!(titles(&ui), ["mono-22k", "sine-96k-24bit", "sine"]);
-    assert_eq!(global(&ui, "Playlist", "summary"), text("3 tracks · 0:00+"));
+    // The library knows how long they are.
+    assert_eq!(global(&ui, "Playlist", "summary"), text("3 tracks · 0:02"));
 
     // Click, then Shift+Down.
     call(
@@ -387,12 +398,13 @@ export component W inherits Window { Text { text: Player.title; } }
     // The library: a music folder is scanned, browsed, searched and played from.
     let ui = current_ui(&app);
     assert_eq!(global(&ui, "Library", "title"), text("Artists"));
-    assert!(library_titles(&ui).is_empty());
     let music = temp_dir("music");
     for name in ["sine.mp3", "sine.flac", "mono-22k.wav"] {
         std::fs::copy(fixture(name), music.join(name)).unwrap();
     }
+    // In place of the folder Up Next was added from.
     call(&ui, "Library", "edit-folders", &[]);
+    call(&ui, "Library", "remove-draft-folder", &[num(0.0)]);
     app.borrow_mut().add_draft_folder(music.clone());
     call(&ui, "Library", "save-folders", &[]);
     wait_for_scan(&app);
@@ -463,14 +475,15 @@ export component W inherits Window { Text { text: Player.title; } }
     assert_eq!(library_titles(&ui).len(), 2);
     call(&ui, "Library", "show", &[text("recently-played")]);
     assert_eq!(global(&ui, "Library", "title"), text("Recently Played"));
-    assert!(library_titles(&ui).is_empty());
-    for _ in 0..2 {
+    // More often than what Up Next played above.
+    for _ in 0..4 {
         app.borrow_mut()
             .library
             .record_play(music.join("mono-22k.wav"), None);
     }
     app.borrow_mut().tick();
-    assert_eq!(library_titles(&ui), ["mono-22k"]);
+    // Before what Up Next played above.
+    assert_eq!(library_titles(&ui)[0], "mono-22k");
     let played = |ui: &SkinWindow| -> Vec<Value> {
         let Value::Model(model) = global(ui, "Library", "rows") else {
             panic!("Library.rows is a model");
@@ -483,10 +496,11 @@ export component W inherits Window { Text { text: Player.title; } }
             })
             .collect()
     };
-    assert_eq!(played(&ui), [text("Just now")]);
+    assert_eq!(played(&ui)[0], text("Just now"));
     call(&ui, "Library", "show", &[text("most-played")]);
     assert_eq!(global(&ui, "Library", "layout"), text("table"));
-    assert_eq!(played(&ui), [text("2 plays")]);
+    // And once as the artist was played above.
+    assert_eq!(played(&ui)[0], text("5 plays"));
     call(&ui, "Library", "activate", &[num(0.0)]);
     assert_eq!(titles(&ui), ["mono-22k"]);
     call(&ui, "Library", "show", &[text("artists")]);
@@ -640,8 +654,20 @@ export component W inherits Window { Text { text: Player.title; } }
     }
 }
 
-/// An app on the built-in skin with a silent player, which plays in real time.
+/// An app on the built-in skin with a silent player, which plays in real time, and a library
+/// of its own, in this process, with nothing in it.
 fn silent_app() -> Rc<RefCell<App>> {
+    library_app(&temp_dir(&format!("library-{}", next_id())))
+}
+
+/// A number for each app's own temporary folders.
+fn next_id() -> usize {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// An app as [`silent_app`] makes it, its library kept in `dir`.
+fn library_app(dir: &Path) -> Rc<RefCell<App>> {
     freya_skin::render::init_headless().unwrap();
     let ui = SkinWindow::load(&SkinSource::Builtin).unwrap();
     let app = Rc::new(RefCell::new(App::new(
@@ -651,13 +677,38 @@ fn silent_app() -> Rc<RefCell<App>> {
         Settings::default(),
         WindowEvents::default(),
         app::Collections {
-            library: library::LibraryPanel::new(None, None),
+            library: library::LibraryPanel::new(
+                Some(library::LibrarySource::InProcess {
+                    database: dir.join("library.sqlite3"),
+                    pictures: None,
+                }),
+                None,
+            ),
             stations: radio::Stations::new(),
             playlists: playlists::Playlists::new(),
         },
     )));
     bindings::connect(&ui, &app);
+    app.borrow_mut().refresh();
     app
+}
+
+/// A music folder of the fixtures `files`, each copied under its new name, put in `app`'s
+/// library and scanned: music plays only from the library.
+fn scanned(app: &Rc<RefCell<App>>, files: &[(&str, &str)]) -> PathBuf {
+    let music = temp_dir(&format!("music-{}", next_id()));
+    for (fixture_name, name) in files {
+        let path = music.join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::copy(fixture(fixture_name), path).unwrap();
+    }
+    app.borrow_mut().edit_folders();
+    app.borrow_mut().add_draft_folder(music.clone());
+    app.borrow_mut().save_folders();
+    wait_for_scan(app);
+    music
 }
 
 /// Plays Up Next from its first entry until nothing plays, and returns the rows that started,
@@ -697,28 +748,43 @@ fn rows_played(app: &Rc<RefCell<App>>, limit: Duration) -> Vec<usize> {
 fn duplicate_entries_play_in_order() {
     // Once, the second A was taken for the first, and Up Next went A, B, A, B, ... for ever.
     let app = silent_app();
-    app.borrow_mut().add_paths(&[
-        fixture("sine.flac"),
-        fixture("mono-22k.wav"),
-        fixture("sine.flac"),
-        fixture("sine.ogg"),
-    ]);
+    let music = scanned(
+        &app,
+        &[
+            ("sine.flac", "sine.flac"),
+            ("mono-22k.wav", "mono-22k.wav"),
+            ("sine.ogg", "sine.ogg"),
+        ],
+    );
+    for name in ["sine.flac", "mono-22k.wav", "sine.flac", "sine.ogg"] {
+        app.borrow_mut().add_paths(&[music.join(name)]);
+    }
     assert_eq!(rows_played(&app, Duration::from_secs(40)), [0, 1, 2, 3]);
 }
 
 #[test]
 fn an_unplayable_entry_is_skipped_and_hopeless_lists_stop() {
     // The entry queued next fails to open: playback goes on with the one after it.
+    // The library's, but gone from the disk since it was scanned.
     let app = silent_app();
-    let missing = temp_dir("unplayable").join("missing.flac");
-    app.borrow_mut()
-        .add_paths(&[fixture("sine.flac"), missing.clone(), fixture("sine.ogg")]);
+    let music = scanned(
+        &app,
+        &[
+            ("sine.flac", "1.flac"),
+            ("sine.flac", "2.flac"),
+            ("sine.ogg", "3.ogg"),
+        ],
+    );
+    std::fs::remove_file(music.join("2.flac")).unwrap();
+    app.borrow_mut().add_paths(std::slice::from_ref(&music));
     assert_eq!(rows_played(&app, Duration::from_secs(40)), [0, 2]);
 
     // Nothing can be played, repeat on: Freya tries each once, then stops.
     let app = silent_app();
     app.borrow_mut().settings.repeat = true;
-    app.borrow_mut().add_paths(&[missing.clone(), missing]);
+    let music = scanned(&app, &[("sine.flac", "1.flac"), ("sine.flac", "2.flac")]);
+    app.borrow_mut().add_paths(std::slice::from_ref(&music));
+    std::fs::remove_dir_all(&music).unwrap();
     let started = std::time::Instant::now();
     assert_eq!(
         rows_played(&app, Duration::from_secs(10)),
@@ -772,18 +838,64 @@ fn a_station_list_is_played_again_without_adding_it_again() {
 }
 
 #[test]
-fn relative_paths_are_kept_from_the_root() {
-    // `freya song.mp3` saved "song.mp3", which a later start from another folder could not
-    // find. Tests run in the crate's folder.
+fn a_path_with_dots_finds_its_track() {
+    // `freya ../song.mp3`: the library names its files without `.` and `..`.
     let app = silent_app();
-    let relative = PathBuf::from("../crates/freya-audio/tests/fixtures/sine.wav");
-    app.borrow_mut().add_paths(std::slice::from_ref(&relative));
+    let music = scanned(&app, &[("sine.wav", "sine.wav")]);
+    let dotted = music
+        .join("elsewhere")
+        .join("..")
+        .join(".")
+        .join("sine.wav");
+    app.borrow_mut().add_paths(std::slice::from_ref(&dotted));
     let app = app.borrow();
-    let path = &app.playlist.entries()[0].path;
-    assert!(path.is_absolute(), "{}", path.display());
+    assert_eq!(app.playlist.entries()[0].path, music.join("sine.wav"));
+}
+
+#[test]
+fn only_the_librarys_files_are_added() {
+    let app = silent_app();
+    let music = scanned(&app, &[("sine.flac", "in/sine.flac")]);
+    let outside = temp_dir("outside");
+    std::fs::copy(fixture("sine.ogg"), outside.join("sine.ogg")).unwrap();
+    app.borrow_mut()
+        .add_paths(&[music.clone(), outside.join("sine.ogg")]);
+    assert_eq!(app.borrow().playlist.len(), 1);
+    assert!(
+        app.borrow().error.contains("not in the library"),
+        "{}",
+        app.borrow().error
+    );
+    // A folder the library does not have: no admin here, so it is said, not offered.
+    app.borrow_mut().error.clear();
+    app.borrow_mut().add_paths(std::slice::from_ref(&outside));
+    assert_eq!(app.borrow().playlist.len(), 1);
+    assert!(app.borrow().error.contains("An admin adds music folders"));
+}
+
+#[test]
+fn up_next_restored_keeps_only_the_librarys_tracks_and_streams() {
+    let app = silent_app();
+    let music = scanned(&app, &[("sine.flac", "sine.flac")]);
+    app.borrow_mut().restore_up_next(vec![
+        Entry::new(music.join("sine.flac")),
+        Entry::new(fixture("sine.ogg")),
+        Entry::new("https://radio.example/stream"),
+    ]);
+    app.borrow_mut().tick();
+    let app = app.borrow();
+    let entries = app.playlist.entries();
+    let paths: Vec<&Path> = entries.iter().map(|e| e.path.as_path()).collect();
     assert_eq!(
-        path.canonicalize().unwrap(),
-        relative.canonicalize().unwrap()
+        paths,
+        [
+            music.join("sine.flac").as_path(),
+            Path::new("https://radio.example/stream")
+        ]
+    );
+    assert!(
+        entries[0].duration.is_some(),
+        "with the library's tags and length"
     );
 }
 
@@ -792,10 +904,17 @@ fn a_file_opened_from_the_system_is_added_to_up_next() {
     // MPRIS OpenUri: the address was not decoded, so a name with a space was not found, and
     // Up Next was emptied all the same.
     let app = silent_app();
+    let music = scanned(
+        &app,
+        &[
+            ("sine.flac", "sine.flac"),
+            ("sine.ogg", "sine.ogg"),
+            ("sine.wav", "with space.wav"),
+        ],
+    );
     app.borrow_mut()
-        .add_paths(&[fixture("sine.flac"), fixture("sine.ogg")]);
-    let file = temp_dir("open-uri").join("with space.wav");
-    std::fs::copy(fixture("sine.wav"), &file).unwrap();
+        .add_paths(&[music.join("sine.flac"), music.join("sine.ogg")]);
+    let file = music.join("with space.wav");
     let path = file
         .to_string_lossy()
         .replace(' ', "%20")
@@ -824,7 +943,8 @@ fn a_cleared_up_next_shows_nothing_of_what_played() {
     // The album of the track played last stayed, under an empty title.
     let app = silent_app();
     let ui = current_ui(&app);
-    app.borrow_mut().add_paths(&[fixture("sine.ape")]);
+    let music = scanned(&app, &[("sine.ape", "sine.ape")]);
+    app.borrow_mut().add_paths(&[music.join("sine.ape")]);
     app.borrow_mut().play_index(0);
     let started = Instant::now();
     while global(&ui, "Player", "album") != text("Fixtures") {
@@ -860,6 +980,10 @@ fn a_cue_sheet_opened_on_its_own_adds_its_tracks() {
          TRACK 02 AUDIO\n    TITLE \"Two\"\n    INDEX 01 00:00:30\n",
     )
     .unwrap();
+    app.borrow_mut().edit_folders();
+    app.borrow_mut().add_draft_folder(dir.clone());
+    app.borrow_mut().save_folders();
+    wait_for_scan(&app);
     app.borrow_mut().add_paths(&[sheet]);
     let app = app.borrow();
     let titles: Vec<Option<&str>> = app
@@ -1034,8 +1158,11 @@ fn scrolling_by_the_middle_button_scrolls_what_is_under_it_down() {
     ui.set_global_property("Server", "chosen", Value::Bool(true))
         .unwrap();
     ui.window().set_size(slint::LogicalSize::new(1100.0, 720.0));
-    let many: Vec<PathBuf> = (0..300).map(|_| fixture("sine.flac")).collect();
-    app.borrow_mut().add_paths(&many);
+    // Up Next as the library's tracks make it, which are not what this tries.
+    let many: Vec<Entry> = (0..300).map(|_| Entry::new(fixture("sine.flac"))).collect();
+    app.borrow_mut().edit(|p| {
+        p.insert(None, many);
+    });
     app.borrow_mut().refresh();
     assert_eq!(global(&ui, "App", "scroll"), num(0.0));
     // What the middle button's scrolling asks below its mark: a negative step.

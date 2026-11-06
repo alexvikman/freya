@@ -1438,7 +1438,7 @@ component TrackList inherits FocusScope {
             horizontal-alignment: center;
         }
         Text {
-            text: "Drop music files or folders here, or press O.";
+            text: "Play an album, an artist or a playlist from the library, or add them here.";
             font-size: 14px;
             color: Theme.text-secondary;
             horizontal-alignment: center;
@@ -10493,6 +10493,10 @@ export component FreyaSkin inherits Window {
         Library.edit-folders();
         folders-popup.show();
     }
+    // A folder given to Freya that the library does not have: the dialog opens with it added,
+    // for an admin to save.
+    property <int> folders-offered: Library.folders-offered;
+    changed folders-offered => { folders-popup.show(); }
 
     function toggle-view(view: string) {
         if (root.view == view) {

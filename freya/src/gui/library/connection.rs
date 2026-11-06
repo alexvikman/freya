@@ -184,6 +184,23 @@ impl LibraryPanel {
         self.db.clone()
     }
 
+    /// Whether the library is open, and can be asked.
+    pub fn ready(&self) -> bool {
+        self.db.is_some()
+    }
+
+    /// The library's tracks of the files and folders at `paths`: see
+    /// [`LibraryApi::tracks_under`].
+    pub fn tracks_under(&self, paths: &[PathBuf]) -> Result<Vec<Track>, String> {
+        let db = self.db.as_ref().ok_or("The library is not open yet.")?;
+        db.tracks_under(paths).map_err(|e| e.to_string())
+    }
+
+    /// Opens the music folders' dialog, its draft made by the app: see `folders-offered`.
+    pub fn offer_folders(&mut self) {
+        self.folders_offered = self.folders_offered.wrapping_add(1);
+    }
+
     /// How scrobbling goes, when the server told since this was last asked.
     pub fn take_lastfm_status(&mut self) -> Option<freya_protocol::LastFmStatus> {
         self.lastfm_status.take()
