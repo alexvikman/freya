@@ -75,6 +75,22 @@ pub enum ServiceEvent {
     Changed,
     /// How scrobbling to Last.fm goes, now that it changed.
     LastFm(crate::LastFmStatus),
+    /// How a backup of the server goes, now that it went on or ended.
+    Backup(BackupStatus),
+}
+
+/// How a backup of the server goes.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct BackupStatus {
+    /// "idle", "running", "done", "cancelled" or "failed".
+    pub state: String,
+    /// Bytes read so far, and all there are.
+    pub done: u64,
+    pub total: u64,
+    /// The file made, once done.
+    pub file: Option<std::path::PathBuf>,
+    /// Why it failed.
+    pub error: String,
 }
 
 /// How the server keeps the library, as the user set it.
@@ -299,6 +315,9 @@ pub struct FolderListing {
     /// Why the folder could not be listed.
     #[serde(default)]
     pub error: Option<String>,
+    /// The server's backups in it, by name, to restore one.
+    #[serde(default)]
+    pub backups: Vec<PathBuf>,
 }
 
 /// Something the server logged.

@@ -176,6 +176,7 @@ fn the_server_is_told_what_to_do_and_tells_what_happens() {
         radio_directory: None,
         scrobbles: None,
         log: None,
+        data: Some(dir.clone()),
     };
     let service = Arc::new(Service::start(dir.join("library.db"), None, config).unwrap());
     let served = Served {
@@ -207,7 +208,8 @@ fn the_server_is_told_what_to_do_and_tells_what_happens() {
         let event = events
             .recv_timeout(std::time::Duration::from_secs(20))
             .unwrap();
-        if event != ServiceEvent::Changed {
+        // How a backup goes is checked by asking, below.
+        if event != ServiceEvent::Changed && !matches!(event, ServiceEvent::Backup(_)) {
             break event;
         }
     };
@@ -241,6 +243,49 @@ fn the_server_is_told_what_to_do_and_tells_what_happens() {
     assert!(start.places.iter().any(|place| place.kind == "home"));
     // The server's log, for an admin; this server keeps none.
     assert!(remote.server_log(10).unwrap().is_empty());
+
+    // A backup of all it keeps, into a folder on its computer, told as it goes.
+    let kept = dir
+        .join("..")
+        .join(format!("freya-client-backups-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&kept);
+    std::fs::create_dir_all(&kept).unwrap();
+    assert!(remote.backup_size().unwrap() > 0);
+    remote.start_backup(&kept, Some("pw")).unwrap();
+    let started = std::time::Instant::now();
+    let status = loop {
+        let status = remote.backup_status().unwrap();
+        if status.state != "running" {
+            break status;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "the backup ends"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(status.state, "done", "{}", status.error);
+    let file = status.file.unwrap();
+    assert!(file.starts_with(&kept));
+    assert_eq!(file.extension().unwrap(), "freyabackup");
+    // Not in the server's own folder, however it is named.
+    remote
+        .start_backup(&dir.join("music").join(".."), None)
+        .unwrap();
+    let started = std::time::Instant::now();
+    let status = loop {
+        let status = remote.backup_status().unwrap();
+        if status.state != "running" {
+            break status;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "the backup ends"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(status.state, "failed");
+    let _ = std::fs::remove_dir_all(&kept);
 
     // Playlists, kept by the server; every client is told of a change.
     let entry = freya_protocol::PlaylistEntry {

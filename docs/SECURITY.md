@@ -187,6 +187,17 @@ Nobody can wear it out before logging in:
   made anew, which would lose the users or break every device's pin.
 - No secret is logged; names lose control characters before they are.
   An admin reads the server's log in Freya's Activity page; listeners cannot.
+- A backup holds everything the server keeps, the accounts' password hashes and the server's
+  private key too: only an admin makes or restores one, and only in a folder on the server's
+  computer, never in its own folder; nothing of it goes to Freya. On macOS and Linux the file
+  is its user's alone. Under a password it is sealed: AES-256-GCM over chunks of a megabyte,
+  each with its own nonce (and a flag on the last, so one cannot be dropped, swapped or cut
+  off), under a key from the password by PBKDF2-HMAC-SHA256 with 600,000 rounds and a random
+  salt. Without the password nothing of it can be read, nor restored.
+- Restoring checks the backup first (the password; that the zip's local headers agree with
+  its directory; that it names no file outside it; that it holds a library and accounts),
+  unpacks it beside the server's files, and takes it in only as the server starts again,
+  before anything is opened. What the server had is moved aside, not removed.
 - An admin chooses music folders among the server's as the server sees them, network
   shares too: on Windows a computer typed as `\\computer` is asked for the folders it shares,
   as the server's user, and a share is read with that user's own access to it. Listeners

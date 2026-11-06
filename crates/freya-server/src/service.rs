@@ -13,10 +13,10 @@ use freya_library::Library;
 use freya_library::library::{LastFm, Online, ScanOptions, Scanner};
 use freya_media::pictures::Pictures;
 use freya_protocol::{
-    ApiError, ApiResult, FolderListing, LastFmStatus, LastFmTrack, LibraryApi, LibraryData,
-    LibraryPictures, LogLine, Part, PlaylistEntry, RadioDirectoryStatus, RadioQuery, RadioResults,
-    RadioShelf, RadioStation, RadioTag, SavedPlaylist, ScanEvent, Scrobble, ServerControl,
-    ServerEvents, ServerSettings, ServiceEvent,
+    ApiError, ApiResult, BackupStatus, FolderListing, LastFmStatus, LastFmTrack, LibraryApi,
+    LibraryData, LibraryPictures, LogLine, Part, PlaylistEntry, RadioDirectoryStatus, RadioQuery,
+    RadioResults, RadioShelf, RadioStation, RadioTag, SavedPlaylist, ScanEvent, Scrobble,
+    ServerControl, ServerEvents, ServerSettings, ServiceEvent,
 };
 
 use crate::folder_watch::FolderWatch;
@@ -55,6 +55,8 @@ pub struct ServiceConfig {
     pub scrobbles: Option<PathBuf>,
     /// The server's log, which an admin reads in Freya; without, it reads nothing.
     pub log: Option<PathBuf>,
+    /// The server's folder, which backups hold and restores replace; without, there are none.
+    pub data: Option<PathBuf>,
 }
 
 impl ServiceConfig {
@@ -92,9 +94,31 @@ struct Shared {
     listeners: Arc<Mutex<Listeners>>,
     /// What clients ask of the library is read and written here, not waiting for a scan.
     api: Arc<LocalLibrary>,
+    /// How the backup running, or the last, goes; and what stops it.
+    backup: Mutex<BackupStatus>,
+    backup_cancel: Arc<AtomicBool>,
+    /// What has the server start again, once a backup is to be restored.
+    restart: Mutex<Option<Restart>>,
 }
 
+/// Has the server start again.
+type Restart = Box<dyn Fn() + Send + Sync>;
+
 impl Service {
+    /// Has `restart` called once a backup is to be restored: it has the server start again.
+    pub fn on_restart(&self, restart: impl Fn() + Send + Sync + 'static) {
+        *lock(&self.shared.restart) = Some(Box::new(restart));
+    }
+
+    /// The server's folder, for backups and restores.
+    fn data(&self) -> ApiResult<PathBuf> {
+        lock(&self.shared.state)
+            .config
+            .data
+            .clone()
+            .ok_or_else(|| ApiError("this server keeps no backups".into()))
+    }
+
     /// Opens the library at `database`, with its pictures kept in `pictures`, and starts
     /// keeping it up to date as `config` says: the first time, everything is read; after,
     /// what changed while it was not running is found by a periodic scan, or by one at each
@@ -155,6 +179,12 @@ impl Service {
             stop: AtomicBool::new(false),
             listeners,
             api: Arc::new(LocalLibrary::with_connections(readers, pictures).watched_by(watch)),
+            backup: Mutex::new(BackupStatus {
+                state: "idle".into(),
+                ..BackupStatus::default()
+            }),
+            backup_cancel: Arc::new(AtomicBool::new(false)),
+            restart: Mutex::new(None),
         });
         let mut service = Self {
             shared,
@@ -362,6 +392,101 @@ impl ServerControl for Service {
 
     fn server_folders(&self, folder: Option<&Path>) -> ApiResult<FolderListing> {
         Ok(crate::folders::listing(folder))
+    }
+
+    fn backup_size(&self) -> ApiResult<u64> {
+        let data = self.data()?;
+        Ok(crate::backup::size(&data))
+    }
+
+    fn start_backup(&self, folder: &Path, password: Option<&str>) -> ApiResult<()> {
+        let data = self.data()?;
+        let database = lock(&self.shared.state).database.clone();
+        {
+            let mut status = lock(&self.shared.backup);
+            if status.state == "running" {
+                return Err(ApiError("A backup is running already.".into()));
+            }
+            *status = BackupStatus {
+                state: "running".into(),
+                ..BackupStatus::default()
+            };
+        }
+        self.shared.backup_cancel.store(false, Ordering::Relaxed);
+        let shared = Arc::clone(&self.shared);
+        let folder = folder.to_owned();
+        let password = password.filter(|p| !p.is_empty()).map(str::to_owned);
+        std::thread::Builder::new()
+            .name("freya-backup".into())
+            .spawn(move || {
+                let mut told = Instant::now();
+                let mut progress = |done: u64, total: u64| {
+                    let mut status = lock(&shared.backup);
+                    status.done = done;
+                    status.total = total;
+                    if told.elapsed() >= Duration::from_millis(300) {
+                        told = Instant::now();
+                        let status = status.clone();
+                        tell_all(&shared.listeners, ServiceEvent::Backup(status));
+                    }
+                };
+                let made = Library::open(&database)
+                    .map_err(|e| format!("could not open the library: {e}"))
+                    .and_then(|db| {
+                        crate::backup::make(
+                            &data,
+                            &db,
+                            &folder,
+                            password.as_deref(),
+                            &shared.backup_cancel,
+                            &mut progress,
+                        )
+                    });
+                let status = {
+                    let mut status = lock(&shared.backup);
+                    match made {
+                        Ok(file) => {
+                            log::info!("backed up the server to {}", file.display());
+                            status.state = "done".into();
+                            status.file = Some(file);
+                        }
+                        Err(e) if e == "cancelled" => status.state = "cancelled".into(),
+                        Err(e) => {
+                            log::warn!("could not back up the server: {e}");
+                            status.state = "failed".into();
+                            status.error = e;
+                        }
+                    }
+                    status.clone()
+                };
+                tell_all(&shared.listeners, ServiceEvent::Backup(status));
+            })
+            .map_err(|e| ApiError(format!("could not start the backup: {e}")))?;
+        Ok(())
+    }
+
+    fn cancel_backup(&self) -> ApiResult<()> {
+        self.shared.backup_cancel.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn backup_status(&self) -> ApiResult<BackupStatus> {
+        Ok(lock(&self.shared.backup).clone())
+    }
+
+    fn restore_backup(&self, file: &Path, password: Option<&str>) -> ApiResult<()> {
+        let data = self.data()?;
+        if lock(&self.shared.backup).state == "running" {
+            return Err(ApiError("A backup is running: let it end first.".into()));
+        }
+        crate::backup::prepare_restore(file, password.filter(|p| !p.is_empty()), &data)
+            .map_err(ApiError)?;
+        log::info!("restoring the backup {}: starting again", file.display());
+        match &*lock(&self.shared.restart) {
+            Some(restart) => restart(),
+            None => log::warn!("the backup is taken in when the server next starts"),
+        }
+        Ok(())
     }
 
     fn server_log(&self, lines: usize) -> ApiResult<Vec<LogLine>> {

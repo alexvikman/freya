@@ -4,6 +4,7 @@
 pub mod accounts;
 mod answers;
 pub mod autostart;
+pub mod backup;
 pub mod discovery;
 mod folder_watch;
 mod folders;

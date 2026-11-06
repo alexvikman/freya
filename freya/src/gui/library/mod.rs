@@ -314,6 +314,8 @@ pub struct LibraryPanel {
     folders_offered: u32,
     /// How the last scan ended, since Freya started: see `Library.last-scan`.
     last_scan: String,
+    /// How the server's backup goes, as it told.
+    backup: freya_protocol::BackupStatus,
     /// Folders last given to the skin, in use and being edited.
     folders_shown: Option<Vec<PathBuf>>,
     draft_shown: Option<Vec<PathBuf>>,
@@ -507,6 +509,7 @@ impl LibraryPanel {
             shown: Shown::default(),
             folders_offered: 0,
             last_scan: String::new(),
+            backup: Default::default(),
             pictures_loaded: Instant::now(),
             folders_shown: None,
             draft_shown: None,
@@ -775,6 +778,7 @@ impl LibraryPanel {
                 ServiceEvent::StationsChanged => self.stations_changed = true,
                 ServiceEvent::RadioDirectoryChanged => self.radio_changed = true,
                 ServiceEvent::LastFm(status) => self.lastfm_status = Some(status),
+                ServiceEvent::Backup(status) => self.backup = status,
                 // The answers kept are forgotten by the client; the rows are read anew when
                 // the events above say what changed them.
                 ServiceEvent::Changed => {}

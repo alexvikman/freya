@@ -110,6 +110,19 @@ impl LibraryPanel {
             let folder = self.scan_folder.as_deref().map(folder_name);
             activities.push((what, folder.unwrap_or_default(), "scan"));
         }
+        if self.backup.state == "running" {
+            let share = self
+                .backup
+                .done
+                .checked_mul(100)
+                .and_then(|done| done.checked_div(self.backup.total))
+                .unwrap_or(0);
+            activities.push((
+                "Backing up the server".to_owned(),
+                format!("{share}%"),
+                "backup",
+            ));
+        }
         let pending = self.thumbnails.as_ref().map_or(0, Thumbnails::pending);
         if pending > 0 {
             activities.push((
@@ -160,6 +173,7 @@ impl LibraryPanel {
             "picture-search" => self.finder.stop(),
             "artist-match" => self.match_finder.stop(),
             "album-match" => self.album_finder.stop(),
+            "backup" => self.tell("stop the backup", |server| server.cancel_backup()),
             _ => return false,
         }
         true

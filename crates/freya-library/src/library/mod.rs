@@ -274,6 +274,16 @@ impl Library {
         Ok(Self { db })
     }
 
+    /// Copies the whole database, as it is now, into a new file at `to`: one consistent copy,
+    /// while others read and write it.
+    pub fn snapshot(&self, to: &Path) -> Result<()> {
+        let to = to.to_str().ok_or_else(|| {
+            rusqlite::Error::InvalidParameterName("a path that is not Unicode".into())
+        })?;
+        self.db.execute("VACUUM INTO ?1", [to])?;
+        Ok(())
+    }
+
     // ----- Browsing ----------------------------------------------------------------------------
 
     pub fn stats(&self) -> Result<Stats> {

@@ -1430,6 +1430,36 @@ export global Server {
     in property <string> browse-error;
     /// Whether `browse-up` has a folder to go up to.
     in property <bool> browse-has-parent;
+    /// What the folder is chosen for: "music" (`browse-start`, `browse-add`), "backup" (where
+    /// a backup goes: `browse-choose-folder`) or "restore" (a backup to restore, among
+    /// `browse-backups`, the backups in the folder shown: `browse-choose-backup`).
+    in property <string> browse-purpose;
+    in property <[string]> browse-backups;
+    callback browse-for(string /* purpose */);
+    callback browse-choose-folder();
+    callback browse-choose-backup(int);
+
+    /// Backing up everything the server keeps, for an admin: the folder it goes to, about how
+    /// large it is (`size-backup` asks), and how the backup goes: `backup-state` "idle",
+    /// "running", "done", "cancelled" or "failed", `backup-progress` from 0 to 1, and
+    /// `backup-detail`, the file made or why it failed. `back-up` starts it, under a password
+    /// when one is given ("" for none); `App.cancel-activity("backup")` stops it.
+    in property <string> backup-folder;
+    in property <string> backup-size;
+    in property <string> backup-state;
+    in property <float> backup-progress;
+    in property <string> backup-detail;
+    in property <string> backup-error;
+    callback size-backup();
+    callback back-up(string /* password */);
+    /// Restoring a backup: the file chosen, whether it is locked with a password, while the
+    /// server checks it, and why it could not. Once checked, the server starts again with it,
+    /// keeping what it had in a folder beside.
+    in property <string> restore-file;
+    in property <bool> restore-sealed;
+    in property <bool> restoring;
+    in property <string> restore-error;
+    callback restore(string /* password */);
     callback browse-start();
     /// Into the `index`th folder shown, or up to the one the folder shown is in.
     callback browse-into(int);

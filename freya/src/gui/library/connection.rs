@@ -184,6 +184,11 @@ impl LibraryPanel {
         self.db.clone()
     }
 
+    /// How the server's backup goes, as it told.
+    pub fn backup(&self) -> &freya_protocol::BackupStatus {
+        &self.backup
+    }
+
     /// Whether the library is open, and can be asked.
     pub fn ready(&self) -> bool {
         self.db.is_some()
@@ -398,6 +403,7 @@ pub(super) fn connect(
                 radio_directory: None,
                 scrobbles: None,
                 log: None,
+                data: None,
             };
             let service = Service::start(database, pictures, config).map_err(|e| {
                 log::warn!("{e}");

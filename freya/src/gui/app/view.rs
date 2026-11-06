@@ -222,6 +222,7 @@ impl App {
             ("here", Value::Bool(self.server_here)),
         ];
         server.extend(self.server.values());
+        server.extend(self.server.backup_values(self.library.backup()));
         view.server_out.write(ui, server);
         view.lastfm_out.write(
             ui,

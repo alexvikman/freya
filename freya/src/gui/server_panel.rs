@@ -54,6 +54,12 @@ enum Done {
     /// Freya Server on this computer, as its folder makes it known: proved, and what this
     /// device may do with it.
     ThisComputer(Result<ThisComputer, String>),
+    /// About how large a backup is.
+    BackupSize(Result<u64, String>),
+    /// A backup started, or why not.
+    BackupStarted(Result<(), String>),
+    /// A backup checked and to be taken in as the server starts again, or why not.
+    Restored(Result<(), String>),
 }
 
 /// A server the user logged in to, for the app to show the library of.
@@ -103,8 +109,19 @@ pub struct ServerPanel {
     /// The server's pages in the browser, once opened, and what happens there.
     proxy: Option<PageProxy>,
     heard: (Sender<Heard>, Receiver<Heard>),
-    /// While choosing a music folder among the server's: the folder shown and those in it.
+    /// While choosing a folder among the server's: the folder shown and those in it.
     browse: Option<FolderListing>,
+    /// What the folder is chosen for: "music", "backup" (where a backup goes) or "restore" (a
+    /// backup to restore, among the files).
+    browse_purpose: &'static str,
+    /// The folder a backup goes to, and the backup to restore, as chosen.
+    backup_folder: Option<PathBuf>,
+    restore_file: Option<PathBuf>,
+    backup_size: Option<u64>,
+    backup_error: String,
+    restoring: bool,
+    restore_error: String,
+    pub browse_backups: ModelRows,
     done: (Sender<Done>, Receiver<Done>),
     pub device_rows: ModelRows,
     pub found_rows: ModelRows,
@@ -147,6 +164,14 @@ impl ServerPanel {
             user_rows: ModelRows::new(),
             found_rows: ModelRows::new(),
             browse_rows: ModelRows::new(),
+            browse_purpose: "music",
+            backup_folder: None,
+            restore_file: None,
+            backup_size: None,
+            backup_error: String::new(),
+            restoring: false,
+            restore_error: String::new(),
+            browse_backups: ModelRows::new(),
             browse_places: ModelRows::new(),
         }
     }
@@ -378,6 +403,18 @@ impl ServerPanel {
                 Done::ThisComputer(Err(e)) => {
                     self.login_busy = false;
                     self.login_error = e;
+                }
+                Done::BackupSize(Ok(size)) => self.backup_size = Some(size),
+                Done::BackupSize(Err(e)) => log::debug!("could not size a backup: {e}"),
+                Done::BackupStarted(Ok(())) => {}
+                Done::BackupStarted(Err(e)) => self.backup_error = e,
+                Done::Restored(Ok(())) => {
+                    self.restoring = false;
+                    self.restore_file = None;
+                }
+                Done::Restored(Err(e)) => {
+                    self.restoring = false;
+                    self.restore_error = e;
                 }
                 Done::Update(Ok(update)) => self.update = Some(update),
                 Done::Update(Err(e)) => {
@@ -652,6 +689,90 @@ impl ServerPanel {
         self.browse.as_ref()?.folders.get(index).cloned()
     }
 
+    /// Starts choosing a folder for `purpose`: "music", "backup" or "restore".
+    pub fn browse_for(&mut self, remote: Option<&Remote<Http>>, purpose: &str) {
+        self.browse_purpose = match purpose {
+            "backup" => "backup",
+            "restore" => "restore",
+            _ => "music",
+        };
+        let start = match self.browse_purpose {
+            "backup" => self.backup_folder.clone(),
+            "restore" => self
+                .restore_file
+                .as_ref()
+                .and_then(|f| f.parent().map(Path::to_owned)),
+            _ => None,
+        };
+        self.browse(remote, start.as_deref());
+    }
+
+    /// The folder shown, as where a backup goes.
+    pub fn choose_backup_folder(&mut self) {
+        if let Some(folder) = self.browsed() {
+            self.backup_folder = Some(folder);
+            self.backup_error.clear();
+        }
+        self.stop_browsing();
+    }
+
+    /// The `index`th backup in the folder shown, as the one to restore.
+    pub fn choose_restore_file(&mut self, index: usize) {
+        if let Some(file) = self
+            .browse
+            .as_ref()
+            .and_then(|b| b.backups.get(index).cloned())
+        {
+            self.restore_file = Some(file);
+            self.restore_error.clear();
+        }
+        self.stop_browsing();
+    }
+
+    /// Asks how large a backup is, on a thread.
+    pub fn size_backup(&mut self, remote: Option<Arc<Remote<Http>>>) {
+        let Some(remote) = remote else {
+            return;
+        };
+        self.spawn(move || Done::BackupSize(remote.backup_size().map_err(|e| e.to_string())));
+    }
+
+    /// Starts a backup into the folder chosen, under `password` when it is not empty.
+    pub fn start_backup(&mut self, remote: Option<Arc<Remote<Http>>>, password: &str) {
+        let (Some(remote), Some(folder)) = (remote, self.backup_folder.clone()) else {
+            self.backup_error = "Choose the folder the backup goes to.".into();
+            return;
+        };
+        self.backup_error.clear();
+        let password = (!password.is_empty()).then(|| password.to_owned());
+        self.spawn(move || {
+            Done::BackupStarted(
+                remote
+                    .start_backup(&folder, password.as_deref())
+                    .map_err(|e| e.to_string()),
+            )
+        });
+    }
+
+    /// Restores the backup chosen, opened with `password` when it is sealed: the server checks
+    /// it and starts again.
+    pub fn restore(&mut self, remote: Option<Arc<Remote<Http>>>, password: &str) {
+        let (Some(remote), Some(file)) = (remote, self.restore_file.clone()) else {
+            self.restore_error = "Choose the backup to restore.".into();
+            return;
+        };
+        self.restoring = true;
+        self.restore_error.clear();
+        let password = (!password.is_empty()).then(|| password.to_owned());
+        self.spawn(move || {
+            Done::Restored(
+                remote
+                    .restore_backup(&file, password.as_deref())
+                    .map_err(|e| e.to_string()),
+            )
+        });
+    }
+
     /// The folder the one shown is in; none at a drive's top.
     pub fn browsed_up(&self) -> Option<PathBuf> {
         self.browse.as_ref()?.parent.clone()
@@ -664,6 +785,58 @@ impl ServerPanel {
 
     pub fn stop_browsing(&mut self) {
         self.browse = None;
+    }
+
+    /// `Server`'s backup properties, with how the backup running goes as the server told.
+    pub fn backup_values(
+        &self,
+        status: &freya_protocol::BackupStatus,
+    ) -> Vec<(&'static str, Value)> {
+        let shown = |path: &Option<PathBuf>| {
+            string(
+                path.as_ref()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            )
+        };
+        let progress = if status.total > 0 {
+            status.done as f64 / status.total as f64
+        } else {
+            0.0
+        };
+        let detail = match status.state.as_str() {
+            "done" => status
+                .file
+                .as_ref()
+                .map(|f| format!("Backed up to {}", f.display()))
+                .unwrap_or_default(),
+            "failed" => status.error.clone(),
+            "cancelled" => "The backup was cancelled.".to_owned(),
+            _ => String::new(),
+        };
+        vec![
+            ("browse-purpose", string(self.browse_purpose)),
+            ("backup-folder", shown(&self.backup_folder)),
+            ("restore-file", shown(&self.restore_file)),
+            (
+                "restore-sealed",
+                Value::Bool(
+                    self.restore_file
+                        .as_ref()
+                        .is_some_and(|f| f.extension().is_some_and(|e| e == "freyabackup")),
+                ),
+            ),
+            (
+                "backup-size",
+                string(self.backup_size.map(size_text).unwrap_or_default()),
+            ),
+            ("backup-state", string(&status.state)),
+            ("backup-progress", Value::Number(progress)),
+            ("backup-detail", string(detail)),
+            ("backup-error", string(&self.backup_error)),
+            ("restoring", Value::Bool(self.restoring)),
+            ("restore-error", string(&self.restore_error)),
+        ]
     }
 
     /// `Server`'s properties but where the library is and how it goes.
@@ -697,6 +870,22 @@ impl ServerPanel {
                             // Names; a whole path where there is none, as a drive's.
                             let shown = f.file_name().map(|n| n.to_string_lossy().into_owned());
                             string(shown.unwrap_or_else(|| f.to_string_lossy().into_owned()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        );
+        self.browse_backups.sync(
+            browse
+                .map(|b| {
+                    b.backups
+                        .iter()
+                        .map(|f| {
+                            string(
+                                f.file_name()
+                                    .map(|n| n.to_string_lossy().into_owned())
+                                    .unwrap_or_default(),
+                            )
                         })
                         .collect()
                 })
@@ -1024,6 +1213,17 @@ fn initial(user: &str) -> String {
         .find(|c| c.is_alphanumeric())
         .map(|c| c.to_uppercase().collect())
         .unwrap_or_default()
+}
+
+/// "1.2 GB", "340 MB".
+fn size_text(bytes: u64) -> String {
+    const MB: f64 = 1_000_000.0;
+    let mb = bytes as f64 / MB;
+    if mb >= 1000.0 {
+        format!("{:.1} GB", mb / 1000.0)
+    } else {
+        format!("{} MB", mb.ceil() as u64)
+    }
 }
 
 #[cfg(test)]

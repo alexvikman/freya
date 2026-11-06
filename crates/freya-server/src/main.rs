@@ -36,6 +36,7 @@ fn main() {
     let mut show_code = false;
     let mut stop = false;
     let mut forget_login = false;
+    let mut after = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         if arg == "--version" {
@@ -61,6 +62,8 @@ fn main() {
         match (arg.as_str(), args.next()) {
             ("--address", Some(value)) => address = value,
             ("--data", Some(value)) => data = Some(PathBuf::from(value)),
+            // Started again by the server that was: it ends first (see updates::after_stop).
+            ("--after", Some(value)) => after = value.parse::<u32>().ok(),
             _ => {
                 eprintln!(
                     "usage: freya-server [--address HOST:PORT] [--data FOLDER] [--forget-password | --code] | --stop [--forget-login] | --version"
@@ -88,6 +91,9 @@ fn main() {
     }
     if show_code {
         std::process::exit(print_adoption_code(&data));
+    }
+    if let Some(process) = after {
+        freya_server::updates::wait_for(process);
     }
     start_log(&data.join("server.log"));
     if let Err(e) = run(&address, &data) {
@@ -124,6 +130,15 @@ fn exit_code() -> i32 {
 }
 
 fn run(address: &str, data: &Path) -> Result<(), String> {
+    // A backup to restore takes the place of what was, before anything here is opened.
+    match freya_server::backup::apply_pending(data) {
+        Ok(Some(before)) => log::info!(
+            "restored a backup; what the server had is kept in {}",
+            before.display()
+        ),
+        Ok(None) => {}
+        Err(e) => return Err(format!("could not restore the backup: {e}")),
+    }
     let identity = Identity::load_or_make(data)?;
     // Before the library is opened: two servers never share it. One already answering with
     // this certificate is this user's, and this one is not needed; another program holding the
@@ -161,6 +176,7 @@ fn run(address: &str, data: &Path) -> Result<(), String> {
         radio_directory: Some(data.join("radio-directory.json")),
         scrobbles: Some(scrobbles),
         log: Some(data.join("server.log")),
+        data: Some(data.to_owned()),
     };
     let service = Arc::new(Service::start(
         data.join("library.sqlite3"),
@@ -171,6 +187,13 @@ fn run(address: &str, data: &Path) -> Result<(), String> {
     #[cfg(any(target_os = "macos", windows))]
     let menu_stop = stop.clone();
     let updates = freya_server::updates::Updates::start(stop.clone());
+    {
+        let stop = stop.clone();
+        service.on_restart(move || {
+            freya_server::updates::START_AGAIN.store(true, std::sync::atomic::Ordering::Relaxed);
+            let _ = stop.send(());
+        });
+    }
     follow_autostart(Arc::clone(&service));
     ctrlc::set_handler(move || {
         let _ = stop.send(());
@@ -213,6 +236,8 @@ fn run(address: &str, data: &Path) -> Result<(), String> {
         drop(network);
         drop(server);
         drop(service);
+        // A backup to restore: the server starts again, and takes it in.
+        freya_server::updates::after_stop();
     };
     // The menu bar's or the notification area's icon runs on the main thread until the process
     // ends, so stopping is another thread's.

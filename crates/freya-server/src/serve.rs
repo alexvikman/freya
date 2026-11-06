@@ -949,7 +949,8 @@ fn for_listeners(event: &ServiceEvent) -> bool {
         | ServiceEvent::Changed
         | ServiceEvent::PlaysWritten
         | ServiceEvent::PlaylistsChanged
-        | ServiceEvent::LastFm(_) => false,
+        | ServiceEvent::LastFm(_)
+        | ServiceEvent::Backup(_) => false,
     }
 }
 

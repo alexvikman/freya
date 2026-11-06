@@ -1313,6 +1313,18 @@ skin_api! {
         Server."browse-places" => set_browse_places, get_browse_places;
         Server."browse-error" => set_browse_error, get_browse_error;
         Server."browse-has-parent" => set_browse_has_parent, get_browse_has_parent;
+        Server."browse-purpose" => set_browse_purpose, get_browse_purpose;
+        Server."browse-backups" => set_browse_backups, get_browse_backups;
+        Server."backup-folder" => set_backup_folder, get_backup_folder;
+        Server."backup-size" => set_backup_size, get_backup_size;
+        Server."backup-state" => set_backup_state, get_backup_state;
+        Server."backup-progress" => set_backup_progress, get_backup_progress;
+        Server."backup-detail" => set_backup_detail, get_backup_detail;
+        Server."backup-error" => set_backup_error, get_backup_error;
+        Server."restore-file" => set_restore_file, get_restore_file;
+        Server."restore-sealed" => set_restore_sealed, get_restore_sealed;
+        Server."restoring" => set_restoring, get_restoring;
+        Server."restore-error" => set_restore_error, get_restore_error;
     }
     callbacks {
         Player."play" => on_play, invoke_play();
@@ -1502,6 +1514,12 @@ skin_api! {
         Server."browse-up" => on_browse_up, invoke_browse_up();
         Server."browse-add" => on_browse_add, invoke_browse_add();
         Server."browse-place" => on_browse_place, invoke_browse_place(index: i32);
+        Server."browse-for" => on_browse_for, invoke_browse_for(purpose: SharedString);
+        Server."browse-choose-folder" => on_browse_choose_folder, invoke_browse_choose_folder();
+        Server."browse-choose-backup" => on_browse_choose_backup, invoke_browse_choose_backup(index: i32);
+        Server."size-backup" => on_size_backup, invoke_size_backup();
+        Server."back-up" => on_back_up, invoke_back_up(password: SharedString);
+        Server."restore" => on_restore, invoke_restore(password: SharedString);
         Recents."set-filter" => on_set_filter, invoke_set_filter(filter: SharedString);
         Recents."toggle" => on_toggle, invoke_toggle(index: i32);
         Recents."open" => on_open, invoke_open(index: i32);

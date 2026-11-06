@@ -509,6 +509,8 @@ The server that keeps the library: Freya Server on this computer, or on another 
 | `set-start-at-login(on)` | Whether the server starts when its user logs in |
 | `check-update()`, `install-update()` | Has the server look for an update now, or install the one available, for an admin |
 | `browse-start()`, `browse-into(index)`, `browse-up()`, `browse-place(index)`, `browse-path(path)`, `browse-add()`, `browse-cancel()` | Choosing a music folder among the server's, as the server sees them, wherever it runs: `browsing`, `browse-folder` (the home folder at first), `browse-folders`, `browse-places` ([`FolderPlaceRow`]: `name`, `kind` "home", "drive", "network" or "volume", and `chosen`, the place the folder shown is in), `browse-has-parent` and `browse-error` say what is shown; `browse-path` goes to a path typed, and on Windows `\\computer` lists the folders that computer shares; `browse-add` adds the folder shown to `Library.folders-draft` |
+| `browse-for(purpose)`, `browse-choose-folder()`, `browse-choose-backup(index)` | The same browser for a backup: "backup" chooses the folder it goes to (`backup-folder`), "restore" a backup among `browse-backups`, the backups in the folder shown (`restore-file`); `browse-purpose` says which |
+| `size-backup()`, `back-up(password)`, `restore(password)` | Backing up everything the server keeps, for an admin: `backup-size` (about how large), `backup-state` ("idle", "running", "done", "cancelled", "failed"), `backup-progress` (0 to 1), `backup-detail` (the file made, or why not) and `backup-error`; `App.cancel-activity("backup")` stops it. Restoring: `restore-sealed` (it needs its password), `restoring` while the server checks it, `restore-error`; once checked, the server starts again with it |
 
 ### `Updates`
 

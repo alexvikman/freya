@@ -187,6 +187,18 @@ macro_rules! with_server_control {
             fn radio_played(id: &str) -> ();
             /// The folders in `folder` on the server, or where to start looking when none.
             fn server_folders(folder: Option<&::std::path::Path>) -> $crate::FolderListing;
+            /// About how many bytes a backup of the server reads, before it is compressed.
+            fn backup_size() -> u64;
+            /// Backs up everything the server keeps into a new file in `folder`, on the server's
+            /// computer, sealed under `password` when one is given; told as it goes in
+            /// [`ServiceEvent::Backup`](crate::ServiceEvent::Backup) and by `backup_status`.
+            fn start_backup(folder: &::std::path::Path, password: Option<&str>) -> ();
+            fn cancel_backup() -> ();
+            fn backup_status() -> $crate::BackupStatus;
+            /// Restores the backup `file`, opened with `password` when it is sealed: checked,
+            /// then taken in as the server starts again, what it had kept beside. Fails when it
+            /// is not a backup of a Freya Server, or the password is not its.
+            fn restore_backup(file: &::std::path::Path, password: Option<&str>) -> ();
             /// The last `lines` the server logged, the newest last: for an admin's Activity page.
             fn server_log(lines: usize) -> Vec<$crate::LogLine>;
             /// How scrobbling to Last.fm goes.
@@ -655,6 +667,11 @@ mod tests {
             "rescan",
             "server_folders",
             "server_log",
+            "backup_size",
+            "start_backup",
+            "cancel_backup",
+            "backup_status",
+            "restore_backup",
             "set_artist_edit",
             // The owner's own, until each user has theirs.
             "record_play",

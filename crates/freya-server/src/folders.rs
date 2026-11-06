@@ -123,6 +123,7 @@ pub fn listing(folder: Option<&Path>) -> FolderListing {
                 folders,
                 places,
                 error: None,
+                backups: Vec::new(),
             },
             Err(e) => FolderListing {
                 folder: Some(folder.clone()),
@@ -138,21 +139,27 @@ pub fn listing(folder: Option<&Path>) -> FolderListing {
         std::io::ErrorKind::PermissionDenied => "Freya Server may not look in it.".to_owned(),
         _ => format!("It cannot be listed: {e}"),
     });
-    let mut folders: Vec<PathBuf> = read
+    let entries: Vec<PathBuf> = read
         .into_iter()
         .flatten()
         .flatten()
         .filter(|entry| !hidden(entry))
         .map(|entry| entry.path())
-        .filter(|path| path.is_dir())
         .collect();
+    let mut folders: Vec<PathBuf> = entries.iter().filter(|p| p.is_dir()).cloned().collect();
     folders.sort_by_key(|path| path.to_string_lossy().to_lowercase());
+    let mut backups: Vec<PathBuf> = entries
+        .into_iter()
+        .filter(|path| path.is_file() && crate::backup::is_backup_name(path))
+        .collect();
+    backups.sort_by_key(|path| path.to_string_lossy().to_lowercase());
     FolderListing {
         parent: folder.parent().map(Path::to_owned),
         folder: Some(folder),
         folders,
         places,
         error,
+        backups,
     }
 }
 

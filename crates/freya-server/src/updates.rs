@@ -2,7 +2,7 @@
 //! only when an admin says so, from Freya's Server tab or the server's own menu. Installed, the
 //! server stops and starts again as the new version.
 
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -141,4 +141,87 @@ fn supervised() -> bool {
     #[cfg(not(target_os = "macos"))]
     let launchd = false;
     launchd || std::env::var_os("INVOCATION_ID").is_some()
+}
+
+/// Whether the server is to start again once it has stopped: a backup is to be restored.
+pub static START_AGAIN: AtomicBool = AtomicBool::new(false);
+
+/// Once the server has stopped: when it is to start again, under launchd or systemd by
+/// ending with [`RESTART_EXIT_CODE`], otherwise by starting itself, told to wait for this one
+/// to end (`--after`).
+pub fn after_stop() {
+    if !START_AGAIN.load(Ordering::Relaxed) {
+        return;
+    }
+    if supervised() {
+        EXIT_CODE.store(RESTART_EXIT_CODE, Ordering::Relaxed);
+        return;
+    }
+    let Ok(program) = std::env::current_exe() else {
+        log::warn!("could not start again: the server's program is unknown");
+        return;
+    };
+    // As it was started, but for an earlier `--after`.
+    let mut args = Vec::new();
+    let mut given = std::env::args().skip(1);
+    while let Some(arg) = given.next() {
+        if arg == "--after" {
+            given.next();
+        } else {
+            args.push(arg);
+        }
+    }
+    let started = std::process::Command::new(program)
+        .args(args)
+        .arg("--after")
+        .arg(std::process::id().to_string())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    if let Err(e) = started {
+        log::warn!("could not start again: {e}");
+    }
+}
+
+/// Waits, at most a minute, for the server that started this one (`--after`) to end.
+pub fn wait_for(process: u32) {
+    let until = Instant::now() + Duration::from_secs(60);
+    while running(process) && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+#[cfg(unix)]
+#[allow(unsafe_code, reason = "asks the system whether a process runs")]
+fn running(process: u32) -> bool {
+    let Ok(process) = libc::pid_t::try_from(process) else {
+        return false;
+    };
+    // SAFETY: signal 0 only asks whether the process is there.
+    unsafe { libc::kill(process, 0) == 0 }
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code, reason = "asks the system whether a process runs")]
+fn running(process: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_TIMEOUT};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+    };
+    // SAFETY: a handle opened here, waited on briefly, and closed.
+    unsafe {
+        let handle = OpenProcess(PROCESS_SYNCHRONIZE, 0, process);
+        if handle.is_null() {
+            return false;
+        }
+        let waited = WaitForSingleObject(handle, 0);
+        CloseHandle(handle);
+        waited == WAIT_TIMEOUT
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn running(_process: u32) -> bool {
+    false
 }

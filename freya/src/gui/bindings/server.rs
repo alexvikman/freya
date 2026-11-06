@@ -133,7 +133,49 @@ pub(super) fn bind(b: &Binder) {
         "browse-start",
         Box::new(|app, _| {
             let remote = app.library.remote();
-            app.server.browse(remote.as_deref(), None);
+            app.server.browse_for(remote.as_deref(), "music");
+        }),
+    );
+    b.bind(
+        "Server",
+        "browse-for",
+        Box::new(|app, args| {
+            let remote = app.library.remote();
+            app.server.browse_for(remote.as_deref(), &text_arg(args, 0));
+        }),
+    );
+    b.bind(
+        "Server",
+        "browse-choose-folder",
+        Box::new(|app, _| app.server.choose_backup_folder()),
+    );
+    b.bind(
+        "Server",
+        "browse-choose-backup",
+        Box::new(|app, args| app.server.choose_restore_file(index(args, 0))),
+    );
+    b.bind(
+        "Server",
+        "size-backup",
+        Box::new(|app, _| {
+            let remote = app.library.remote();
+            app.server.size_backup(remote);
+        }),
+    );
+    b.bind(
+        "Server",
+        "back-up",
+        Box::new(|app, args| {
+            let remote = app.library.remote();
+            app.server.start_backup(remote, &text_arg(args, 0));
+        }),
+    );
+    b.bind(
+        "Server",
+        "restore",
+        Box::new(|app, args| {
+            let remote = app.library.remote();
+            app.server.restore(remote, &text_arg(args, 0));
         }),
     );
     b.bind(

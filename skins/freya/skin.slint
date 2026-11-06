@@ -6006,6 +6006,177 @@ component SidebarItem inherits Rectangle {
 /// Looking for, and installing, an update to Freya.
 /// The library's folders, edited as in a dialog: nothing changes until Save, and then the
 /// library is read once.
+/// Backs up everything the server keeps into a folder on its computer, under a password if
+/// one is given.
+component BackupForm inherits MenuSurface {
+    callback closed();
+
+    property <string> password;
+    property <string> again;
+    property <bool> mismatch: root.password != root.again;
+
+    init => { Server.size-backup(); }
+
+    VerticalLayout {
+        padding: 20px;
+        spacing: 14px;
+
+        VerticalLayout {
+            spacing: 4px;
+
+            Text {
+                text: "Back Up the Server";
+                font-size: 17px;
+                font-weight: 600;
+                color: Theme.text;
+            }
+            Text {
+                text: "Everything the server keeps goes in one file: the library, the pictures and covers, playlists, stations, settings, users and their passwords, and the server's certificate. Keep it somewhere safe."
+                    + (Server.backup-size != "" ? " About " + Server.backup-size + " before it is compressed." : "");
+                font-size: 13px;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+        }
+        HorizontalLayout {
+            spacing: 10px;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+
+                Text {
+                    text: Server.backup-folder != "" ? Server.backup-folder : "No folder chosen";
+                    color: Server.backup-folder != "" ? Theme.text : Theme.text-secondary;
+                    overflow: elide;
+                }
+            }
+            TextButton {
+                text: "Choose Folder…";
+                clicked => { Server.browse-for("backup"); }
+            }
+        }
+        FormField {
+            label: "Password (optional)";
+            password: true;
+            text <=> root.password;
+            hint: "With a password, the backup can only be restored with it. Forgotten, it cannot be restored at all.";
+        }
+        if root.password != "": FormField {
+            label: "Password again";
+            password: true;
+            text <=> root.again;
+        }
+        if Server.backup-error != "" || (root.password != "" && root.again != "" && root.mismatch): Text {
+            text: Server.backup-error != "" ? Server.backup-error : "The passwords differ.";
+            font-size: 13px;
+            color: Theme.danger;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+
+            TextButton {
+                text: "Cancel";
+                clicked => { root.closed(); }
+            }
+            if Server.backup-folder != "" && !(root.password != "" && root.mismatch): TextButton {
+                text: "Back Up";
+                primary: true;
+                clicked => {
+                    Server.back-up(root.password);
+                    root.closed();
+                }
+            }
+        }
+    }
+}
+
+/// Restores a backup: the server takes it in as it starts again.
+component RestoreForm inherits MenuSurface {
+    callback closed();
+
+    property <string> password;
+    // Checked, the server starts again with it: the dialog has done its work.
+    property <bool> checking: Server.restoring;
+    changed checking => {
+        if (!self.checking && Server.restore-error == "") {
+            root.closed();
+        }
+    }
+
+    VerticalLayout {
+        padding: 20px;
+        spacing: 14px;
+
+        VerticalLayout {
+            spacing: 4px;
+
+            Text {
+                text: "Restore a Backup";
+                font-size: 17px;
+                font-weight: 600;
+                color: Theme.text;
+            }
+            Text {
+                text: "Everything the server keeps becomes as it was in the backup, its users and passwords too, and the server starts again. What it has now is kept in a folder beside its own, until you take it away.";
+                font-size: 13px;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+        }
+        HorizontalLayout {
+            spacing: 10px;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+
+                Text {
+                    text: Server.restore-file != "" ? Server.restore-file : "No backup chosen";
+                    color: Server.restore-file != "" ? Theme.text : Theme.text-secondary;
+                    overflow: elide;
+                }
+            }
+            TextButton {
+                text: "Choose Backup…";
+                clicked => { Server.browse-for("restore"); }
+            }
+        }
+        if Server.restore-sealed: FormField {
+            label: "The backup's password";
+            password: true;
+            text <=> root.password;
+        }
+        if Server.restore-error != "": Text {
+            text: Server.restore-error;
+            font-size: 13px;
+            color: Theme.danger;
+            wrap: word-wrap;
+        }
+        if Server.restoring: Text {
+            text: "Checking the backup…";
+            font-size: 13px;
+            color: Theme.text-secondary;
+        }
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+
+            TextButton {
+                text: "Cancel";
+                clicked => { root.closed(); }
+            }
+            if Server.restore-file != "" && !Server.restoring: TextButton {
+                text: "Restore and Start Again";
+                primary: true;
+                clicked => { Server.restore(root.password); }
+            }
+        }
+    }
+}
+
 /// Chooses a music folder among the server's, as the server sees them: the places to start
 /// from at the side, the folders where it is, and a path to type or paste.
 component FolderBrowser inherits MenuSurface {
@@ -6022,7 +6193,9 @@ component FolderBrowser inherits MenuSurface {
             spacing: 4px;
 
             Text {
-                text: "Add Folder";
+                text: Server.browse-purpose == "backup" ? "Where the Backup Goes"
+                    : Server.browse-purpose == "restore" ? "Choose a Backup"
+                    : "Add Folder";
                 font-size: 17px;
                 font-weight: 600;
                 color: Theme.text;
@@ -6150,6 +6323,42 @@ component FolderBrowser inherits MenuSurface {
                                 clicked => { Server.browse-into(i); }
                             }
                         }
+                        // The backups in it, to restore one.
+                        for name[i] in Server.browse-purpose == "restore" ? Server.browse-backups : []: Rectangle {
+                            height: 36px;
+                            border-radius: 6px;
+                            background: backup-touch.has-hover ? Theme.hover : transparent;
+                            accessible-role: button;
+                            accessible-label: name;
+                            accessible-action-default => { Server.browse-choose-backup(i); }
+
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                spacing: 10px;
+
+                                Icon {
+                                    width: 18px;
+                                    height: 18px;
+                                    y: (parent.height - self.height) / 2;
+                                    data: Icons.document;
+                                    stroked: true;
+                                    color: Theme.accent-text;
+                                }
+                                Text {
+                                    horizontal-stretch: 1;
+                                    text: name;
+                                    color: Theme.text;
+                                    font-weight: 600;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                            }
+                            backup-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { Server.browse-choose-backup(i); }
+                            }
+                        }
                     }
                 }
             }
@@ -6166,10 +6375,15 @@ component FolderBrowser inherits MenuSurface {
                 text: "Cancel";
                 clicked => { Server.browse-cancel(); }
             }
-            if Server.browse-folder != "" && Server.browse-error == "": TextButton {
+            if Server.browse-purpose == "music" && Server.browse-folder != "" && Server.browse-error == "": TextButton {
                 text: "Add This Folder";
                 primary: true;
                 clicked => { Server.browse-add(); }
+            }
+            if Server.browse-purpose == "backup" && Server.browse-folder != "" && Server.browse-error == "": TextButton {
+                text: "Back Up Here";
+                primary: true;
+                clicked => { Server.browse-choose-folder(); }
             }
         }
     }
@@ -8978,6 +9192,9 @@ component SettingsView inherits Rectangle {
     callback edit-fanart-key();
     /// Open the dialog for finding a server.
     callback find-servers();
+    /// Open the dialog for backing up the server, or for restoring a backup.
+    callback back-up();
+    callback restore();
 
     property <string> server-name;
     property <string> invite-name;
@@ -9344,6 +9561,42 @@ component SettingsView inherits Rectangle {
                 }
             }
 
+            if root.tab == "server" && Server.admin: SettingsSection {
+                title: "Backup";
+
+                SettingsRow {
+                    label: "Back up the server";
+                    detail: Server.backup-state == "running" ? "Backing up… " + round(Server.backup-progress * 100) + "%"
+                        : Server.backup-detail != "" ? Server.backup-detail
+                        : "Everything it keeps, in one file, on its own computer.";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        if Server.backup-state == "running": TextButton {
+                            text: "Cancel";
+                            clicked => { App.cancel-activity("backup"); }
+                        }
+                        if Server.backup-state != "running": TextButton {
+                            text: "Back Up…";
+                            clicked => { root.back-up(); }
+                        }
+                    }
+                }
+                SettingsRow {
+                    label: "Restore a backup";
+                    detail: "Makes the server as it was in a backup, here or on another computer.";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        TextButton {
+                            text: "Restore…";
+                            clicked => { root.restore(); }
+                        }
+                    }
+                }
+            }
             if root.tab == "server" && Server.admin: SettingsSection {
                 title: "Freya Server";
 
@@ -11244,6 +11497,8 @@ export component FreyaSkin inherits Window {
                                 manage-folders => { root.manage-folders(); }
                                 edit-fanart-key => { fanart-popup.show(); }
                                 find-servers => { server-popup.show(); }
+                                back-up => { backup-popup.show(); }
+                                restore => { restore-popup.show(); }
                             }
                             if root.view == "activity": ActivityView {
                                 width: 100%;
@@ -11323,6 +11578,82 @@ export component FreyaSkin inherits Window {
                     x: (parent.width - self.width) / 2;
                     y: max(24px, (parent.height - self.preferred-height) / 3);
                     closed => { folders-popup.close(); }
+                }
+                if Server.browsing: FolderBrowser {
+                    width: min(780px, parent.width - 48px);
+                    height: self.preferred-height;
+                    x: (parent.width - self.width) / 2;
+                    y: max(24px, (parent.height - self.preferred-height) / 3);
+                }
+            }
+        }
+    }
+
+    // The server's backup, and restoring one: their forms, or choosing the folder or file.
+    backup-popup := PopupWindow {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        close-policy: no-auto-close;
+
+        DialogFocus {
+            key-pressed(event) => {
+                if (event.text == Key.Escape) {
+                    if (Server.browsing) {
+                        Server.browse-cancel();
+                    } else {
+                        backup-popup.close();
+                    }
+                    return accept;
+                }
+                reject
+            }
+
+            DialogScrim {
+                if !Server.browsing: BackupForm {
+                    width: min(560px, parent.width - 48px);
+                    height: self.preferred-height;
+                    x: (parent.width - self.width) / 2;
+                    y: max(24px, (parent.height - self.preferred-height) / 3);
+                    closed => { backup-popup.close(); }
+                }
+                if Server.browsing: FolderBrowser {
+                    width: min(780px, parent.width - 48px);
+                    height: self.preferred-height;
+                    x: (parent.width - self.width) / 2;
+                    y: max(24px, (parent.height - self.preferred-height) / 3);
+                }
+            }
+        }
+    }
+    restore-popup := PopupWindow {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        close-policy: no-auto-close;
+
+        DialogFocus {
+            key-pressed(event) => {
+                if (event.text == Key.Escape) {
+                    if (Server.browsing) {
+                        Server.browse-cancel();
+                    } else {
+                        restore-popup.close();
+                    }
+                    return accept;
+                }
+                reject
+            }
+
+            DialogScrim {
+                if !Server.browsing: RestoreForm {
+                    width: min(560px, parent.width - 48px);
+                    height: self.preferred-height;
+                    x: (parent.width - self.width) / 2;
+                    y: max(24px, (parent.height - self.preferred-height) / 3);
+                    closed => { restore-popup.close(); }
                 }
                 if Server.browsing: FolderBrowser {
                     width: min(780px, parent.width - 48px);
