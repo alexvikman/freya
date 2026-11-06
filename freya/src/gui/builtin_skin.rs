@@ -280,6 +280,25 @@ impl Convert for ServerDevice {
     }
 }
 
+impl Convert for FolderPlaceRow {
+    fn from_value(value: Value) -> Option<Self> {
+        let Value::Struct(s) = value else { return None };
+        Some(Self {
+            name: field(&s, "name"),
+            kind: field(&s, "kind"),
+            chosen: field(&s, "chosen"),
+        })
+    }
+
+    fn to_value(self) -> Value {
+        structure(vec![
+            ("name", self.name.to_value()),
+            ("kind", self.kind.to_value()),
+            ("chosen", self.chosen.to_value()),
+        ])
+    }
+}
+
 impl Convert for ServerUser {
     fn from_value(value: Value) -> Option<Self> {
         let Value::Struct(s) = value else { return None };
@@ -1257,6 +1276,9 @@ skin_api! {
         Server."browsing" => set_browsing, get_browsing;
         Server."browse-folder" => set_browse_folder, get_browse_folder;
         Server."browse-folders" => set_browse_folders, get_browse_folders;
+        Server."browse-places" => set_browse_places, get_browse_places;
+        Server."browse-error" => set_browse_error, get_browse_error;
+        Server."browse-has-parent" => set_browse_has_parent, get_browse_has_parent;
     }
     callbacks {
         Player."play" => on_play, invoke_play();
@@ -1443,6 +1465,8 @@ skin_api! {
         Server."browse-into" => on_browse_into, invoke_browse_into(index: i32);
         Server."browse-up" => on_browse_up, invoke_browse_up();
         Server."browse-add" => on_browse_add, invoke_browse_add();
+        Server."browse-place" => on_browse_place, invoke_browse_place(index: i32);
+        Server."browse-path" => on_browse_path, invoke_browse_path(path: SharedString);
         Server."browse-cancel" => on_browse_cancel, invoke_browse_cancel();
     }
 }

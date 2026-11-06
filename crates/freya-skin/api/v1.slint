@@ -1213,6 +1213,16 @@ export struct ServerDevice {
 }
 
 /// A user of the server, as an admin sees them.
+/// A place on the server to choose a music folder from: see `Server.browse-places`.
+export struct FolderPlaceRow {
+    /// As the system names it: "Windows (C:)", "Z: \\nas\music", "Music".
+    name: string,
+    /// "home", "drive", "network" or "volume".
+    kind: string,
+    /// Whether the folder shown is in it: the place it is in, the innermost.
+    chosen: bool,
+}
+
 export struct ServerUser {
     /// What `Server.invite-again` and `remove-user` take.
     name: string,
@@ -1368,15 +1378,24 @@ export global Server {
     callback check-update();
     callback install-update();
 
-    /// While choosing a music folder among the server's, from another computer: the folder
-    /// shown ("" where to start: the home folder and the drives) and the folders in it.
+    /// While choosing a music folder among the server's, as the server sees them, wherever it
+    /// runs: the folder shown (the home folder at first), the folders in it, the places to
+    /// start from, and why the folder could not be listed.
     in property <bool> browsing;
     in property <string> browse-folder;
     in property <[string]> browse-folders;
+    in property <[FolderPlaceRow]> browse-places;
+    in property <string> browse-error;
+    /// Whether `browse-up` has a folder to go up to.
+    in property <bool> browse-has-parent;
     callback browse-start();
     /// Into the `index`th folder shown, or up to the one the folder shown is in.
     callback browse-into(int);
     callback browse-up();
+    /// To the `index`th of `browse-places`, or to a path typed: on Windows, `\\computer`
+    /// shows the folders that computer shares.
+    callback browse-place(int);
+    callback browse-path(string);
     /// Adds the folder shown to `Library.folders-draft`, and stops browsing.
     callback browse-add();
     callback browse-cancel();

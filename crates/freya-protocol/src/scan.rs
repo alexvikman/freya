@@ -287,12 +287,28 @@ pub struct AccountInfo {
 /// computer.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct FolderListing {
-    /// The folder listed; none for where to start: the user's home, and the drives.
+    /// The folder listed; none when there is none to list, as without a home folder.
     pub folder: Option<PathBuf>,
-    /// The folder it is in; none at the start.
+    /// The folder it is in; none at a drive's top, or a computer's shares.
     pub parent: Option<PathBuf>,
-    /// By name; hidden ones left out.
+    /// By name; hidden ones left out. On Windows, a computer's shares for `\\computer`.
     pub folders: Vec<PathBuf>,
+    /// Where to start: the user's home, the drives, network drives and mounted volumes.
+    #[serde(default)]
+    pub places: Vec<FolderPlace>,
+    /// Why the folder could not be listed.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// A place on the server to start choosing a folder from.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct FolderPlace {
+    pub path: PathBuf,
+    /// As the system names it, like "Windows (C:)" or "Z: \\nas\music".
+    pub name: String,
+    /// "home", "drive", "network" or "volume".
+    pub kind: String,
 }
 
 /// A device a user connected, with a token of its own.

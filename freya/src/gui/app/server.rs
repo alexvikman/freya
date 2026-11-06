@@ -16,6 +16,11 @@ impl App {
                 "browse-folders",
                 self.server.browse_rows.model_value(),
             );
+            let _ = ui.set_global_property(
+                "Server",
+                "browse-places",
+                self.server.browse_places.model_value(),
+            );
         }
         if self.view.library_out.available {
             self.library.attach(&self.view.ui);

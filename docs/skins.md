@@ -491,7 +491,7 @@ The server that keeps the library: Freya Server on this computer, or on another 
 | `set-network(on)`, `set-server-name(name)` | For the server on this computer |
 | `set-start-at-login(on)` | Whether the server starts when its user logs in |
 | `check-update()`, `install-update()` | Has the server look for an update now, or install the one available, for an admin |
-| `browse-start()`, `browse-into(index)`, `browse-up()`, `browse-add()`, `browse-cancel()` | Choosing a music folder among the server's, wherever it runs: `browsing`, `browse-folder` ("" where to start: the home folder and the drives) and `browse-folders` say what is shown; `browse-add` adds the folder shown to `Library.folders-draft` |
+| `browse-start()`, `browse-into(index)`, `browse-up()`, `browse-place(index)`, `browse-path(path)`, `browse-add()`, `browse-cancel()` | Choosing a music folder among the server's, as the server sees them, wherever it runs: `browsing`, `browse-folder` (the home folder at first), `browse-folders`, `browse-places` ([`FolderPlaceRow`]: `name`, `kind` "home", "drive", "network" or "volume", and `chosen`, the place the folder shown is in), `browse-has-parent` and `browse-error` say what is shown; `browse-path` goes to a path typed, and on Windows `\\computer` lists the folders that computer shares; `browse-add` adds the folder shown to `Library.folders-draft` |
 
 ### `Updates`
 

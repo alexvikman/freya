@@ -110,6 +110,7 @@ pub struct ServerPanel {
     pub found_rows: ModelRows,
     pub user_rows: ModelRows,
     pub browse_rows: ModelRows,
+    pub browse_places: ModelRows,
 }
 
 impl ServerPanel {
@@ -146,6 +147,7 @@ impl ServerPanel {
             user_rows: ModelRows::new(),
             found_rows: ModelRows::new(),
             browse_rows: ModelRows::new(),
+            browse_places: ModelRows::new(),
         }
     }
 
@@ -650,9 +652,14 @@ impl ServerPanel {
         self.browse.as_ref()?.folders.get(index).cloned()
     }
 
-    /// The folder the one shown is in; none at the start, where it goes back to.
+    /// The folder the one shown is in; none at a drive's top.
     pub fn browsed_up(&self) -> Option<PathBuf> {
         self.browse.as_ref()?.parent.clone()
+    }
+
+    /// The `index`th place to start from.
+    pub fn browsed_place(&self, index: usize) -> Option<PathBuf> {
+        Some(self.browse.as_ref()?.places.get(index)?.path.clone())
     }
 
     pub fn stop_browsing(&mut self) {
@@ -687,12 +694,35 @@ impl ServerPanel {
                     b.folders
                         .iter()
                         .map(|f| {
-                            // Where to start, whole paths; inside a folder, names.
-                            let shown = match &b.folder {
-                                Some(_) => f.file_name().map(|n| n.to_string_lossy().into_owned()),
-                                None => None,
-                            };
+                            // Names; a whole path where there is none, as a drive's.
+                            let shown = f.file_name().map(|n| n.to_string_lossy().into_owned());
                             string(shown.unwrap_or_else(|| f.to_string_lossy().into_owned()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        );
+        self.browse_places.sync(
+            browse
+                .map(|b| {
+                    // The innermost place the folder shown is in.
+                    let chosen = b.folder.as_ref().and_then(|folder| {
+                        b.places
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, place)| folder.starts_with(&place.path))
+                            .max_by_key(|(_, place)| place.path.components().count())
+                            .map(|(i, _)| i)
+                    });
+                    b.places
+                        .iter()
+                        .enumerate()
+                        .map(|(i, place)| {
+                            Value::Struct(Struct::from_iter([
+                                ("name".to_owned(), string(&place.name)),
+                                ("kind".to_owned(), string(&place.kind)),
+                                ("chosen".to_owned(), Value::Bool(chosen == Some(i))),
+                            ]))
                         })
                         .collect()
                 })
@@ -719,6 +749,14 @@ impl ServerPanel {
             .unwrap_or_default();
         vec![
             ("browsing", Value::Bool(browse.is_some())),
+            (
+                "browse-error",
+                string(browse.and_then(|b| b.error.clone()).unwrap_or_default()),
+            ),
+            (
+                "browse-has-parent",
+                Value::Bool(browse.is_some_and(|b| b.parent.is_some())),
+            ),
             (
                 "browse-folder",
                 string(

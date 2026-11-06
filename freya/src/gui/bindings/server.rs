@@ -148,6 +148,29 @@ pub(super) fn bind(b: &Binder) {
     );
     b.bind(
         "Server",
+        "browse-place",
+        Box::new(|app, args| {
+            let remote = app.library.remote();
+            if let Some(place) = app.server.browsed_place(index(args, 0)) {
+                app.server.browse(remote.as_deref(), Some(&place));
+            }
+        }),
+    );
+    b.bind(
+        "Server",
+        "browse-path",
+        Box::new(|app, args| {
+            let path = text_arg(args, 0);
+            let path = path.trim();
+            if !path.is_empty() {
+                let remote = app.library.remote();
+                app.server
+                    .browse(remote.as_deref(), Some(std::path::Path::new(path)));
+            }
+        }),
+    );
+    b.bind(
+        "Server",
         "browse-up",
         Box::new(|app, _| {
             let remote = app.library.remote();

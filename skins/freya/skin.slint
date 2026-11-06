@@ -91,6 +91,10 @@ global Icons {
     out property <string> activity: "M12 2.5 A9.5 9.5 0 1 0 12 21.5 A9.5 9.5 0 1 0 12 2.5 Z M6.5 12 H9 L10.75 8.5 L13.25 15.5 L15 12 H17.5";
     out property <string> external: "M7 17 L17 7 M9 7 H17 V15";
     out property <string> server: "M4.5 3.5 H19.5 A1.5 1.5 0 0 1 21 5 V9 A1.5 1.5 0 0 1 19.5 10.5 H4.5 A1.5 1.5 0 0 1 3 9 V5 A1.5 1.5 0 0 1 4.5 3.5 Z M4.5 13.5 H19.5 A1.5 1.5 0 0 1 21 15 V19 A1.5 1.5 0 0 1 19.5 20.5 H4.5 A1.5 1.5 0 0 1 3 19 V15 A1.5 1.5 0 0 1 4.5 13.5 Z M7 7 V7.01 M7 17 V17.01";
+    // Places to choose a folder from: the home folder, a drive, a network drive.
+    out property <string> home: "M3 10.5 L12 3 L21 10.5 M5 9 V20 H10 V14 H14 V20 H19 V9";
+    out property <string> drive: "M4.5 13 H19.5 A1.5 1.5 0 0 1 21 14.5 V18.5 A1.5 1.5 0 0 1 19.5 20 H4.5 A1.5 1.5 0 0 1 3 18.5 V14.5 A1.5 1.5 0 0 1 4.5 13 Z M3 14.5 L6 5 H18 L21 14.5 M17 16.5 V16.51";
+    out property <string> network: "M12 3 A9 9 0 1 0 12 21 A9 9 0 1 0 12 3 Z M3 12 H21 M12 3 C9.5 5.5 8.5 8.5 8.5 12 C8.5 15.5 9.5 18.5 12 21 C14.5 18.5 15.5 15.5 15.5 12 C15.5 8.5 14.5 5.5 12 3 Z";
     out property <string> code: "M8 6 L2 12 L8 18 M16 6 L22 12 L16 18";
     out property <string> document: "M6 3 H14 L19 8 V21 H6 Z M14 3 V8 H19 M9 13 H16 M9 17 H16";
     out property <string> bubble: "M4 5 H20 V16 H11 L6 20 V16 H4 Z";
@@ -5986,6 +5990,175 @@ component SidebarItem inherits Rectangle {
 /// Looking for, and installing, an update to Freya.
 /// The library's folders, edited as in a dialog: nothing changes until Save, and then the
 /// library is read once.
+/// Chooses a music folder among the server's, as the server sees them: the places to start
+/// from at the side, the folders where it is, and a path to type or paste.
+component FolderBrowser inherits MenuSurface {
+    // The path field follows where the browser is, and is free to type in between.
+    property <string> shown: Server.browse-folder;
+    changed shown => { path.text = self.shown; }
+    init => { path.text = Server.browse-folder; }
+
+    VerticalLayout {
+        padding: 20px;
+        spacing: 14px;
+
+        VerticalLayout {
+            spacing: 4px;
+
+            Text {
+                text: "Add Folder";
+                font-size: 17px;
+                font-weight: 600;
+                color: Theme.text;
+            }
+            Text {
+                text: Platform.os == OperatingSystemType.windows
+                    ? "The folders on " + Server.name + ", as Freya Server sees them. Type \\\\computer to see the folders a computer shares."
+                    : "The folders on " + Server.name + ", as Freya Server sees them.";
+                font-size: 13px;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+        }
+        path := FormField {
+            placeholder: "A folder's path";
+            accepted => { Server.browse-path(self.text); }
+        }
+        HorizontalLayout {
+            height: 340px;
+            spacing: 12px;
+
+            // The places to start from.
+            Rectangle {
+                width: 230px;
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: Theme.divider;
+                clip: true;
+
+                ScrollView {
+                    VerticalLayout {
+                        padding: 4px;
+
+                        for place[i] in Server.browse-places: Rectangle {
+                            height: 36px;
+                            border-radius: 6px;
+                            background: place.chosen ? Theme.selection : place-touch.has-hover ? Theme.hover : transparent;
+                            accessible-role: button;
+                            accessible-label: place.name;
+                            accessible-item-selected: place.chosen;
+                            accessible-action-default => { Server.browse-place(i); }
+
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                spacing: 10px;
+
+                                Icon {
+                                    width: 18px;
+                                    height: 18px;
+                                    y: (parent.height - self.height) / 2;
+                                    data: place.kind == "home" ? Icons.home : place.kind == "network" ? Icons.network : Icons.drive;
+                                    stroked: true;
+                                    color: place.chosen ? Theme.accent-text : Theme.text-secondary;
+                                }
+                                Text {
+                                    horizontal-stretch: 1;
+                                    text: place.name;
+                                    color: Theme.text;
+                                    font-weight: place.chosen ? 600 : 400;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                            }
+                            place-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { Server.browse-place(i); }
+                            }
+                        }
+                    }
+                }
+            }
+            // The folders where it is.
+            Rectangle {
+                horizontal-stretch: 1;
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: Theme.divider;
+                clip: true;
+
+                if Server.browse-folders.length == 0: Text {
+                    x: 16px;
+                    width: parent.width - 32px;
+                    text: Server.browse-error != "" ? Server.browse-error : "No folders in it.";
+                    font-size: 13px;
+                    color: Server.browse-error != "" ? Theme.danger : Theme.text-secondary;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+                ScrollView {
+                    VerticalLayout {
+                        padding: 4px;
+
+                        for name[i] in Server.browse-folders: Rectangle {
+                            height: 36px;
+                            border-radius: 6px;
+                            background: folder-touch.has-hover ? Theme.hover : transparent;
+                            accessible-role: button;
+                            accessible-label: name;
+                            accessible-action-default => { Server.browse-into(i); }
+
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                spacing: 10px;
+
+                                Icon {
+                                    width: 18px;
+                                    height: 18px;
+                                    y: (parent.height - self.height) / 2;
+                                    data: Icons.folder;
+                                    stroked: true;
+                                    color: Theme.text-secondary;
+                                }
+                                Text {
+                                    horizontal-stretch: 1;
+                                    text: name;
+                                    color: Theme.text;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                            }
+                            folder-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { Server.browse-into(i); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+
+            if Server.browse-has-parent: TextButton {
+                text: "Up";
+                clicked => { Server.browse-up(); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            TextButton {
+                text: "Cancel";
+                clicked => { Server.browse-cancel(); }
+            }
+            if Server.browse-folder != "" && Server.browse-error == "": TextButton {
+                text: "Add This Folder";
+                primary: true;
+                clicked => { Server.browse-add(); }
+            }
+        }
+    }
+}
+
 component FoldersForm inherits MenuSurface {
     callback closed();
 
@@ -6084,87 +6257,8 @@ component FoldersForm inherits MenuSurface {
                 clicked => { Server.browse-start(); }
             }
         }
-        if Server.browsing: VerticalLayout {
-            spacing: 8px;
 
-            Text {
-                text: Server.browse-folder == "" ? "On " + Server.name : Server.browse-folder;
-                font-size: 13px;
-                font-weight: 600;
-                color: Theme.text;
-                overflow: elide;
-            }
-            Rectangle {
-                height: min(max(Server.browse-folders.length, 1), 7) * 36px;
-                border-radius: 6px;
-                border-width: 1px;
-                border-color: Theme.divider;
-                clip: true;
-
-                if Server.browse-folders.length == 0: Text {
-                    text: "No folders in it.";
-                    font-size: 13px;
-                    color: Theme.text-secondary;
-                }
-                ScrollView {
-                    VerticalLayout {
-                        for name[i] in Server.browse-folders: Rectangle {
-                            height: 36px;
-                            background: folder-touch.has-hover ? Theme.hover : Theme.surface;
-                            accessible-role: button;
-                            accessible-label: name;
-                            accessible-action-default => { Server.browse-into(i); }
-
-                            HorizontalLayout {
-                                padding-left: 12px;
-                                padding-right: 12px;
-                                spacing: 10px;
-
-                                Icon {
-                                    width: 18px;
-                                    height: 18px;
-                                    y: (parent.height - self.height) / 2;
-                                    data: Icons.folder;
-                                    stroked: true;
-                                    color: Theme.text-secondary;
-                                }
-                                Text {
-                                    horizontal-stretch: 1;
-                                    text: name;
-                                    color: Theme.text;
-                                    vertical-alignment: center;
-                                    overflow: elide;
-                                }
-                            }
-                            folder-touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => { Server.browse-into(i); }
-                            }
-                        }
-                    }
-                }
-            }
-            HorizontalLayout {
-                spacing: 8px;
-
-                if Server.browse-folder != "": TextButton {
-                    text: "Up";
-                    clicked => { Server.browse-up(); }
-                }
-                Rectangle { horizontal-stretch: 1; }
-                TextButton {
-                    text: "Cancel";
-                    clicked => { Server.browse-cancel(); }
-                }
-                if Server.browse-folder != "": TextButton {
-                    text: "Add This Folder";
-                    primary: true;
-                    clicked => { Server.browse-add(); }
-                }
-            }
-        }
-
-        HorizontalLayout {
+        if !Server.browsing: HorizontalLayout {
             alignment: end;
             spacing: 8px;
 
@@ -11033,7 +11127,12 @@ export component FreyaSkin inherits Window {
         DialogFocus {
             key-pressed(event) => {
                 if (event.text == Key.Escape) {
-                    folders-popup.close();
+                    // Out of the browser first, back to the folders.
+                    if (Server.browsing) {
+                        Server.browse-cancel();
+                    } else {
+                        folders-popup.close();
+                    }
                     return accept;
                 }
                 reject
@@ -11041,13 +11140,19 @@ export component FreyaSkin inherits Window {
 
             DialogScrim {
 
-                FoldersForm {
+                if !Server.browsing: FoldersForm {
                     width: min(560px, parent.width - 48px);
                     // As tall as what it holds: it would fill the window otherwise.
                     height: self.preferred-height;
                     x: (parent.width - self.width) / 2;
                     y: max(24px, (parent.height - self.preferred-height) / 3);
                     closed => { folders-popup.close(); }
+                }
+                if Server.browsing: FolderBrowser {
+                    width: min(780px, parent.width - 48px);
+                    height: self.preferred-height;
+                    x: (parent.width - self.width) / 2;
+                    y: max(24px, (parent.height - self.preferred-height) / 3);
                 }
             }
         }
