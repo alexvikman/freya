@@ -823,6 +823,43 @@ fn only_a_device_with_a_token_is_answered() {
             .is_err()
     );
     assert!(phone.put_picture(b"not a picture").is_err());
+    assert!(phone.backup_size().unwrap_err().0.contains("admin"));
+
+    // An admin who is not the owner backs up nothing and restores nothing: a backup holds
+    // every password, and restoring one replaces the users, the owner too.
+    accounts
+        .add_user("Bo", freya_protocol::Role::Admin, "tree house trumpet")
+        .unwrap();
+    let login = Login::new("http://127.0.0.1:47477/callback");
+    let sent = log_in(&pages, &login, "Bo", "tree house trumpet");
+    let location = &sent
+        .headers
+        .iter()
+        .find(|(n, _)| n == "location")
+        .unwrap()
+        .1;
+    let code = location
+        .split("code=")
+        .nth(1)
+        .unwrap()
+        .split('&')
+        .next()
+        .unwrap();
+    let bo = Http::new(&address).redeem(&login, code, "Laptop").unwrap();
+    let laptop = connect(&address, Some(bo.access), None);
+    assert!(!laptop.0.account().unwrap().unwrap().owner);
+    assert!(laptop.server_folders(None).is_ok(), "an admin");
+    for refused in [
+        laptop.backup_size().map(drop),
+        laptop.backup_status().map(drop),
+        laptop.start_backup(std::path::Path::new("/tmp"), None),
+        laptop.restore_backup(std::path::Path::new("/tmp/x.zip"), None),
+    ] {
+        assert!(refused.unwrap_err().0.contains("owner"));
+    }
+    // Alex is an admin too, added after the owner, who adopted the server.
+    assert!(!mac.0.account().unwrap().unwrap().owner);
+    assert!(mac.backup_size().unwrap_err().0.contains("owner"));
 
     // And logs itself out.
     mac.0.log_out().unwrap();

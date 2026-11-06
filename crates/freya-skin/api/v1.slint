@@ -1373,6 +1373,9 @@ export global Server {
 
     /// Whether the account is an admin's, who sees and invites the server's users.
     in property <bool> admin;
+    /// Whether the account is the server's owner, who adopted it: only they back it up and
+    /// restore it.
+    in property <bool> owner;
     /// The server's users, the owner first, for an admin.
     in property <[ServerUser]> users;
     /// The code a user was just invited with, "K7Q2M-9XD4T", whom it is for, and until when it

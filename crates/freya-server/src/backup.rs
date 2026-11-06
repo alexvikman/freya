@@ -34,6 +34,11 @@ const BEFORE: &str = "before-restore-";
 /// What a backup must hold to be the server's.
 const NEEDED: [&str; 2] = [DATABASE, "accounts.json"];
 
+/// At most this many files, and this many times the backup's own size, are unpacked: a backup
+/// made to fill the disk is stopped.
+const MOST_FILES: usize = 1_000_000;
+const MOST_GROWTH: u64 = 100;
+
 const MAGIC: &[u8; 8] = b"FREYABK1";
 const CHUNK: usize = 1024 * 1024;
 const ITERATIONS: u32 = 600_000;
@@ -134,10 +139,15 @@ pub fn make(
     let stamp = jiff::Zoned::now().strftime("%Y-%m-%d %H%M%S").to_string();
     let extension = if password.is_some() { SEALED } else { PLAIN };
     let out = folder.join(format!("Freya Server backup {stamp}.{extension}"));
+    if out.exists() {
+        return Err(format!("{} is there already.", out.display()));
+    }
+    // Named so no one can have put a file or a link there beforehand.
+    let random = random_name()?;
     let partials = Partials(vec![
-        folder.join(format!(".freya-backup-{stamp}.database.partial")),
-        folder.join(format!(".freya-backup-{stamp}.zip.partial")),
-        out.with_extension(format!("{extension}.partial")),
+        folder.join(format!(".freya-backup-{random}.database.partial")),
+        folder.join(format!(".freya-backup-{random}.zip.partial")),
+        folder.join(format!(".freya-backup-{random}.{extension}.partial")),
     ]);
     let [database, zipped, sealed] = [&partials.0[0], &partials.0[1], &partials.0[2]];
     db.snapshot(database)
@@ -150,7 +160,7 @@ pub fn make(
             .sum::<u64>();
     let written = if password.is_some() { zipped } else { sealed };
     let mut zip = zip::ZipWriter::new(BufWriter::new(
-        private_file(written).map_err(|e| io_error(written, &e))?,
+        new_file(written).map_err(|e| io_error(written, &e))?,
     ));
     let mut done = 0;
     let entries = std::iter::once((database.clone(), DATABASE.to_owned())).chain(files);
@@ -192,6 +202,10 @@ pub fn make(
     if let Some(password) = password {
         seal(zipped, sealed, password, cancel)?;
     }
+    // Not over a file made meanwhile.
+    if out.exists() {
+        return Err(format!("{} is there already.", out.display()));
+    }
     std::fs::rename(sealed, &out).map_err(|e| io_error(&out, &e))?;
     drop(partials);
     Ok(out)
@@ -201,10 +215,14 @@ pub fn make(
 /// the server's files in `data`, for its next start to take. Fails, leaving `data` as it was,
 /// when it is not a backup of a Freya Server, the password is not its, or it is damaged.
 pub fn prepare_restore(file: &Path, password: Option<&str>, data: &Path) -> Result<(), String> {
+    if !is_backup_name(file) {
+        return Err("This is not named as a backup of a Freya Server is.".into());
+    }
     let pending = data.join(PENDING);
+    let random = random_name()?;
     let partials = Partials(vec![
-        data.join(format!("{PENDING}.zip.partial")),
-        data.join(format!("{PENDING}.partial")),
+        data.join(format!(".restore-{random}.zip.partial")),
+        data.join(format!(".restore-{random}.partial")),
     ]);
     let [opened, unpacked] = [&partials.0[0], &partials.0[1]];
     let zipped = if is_sealed(file)? {
@@ -225,14 +243,25 @@ pub fn prepare_restore(file: &Path, password: Option<&str>, data: &Path) -> Resu
             return Err("This is not a backup of a Freya Server.".into());
         }
     }
-    let _ = std::fs::remove_dir_all(unpacked);
-    std::fs::create_dir_all(unpacked).map_err(|e| io_error(unpacked, &e))?;
+    if zip.len() > MOST_FILES {
+        return Err("This backup holds more files than a server keeps.".into());
+    }
+    let most = std::fs::metadata(&zipped)
+        .map_or(0, |m| m.len())
+        .saturating_mul(MOST_GROWTH);
+    let mut written: u64 = 0;
+    std::fs::create_dir(unpacked).map_err(|e| io_error(unpacked, &e))?;
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
         let name = entry.name().map(|n| n.into_owned()).unwrap_or_default();
         let Some(relative) = safe_relative(&name) else {
             return Err(format!("This backup names a file outside it: {name:?}"));
         };
+        // What a backup never holds: the server's own working folders above all, which would
+        // keep it from starting.
+        if left_out(&relative) && relative != Path::new(DATABASE) {
+            return Err(format!("This backup holds what no backup does: {name:?}"));
+        }
         if entry.is_dir() {
             continue;
         }
@@ -240,8 +269,19 @@ pub fn prepare_restore(file: &Path, password: Option<&str>, data: &Path) -> Resu
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| io_error(parent, &e))?;
         }
-        let mut out = BufWriter::new(private_file(&path).map_err(|e| io_error(&path, &e))?);
-        std::io::copy(&mut entry, &mut out).map_err(|e| format!("This backup is damaged: {e}"))?;
+        let mut out = BufWriter::new(new_file(&path).map_err(|e| io_error(&path, &e))?);
+        // Counted as written, not as the zip says: a backup made to fill the disk stops here.
+        let copied = std::io::copy(
+            &mut (&mut entry).take(most.saturating_sub(written) + 1),
+            &mut out,
+        )
+        .map_err(|e| format!("This backup is damaged: {e}"))?;
+        written += copied;
+        if written > most {
+            return Err(
+                "This backup unpacks to far more than it holds: it is not a server's.".into(),
+            );
+        }
         out.flush().map_err(|e| io_error(&path, &e))?;
     }
     let _ = std::fs::remove_dir_all(&pending);
@@ -295,13 +335,26 @@ impl Drop for Partials {
     }
 }
 
-/// A new file only its user can read where the system has that.
-fn private_file(path: &Path) -> std::io::Result<File> {
+/// A new file only its user can read where the system has that; never one there already, nor
+/// through a link.
+fn new_file(path: &Path) -> std::io::Result<File> {
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
     options.open(path)
+}
+
+/// 16 random hex digits, for names no one can guess.
+fn random_name() -> Result<String, String> {
+    let mut bytes = [0u8; 8];
+    SystemRandom::new()
+        .fill(&mut bytes)
+        .map_err(|_| "no random numbers".to_owned())?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 fn io_error(path: &Path, e: &std::io::Error) -> String {
@@ -365,7 +418,7 @@ fn seal(from: &Path, to: &Path, password: &str, cancel: &AtomicBool) -> Result<(
         .map_err(|_| "no random numbers".to_owned())?;
     let key = key(password, &salt, ITERATIONS)?;
     let mut input = BufReader::new(File::open(from).map_err(|e| io_error(from, &e))?);
-    let mut out = BufWriter::new(private_file(to).map_err(|e| io_error(to, &e))?);
+    let mut out = BufWriter::new(new_file(to).map_err(|e| io_error(to, &e))?);
     let header = [
         MAGIC.as_slice(),
         &ITERATIONS.to_be_bytes(),
@@ -419,10 +472,14 @@ fn unseal(from: &Path, to: &Path, password: &str) -> Result<(), String> {
         return Err(damaged());
     }
     let iterations = u32::from_be_bytes(header[8..12].try_into().map_err(|_| damaged())?);
+    // Only as many rounds as Freya makes: a file asking billions would hold the server up.
+    if iterations != ITERATIONS {
+        return Err(damaged());
+    }
     let salt = &header[12..12 + SALT];
     let prefix: [u8; PREFIX] = header[12 + SALT..].try_into().map_err(|_| damaged())?;
     let key = key(password, salt, iterations)?;
-    let mut out = BufWriter::new(private_file(to).map_err(|e| io_error(to, &e))?);
+    let mut out = BufWriter::new(new_file(to).map_err(|e| io_error(to, &e))?);
     let mut index: u32 = 0;
     loop {
         let mut head = [0u8; 5];
@@ -571,18 +628,94 @@ mod tests {
         seal(&zip, &sealed, "pw", &AtomicBool::new(false)).unwrap();
         let bytes = std::fs::read(&sealed).unwrap();
         let out = dir.join("out.zip");
-        unseal(&sealed, &out, "pw").unwrap();
+        let opened = |bytes: &[u8]| {
+            std::fs::write(&sealed, bytes).unwrap();
+            let _ = std::fs::remove_file(&out);
+            unseal(&sealed, &out, "pw")
+        };
+        opened(&bytes).unwrap();
         assert_eq!(std::fs::read(&out).unwrap().len(), 2 * CHUNK + 10);
         // Its last chunk cut off.
         let header = 8 + 4 + SALT + PREFIX;
         let first = header + 5 + CHUNK + 16;
-        std::fs::write(&sealed, &bytes[..first + 5 + CHUNK + 16]).unwrap();
-        assert!(unseal(&sealed, &out, "pw").is_err());
+        assert_eq!(
+            opened(&bytes[..first + 5 + CHUNK + 16]).unwrap_err(),
+            "This backup is damaged."
+        );
         // A byte changed.
         let mut changed = bytes.clone();
         changed[first + 100] ^= 1;
-        std::fs::write(&sealed, &changed).unwrap();
+        assert_eq!(opened(&changed).unwrap_err(), "This backup is damaged.");
+        // Asking more rounds of the key than Freya makes.
+        let mut rounds = bytes.clone();
+        rounds[8..12].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert_eq!(opened(&rounds).unwrap_err(), "This backup is damaged.");
+        // A file there already is never written over.
+        std::fs::write(&out, b"kept").unwrap();
+        std::fs::write(&sealed, &bytes).unwrap();
         assert!(unseal(&sealed, &out, "pw").is_err());
+        assert_eq!(std::fs::read(&out).unwrap(), b"kept");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A zip at `path` of `files`, as a backup is made.
+    fn zip_of(path: &Path, files: &[(&str, &[u8])]) {
+        let mut zip = zip::ZipWriter::new(File::create(path).unwrap());
+        for (name, bytes) in files {
+            zip.start_file(*name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn a_backup_holding_what_none_does_is_refused() {
+        let dir = temp("refused");
+        let data = dir.join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let backup = dir.join("Freya Server backup 2026-11-06 120000.zip");
+        // A folder the server works in, which would keep it from starting.
+        zip_of(
+            &backup,
+            &[
+                (DATABASE, b""),
+                ("accounts.json", b"{}"),
+                ("restore-pending/x", b""),
+            ],
+        );
+        assert!(
+            prepare_restore(&backup, None, &data)
+                .unwrap_err()
+                .contains("what no backup does")
+        );
+        assert!(!data.join(PENDING).exists());
+        // Not a server's: no accounts.
+        zip_of(&backup, &[(DATABASE, b"")]);
+        assert_eq!(
+            prepare_restore(&backup, None, &data).unwrap_err(),
+            "This is not a backup of a Freya Server."
+        );
+        // Not named as a backup is.
+        let other = dir.join("holiday.zip");
+        zip_of(&other, &[(DATABASE, b""), ("accounts.json", b"{}")]);
+        assert!(prepare_restore(&other, None, &data).is_err());
+        // Far larger unpacked than it is: made to fill the disk.
+        let zeros = vec![0u8; 4 * 1024 * 1024];
+        let mut zip = zip::ZipWriter::new(File::create(&backup).unwrap());
+        let deflated = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for name in [DATABASE, "accounts.json"] {
+            zip.start_file(name, deflated).unwrap();
+            zip.write_all(&zeros).unwrap();
+        }
+        zip.finish().unwrap();
+        assert!(
+            prepare_restore(&backup, None, &data)
+                .unwrap_err()
+                .contains("far more")
+        );
+        assert_eq!(std::fs::read_dir(&data).unwrap().count(), 0, "nothing left");
         let _ = std::fs::remove_dir_all(dir);
     }
 

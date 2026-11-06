@@ -297,6 +297,9 @@ pub struct AccountInfo {
     /// Whether they can log in on other devices.
     pub has_password: bool,
     pub devices: Vec<DeviceInfo>,
+    /// Whether they are the server's owner, who adopted it: only they back it up and restore it.
+    #[serde(default)]
+    pub owner: bool,
 }
 
 /// The folders in a folder on the server, for choosing the music's folders from another

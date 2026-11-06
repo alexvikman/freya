@@ -206,6 +206,14 @@ fn answer(served: &Served, answers: &Answers, request: Request) -> Response {
     {
         return Response::error(403, "only the server's admin may do that");
     }
+    if let Some(caller) = &caller
+        && !caller.is_owner()
+        && path
+            .strip_prefix("/call/")
+            .is_some_and(|call| freya_protocol::OWNER_CALLS.contains(&call))
+    {
+        return Response::error(403, "only the server's owner may do that");
+    }
     if let (Some(accounts), Some(caller)) = (&served.accounts, &caller)
         && let Some(answer) = account(
             accounts,

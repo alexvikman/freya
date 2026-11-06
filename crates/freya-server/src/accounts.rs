@@ -276,6 +276,13 @@ pub struct Caller {
     pub role: Role,
 }
 
+impl Caller {
+    /// Whether they are the server's owner, who adopted it.
+    pub fn is_owner(&self) -> bool {
+        self.user == OWNER
+    }
+}
+
 struct Connection {
     code: String,
     until: Instant,
@@ -1323,6 +1330,7 @@ impl Accounts {
             user: user.map(|u| u.name.clone()).unwrap_or_default(),
             role: user.map(|u| u.role).unwrap_or_default(),
             has_password: user.is_some_and(|u| u.password.is_some()),
+            owner: caller.user == OWNER,
             devices: kept
                 .devices
                 .iter()
@@ -1617,6 +1625,12 @@ mod tests {
             device: String::new(),
             role,
         }
+    }
+
+    #[test]
+    fn only_the_user_who_adopted_the_server_is_its_owner() {
+        assert!(caller(OWNER, Role::Admin).is_owner());
+        assert!(!caller(OWNER + 1, Role::Admin).is_owner());
     }
 
     const REDIRECT: &str = "http://127.0.0.1:47477/callback";

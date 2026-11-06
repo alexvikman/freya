@@ -188,14 +188,20 @@ Nobody can wear it out before logging in:
 - No secret is logged; names lose control characters before they are.
   An admin reads the server's log in Freya's Activity page; listeners cannot.
 - A backup holds everything the server keeps, the accounts' password hashes and the server's
-  private key too: only an admin makes or restores one, and only in a folder on the server's
-  computer, never in its own folder; nothing of it goes to Freya. On macOS and Linux the file
+  private key too: only the server's owner, who adopted it, makes or restores one (not every
+  admin: restoring one replaces the users, and an admin could make themself the owner by it),
+  and only in a folder on the server's computer, never in its own folder; nothing of it goes
+  to Freya. Its files are made new, under names no one can guess, never through a link nor
+  over a file there already. On macOS and Linux the file
   is its user's alone. Under a password it is sealed: AES-256-GCM over chunks of a megabyte,
   each with its own nonce (and a flag on the last, so one cannot be dropped, swapped or cut
   off), under a key from the password by PBKDF2-HMAC-SHA256 with 600,000 rounds and a random
   salt. Without the password nothing of it can be read, nor restored.
-- Restoring checks the backup first (the password; that the zip's local headers agree with
-  its directory; that it names no file outside it; that it holds a library and accounts),
+- Restoring checks the backup first (its name; the password, asking only the key's rounds
+  Freya makes; that the zip's local headers agree with its directory; that it names no file
+  outside it, and none of the server's own working folders; that it holds a library and
+  accounts; at most a million files, and at most a hundred times its size unpacked, counted as
+  written),
   unpacks it beside the server's files, and takes it in only as the server starts again,
   before anything is opened. What the server had is moved aside, not removed.
 - An admin chooses music folders among the server's as the server sees them, network

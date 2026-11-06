@@ -329,6 +329,17 @@ pub const LISTENER_CALLS: &[&str] = &[
     "radio_played",
 ];
 
+/// The calls only the server's owner may make: a backup holds every user's password hash and the
+/// server's key, and restoring one replaces the users, an admin among them could make themself
+/// the owner by it.
+pub const OWNER_CALLS: &[&str] = &[
+    "backup_size",
+    "start_backup",
+    "cancel_backup",
+    "backup_status",
+    "restore_backup",
+];
+
 /// The calls that only read what the library's database holds, and answer every caller the
 /// same: their answers may be kept, by the server while the library's generation is the same,
 /// and by a client until the server says the library changed. A call not named here is never

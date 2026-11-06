@@ -1302,6 +1302,7 @@ skin_api! {
         Server."login-kind" => set_login_kind, get_login_kind;
         Server."login-user" => set_login_user, get_login_user;
         Server."admin" => set_admin, get_admin;
+        Server."owner" => set_owner, get_owner;
         Server."users" => set_users, get_users;
         Server."invite-code" => set_invite_code, get_invite_code;
         Server."invite-for" => set_invite_for, get_invite_for;

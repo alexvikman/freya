@@ -9561,7 +9561,7 @@ component SettingsView inherits Rectangle {
                 }
             }
 
-            if root.tab == "server" && Server.admin: SettingsSection {
+            if root.tab == "server" && Server.owner: SettingsSection {
                 title: "Backup";
 
                 SettingsRow {

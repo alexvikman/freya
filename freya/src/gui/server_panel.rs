@@ -1028,6 +1028,7 @@ impl ServerPanel {
                 "admin",
                 Value::Bool(account.is_some_and(|a| a.role == Role::Admin)),
             ),
+            ("owner", Value::Bool(account.is_some_and(|a| a.owner))),
             (
                 "update-state",
                 string(self.update.as_ref().map_or("", |u| u.state.as_str())),
