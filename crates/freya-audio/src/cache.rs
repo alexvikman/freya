@@ -74,7 +74,9 @@ struct Listed {
     used: SystemTime,
 }
 
-/// The files kept in `dir`.
+/// The files kept in `dir`: each as large as its bytes' file, holes and all, as a disk that
+/// does not keep holes apart takes them; used when its index was, or else when its bytes
+/// were written last.
 fn entries(dir: &Path) -> Vec<Listed> {
     let Ok(read) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -82,20 +84,20 @@ fn entries(dir: &Path) -> Vec<Listed> {
     let mut entries = Vec::new();
     for item in read.flatten() {
         let path = item.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("index") {
+        if path.extension().and_then(|e| e.to_str()) != Some("audio") {
             continue;
         }
         let Some(key) = path.file_stem().and_then(|s| s.to_str()) else {
             continue;
         };
-        let used = item
-            .metadata()
+        let Ok(bytes) = item.metadata() else {
+            continue;
+        };
+        let used = std::fs::metadata(dir.join(format!("{key}.index")))
             .and_then(|m| m.modified())
+            .or_else(|_| bytes.modified())
             .unwrap_or(SystemTime::UNIX_EPOCH);
-        let size = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|text| Index::parse(&text))
-            .map_or(0, |index| index.ranges.held());
+        let size = bytes.len();
         entries.push(Listed {
             key: key.to_owned(),
             size,
@@ -291,65 +293,57 @@ impl Index {
     }
 }
 
-/// Where a file's bytes go as they come: a kept file on disk, or memory.
+/// A file's store, what of it is here, and its length and version when they are known.
+pub(crate) type Opened = (Store, Ranges, Option<(u64, String)>);
+
+/// Where a file's bytes go as they come: a file kept on disk, or one that goes once read.
 pub(crate) enum Store {
-    /// The pieces that came, by where they start.
-    Memory(BTreeMap<u64, Vec<u8>>),
     Kept(Kept),
+    Passing(Passing),
 }
 
 impl Store {
     /// For the file at `url`: the one kept, with what of it is here and its tag, when there
     /// is one; else a new one, empty, kept when a cache is set.
-    pub fn open(url: &str) -> (Self, Ranges, Option<(u64, String)>) {
-        match Kept::open(url) {
+    pub fn open(url: &str) -> io::Result<Opened> {
+        Ok(match Kept::open(url) {
             Some((kept, index)) => {
                 let known = (!index.tag.is_empty()).then(|| (index.len, index.tag.clone()));
                 (Store::Kept(kept), index.ranges, known)
             }
-            None => (Store::Memory(BTreeMap::new()), Ranges::default(), None),
+            None => (Store::Passing(Passing::new()?), Ranges::default(), None),
+        })
+    }
+
+    /// The file is `len` long: one larger than all the cache may keep is not kept, but goes
+    /// once read.
+    pub fn fit(&mut self, len: u64) -> io::Result<()> {
+        let limit = cache().config.as_ref().map_or(0, |config| config.limit);
+        if matches!(self, Store::Kept(_)) && len > limit {
+            *self = Store::Passing(Passing::new()?);
+        }
+        Ok(())
+    }
+
+    fn file(&mut self) -> &mut File {
+        match self {
+            Store::Kept(kept) => &mut kept.file,
+            Store::Passing(passing) => &mut passing.file,
         }
     }
 
     /// Puts `bytes` at `at`.
     pub fn write_at(&mut self, at: u64, bytes: &[u8]) -> io::Result<()> {
-        match self {
-            Store::Memory(pieces) => {
-                pieces.insert(at, bytes.to_vec());
-                Ok(())
-            }
-            Store::Kept(kept) => {
-                kept.file.seek(SeekFrom::Start(at))?;
-                kept.file.write_all(bytes)
-            }
-        }
+        let file = self.file();
+        file.seek(SeekFrom::Start(at))?;
+        file.write_all(bytes)
     }
 
     /// Fills `out` from `at`, which must be here.
     pub fn read_at(&mut self, at: u64, out: &mut [u8]) -> io::Result<()> {
-        match self {
-            Store::Memory(pieces) => {
-                let mut done = 0;
-                while done < out.len() {
-                    let pos = at + done as u64;
-                    // The piece that holds it: pieces fetched apart may overlap.
-                    let (start, piece) = pieces
-                        .range(..=pos)
-                        .rev()
-                        .find(|(start, piece)| pos < **start + piece.len() as u64)
-                        .ok_or_else(|| io::Error::other("not fetched"))?;
-                    let from = (pos - start) as usize;
-                    let count = (piece.len() - from).min(out.len() - done);
-                    out[done..done + count].copy_from_slice(&piece[from..from + count]);
-                    done += count;
-                }
-                Ok(())
-            }
-            Store::Kept(kept) => {
-                kept.file.seek(SeekFrom::Start(at))?;
-                kept.file.read_exact(out)
-            }
-        }
+        let file = self.file();
+        file.seek(SeekFrom::Start(at))?;
+        file.read_exact(out)
     }
 
     /// Notes what of the file is here, of which version: kept with it from now on. Without a
@@ -368,14 +362,40 @@ impl Store {
 
     /// The bytes held were of another version of the file: none are kept.
     pub fn forget(&mut self) {
-        match self {
-            Store::Memory(pieces) => pieces.clear(),
-            Store::Kept(kept) => {
-                let _ = kept.file.set_len(0);
-                kept.index = None;
-                kept.save();
-            }
+        let _ = self.file().set_len(0);
+        if let Store::Kept(kept) = self {
+            kept.index = None;
+            kept.save();
         }
+    }
+}
+
+/// A file read from a server, not kept: on disk while it is read, so even a long one takes
+/// no memory, then gone.
+pub(crate) struct Passing {
+    path: PathBuf,
+    file: File,
+}
+
+impl Passing {
+    fn new() -> io::Result<Self> {
+        static MADE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let made = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("freya-{}-{made}.playing", std::process::id()));
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)?;
+        Ok(Self { path, file })
+    }
+}
+
+impl Drop for Passing {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
     }
 }
 

@@ -60,6 +60,9 @@ const STALL: Duration = Duration::from_millis(250);
 const START_AHEAD: f64 = 3.0;
 /// How often what is here is noted in the cache's index while it is fetched.
 const NOTE_EVERY: Duration = Duration::from_secs(5);
+/// The longest file played from a server: an hour and a half of 24-bit, 192 kHz audio in
+/// eight channels, and more. A server saying more is not believed.
+const LONGEST_FILE: u64 = 64 * 1024 * 1024 * 1024;
 /// How much a seek's search looks at, at each place: more than a FLAC frame of a CD's.
 const LOOKED_AT: u64 = 32 * 1024;
 /// The size of a part whose search goes on halving it: past this, it is read whole.
@@ -273,22 +276,35 @@ struct Got {
 
 impl Got {
     /// The bytes of the file `len` long, of version `tag`, came: what is here of another
-    /// version, or another length, goes.
-    fn check_version(&mut self, len: u64, tag: Option<&str>) {
+    /// version, or another length, goes. A file longer than any is refused.
+    fn check_version(&mut self, len: u64, tag: Option<&str>) -> io::Result<()> {
+        if len > LONGEST_FILE {
+            return Err(io::Error::other(format!(
+                "the server says the file is {len} bytes long"
+            )));
+        }
         let other = self.len != len || (self.tag.is_some() && self.tag.as_deref() != tag);
         if other && self.ranges.held() > 0 {
             log::info!("the server has another version of a file kept; fetching it again");
             self.store.forget();
             self.ranges = Ranges::default();
         }
+        if self.len != len {
+            self.store.fit(len)?;
+        }
         self.len = len;
         self.tag = tag.map(str::to_owned);
+        Ok(())
     }
 
     /// Keeps `bytes` that came for `at`.
     fn keep(&mut self, at: u64, bytes: &[u8]) -> io::Result<()> {
         if bytes.is_empty() {
             return Ok(());
+        }
+        // Only within the file, as long as the server said it is.
+        if at + bytes.len() as u64 > self.len {
+            return Err(io::Error::other("the server sent more than the file holds"));
         }
         self.store.write_at(at, bytes)?;
         self.ranges.insert(at, at + bytes.len() as u64);
@@ -395,7 +411,8 @@ impl Download {
         if answer.from != start {
             return Err(io::Error::other("the server sent another part"));
         }
-        self.lock().check_version(answer.len, answer.tag.as_deref());
+        self.lock()
+            .check_version(answer.len, answer.tag.as_deref())?;
         let mut piece = vec![0; READ_AT_ONCE];
         let mut at = start;
         loop {
@@ -598,7 +615,7 @@ impl RemoteFile {
             bearer: remote.bearer.clone(),
             interrupt,
         };
-        let (store, ranges, known) = Store::open(&remote.url);
+        let (store, ranges, known) = Store::open(&remote.url)?;
         let (len, tag) = known.map_or((0, None), |(len, tag)| (len, Some(tag)));
         let was_whole = len > 0 && ranges.whole(len);
         let fetching = Fetching::start();
@@ -674,7 +691,7 @@ impl RemoteFile {
         let mut got = download.lock();
         if let Some(head) = head {
             let head = head?;
-            got.check_version(head.len, head.tag.as_deref());
+            got.check_version(head.len, head.tag.as_deref())?;
             got.keep(head.from, &head.bytes)?;
         }
         // The end is only of use as of the same version.
@@ -878,7 +895,7 @@ mod tests {
             ranges.insert(from, to);
         }
         let got = Got {
-            store: Store::Memory(Default::default()),
+            store: Store::open("http://nowhere/").unwrap().0,
             ranges,
             len: 100,
             tag: None,
@@ -893,6 +910,32 @@ mod tests {
             stale: false,
         };
         got.next_part(30)
+    }
+
+    #[test]
+    fn a_server_is_not_believed_beyond_the_files_length() {
+        let mut got = Got {
+            store: Store::open("http://nowhere/").unwrap().0,
+            ranges: Ranges::default(),
+            len: 0,
+            tag: None,
+            wanted: None,
+            read_at: 0,
+            failed: None,
+            closed: false,
+            rate: None,
+            waiting_since: None,
+            stalled: false,
+            noted: Instant::now(),
+            stale: false,
+        };
+        assert!(got.check_version(LONGEST_FILE + 1, None).is_err());
+        got.check_version(100, None).unwrap();
+        assert!(got.keep(90, &[0; 20]).is_err(), "past its end");
+        // Far past it, which would make a file as large on a disk without holes.
+        assert!(got.keep(1 << 40, &[0; 1]).is_err());
+        got.keep(90, &[1; 10]).unwrap();
+        assert_eq!(got.ranges.held(), 10);
     }
 
     #[test]
