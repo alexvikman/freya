@@ -47,6 +47,10 @@ const WRITE_TIME: Duration = Duration::from_secs(30);
 const MAX_CONNECTIONS: usize = 128;
 const MAX_FROM_ONE: usize = 16;
 const MAX_ALL: usize = 512;
+/// The most connections from one address once it is a known device's: a client keeps a few
+/// open for the library and the pictures, one for the events and some for the music, so one
+/// device that opens more does not take every connection from the others.
+const MAX_KNOWN_FROM_ONE: usize = 64;
 /// The most of an answer written at once: four of TLS's largest records.
 const WRITTEN_AT_ONCE: usize = 64 * 1024;
 /// How long a streamed answer may take to be taken: longer than the events stream lasts.
@@ -200,19 +204,28 @@ impl Live {
     }
 
     /// `stream` counted among those served, unless strangers' are too many, in all or from its
-    /// address, or all are. An IPv6 address counts by its /64, which one computer may have all
-    /// of.
+    /// address, or all are, or a known device's from its address are. An IPv6 address counts
+    /// by its /64, which one computer may have all of.
     fn admit(self: &Arc<Self>, stream: &TcpStream) -> Option<Admitted> {
         let ip = network(stream.peer_addr().ok()?.ip());
         let kept = stream.try_clone().ok()?;
         let mut connections = self.connections();
-        let (all, from_it) = connections
-            .values()
-            .filter(|c| !c.known)
-            .fold((0, 0), |(all, from_it), c| {
-                (all + 1, from_it + usize::from(c.from == ip))
-            });
-        if all >= MAX_CONNECTIONS || from_it >= MAX_FROM_ONE || connections.len() >= MAX_ALL {
+        let (all, from_it, known_from_it) =
+            connections
+                .values()
+                .fold((0, 0, 0), |(all, from_it, known_from_it), c| {
+                    let here = usize::from(c.from == ip);
+                    if c.known {
+                        (all, from_it, known_from_it + here)
+                    } else {
+                        (all + 1, from_it + here, known_from_it)
+                    }
+                });
+        if all >= MAX_CONNECTIONS
+            || from_it >= MAX_FROM_ONE
+            || known_from_it >= MAX_KNOWN_FROM_ONE
+            || connections.len() >= MAX_ALL
+        {
             return None;
         }
         let id = self.next.fetch_add(1, Ordering::Relaxed);
@@ -656,8 +669,10 @@ impl Connection {
     }
 
     fn write(&mut self, response: Response, keep: bool) -> io::Result<()> {
+        // Taken as the type it says, never guessed from its bytes, should a browser ever see an
+        // answer: a picture is not read as a page.
         let mut head = format!(
-            "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nConnection: {}\r\n",
+            "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nX-Content-Type-Options: nosniff\r\nConnection: {}\r\n",
             response.status,
             reason(response.status),
             response.content_type,
@@ -1002,5 +1017,17 @@ mod tests {
             "a known one does not count"
         );
         held.clear();
+        // A known device holds at most so many from its address: strangers' places stay.
+        let mut known: Vec<Admitted> = (0..MAX_KNOWN_FROM_ONE)
+            .map(|_| {
+                let admitted = live.admit(&accept()).unwrap();
+                admitted.know();
+                admitted
+            })
+            .collect();
+        assert!(live.admit(&accept()).is_none(), "the address is full");
+        known.pop();
+        assert!(live.admit(&accept()).is_some(), "with room again");
+        known.clear();
     }
 }

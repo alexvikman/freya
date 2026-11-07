@@ -80,6 +80,8 @@ impl App {
         let pin = self.settings.server.as_ref().and_then(|s| s.pin());
         if let (Some(pin), Some(store)) = (pin, settings::token_store()) {
             store.remove(&freya_client::token_key(&pin));
+            // And one kept by the address, as before.
+            store.remove(&freya_client::token_key_by_address(&pin));
         }
         self.settings.server = None;
         self.server.set_known(None);

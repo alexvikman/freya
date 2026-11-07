@@ -7,10 +7,12 @@
 //! The login page sends the browser back here, to `/callback`, with a code; Freya trades it
 //! for a token before it says the user is logged in.
 //!
-//! The password page is the user's own: Freya opens it with a start that works once, and the
-//! browser that comes with it is given a cookie, which alone opens the page after. The ticket
-//! the server gave for it is added on the way, so it is in no URL or command line, and another
-//! program on this computer asking the proxy is given nothing.
+//! The pages are the user's own: Freya opens them with a start that works once, and the
+//! browser that comes with it is given a cookie, which alone opens the pages after, sends
+//! their forms and brings the login's code back. Another program on this computer, of another
+//! user, and a page elsewhere in the browser, are given nothing: not the login page, not the
+//! page adopting or joining the server, and not the ticket that page carries, which is added
+//! on the way, so it is in no URL or command line.
 
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -43,26 +45,27 @@ pub enum Heard {
     PasswordChanged,
 }
 
-/// The server whose pages are shown, and the login waiting for its code; with the ticket that
-/// lets it adopt or join the server instead, added to the page on the way.
+/// The server whose pages are shown, and what is shown: a login waiting for its code, with the
+/// ticket that lets it adopt or join the server instead; or the password page, with the
+/// server's ticket for it. Each is opened by Freya with a start that works once, which gives
+/// the browser that came with it the cookie that alone opens the pages after.
 #[derive(Default)]
 struct Showing {
     pages: Option<Pages>,
     login: Option<(Http, Login)>,
     claim: Option<String>,
-    password: Option<PasswordPage>,
-}
-
-/// The password page shown: the start Freya opens it with, once; the cookie the browser that
-/// came with it was given; and the server's ticket for it.
-struct PasswordPage {
-    start: String,
+    /// The server's ticket for the password page, while it is shown.
+    password: Option<String>,
+    /// The page the start sends the browser on to, with its query.
+    page: String,
+    /// The start Freya opened the pages with, until it was used; and the cookie the browser
+    /// that came with it was given.
+    start: Option<String>,
     cookie: Option<String>,
-    ticket: String,
 }
 
-/// The cookie the password page is opened with.
-const COOKIE: &str = "freya-password";
+/// The cookie the pages are opened with.
+const COOKIE: &str = "freya-pages";
 
 pub struct PageProxy {
     showing: Arc<Mutex<Showing>>,
@@ -102,35 +105,51 @@ impl PageProxy {
     }
 
     /// Shows the pages of `server`, waiting for `login` to come back: logged in, or, with a
-    /// claim's `ticket`, once the server is adopted or joined.
-    pub fn claim(&self, server: Http, login: Login, ticket: Option<String>) {
+    /// claim's `ticket`, once the server is adopted or joined. The page to open, once: it
+    /// sends the browser on to the login page, or the page adopting or joining the server.
+    pub fn claim(&self, server: Http, login: Login, ticket: Option<String>) -> String {
+        let page = if ticket.is_some() {
+            login.join_page()
+        } else {
+            login.page()
+        };
         let mut showing = self.showing();
         showing.pages = Some(server.pages());
         showing.login = Some((server, login));
         showing.claim = ticket;
         showing.password = None;
+        self.open(&mut showing, page)
     }
 
     /// Shows `pages`, its password page opened with `ticket`, and no login waiting: the page
     /// to open, once.
     pub fn show_password(&self, pages: Pages, ticket: String) -> String {
-        let start = random_hex();
         let mut showing = self.showing();
         showing.pages = Some(pages);
         showing.login = None;
-        showing.password = Some(PasswordPage {
-            start: start.clone(),
-            cookie: None,
-            ticket,
-        });
-        format!("{}{PAGES_PATH}/password?start={start}", self.origin())
+        showing.claim = None;
+        showing.password = Some(ticket);
+        self.open(&mut showing, format!("{PAGES_PATH}/password"))
     }
 
-    /// Waits for no login any more: one that comes back is not taken.
+    /// A new start for `page`, in place of any before, which the browser that comes with it
+    /// alone is given the cookie for: the page Freya opens.
+    fn open(&self, showing: &mut Showing, page: String) -> String {
+        let start = random_hex();
+        showing.page = page;
+        showing.start = Some(start.clone());
+        showing.cookie = None;
+        format!("{}{PAGES_PATH}/open?start={start}", self.origin())
+    }
+
+    /// Waits for no login any more: one that comes back is not taken, and the pages opened for
+    /// it are given nothing more.
     pub fn cancel_login(&self) {
         let mut showing = self.showing();
         showing.login = None;
         showing.claim = None;
+        showing.start = None;
+        showing.cookie = None;
     }
 
     /// Where the login page sends the browser back to.
@@ -160,13 +179,56 @@ fn answer(
     if request.method == "POST" && request.header("origin") != Some(origin.as_str()) {
         return text(403, "Open this page from Freya.");
     }
+    let open = format!("{PAGES_PATH}/open");
+    if (request.method.as_str(), request.path.as_str()) == ("GET", open.as_str()) {
+        // Opened by Freya: the browser that came is given the cookie, once.
+        let mut showing = showing();
+        let started = request
+            .query_value("start")
+            .zip(showing.start.as_deref())
+            .is_some_and(|(given, start)| same(given, start));
+        if !started || showing.cookie.is_some() {
+            return text(
+                403,
+                "This page was opened already. Open it again from Freya.",
+            );
+        }
+        let cookie = random_hex();
+        showing.cookie = Some(cookie.clone());
+        showing.start = None;
+        let mut sent = text(303, "");
+        sent.headers.extend([
+            ("Location", showing.page.clone()),
+            (
+                "Set-Cookie",
+                format!("{COOKIE}={cookie}; HttpOnly; SameSite=Strict; Path=/"),
+            ),
+        ]);
+        return sent;
+    }
+    // Everything else only for the browser that came with the start.
+    let came = {
+        let showing = showing();
+        showing
+            .cookie
+            .as_deref()
+            .zip(sent_cookie(request).as_deref())
+            .is_some_and(|(cookie, sent)| same(cookie, sent))
+    };
+    if !came {
+        return text(403, "Open this page from Freya.");
+    }
     if (request.method.as_str(), request.path.as_str()) == ("GET", "/callback") {
         // Taken only by the login's own state, so another page cannot end it.
         let waiting = {
             let mut showing = showing();
             match &showing.login {
                 None => None,
-                Some((_, login)) if request.query_value("state") != Some(login.state.as_str()) => {
+                Some((_, login))
+                    if !request
+                        .query_value("state")
+                        .is_some_and(|state| same(state, &login.state)) =>
+                {
                     return text(
                         400,
                         "This is not the login Freya asked for. Start again from its settings.",
@@ -186,7 +248,7 @@ fn answer(
         return match server.redeem(&login, code, &device) {
             Ok(tokens) => {
                 tell(Heard::LoggedIn(Ok((server.pin().cloned(), tokens))));
-                let mut sent = Response::bytes(303, "text/plain; charset=utf-8", Vec::new());
+                let mut sent = text(303, "");
                 sent.headers
                     .push(("Location", format!("{PAGES_PATH}/logged-in")));
                 sent
@@ -202,43 +264,12 @@ fn answer(
     }
     let password_page = request.path == format!("{PAGES_PATH}/password");
     let path = if password_page {
-        let mut showing = showing();
-        let Some(page) = showing.password.as_mut() else {
+        let Some(ticket) = showing().password.clone() else {
             return text(404, "Open this page from Freya's settings.");
         };
-        // Opened by Freya: the browser that came is given the cookie, once.
-        if let Some(start) = request.query_value("start") {
-            if page.cookie.is_some() || start != page.start {
-                return text(
-                    403,
-                    "This page was opened already. Open it again from Freya's settings.",
-                );
-            }
-            let cookie = random_hex();
-            page.cookie = Some(cookie.clone());
-            let mut sent = Response::bytes(303, "text/plain; charset=utf-8", Vec::new());
-            sent.headers.extend([
-                ("Location", format!("{PAGES_PATH}/password")),
-                (
-                    "Set-Cookie",
-                    format!(
-                        "{COOKIE}={cookie}; HttpOnly; SameSite=Strict; Path={PAGES_PATH}/password"
-                    ),
-                ),
-                ("Cache-Control", "no-store".into()),
-            ]);
-            return sent;
-        }
-        let came = page
-            .cookie
-            .as_ref()
-            .is_some_and(|cookie| sent_cookie(request).as_deref() == Some(cookie.as_str()));
-        if !came {
-            return text(403, "Open this page from Freya's settings.");
-        }
         // Its ticket, added here.
         if request.method == "GET" {
-            format!("{}?ticket={}", request.path, page.ticket)
+            format!("{}?ticket={ticket}", request.path)
         } else {
             request.path.clone()
         }
@@ -267,7 +298,9 @@ fn answer(
     };
     if request.method == "POST" && password_page && page.status == 200 {
         // Done with: the page is not opened again with its cookie.
-        showing().password = None;
+        let mut showing = showing();
+        showing.password = None;
+        showing.cookie = None;
         tell(Heard::PasswordChanged);
     }
     let html = page.headers.iter().any(|(name, value)| {
@@ -279,11 +312,7 @@ fn answer(
         "text/plain; charset=utf-8"
     };
     let mut response = Response::bytes(page.status, kind, page.body);
-    response.headers.extend(
-        SAFE_HEADERS
-            .iter()
-            .map(|(name, value)| (*name, (*value).to_owned())),
-    );
+    response.headers.extend(safe_headers());
     // Where the server sends the browser on: to its own pages, or back to this proxy with a
     // login's code; nowhere else.
     let location = page
@@ -301,13 +330,18 @@ fn answer(
     response
 }
 
-/// The password page's cookie, as the browser sent it.
+/// The pages' cookie, as the browser sent it.
 fn sent_cookie(request: &Request) -> Option<String> {
     request
         .header("cookie")?
         .split(';')
         .find_map(|pair| pair.trim().strip_prefix(&format!("{COOKIE}=")))
         .map(str::to_owned)
+}
+
+/// Whether `given` is `secret`, compared in the same time whatever they are.
+fn same(given: &str, secret: &str) -> bool {
+    freya_protocol::same_secret(given.as_bytes(), secret.as_bytes())
 }
 
 fn random_hex() -> String {
@@ -318,9 +352,17 @@ fn random_hex() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// A page of plain text.
+fn safe_headers() -> impl Iterator<Item = (&'static str, String)> {
+    SAFE_HEADERS
+        .iter()
+        .map(|(name, value)| (*name, (*value).to_owned()))
+}
+
+/// A page of plain text, kept as the server's pages are.
 fn text(status: u16, said: &str) -> Response {
-    Response::bytes(status, "text/plain; charset=utf-8", said.into())
+    let mut response = Response::bytes(status, "text/plain; charset=utf-8", said.into());
+    response.headers.extend(safe_headers());
+    response
 }
 
 #[cfg(test)]
@@ -352,6 +394,33 @@ mod tests {
             .unwrap_or_default()
     }
 
+    /// The cookie `answer` set, as the browser sends it back.
+    fn cookie_of(answer: &ureq::http::Response<ureq::Body>) -> String {
+        let set = header(answer, "set-cookie");
+        assert!(
+            set.contains("HttpOnly") && set.contains("SameSite=Strict"),
+            "{set}"
+        );
+        set.split(';').next().unwrap().to_owned()
+    }
+
+    /// A claim ticket of `accounts`, for the server with `certificate`, proving its adoption
+    /// code as a device typing it does.
+    fn adoption_ticket(accounts: &Accounts, certificate: &[u8]) -> String {
+        let (code, _) = accounts.adoption_code().unwrap();
+        let digest = ring::digest::digest(&ring::digest::SHA256, certificate);
+        let key = freya_protocol::connection_key(&code, digest.as_ref());
+        let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &key);
+        let nonce = [3; 32];
+        let proof = ring::hmac::sign(
+            &key,
+            &freya_protocol::claim_message(&nonce, digest.as_ref()),
+        );
+        let (ticket, claim) = accounts.claim(&nonce, proof.as_ref(), certificate).unwrap();
+        assert_eq!(claim, freya_protocol::Claim::Adopt);
+        ticket
+    }
+
     #[test]
     fn logs_in_and_changes_the_password_in_the_browser() {
         let dir = std::env::temp_dir().join(format!("freya-page-proxy-{}", std::process::id()));
@@ -363,6 +432,7 @@ mod tests {
         accounts
             .add_user("Ada", freya_protocol::Role::Admin, "battery staple")
             .unwrap();
+        let certificate = b"the server's certificate".to_vec();
         let served = Served {
             library: Arc::new(freya_server::LocalLibrary::new(
                 Library::open_in_memory().unwrap(),
@@ -370,7 +440,7 @@ mod tests {
             )),
             server: None,
             accounts: Some(Arc::clone(&accounts)),
-            certificate: None,
+            certificate: Some(certificate.clone()),
             callback_port: here.rsplit_once(':').unwrap().1.parse().unwrap(),
             updates: None,
         };
@@ -419,13 +489,9 @@ mod tests {
         assert_eq!(other.status(), 403);
         let started = browser.get(&page).call().unwrap();
         assert_eq!(started.status(), 303);
-        let cookie = header(&started, "set-cookie")
-            .split(';')
-            .next()
-            .unwrap()
-            .to_owned();
-        assert!(cookie.starts_with("freya-password="));
-        assert!(header(&started, "set-cookie").contains("HttpOnly"));
+        assert_eq!(header(&started, "location"), "/web/password");
+        let cookie = cookie_of(&started);
+        assert!(cookie.starts_with("freya-pages="));
         assert_eq!(browser.get(&page).call().unwrap().status(), 403, "once");
         let shown = browser
             .get(&format!("{origin}/web/password"))
@@ -465,32 +531,69 @@ mod tests {
             .unwrap();
         assert_eq!(changed.status(), 200);
         assert!(matches!(wait(), Heard::PasswordChanged));
+        // Done with: the cookie opens nothing more.
+        let again = browser
+            .get(&format!("{origin}/web/password"))
+            .header("Cookie", cookie.as_str())
+            .call()
+            .unwrap();
+        assert_eq!(again.status(), 403);
 
         // Logging in: the page sends the browser back with a code, which Freya trades for a
-        // token before it says so.
+        // token before it says so. Only the browser Freya opened sees the page or sends it.
         let login = Login::new(&proxy.callback());
         let page = login.page();
-        proxy.claim(Http::new(&address), login, None);
-        let shown = browser.get(&format!("{origin}{page}")).call().unwrap();
+        let start = proxy.claim(Http::new(&address), login, None);
+        assert!(
+            !start.contains("code_challenge"),
+            "the start is only a start"
+        );
+        let unopened = browser.get(&format!("{origin}{page}")).call().unwrap();
+        assert_eq!(unopened.status(), 403, "not before the start");
+        let started = browser.get(&start).call().unwrap();
+        assert_eq!(started.status(), 303);
+        assert_eq!(header(&started, "location"), page);
+        let cookie = cookie_of(&started);
+        let shown = browser
+            .get(&format!("{origin}{page}"))
+            .header("Cookie", cookie.as_str())
+            .call()
+            .unwrap();
         assert_eq!(shown.status(), 200);
         assert_eq!(header(&shown, "x-frame-options"), "DENY");
         let opened = page.split_once('?').unwrap().1;
+        let typed = format!("{opened}&username=Ada&password=correct+horse");
+        let without = browser
+            .post(&format!("{origin}/web/login"))
+            .header("Content-Type", FORM)
+            .header("Origin", origin.as_str())
+            .send(typed.clone())
+            .unwrap();
+        assert_eq!(without.status(), 403, "not without the cookie");
         let sent = browser
             .post(&format!("{origin}/web/login"))
             .header("Content-Type", FORM)
             .header("Origin", origin.as_str())
-            .send(format!("{opened}&username=Ada&password=correct+horse"))
+            .header("Cookie", cookie.as_str())
+            .send(typed)
             .unwrap();
         assert_eq!(sent.status(), 303);
         let back = header(&sent, "location").to_owned();
         assert!(back.starts_with(&format!("{origin}/callback?code=")));
-        // Another page sending the browser back with another state ends nothing.
+        // Another page sending the browser back with another state ends nothing, nor one
+        // without the cookie.
         let forged = browser
             .get(&format!("{origin}/callback?code=x&state=forged"))
+            .header("Cookie", cookie.as_str())
             .call()
             .unwrap();
         assert_eq!(forged.status(), 400);
-        let done = browser.get(&back).call().unwrap();
+        assert_eq!(browser.get(&back).call().unwrap().status(), 403);
+        let done = browser
+            .get(&back)
+            .header("Cookie", cookie.as_str())
+            .call()
+            .unwrap();
         assert_eq!(done.status(), 303);
         assert_eq!(header(&done, "location"), "/web/logged-in");
         let Heard::LoggedIn(Ok((_, tokens))) = wait() else {
@@ -500,11 +603,82 @@ mod tests {
         assert_eq!(pc.account().unwrap().unwrap().devices.len(), 2);
         let logged_in = browser
             .get(&format!("{origin}/web/logged-in"))
+            .header("Cookie", cookie.as_str())
             .call()
             .unwrap();
         assert_eq!(logged_in.status(), 200);
         // Once.
-        assert_eq!(browser.get(&back).call().unwrap().status(), 404);
+        let once = browser
+            .get(&back)
+            .header("Cookie", cookie.as_str())
+            .call()
+            .unwrap();
+        assert_eq!(once.status(), 404);
+
+        // Adopting the server, with a claim's ticket: added to the page only for the browser
+        // Freya opened, so another program on this computer cannot learn it and adopt the
+        // server itself.
+        assert!(!accounts.adopted());
+        let ticket = adoption_ticket(&accounts, &certificate);
+        let login = Login::new(&proxy.callback());
+        let page = login.join_page();
+        let start = proxy.claim(Http::new(&address), login, Some(ticket.clone()));
+        let unopened = browser.get(&format!("{origin}{page}")).call().unwrap();
+        assert_eq!(unopened.status(), 403);
+        let old = browser
+            .get(&format!("{origin}{page}"))
+            .header("Cookie", cookie.as_str())
+            .call()
+            .unwrap();
+        assert_eq!(old.status(), 403, "the login's cookie is not the claim's");
+        let started = browser.get(&start).call().unwrap();
+        let cookie = cookie_of(&started);
+        let mut shown = browser
+            .get(&format!("{origin}{page}"))
+            .header("Cookie", cookie.as_str())
+            .call()
+            .unwrap();
+        assert_eq!(shown.status(), 200);
+        let body = shown.body_mut().read_to_string().unwrap();
+        assert!(body.contains(&ticket), "the page carries the ticket");
+        assert!(body.contains("Adopt"), "{body}");
+        let opened = page.split_once('?').unwrap().1;
+        let typed = format!(
+            "{opened}&ticket={ticket}&username=Ada+Owner&password=correct+horse&again=correct+horse"
+        );
+        let sent = browser
+            .post(&format!("{origin}/web/join"))
+            .header("Content-Type", FORM)
+            .header("Origin", origin.as_str())
+            .header("Cookie", cookie.as_str())
+            .send(typed)
+            .unwrap();
+        assert_eq!(sent.status(), 303);
+        let back = header(&sent, "location").to_owned();
+        let done = browser
+            .get(&back)
+            .header("Cookie", cookie.as_str())
+            .call()
+            .unwrap();
+        assert_eq!(done.status(), 303);
+        let Heard::LoggedIn(Ok((_, tokens))) = wait() else {
+            panic!("not adopted");
+        };
+        assert!(accounts.adopted());
+        let owner = Http::new(&address).with_token(Some(tokens.access));
+        assert!(owner.account().unwrap().unwrap().owner);
+
+        // Cancelled, the pages are given nothing more.
+        let login = Login::new(&proxy.callback());
+        let start = proxy.claim(Http::new(&address), login, None);
+        let cookie = cookie_of(&browser.get(&start).call().unwrap());
+        proxy.cancel_login();
+        let cancelled = browser
+            .get(&format!("{origin}/web/login"))
+            .header("Cookie", cookie.as_str())
+            .call()
+            .unwrap();
+        assert_eq!(cancelled.status(), 403);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

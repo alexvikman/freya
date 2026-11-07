@@ -86,6 +86,10 @@ fn pictures_go_both_ways_and_only_the_librarys_music_is_read() {
         .unwrap();
     let kept = remote.put_picture(&png).unwrap();
     assert_eq!(remote.picture(&kept).unwrap(), Some(png.clone()));
+    // Only a picture is kept as one: bytes that are not one are refused, however they are
+    // named.
+    let refused = remote.put_picture(b"not a picture at all").unwrap_err();
+    assert!(refused.0.contains("not a picture"), "{refused}");
     let smaller = remote.take_picture(&png, 100).unwrap();
     let small = image::load_from_memory(&local.picture(&smaller).unwrap().unwrap()).unwrap();
     assert_eq!((small.width(), small.height()), (100, 67));

@@ -1008,13 +1008,23 @@ fn remove(db: &Connection, source: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The most words of a search that count: as many as anyone types, and not so many that a
+/// search sent by a program takes the library's time.
+const MOST_SEARCH_WORDS: usize = 16;
+/// The most of a search's word that counts.
+const LONGEST_SEARCH_WORD: usize = 64;
+
 /// Turns typed text into an FTS5 query: every word must start a word in the track. Each word
 /// is quoted, so characters like `"`, `*` or `-` are searched for rather than taken as query
 /// syntax. `None` when there is nothing to search for.
 fn search_pattern(text: &str) -> Option<String> {
     let terms: Vec<String> = text
         .split_whitespace()
-        .map(|word| format!("\"{}\"*", word.replace('"', "\"\"")))
+        .take(MOST_SEARCH_WORDS)
+        .map(|word| {
+            let word: String = word.chars().take(LONGEST_SEARCH_WORD).collect();
+            format!("\"{}\"*", word.replace('"', "\"\""))
+        })
         .collect();
     (!terms.is_empty()).then(|| terms.join(" "))
 }

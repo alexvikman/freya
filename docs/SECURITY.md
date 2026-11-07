@@ -46,8 +46,11 @@ files, and with them Freya's.
   can the server be logged in to. A server the computer used before is known by its
   certificate at any address.
 - **Discovery** answers only private, link-local and loopback addresses, each at most twice a
-  second, with a short answer, so the server cannot be used to flood another computer. A
-  server found that gives another certificate than it named is refused.
+  second, with a short answer, so the server cannot be used to flood another computer; a few
+  hundred answers a second in all, and a few thousand addresses remembered, so questions sent
+  in the names of a whole network at once neither fill its memory nor keep it answering. A
+  client takes at most 32 servers found, each name at most 64 characters, and a server found
+  that gives another certificate than it named is refused.
 
 ## Owning the server, and its users
 
@@ -93,6 +96,16 @@ files, and with them Freya's.
   sends the browser back to `http://127.0.0.1:47477/callback`, the only place a code is sent,
   with a code that lasts two minutes and is taken once; only the client that sent the challenge
   trades it, with the secret it was made from, for tokens.
+- **The pages are the browser's that Freya opened**: each, the login's, the one adopting or
+  joining the server, and the password's, is opened with a start that works once, through a
+  file only the user can read, so the start is in no command line; the browser that comes
+  with it is given an HttpOnly, SameSite=Strict cookie, which alone opens the pages after,
+  sends their forms and brings the login's code back. The ticket that lets the page adopt or
+  join the server is added by the proxy for that browser only, so another program on this
+  computer, of another user, who can reach `127.0.0.1`, learns neither the ticket nor the
+  page, and cannot adopt the server in the user's place; nor can a page elsewhere in the
+  browser open the login through the proxy. Starts, cookies and the login's state are
+  compared in constant time.
 - **Passwords**: PBKDF2-HMAC-SHA256, 600,000 rounds, salted. A wrong one holds the answer up a
   second. Tries are counted before a password is checked: per user from a network, per network
   (IPv6 by its /64, link-local addresses one by one), and per user from anywhere (20). Five are
@@ -102,15 +115,14 @@ files, and with them Freya's.
   counts by its first 128 characters, and whether it exists does not show: a made-up one is
   counted, waited for and checked against a hash of nothing, as long. The table of tries keeps
   running waits, and with no room takes no new try, but a user's at home.
-- **The password** is changed on the server's page, opened with a start that works once, through
-  a file only the user can read, so the start is in no command line; the browser that came
-  with it is given an HttpOnly, SameSite=Strict cookie, which alone opens the page after. A
+- **The password** is changed on the server's page, opened as the pages above are. A
   password once set is asked for to change it; changing it logs the other devices out unless
   the user unticks it. One forgotten is forgotten on the server's computer with the server
   stopped, `freya-server --forget-password`, which logs out the devices that logged in with it.
-  The login page is opened through such a file too, its state in no command line.
 - **The pages** run no script, cannot be framed, and take a form only from their own origin;
-  the proxy sets these itself, whatever a server sends.
+  the proxy sets these itself, whatever a server sends. The API's answers are never kept by
+  anything between (`Cache-Control: no-store`), and every answer is taken as the type it says
+  (`X-Content-Type-Options: nosniff`).
 
 ## Tokens
 
@@ -123,7 +135,10 @@ files, and with them Freya's.
 - **On the client**: refresh tokens are kept in Windows' Credential Manager and Linux's Secret
   Service, else in a file only the user reads (0600); on macOS in that file until Freya is
   signed with a Developer ID, as an ad hoc signature changes with each version and the
-  Keychain would ask for the user's password after every update. Access tokens live in memory.
+  Keychain would ask for the user's password after every update. Each is kept under the
+  server's certificate, not its address: it goes only to the server that gave it, which is
+  the only one that completes TLS with that certificate, at whatever address it has now, and
+  never to another at the same address. Access tokens live in memory.
   Renewals are one at a time, ahead of the end by the clock, and again after a 401. A token's
   lifetime is taken as a day at most, whatever a server says. A token kept in the file when the
   keychain could not take it removes the keychain's old one.
@@ -146,7 +161,8 @@ Nobody can wear it out before logging in:
 
 - at most 128 connections of strangers, 16 from one address (an IPv6 one by its /64), on each
   of its two listeners: a connection that sent a request with a valid token is a known
-  device's, and strangers' do not crowd it out; 512 in all;
+  device's, and strangers' do not crowd it out; a known device's address holds at most 64, so
+  one device that opens more does not take every connection from the others; 512 in all;
 - the TLS handshake and a request's head within 10 seconds, its body at 32 KB a second at
   least, an answer taken within 30 seconds and a second more for each 32 KB, each in all,
   inside TLS too, and 15 seconds' wait for the next request, two minutes on a connection a
@@ -160,6 +176,13 @@ Nobody can wear it out before logging in:
 - calls asked at once (`/calls`) only those that read the library, at most 256 and 32 MB
   of answers, each allowed to a listener or not on its own, as if asked alone; small
   pictures at most 64 at once, in one size only, made from pictures already kept;
+- a picture an admin keeps is kept only if its head says it is a picture Freya shows, within
+  the bounds pictures are decoded in, so nothing else is given to every device as one;
+- proofs of a connection code, and tries at claiming the server with one, a few a minute
+  from one network (an IPv6 one by its /64);
+- a search of the library reads at most 16 words of 64 characters; at most six pictures are
+  decoded at once, whoever asks, each within the bounds below, so pictures asked for together
+  cannot take the memory;
 - events wait for a listener in a queue of 1,024, past which it is let go;
 - stopping the server, or turning the network off, ends every connection.
 
@@ -173,8 +196,10 @@ Nobody can wear it out before logging in:
 - A scan follows no link out of the folders it walks, so one put in a shared music folder does
   not bring the rest of the computer into the library.
 - The server's folder, its own apart from Freya's (named after Freya Server among the user's
-  application data), holds `accounts.json`, `adoption-code` while it is not adopted,
-  `tls-key.pk8`, `tls-certificate.der` and `server.log`, all 0600, written as new files and renamed into place.
+  application data), is made the user's alone (0700) each time the server starts, whatever
+  each file in it is made with, and holds `accounts.json`, `adoption-code` while it is not
+  adopted, `tls-key.pk8`, `tls-certificate.der`, `settings.toml` (the user's keys are in it)
+  and `server.log`, all 0600, written as new files and renamed into place.
   Started at login, the server makes files for the user alone (launchd's `Umask`, systemd's
   `UMask=0077`); on Linux its unit gains no privileges, and seccomp lets it make only a
   service's system calls; it retries every ten seconds, never giving up. The server registers
@@ -187,6 +212,10 @@ Nobody can wear it out before logging in:
   made anew, which would lose the users or break every device's pin.
 - No secret is logged; names lose control characters before they are.
   An admin reads the server's log in Freya's Activity page; listeners cannot.
+- The server runs no program found on the path: the computer's name and the user's id are
+  asked of the system itself, and `launchctl` and `systemctl`, which register it to start at
+  login, are run from where the system keeps them. Freya asks the system for this computer's
+  name the same way.
 - A backup holds everything the server keeps, the accounts' password hashes and the server's
   private key too: only the server's owner, who adopted it, makes or restores one (not every
   admin: restoring one replaces the users, and an admin could make themself the owner by it),
@@ -225,9 +254,10 @@ Nobody can wear it out before logging in:
 - A stream a server elsewhere names is asked only of addresses beyond this computer and its
   network: each name is resolved and every near address dropped, a redirect's too, and no
   proxy is used, which would resolve it itself.
-- What a server sends is bounded: 1 MB for small answers and each event line, 32 MB for a
-  picture, 512 MB for the library's calls, read straight into their types; every picture is
-  decoded within 12,000 pixels a side and 256 MB.
+- What a server sends is bounded: 1 MB for small answers, each event line and each small
+  picture, 32 MB for a picture, 512 MB for the library's calls, read straight into their
+  types; every picture is decoded within 12,000 pixels a side and 256 MB. What a server says
+  went wrong is shown without control characters, and at most 500 characters of it.
 - A login's tokens go only with the server that gave them, never to one chosen meanwhile.
 - What answers on this computer's address without the user's certificate is given nothing.
 - The picture cache keeps and gives only bytes whose SHA-256 is their name. The covers a

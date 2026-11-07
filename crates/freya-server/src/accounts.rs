@@ -721,9 +721,13 @@ impl Accounts {
             let at = grants.iter().position(|g| g.code == hash)?;
             grants.swap_remove(at)
         };
+        // Compared in constant time, as every secret is, though a challenge is no secret.
         let fits = grant.until > Instant::now()
             && grant.redirect == redirect
-            && challenge(verifier) == grant.challenge;
+            && freya_protocol::same_secret(
+                challenge(verifier).as_bytes(),
+                grant.challenge.as_bytes(),
+            );
         if fits {
             self.add_device(grant.user, device, Joined::LoggedIn, Some(grant.changed))
         } else {
@@ -1212,9 +1216,10 @@ impl Accounts {
         let Some(from) = from else {
             return true;
         };
-        // Counted apart from logins, by address, so asking for proofs fills nothing logins need,
-        // nor holds up another on the same network.
-        let key = [(format!("proof:{from}"), PROOFS_FREE)];
+        // Counted apart from logins, by address (an IPv6 one by its /64, which one computer
+        // may change at will within), so asking for proofs fills nothing logins need, nor holds
+        // up another on another network.
+        let key = [(format!("proof:{}", network(from)), PROOFS_FREE)];
         let mut tries = self.proofs.lock().unwrap_or_else(|e| e.into_inner());
         if tries.wait(&key).is_some() {
             return false;

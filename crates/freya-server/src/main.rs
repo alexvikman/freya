@@ -86,6 +86,18 @@ fn main() {
         eprintln!("freya-server: could not make {}: {e}", data.display());
         std::process::exit(1);
     }
+    // The user's alone, whatever each file in it is made with: the library says what music
+    // they have, the settings hold their keys, and the accounts hold every user's.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) = std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)) {
+            eprintln!(
+                "freya-server: could not keep {} to its user: {e}",
+                data.display()
+            );
+        }
+    }
     if forget_password {
         std::process::exit(forget_owner_password(&address, &data));
     }

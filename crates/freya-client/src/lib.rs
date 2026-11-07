@@ -178,8 +178,17 @@ fn make_agent(
     )
 }
 
-/// What a pinned server's token is kept by in a [`TokenStore`].
+/// What a pinned server's token is kept by in a [`TokenStore`]: its certificate, so the token
+/// goes only to the server that gave it, at whatever address that server has now, and never to
+/// another at the same address.
 pub fn token_key(pin: &Pin) -> String {
+    let digest = ring::digest::digest(&ring::digest::SHA256, &pin.certificate);
+    format!("freya-server:{}", hex(digest.as_ref()))
+}
+
+/// What a token was kept by before: the server's address. A token kept so is moved to
+/// [`token_key`] when the server is connected to.
+pub fn token_key_by_address(pin: &Pin) -> String {
     format!("https://{}", pin.address)
 }
 
@@ -188,7 +197,15 @@ pub fn token_key(pin: &Pin) -> String {
 /// folder of the client's.
 pub fn connect_pinned(pin: Pin, store: TokenStore, cache: Option<PathBuf>) -> Arc<Remote<Http>> {
     let key = token_key(&pin);
-    let refresh = store.get(&key).unwrap_or_default();
+    let refresh = store.get(&key).or_else(|| {
+        // Kept by the address, as before: kept by the certificate from now on.
+        let before = token_key_by_address(&pin);
+        let refresh = store.get(&before)?;
+        store.set(&key, &refresh);
+        store.remove(&before);
+        Some(refresh)
+    });
+    let refresh = refresh.unwrap_or_default();
     let server = hex(ring::digest::digest(&ring::digest::SHA256, &pin.certificate).as_ref());
     let mut http = Http::pinned(pin).with_session(refresh, None, Some((store, key)));
     if let Some(cache) = cache {
@@ -321,7 +338,13 @@ pub fn find_servers(wait: Duration) -> Vec<Found> {
     })
 }
 
-/// The servers that answer `to` within `wait`, each once.
+/// The most servers found at once: a home has a few, and a computer answering as many cannot
+/// fill the memory.
+const MOST_FOUND: usize = 32;
+/// The most of a found server's name taken.
+const LONGEST_FOUND_NAME: usize = 64;
+
+/// The servers that answer `to` within `wait`, each once; at most [`MOST_FOUND`].
 fn ask_for_servers(to: std::net::SocketAddr, wait: Duration) -> std::io::Result<Vec<Found>> {
     let socket = std::net::UdpSocket::bind(("0.0.0.0", 0))?;
     socket.set_broadcast(true)?;
@@ -338,13 +361,25 @@ fn ask_for_servers(to: std::net::SocketAddr, wait: Duration) -> std::io::Result<
         let Ok((read, from)) = socket.recv_from(&mut answer) else {
             return Ok(found);
         };
-        let Ok(server) = serde_json::from_slice::<freya_protocol::ServerFound>(&answer[..read])
+        let Ok(mut server) = serde_json::from_slice::<freya_protocol::ServerFound>(&answer[..read])
         else {
             continue;
         };
+        if server.port == 0 {
+            continue;
+        }
+        server.name = server
+            .name
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(LONGEST_FOUND_NAME)
+            .collect();
         let address = std::net::SocketAddr::new(from.ip(), server.port);
         if !found.iter().any(|f| f.address == address) {
             found.push(Found { address, server });
+            if found.len() >= MOST_FOUND {
+                return Ok(found);
+            }
         }
     }
 }
@@ -1141,11 +1176,23 @@ fn next_answer(bytes: &[u8]) -> Option<(u16, &str, &[u8], &[u8])> {
     ))
 }
 
-/// What the server said went wrong in `body`, answered with `status`.
+/// The most of what a server says went wrong that is shown.
+const LONGEST_ERROR: usize = 500;
+
+/// What the server said went wrong in `body`, answered with `status`: as it said, but for
+/// control characters, which would forge lines in the log, and beyond a length, as a server
+/// may be hostile.
 fn error(status: u16, body: &[u8]) -> ApiError {
     let said = serde_json::from_slice::<serde_json::Value>(body)
         .ok()
-        .and_then(|v| v.get("error")?.as_str().map(str::to_owned));
+        .and_then(|v| v.get("error")?.as_str().map(str::to_owned))
+        .map(|said| {
+            said.chars()
+                .filter(|c| !c.is_control())
+                .take(LONGEST_ERROR)
+                .collect::<String>()
+        })
+        .filter(|said| !said.trim().is_empty());
     ApiError(said.unwrap_or_else(|| format!("the server answered {status}")))
 }
 
@@ -1270,7 +1317,8 @@ impl Transport for Http {
                 .header("Content-Type", "application/json")
                 .send(&body[..])
         })?;
-        let limit = MAX_PICTURE * freya_protocol::MOST_SMALL_AT_ONCE as u64;
+        // Small pictures are small: a server sending more is not read further.
+        let limit = MAX_SMALL * freya_protocol::MOST_SMALL_AT_ONCE as u64;
         let answers = match read_at_most(answer, limit)? {
             (200, bytes) => {
                 let mut rest = &bytes[..];
@@ -1508,8 +1556,13 @@ pub(crate) fn write_private(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
     }
     let partial = file.with_extension("partial");
+    // A new file, never one already there, nor through a link put there in its place.
+    match std::fs::remove_file(&partial) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;

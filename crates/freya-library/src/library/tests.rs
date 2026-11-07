@@ -172,6 +172,9 @@ fn a_cue_sheet_lists_its_file_as_tracks() {
     // Found by what the sheet says, not by the file's name.
     assert_eq!(titles(&library.search("guest", 10).unwrap()), ["Two"]);
     assert!(library.search("album", 10).unwrap().is_empty());
+    // A search of many words, or long ones, is read within bounds, and answered.
+    let many = "guest ".repeat(1000) + &"x".repeat(10_000);
+    assert_eq!(titles(&library.search(&many, 10).unwrap()), ["Two"]);
 
     let again = scan_now(&mut library, &folders);
     assert_eq!((again.added, again.updated, again.unchanged), (0, 0, 2));
