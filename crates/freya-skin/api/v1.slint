@@ -1597,6 +1597,11 @@ export component AboutFreya inherits Rectangle {
 ///
 ///     Space play/pause, ←/→ seek 5 s, ↑/↓ volume, M mute, N/P next/previous, S stop,
 ///     O open files, F1 about, F2 skins.
+///
+/// A key goes to what has the keyboard, then to what holds that: give it back to the
+/// shortcuts (`focus()`) when what had it is hidden, or the next key goes nowhere. A
+/// FocusScope around them, for keys of the skin's own, should not take the keyboard on a
+/// click (`focus-on-click: false`): it would take it from them at every other click.
 export component Shortcuts inherits FocusScope {
     key-pressed(event) => {
         if (event.modifiers.control || event.modifiers.meta || event.modifiers.alt) {

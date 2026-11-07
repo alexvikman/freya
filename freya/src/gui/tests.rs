@@ -1189,3 +1189,73 @@ fn scrolling_by_the_middle_button_scrolls_what_is_under_it_down() {
     };
     assert!(scrolled > 0.0, "scrolled {scrolled}");
 }
+
+#[test]
+fn shortcuts_hear_the_keyboard_whatever_was_clicked_or_hidden() {
+    use slint::platform::{PointerEventButton, WindowEvent as E};
+    let app = silent_app();
+    let ui = current_ui(&app);
+    ui.set_global_property("Server", "chosen", Value::Bool(true))
+        .unwrap();
+    ui.window().set_size(slint::LogicalSize::new(1100.0, 720.0));
+    let many: Vec<Entry> = (0..30).map(|_| Entry::new(fixture("sine.flac"))).collect();
+    app.borrow_mut().edit(|p| {
+        p.insert(None, many);
+    });
+    app.borrow_mut().refresh();
+    let press = |key: &str| {
+        ui.window()
+            .dispatch_event(E::KeyPressed { text: key.into() });
+        ui.window()
+            .dispatch_event(E::KeyReleased { text: key.into() });
+        app.borrow_mut().refresh();
+    };
+    // Whether M, a shortcut as Space is, mutes; and unmutes again.
+    let heard = || {
+        let before = app.borrow().player.volume();
+        press("m");
+        let heard = app.borrow().player.volume() != before;
+        if heard {
+            press("m");
+        }
+        heard
+    };
+    let click = |x: f32, y: f32| {
+        let at = slint::LogicalPosition::new(x, y);
+        let button = PointerEventButton::Left;
+        ui.window().dispatch_event(E::PointerMoved { position: at });
+        ui.window().dispatch_event(E::PointerPressed {
+            position: at,
+            button,
+        });
+        ui.window().dispatch_event(E::PointerReleased {
+            position: at,
+            button,
+        });
+        app.borrow_mut().refresh();
+    };
+    let show = |view: &str| {
+        ui.set_global_property("App", "view", text(view)).unwrap();
+        app.borrow_mut().refresh();
+    };
+    assert!(heard());
+    // A row of Up Next takes the keyboard, and gives it back when Up Next is left.
+    click(600.0, 300.0);
+    assert!(heard(), "a row");
+    show("settings");
+    assert!(heard(), "Up Next left");
+    // Each click on an empty place, not every other one.
+    for _ in 0..3 {
+        click(100.0, 600.0);
+        assert!(heard(), "the sidebar's empty place");
+        click(700.0, 600.0);
+        assert!(heard(), "Settings' empty place");
+    }
+    // Albums, from the sidebar, and the library under it.
+    click(100.0, 112.0);
+    assert!(heard(), "Albums");
+    click(600.0, 400.0);
+    assert!(heard(), "the library");
+    show("settings");
+    assert!(heard(), "the library left");
+}

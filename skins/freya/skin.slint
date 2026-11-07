@@ -11136,6 +11136,17 @@ export component FreyaSkin inherits Window {
     property <string> before-stage;
     property <bool> was-full-screen;
 
+    // What had the keyboard may no longer be shown: the list of the view left, or a field in
+    // it. A key pressed then would go nowhere, so it goes back to the shortcuts; unless it is
+    // in the search, which opens the library as it is typed, or in the view now shown.
+    changed view => {
+        if (!toolbar.search-typing
+            && !(root.view == "library" && library.has-focus)
+            && !(root.view == "queue" && queue-list.has-focus)) {
+            shortcuts.focus();
+        }
+    }
+
     // Leaving full screen from the system, e.g. with the green button, leaves the stage too.
     changed full-screen => {
         if (!root.full-screen && root.stage) {
@@ -11511,8 +11522,12 @@ export component FreyaSkin inherits Window {
         }
     }
 
-    // F fills the screen with the visualizer, and Esc leaves it again.
+    // F fills the screen with the visualizer, and Esc leaves it again. It hears the keys the
+    // shortcuts inside it leave, and never takes the keyboard itself: a click it heard would
+    // take it from them, so that every other click on an empty place silenced Space.
     stage-keys := FocusScope {
+        focus-on-click: false;
+        focus-on-tab-navigation: false;
         key-pressed(event) => {
             // Cmd+, (Ctrl+, elsewhere) opens Settings, as in most apps.
             if (event.text == "," && (event.modifiers.meta || event.modifiers.control) && !event.modifiers.alt) {
@@ -11629,7 +11644,7 @@ export component FreyaSkin inherits Window {
                             border-radius: root.stage ? 0 : 8px;
                             clip: true;
 
-                            TrackList {
+                            queue-list := TrackList {
                                 width: 100%;
                                 height: 100%;
                                 visible: root.view == "queue";
