@@ -39,7 +39,23 @@ fn cache() -> MutexGuard<'static, Cache> {
 /// folder or no room. Files kept beyond a new limit go at once.
 pub fn set_cache(dir: Option<PathBuf>, limit: u64) {
     let config = dir.filter(|_| limit > 0).map(|dir| Config { dir, limit });
-    cache().config = config;
+    let first = {
+        let mut cache = cache();
+        let first = cache.config.is_none();
+        cache.config = config.clone();
+        first
+    };
+    // Files played from that were left behind, as by a crash on Windows, where they cannot
+    // go while open.
+    if let (true, Some(config)) = (first, config)
+        && let Ok(read) = std::fs::read_dir(&config.dir)
+    {
+        for item in read.flatten() {
+            if item.path().extension().is_some_and(|e| e == "playing") {
+                let _ = std::fs::remove_file(item.path());
+            }
+        }
+    }
     trim();
 }
 
@@ -378,18 +394,42 @@ pub(crate) struct Passing {
 }
 
 impl Passing {
+    /// A new file, only this user's: in the cache's folder when there is one, else the
+    /// system's for temporary files; never one that was there already, which another could
+    /// have put there. On Unix it is unlinked at once and goes when closed.
     fn new() -> io::Result<Self> {
         static MADE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let made = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let path =
-            std::env::temp_dir().join(format!("freya-{}-{made}.playing", std::process::id()));
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&path)?;
-        Ok(Self { path, file })
+        let dir = cache()
+            .config
+            .as_ref()
+            .map(|config| config.dir.clone())
+            .filter(|dir| std::fs::create_dir_all(dir).is_ok())
+            .unwrap_or_else(std::env::temp_dir);
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let mut last = None;
+        for _ in 0..8 {
+            let made = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let nanos = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map_or(0, |since| since.subsec_nanos());
+            let path = dir.join(format!(
+                "freya-{}-{made}-{nanos:08x}.playing",
+                std::process::id()
+            ));
+            match options.open(&path) {
+                Ok(file) => {
+                    #[cfg(unix)]
+                    let _ = std::fs::remove_file(&path);
+                    return Ok(Self { path, file });
+                }
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => last = Some(e),
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last.unwrap_or_else(|| io::Error::other("no file to play from")))
     }
 }
 
