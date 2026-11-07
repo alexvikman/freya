@@ -54,6 +54,8 @@ struct Smaller {
     making: HashMap<String, Arc<Making>>,
     /// Those made now.
     at_once: usize,
+    /// Those being planned now, by the requests that asked for them: waiting too.
+    planning: usize,
     /// Those answered as they are: not much smaller, or failed to be made so. Keyed by the
     /// version of the file too, so a file changed is tried again.
     as_they_are: HashSet<String>,
@@ -166,17 +168,21 @@ pub fn answer(path: &Path, file: &File, version: &str, quality: Quality) -> Resu
             body: Body::Made(made),
         });
     }
-    if state.making.len() >= MOST_WAITING {
+    if state.making.len() + state.planning >= MOST_WAITING {
         return Err(Not::Busy);
     }
-    // Planned with the lock let go: a file whose length its format does not say is read
-    // through to count it.
+    // Planned with the lock let go, counted as waiting meanwhile: a file whose length its
+    // format does not say is read through to count it.
+    let mut state = state;
+    state.planning += 1;
     drop(state);
+    let planning = Planning;
     let extension = path.extension().and_then(|e| e.to_str()).map(str::to_owned);
     let planned = file
         .try_clone()
         .map_err(freya_transcode::Error::from)
         .and_then(|file| Plan::new(file, extension.as_deref(), quality));
+    drop(planning);
     let (mut state, _) = smaller();
     let plan = match planned {
         Ok(Some(plan)) => plan,
@@ -197,6 +203,10 @@ pub fn answer(path: &Path, file: &File, version: &str, quality: Quality) -> Resu
             tag,
             body: Body::Making(Arc::clone(making)),
         });
+    }
+    // Others may have come since this one was planned.
+    if state.making.len() >= MOST_WAITING {
+        return Err(Not::Busy);
     }
     let making = Arc::new(Making {
         length: plan.length(),
@@ -224,6 +234,16 @@ pub fn answer(path: &Path, file: &File, version: &str, quality: Quality) -> Resu
         tag,
         body: Body::Making(making),
     })
+}
+
+/// A file being planned, counted while it is, however planning ends.
+struct Planning;
+
+impl Drop for Planning {
+    fn drop(&mut self) {
+        let (mut state, _) = smaller();
+        state.planning = state.planning.saturating_sub(1);
+    }
 }
 
 /// Makes `plan`'s file, in its turn.
