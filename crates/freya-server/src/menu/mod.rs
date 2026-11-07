@@ -78,12 +78,45 @@ pub fn run(actions: Actions) -> Option<()> {
 
 /// Hands `what`, a page or a file, to the system to open.
 fn open(what: &std::ffi::OsStr) {
-    let opener = if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "explorer"
-    };
-    if let Err(e) = std::process::Command::new(opener).arg(what).spawn() {
+    #[cfg(windows)]
+    let opened = shell_open(what);
+    #[cfg(not(windows))]
+    let opened = std::process::Command::new("open")
+        .arg(what)
+        .spawn()
+        .map(drop);
+    if let Err(e) = opened {
         log::warn!("could not open {}: {e}", what.to_string_lossy());
+    }
+}
+
+/// Opens `what` as a click on it in Windows would, with ShellExecuteW: an address in the
+/// browser, a file with its program. Not through explorer.exe, which reads its argument for
+/// switches and commas of its own, and opened the Documents folder for an address with a query.
+#[cfg(windows)]
+#[allow(unsafe_code, reason = "asks Windows to open a page or a file")]
+fn shell_open(what: &std::ffi::OsStr) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    let wide: Vec<u16> = what.encode_wide().chain([0]).collect();
+    let verb: Vec<u16> = "open".encode_utf16().chain([0]).collect();
+    // SAFETY: valid wide strings that outlive the call; no window, folder or parameters.
+    let done = unsafe {
+        windows_sys::Win32::UI::Shell::ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            wide.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
+        )
+    };
+    // Above 32 when it worked, as ShellExecuteW says.
+    if done as usize > 32 {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "ShellExecuteW said {}",
+            done as usize
+        )))
     }
 }
