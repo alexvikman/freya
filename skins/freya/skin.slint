@@ -1497,13 +1497,22 @@ component TrackList inherits FocusScope {
     }
 }
 
-/// The search field in the toolbar; it searches the library.
+/// The search field in the toolbar. What is typed shows its best matches under it; Return
+/// opens a page of all of them, which stays as it is while another search is typed, until
+/// Return again. The field shows the search of the page shown.
 component SearchField inherits Rectangle {
     callback edited;
     callback accepted;
     forward-focus: input;
     /// Whether the keyboard is in it.
     out property <bool> typing: input.has-focus;
+    /// What is typed.
+    out property <string> text: input.text;
+    /// The search of the page shown, which the field shows when it changes: another search,
+    /// one gone back to, or none.
+    property <string> searched: Library.query;
+    changed searched => { input.text = Library.query; }
+    init => { input.text = Library.query; }
 
     height: 34px;
     border-radius: 8px;
@@ -1527,7 +1536,7 @@ component SearchField inherits Rectangle {
         Rectangle {
             horizontal-stretch: 1;
 
-            if Library.query == "": Text {
+            if input.text == "": Text {
                 width: 100%;
                 text: "Search the library";
                 color: Theme.text-secondary;
@@ -1536,7 +1545,6 @@ component SearchField inherits Rectangle {
             }
             input := TextInput {
                 width: 100%;
-                text <=> Library.query;
                 single-line: true;
                 color: Theme.text;
                 selection-background-color: Theme.selection;
@@ -1545,11 +1553,7 @@ component SearchField inherits Rectangle {
                 accessible-role: text-input;
                 accessible-label: "Search the library";
                 edited => {
-                    if (Library.search-shown) {
-                        Library.search(self.text);
-                    } else {
-                        Library.suggest(self.text);
-                    }
+                    Library.suggest(self.text);
                     root.edited();
                 }
                 accepted => {
@@ -1558,13 +1562,14 @@ component SearchField inherits Rectangle {
                 }
             }
         }
-        if Library.query != "": IconButton {
+        if input.text != "": IconButton {
             icon: Icons.close;
             stroked: true;
             size: 26px;
             label: "Clear search";
             clicked => {
-                Library.search("");
+                input.text = "";
+                Library.suggest("");
                 input.focus();
             }
         }
@@ -10776,6 +10781,7 @@ component Toolbar inherits HorizontalLayout {
     out property <length> search-bottom: search.absolute-position.y + search.height;
     out property <length> search-width: search.width;
     out property <bool> search-typing: search.typing;
+    out property <string> search-text: search.text;
     callback search-edited();
     callback search-accepted();
     /// After a playlist was made from Up Next ("playlist") or deleted ("queue").
@@ -11702,15 +11708,8 @@ export component FreyaSkin inherits Window {
                                 can-go-back: root.view == "library" && Library.can-go-back;
                                 toggle-sidebar => { root.sidebar-shown = !root.sidebar-shown; }
                                 back => { library.back(); }
-                                // On a search's page, it follows what is typed; elsewhere the
-                                // best matches show under the field.
-                                search-edited => {
-                                    if (Library.search-shown) {
-                                        root.open("library");
-                                    } else {
-                                        root.suggesting = true;
-                                    }
-                                }
+                                // The best matches show under the field, on a search's page too.
+                                search-edited => { root.suggesting = true; }
                                 // The keyboard goes to the results, so Space plays again
                                 // instead of typing into the search.
                                 search-accepted => {
@@ -11840,8 +11839,10 @@ export component FreyaSkin inherits Window {
     /// Whether the matches of what is typed show under the search field.
     property <bool> suggesting;
 
-    if root.suggesting && toolbar.search-typing && Library.query != "" && Library.suggestions.length > 0: SuggestionList {
+    if root.suggesting && toolbar.search-typing && toolbar.search-text != "" && Library.suggestions.length > 0: SuggestionList {
         width: 380px;
+        // As tall as its matches.
+        height: self.preferred-height;
         x: max(8px, toolbar.search-x + toolbar.search-width - self.width);
         y: toolbar.search-bottom + 6px;
         opened(i) => {
@@ -11850,7 +11851,7 @@ export component FreyaSkin inherits Window {
         }
         all => {
             root.suggesting = false;
-            Library.search(Library.query);
+            Library.search(toolbar.search-text);
             root.open("library");
             library.start-over();
             library.focus();

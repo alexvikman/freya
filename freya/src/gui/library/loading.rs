@@ -311,10 +311,7 @@ impl LibraryPanel {
         self.letter_rows.sync(self.letters());
         // Of something else opened, not the same search typed on: a page anew.
         let place = self.place();
-        let anew = self
-            .read_for
-            .as_ref()
-            .is_none_or(|before| *before != place && !before.continued_by(&place));
+        let anew = self.read_for.as_ref().is_none_or(|before| *before != place);
         if anew {
             self.opens += 1;
             self.reveal_row = -1;

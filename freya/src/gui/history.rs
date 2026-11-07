@@ -25,15 +25,6 @@ impl Place {
     fn same(&self, other: &Self) -> bool {
         self.view == other.view && self.library == other.library && self.playlist == other.playlist
     }
-
-    /// `next` goes on with the search this place is: typing a search is one place, not one
-    /// for each key.
-    fn continued_by(&self, next: &Self) -> bool {
-        match (&self.library, &next.library) {
-            (Some(a), Some(b)) => self.view == next.view && a.continued_by(b),
-            _ => false,
-        }
-    }
 }
 
 #[derive(Debug, Default)]
@@ -55,13 +46,6 @@ impl History {
         };
         if current.same(&place) {
             return false;
-        }
-        if current.continued_by(&place) {
-            *current = Place {
-                scroll: 0.0,
-                ..place
-            };
-            return true;
         }
         current.scroll = scroll;
         self.places.truncate(self.at + 1);

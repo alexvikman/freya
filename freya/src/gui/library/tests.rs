@@ -923,26 +923,26 @@ fn albums_are_as_long_as_their_tracks_in_words() {
 }
 
 #[test]
-fn typing_a_search_is_one_place() {
+fn each_search_is_a_place_of_its_own() {
     let mut panel = LibraryPanel::new(None, None);
     let browsing = panel.place();
     panel.search("sho");
     let searching = panel.place();
     panel.search("shores");
-    let typed_on = panel.place();
-    assert!(
-        !browsing.continued_by(&searching),
-        "a search starts a place"
+    let searched_again = panel.place();
+    assert_ne!(browsing, searching, "a search is another place");
+    assert_ne!(
+        searching, searched_again,
+        "and the next search another again"
     );
-    assert!(searching.continued_by(&typed_on));
+    // Return again on the same search leaves it where it is.
+    panel.search("shores ");
+    assert_eq!(panel.place(), searched_again);
     panel.search("");
-    assert!(
-        !typed_on.continued_by(&panel.place()),
-        "ending it is another"
-    );
-    // Back where the search was.
-    panel.go_to(&typed_on);
-    assert_eq!(panel.place(), typed_on);
+    assert_eq!(panel.place(), browsing, "ending it goes back to browsing");
+    // Back to each search.
+    panel.go_to(&searching);
+    assert_eq!(panel.place(), searching);
 }
 
 #[test]

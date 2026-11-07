@@ -127,13 +127,6 @@ pub struct LibraryPlace {
     query: String,
 }
 
-impl LibraryPlace {
-    /// Whether `next` is this search typed on: the same lists, searching still.
-    pub fn continued_by(&self, next: &Self) -> bool {
-        !self.query.trim().is_empty() && !next.query.trim().is_empty() && self.opened == next.opened
-    }
-}
-
 /// Which of an artist's albums show, by the kind of release they are.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AlbumFilter {
@@ -327,11 +320,6 @@ pub struct LibraryPanel {
     reveal_playing: Option<bool>,
     /// A track to mark once its album's rows are read: a song found by search, opened there.
     reveal_track: Option<(PathBuf, Duration)>,
-    /// Text typed while searching or suggesting, waiting for a pause in the typing, and when
-    /// each was last done: a key pressed after a pause is answered at once, those typed fast
-    /// after it once the typing pauses.
-    typed: Option<String>,
-    searched: Instant,
     typed_suggest: Option<String>,
     suggested: Instant,
     items: Vec<Item>,
@@ -549,8 +537,6 @@ impl LibraryPanel {
             asking_playlist: None,
             reveal_playing: None,
             reveal_track: None,
-            typed: None,
-            searched: Instant::now() - TYPING_PAUSE,
             typed_suggest: None,
             suggested: Instant::now() - TYPING_PAUSE,
             items: Vec::new(),

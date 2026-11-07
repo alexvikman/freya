@@ -3,29 +3,18 @@
 use super::*;
 
 impl LibraryPanel {
+    /// Shows the page of what `text` finds, asked for with Return: it stays as it is while
+    /// another search is typed, whose best matches are suggested.
     pub fn search(&mut self, text: &str) {
-        if text.trim() == self.query.trim() {
+        // The same again, but for spaces, leaves the page as it is.
+        if text.trim() != self.query.trim() {
             self.query = text.to_owned();
-            self.typed = None;
-            return;
+            self.reload();
         }
-        if self.searched.elapsed() < self.typing_pause() {
-            self.typed = Some(text.to_owned());
-            return;
-        }
-        self.typed = None;
-        self.searched = Instant::now();
-        self.query = text.to_owned();
-        self.reload();
     }
 
-    /// What was typed fast, searched and suggested for once the typing paused.
+    /// What was typed fast, suggested for once the typing paused.
     pub(super) fn take_typed(&mut self) {
-        if self.searched.elapsed() >= self.typing_pause()
-            && let Some(text) = self.typed.take()
-        {
-            self.search(&text);
-        }
         if self.suggested.elapsed() >= self.typing_pause()
             && let Some(text) = self.typed_suggest.take()
         {
