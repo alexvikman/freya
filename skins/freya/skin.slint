@@ -2229,15 +2229,15 @@ component ArtistPageHead inherits Rectangle {
                 background: @linear-gradient(180deg, root.page.color 0%, root.page.color.darker(15%) 100%);
             }
 
-            // Filling the width, cut a third of the way down rather than through the middle,
-            // where faces in such pictures mostly are.
+            // Filling the width, cut near its top rather than through the middle: in a wide
+            // window much of a picture is cut, and faces are mostly in its upper part.
             if root.page.banner.width > 0: Image {
                 property <float> aspect: root.page.banner.width / max(1, root.page.banner.height);
 
                 width: max(parent.width, parent.height * self.aspect);
                 height: self.width / self.aspect;
                 x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) * 0.3;
+                y: (parent.height - self.height) * 0.15;
                 source: root.page.banner;
                 image-rendering: smooth;
             }
@@ -5432,7 +5432,7 @@ component PlaylistPageHead inherits Rectangle {
                 width: max(parent.width, parent.height * self.aspect);
                 height: self.width / self.aspect;
                 x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) * 0.3;
+                y: (parent.height - self.height) * 0.15;
                 source: root.page.banner;
                 image-rendering: smooth;
             }

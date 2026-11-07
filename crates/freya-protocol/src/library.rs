@@ -264,13 +264,17 @@ pub enum AlbumOrder {
 /// An album as its favourite is kept: its album artist and title.
 pub type AlbumKey = (Option<String>, Option<String>);
 
-/// An album's cover as the last scan made it.
+/// An album's cover: as the last scan made it, or as the user chose it.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct AlbumCover {
     pub cover: Option<String>,
     pub color: Option<[u8; 3]>,
     pub track: String,
     pub images: i64,
+    /// Whether the user chose it: then it is to be shown whole as it is kept, not from the
+    /// music.
+    #[serde(default)]
+    pub chosen: bool,
 }
 
 /// What a playlist has beside its tracks; each `None` when the user gave none.

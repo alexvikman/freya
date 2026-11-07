@@ -37,12 +37,82 @@ pub(super) const SCHEMA: &str = "
         release_group TEXT NOT NULL,
         asked INTEGER NOT NULL
     );
+    -- The covers the user chose, over what the music has and what the internet had: kept
+    -- apart, so neither a scan nor a fetch takes them away.
+    CREATE TABLE IF NOT EXISTS album_chosen_covers (
+        key TEXT NOT NULL PRIMARY KEY,
+        cover TEXT NOT NULL,
+        color TEXT,
+        chosen INTEGER NOT NULL
+    );
 ";
 
 impl Library {
-    /// Every album's cover, by the album's key.
-    /// Every album's cover, by the album's key: its music's, else one from the internet.
+    /// Every album's cover, by the album's key: the one the user chose, else its music's, else
+    /// one from the internet.
     pub fn album_covers(&self) -> Result<HashMap<String, AlbumCover>> {
+        let mut covers = self.made_album_covers()?;
+        let mut statement = self
+            .db
+            .prepare_cached("SELECT key, cover, color FROM album_chosen_covers")?;
+        let chosen = statement.query_map([], |row| {
+            let color: Option<String> = row.get(2)?;
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                color.as_deref().and_then(color_of),
+            ))
+        })?;
+        for row in chosen {
+            let (key, cover, color) = row?;
+            let made = covers.entry(key).or_insert_with(|| AlbumCover {
+                cover: None,
+                color: None,
+                track: String::new(),
+                images: 0,
+                chosen: false,
+            });
+            made.cover = Some(cover);
+            made.color = color.or(made.color);
+            made.chosen = true;
+        }
+        Ok(covers)
+    }
+
+    /// Keeps `cover`, among Freya's pictures, as the cover the user chose for the album `key`,
+    /// with `color` for its page; none goes back to its music's, or the internet's.
+    pub fn set_chosen_album_cover(
+        &self,
+        key: &str,
+        cover: Option<&str>,
+        color: Option<[u8; 3]>,
+    ) -> Result<()> {
+        match cover {
+            Some(cover) => {
+                self.db
+                    .prepare_cached(
+                        "INSERT OR REPLACE INTO album_chosen_covers (key, cover, color, chosen)
+                         VALUES (?1, ?2, ?3, ?4)",
+                    )?
+                    .execute(params![
+                        key,
+                        cover,
+                        color.map(|[r, g, b]| format!("{r:02x}{g:02x}{b:02x}")),
+                        super::epoch_millis(std::time::SystemTime::now())
+                    ])?;
+            }
+            None => {
+                self.db
+                    .prepare_cached("DELETE FROM album_chosen_covers WHERE key = ?1")?
+                    .execute([key])?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Every album's cover as its music or the internet gave it, without the user's choice:
+    /// what a scan looks at, to know which to make again.
+    pub(super) fn made_album_covers(&self) -> Result<HashMap<String, AlbumCover>> {
         let mut statement = self.db.prepare_cached(
             "SELECT c.key, coalesce(c.cover, o.cover), coalesce(c.color, o.color), c.track,
                     c.images
@@ -61,6 +131,7 @@ impl Library {
                     color: color.as_deref().and_then(color_of),
                     track: row.get(3)?,
                     images: row.get(4)?,
+                    chosen: false,
                 },
             ))
         })?;
@@ -185,7 +256,7 @@ impl Library {
     /// Takes away the covers of albums no longer in the library.
     pub fn keep_album_covers(&self, keys: &HashSet<String>) -> Result<usize> {
         let kept: Vec<String> = self
-            .album_covers()?
+            .made_album_covers()?
             .into_keys()
             .filter(|key| !keys.contains(key))
             .collect();
@@ -226,6 +297,7 @@ mod tests {
             color: None,
             track: "/m/1.mp3".into(),
             images: 0,
+            chosen: false,
         };
         library.set_album_cover("k", &none).unwrap();
         let kept = &library.album_covers().unwrap()["k"];
@@ -251,6 +323,44 @@ mod tests {
     }
 
     #[test]
+    fn a_chosen_cover_comes_first_and_stays_until_unchosen() {
+        let library = Library::open_in_memory().unwrap();
+        let own = AlbumCover {
+            cover: Some("beef".into()),
+            color: Some([1, 2, 3]),
+            track: "/m/1.mp3".into(),
+            images: 4,
+            chosen: false,
+        };
+        library.set_album_cover("k", &own).unwrap();
+        library
+            .set_chosen_album_cover("k", Some("feed"), Some([9, 8, 7]))
+            .unwrap();
+        let shown = &library.album_covers().unwrap()["k"];
+        assert_eq!(
+            (shown.cover.as_deref(), shown.color, shown.chosen),
+            (Some("feed"), Some([9, 8, 7]), true)
+        );
+        // What the music has is still known, for a scan.
+        assert_eq!(library.made_album_covers().unwrap()["k"], own);
+        // A scan makes the music's again: the chosen one stays.
+        library.set_album_cover("k", &own).unwrap();
+        assert_eq!(
+            library.album_covers().unwrap()["k"].cover.as_deref(),
+            Some("feed")
+        );
+        assert!(library.artist_picture_checksums().unwrap().contains("feed"));
+        // Chosen for an album with no cover of its own.
+        library
+            .set_chosen_album_cover("other", Some("f00d"), None)
+            .unwrap();
+        assert!(library.album_covers().unwrap()["other"].chosen);
+        // Unchosen, the music's again.
+        library.set_chosen_album_cover("k", None, None).unwrap();
+        assert_eq!(library.album_covers().unwrap()["k"], own);
+    }
+
+    #[test]
     fn keeps_each_albums_cover_and_forgets_those_gone() {
         let library = Library::open_in_memory().unwrap();
         let cover = AlbumCover {
@@ -258,6 +368,7 @@ mod tests {
             color: Some([10, 200, 33]),
             track: "/m/a/1.flac".into(),
             images: 42,
+            chosen: false,
         };
         library.set_album_cover("a", &cover).unwrap();
         library

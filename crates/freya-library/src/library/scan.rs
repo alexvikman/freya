@@ -417,7 +417,7 @@ fn make_covers(
         }
     }
     let stamps = ImageStamps::new(images, stamps);
-    let kept = library.album_covers()?;
+    let kept = library.made_album_covers()?;
     let mut keys = HashSet::new();
     let mut work = Vec::new();
     for album in library.all_albums()? {
@@ -494,6 +494,7 @@ fn make_covers(
                     color,
                     track: track.to_string_lossy().into_owned(),
                     images: *images,
+                    chosen: false,
                 },
             )?;
             if told.elapsed() >= COMMIT_INTERVAL || done == total {

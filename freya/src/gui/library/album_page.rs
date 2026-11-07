@@ -133,8 +133,8 @@ impl LibraryPanel {
         ]))
     }
 
-    /// Reads the cover of the album whose page is shown whole, from its music, on a thread:
-    /// the user asked to see it.
+    /// Reads the cover of the album whose page is shown whole, on a thread: the user asked to
+    /// see it.
     pub fn show_album_cover(&mut self) {
         let Some(page) = self.album_page.as_ref().filter(|p| p.cover_full.is_none()) else {
             return;
@@ -143,15 +143,26 @@ impl LibraryPanel {
             return;
         };
         let (key, track) = (page.cover.clone(), page.track.clone());
+        // The cover the album shows: one the user chose is shown as it is kept, else the
+        // music's is read whole, else the one kept for it, as from the internet.
+        let made = self.made_covers.get(&key);
+        let kept = made.and_then(|made| made.cover.clone());
+        let chosen = made.is_some_and(|made| made.chosen);
         let read = self.full_covers.0.clone();
         let started = std::thread::Builder::new()
             .name("freya-album-cover".into())
             .spawn(move || {
-                let picture = api
-                    .album_art(&track, COVER_FULL)
-                    .ok()
-                    .flatten()
-                    .and_then(|bytes| crate::gui::decode_picture(&bytes).ok());
+                let from_music = || api.album_art(&track, COVER_FULL).ok().flatten();
+                let from_kept = || {
+                    kept.as_deref()
+                        .and_then(|checksum| api.picture(checksum).ok().flatten())
+                };
+                let bytes = if chosen {
+                    from_kept().or_else(from_music)
+                } else {
+                    from_music().or_else(from_kept)
+                };
+                let picture = bytes.and_then(|bytes| crate::gui::decode_picture(&bytes).ok());
                 if let Some(picture) = picture {
                     let rgb = picture.to_rgb8();
                     let buffer = slint::SharedPixelBuffer::clone_from_slice(

@@ -77,8 +77,12 @@ macro_rules! with_library_data {
                 artist: Option<&str>,
                 album: Option<&str>,
             ) -> Vec<((::std::path::PathBuf, Option<::std::time::Duration>), u32)>;
-            /// Each album's cover as the last scan made it, by the album's key.
+            /// Each album's cover, by the album's key: the one the user chose, else as the last
+            /// scan made it.
             fn album_covers() -> ::std::collections::HashMap<String, $crate::AlbumCover>;
+            /// Keeps the picture `cover` as the cover chosen for the album `key`, with `color`
+            /// for its page; none goes back to the music's, or the internet's.
+            fn set_chosen_album_cover(key: &str, cover: Option<&str>, color: Option<[u8; 3]>) -> ();
             fn artist_mbid(artist: Option<&str>) -> Option<String>;
             fn artist_summary(artist: Option<&str>, genres: usize) -> $crate::ArtistSummary;
             fn artist_popular(artist: Option<&str>, limit: usize) -> Vec<$crate::Played>;
@@ -428,6 +432,7 @@ copied_args!(
     usize,
     u32,
     bool,
+    Option<[u8; 3]>,
     std::time::SystemTime,
     std::time::Duration,
     crate::PictureKind,
