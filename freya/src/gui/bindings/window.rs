@@ -101,6 +101,17 @@ pub(super) fn bind(b: &Binder) {
     );
     b.bind(
         "App",
+        "set-stream-quality",
+        Box::new(|app, args| {
+            if let Some(Value::String(quality)) = args.first()
+                && crate::stream_cache::set_quality(quality)
+            {
+                app.settings.stream_quality = quality.to_string();
+            }
+        }),
+    );
+    b.bind(
+        "App",
         "clear-stream-cache",
         Box::new(|app, _| {
             crate::stream_cache::clear();

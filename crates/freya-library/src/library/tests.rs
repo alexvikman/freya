@@ -4,7 +4,7 @@ use std::time::Instant;
 use super::*;
 
 fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../freya-audio/tests/fixtures")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../freya-decode/tests/fixtures")
 }
 
 fn temp_dir(name: &str) -> PathBuf {

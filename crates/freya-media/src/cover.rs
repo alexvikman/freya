@@ -356,7 +356,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let track = dir.join("tagged.mp3");
         let fixture =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../freya-audio/tests/fixtures/sine.mp3");
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../freya-decode/tests/fixtures/sine.mp3");
         std::fs::copy(&fixture, &track).unwrap();
 
         let mut png = std::io::Cursor::new(Vec::new());
@@ -381,7 +381,7 @@ mod tests {
     #[test]
     fn no_cover_is_none() {
         let fixture =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../freya-audio/tests/fixtures/sine.flac");
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../freya-decode/tests/fixtures/sine.flac");
         assert_eq!(read_cover(&fixture, 256), None);
     }
 }

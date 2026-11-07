@@ -2,41 +2,21 @@
 
 use std::fs::File;
 use std::path::PathBuf;
-use std::sync::LazyLock;
 use std::time::Duration;
 
 use symphonia::core::codecs::audio::{AudioDecoder, AudioDecoderOptions};
-use symphonia::core::codecs::registry::CodecRegistry;
 use symphonia::core::errors::Error as SymError;
-use symphonia::core::formats::probe::{Hint, Probe};
+use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType};
 use symphonia::core::io::{MediaSource, MediaSourceStream, ReadOnlySource};
 use symphonia::core::meta::{MetadataOptions, MetadataRevision, StandardTag};
 use symphonia::core::units::{Time, TimeBase};
 
+use freya_decode::{CODECS, PROBE};
+
 use crate::Error;
-use crate::ape;
 use crate::remote::RemoteFile;
 use crate::stream::{self, Interrupt, Stream, Titles};
-
-/// Symphonia's decoders, plus Opus from libopus and Monkey's Audio of our own, which Symphonia
-/// does not have.
-pub(crate) static CODECS: LazyLock<CodecRegistry> = LazyLock::new(|| {
-    let mut codecs = CodecRegistry::new();
-    symphonia::default::register_enabled_codecs(&mut codecs);
-    #[cfg(feature = "opus")]
-    codecs.register_audio_decoder::<symphonia_adapter_libopus::OpusDecoder>();
-    codecs.register_audio_decoder::<ape::ApeDecoder>();
-    codecs
-});
-
-/// Symphonia's formats and tag readers, plus Monkey's Audio.
-pub(crate) static PROBE: LazyLock<Probe> = LazyLock::new(|| {
-    let mut probe = Probe::default();
-    symphonia::default::register_enabled_formats(&mut probe);
-    probe.register_format::<ape::ApeReader<'_>>();
-    probe
-});
 
 /// What to play: a file or stream, or a part of a file, like a track of a CUE sheet.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -63,13 +43,16 @@ pub struct Media {
 
 /// A file on a server: its address, the token the server asks for, and how to reach it when
 /// that is not the usual way, as for a server whose certificate the caller pinned.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct RemoteSource {
     pub url: String,
     /// The access token to read with, when the server asks for one.
     pub bearer: Option<Bearer>,
     /// Asked each part in at most 20 seconds, its errors answered as they come.
     pub agent: Option<std::sync::Arc<ureq::Agent>>,
+    /// How long the whole file plays, as the library knows it: for choosing how large to
+    /// fetch it (see [`crate::StreamQuality`]).
+    pub duration: Option<Duration>,
 }
 
 /// What the player asks for the access token to read a track with: the one now with `None`,

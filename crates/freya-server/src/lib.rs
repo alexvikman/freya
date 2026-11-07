@@ -22,6 +22,7 @@ mod scrobbler;
 mod serve;
 mod service;
 pub mod settings;
+pub mod smaller;
 mod stations;
 #[cfg(windows)]
 pub mod stop;

@@ -449,7 +449,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let fixtures =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-audio/tests/fixtures");
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-decode/tests/fixtures");
         std::fs::copy(fixtures.join("sine.mp3"), dir.join("sine.mp3")).unwrap();
         let mut db = Library::open_in_memory().unwrap();
         let cancel = std::sync::atomic::AtomicBool::new(false);

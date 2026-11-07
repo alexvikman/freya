@@ -835,7 +835,11 @@ fn media(entry: &Entry, library: &LibraryPanel) -> Media {
     let Some(part) = entry.part else {
         return Media {
             id: entry.id,
-            remote,
+            // How long the file plays: the entry's, all of it.
+            remote: remote.map(|remote| freya_audio::RemoteSource {
+                duration: entry.duration,
+                ..remote
+            }),
             far_only: library.elsewhere(),
             ..Media::from(&entry.path)
         };

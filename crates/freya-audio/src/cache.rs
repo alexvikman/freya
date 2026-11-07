@@ -309,6 +309,21 @@ impl Index {
     }
 }
 
+/// What is kept of the file at `url`: its length, and how much of it is here from its
+/// start on; none when nothing is, or its length is not known.
+pub(crate) fn kept_of(url: &str) -> Option<(u64, u64)> {
+    let dir = cache().config.clone()?.dir;
+    let key = key_of(url);
+    let on_disk = std::fs::metadata(dir.join(format!("{key}.audio")))
+        .ok()?
+        .len();
+    let index = std::fs::read_to_string(dir.join(format!("{key}.index")))
+        .ok()
+        .and_then(|text| Index::parse(&text))
+        .filter(|index| index.url == url && index.ranges.end() <= on_disk)?;
+    (index.len > 0 && !index.tag.is_empty()).then(|| (index.len, index.ranges.from(0)))
+}
+
 /// A file's store, what of it is here, and its length and version when they are known.
 pub(crate) type Opened = (Store, Ranges, Option<(u64, String)>);
 

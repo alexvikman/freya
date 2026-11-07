@@ -183,6 +183,10 @@ Nobody can wear it out before logging in:
 - a search of the library reads at most 16 words of 64 characters; at most six pictures are
   decoded at once, whoever asks, each within the bounds below, so pictures asked for together
   cannot take the memory;
+- tracks made smaller for a slow network (`/audio?quality=`) at most two at once and sixteen
+  asked for, past which a client is told to ask again; each at most 12 hours of music, each
+  part waited for at most a minute, all of them kept within 4 GB of the server's cache, the
+  least lately played going first; a file that cannot be made smaller is sent as it is;
 - events wait for a listener in a queue of 1,024, past which it is let go;
 - stopping the server, or turning the network off, ends every connection.
 

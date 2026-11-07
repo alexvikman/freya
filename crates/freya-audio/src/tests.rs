@@ -319,7 +319,7 @@ fn seeking_past_the_end_goes_on_with_the_next_track() {
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
+        .join("../freya-decode/tests/fixtures")
         .join(name)
 }
 
@@ -588,8 +588,8 @@ fn frames_played(path: &Path) -> u64 {
 #[test]
 fn a_damaged_packet_plays_as_silence_of_its_length() {
     // It was left out, so all after it came early: a CUE track then started off its mark.
-    let fixture =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ape/stereo-16-normal.ape");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../freya-decode/tests/fixtures/ape/stereo-16-normal.ape");
     let mut bytes = std::fs::read(&fixture).unwrap();
     let pos = bytes.len() / 2;
     bytes[pos] ^= 0x10;
@@ -733,6 +733,7 @@ fn a_file_read_from_a_server_plays_as_the_file_itself() {
                 url: file_server(fixture(name), None),
                 bearer: None,
                 agent: None,
+                duration: None,
             }),
             ..local.clone()
         };
@@ -784,6 +785,7 @@ fn the_next_track_from_a_server_is_opened_before_it_plays() {
             url: format!("http://{slow}/audio"),
             bearer: None,
             agent: None,
+            duration: None,
         }),
         ..Media::from(fixture("sine.flac"))
     };
@@ -820,6 +822,7 @@ fn a_dropped_request_is_made_again() {
             url: file_server(fixture("sine.flac"), Some(3)),
             bearer: None,
             agent: None,
+            duration: None,
         }),
         ..local.clone()
     };
@@ -844,6 +847,7 @@ fn a_server_that_never_answers_is_given_up_on() {
             url,
             bearer: None,
             agent: None,
+            duration: None,
         }),
         ..Media::from(fixture("sine.flac"))
     };
@@ -957,6 +961,7 @@ fn remote_media(file: &Path, url: &str) -> Media {
             url: url.to_owned(),
             bearer: None,
             agent: None,
+            duration: None,
         }),
         ..Media::from(file)
     }

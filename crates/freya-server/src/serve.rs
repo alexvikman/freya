@@ -8,7 +8,8 @@
 //!   answering its checksum.
 //! - `POST /album-art`: the cover of the album whose track `{"track", "largest"}` is.
 //! - `GET /audio?path=`: a track's file, the path percent-encoded, whole or the part a Range
-//!   header asks for; only the library's own music.
+//!   header asks for; only the library's own music. With `&quality=high` or `normal`, made
+//!   smaller for a slow network (see [`crate::smaller`]).
 //! - `GET /events`: what happens at the server, as it happens: one [`ServiceEvent`] in JSON
 //!   a line, and an empty line now and then while nothing does.
 //! - `GET /version`: `{"version": ...}`.
@@ -622,6 +623,25 @@ fn audio(served: &Served, request: &Request) -> Response {
         Ok(metadata) => (metadata.len(), file_version(&metadata)),
         Err(e) => return Response::error(500, e),
     };
+    if let Some(quality) = request.query_value("quality") {
+        let Some(quality) = freya_transcode::Quality::from_name(quality) else {
+            return Response::error(400, "no such quality");
+        };
+        match crate::smaller::answer(&path, &file, &version, quality) {
+            Ok(smaller) => return smaller_audio(request, smaller),
+            Err(crate::smaller::Not::Busy) => {
+                let mut busy = Response::error(503, "making too many smaller, ask again");
+                busy.headers.push(("Retry-After", "2".into()));
+                return busy;
+            }
+            // Read to plan it, by a handle of the same file.
+            Err(crate::smaller::Not::AsItIs) => {
+                if let Err(e) = std::io::Seek::rewind(&mut file) {
+                    return Response::error(500, e);
+                }
+            }
+        }
+    }
     let kind = audio_type(&path);
     let Some(range) = request.header("range") else {
         let mut whole = Response::read(200, kind, length, Box::new(file));
@@ -646,6 +666,37 @@ fn audio(served: &Served, request: &Request) -> Response {
         .push(("Content-Range", format!("bytes {from}-{to}/{length}")));
     part.headers.push(("ETag", version));
     part
+}
+
+/// A track made smaller (see [`crate::smaller`]), whole or the part `Range` asks for.
+fn smaller_audio(request: &Request, smaller: crate::smaller::Answer) -> Response {
+    let length = smaller.length;
+    let (status, from, to) = match request.header("range") {
+        None => (200, 0, length.saturating_sub(1)),
+        Some(range) => match byte_range(range, length) {
+            Some((from, to)) => (206, from, to),
+            None => {
+                let mut refused = Response::error(416, "no such part");
+                refused
+                    .headers
+                    .push(("Content-Range", format!("bytes */{length}")));
+                return refused;
+            }
+        },
+    };
+    let body = match smaller.from(from) {
+        Ok(body) => body,
+        Err(e) => return Response::error(500, e),
+    };
+    let mut answer = Response::read(status, "audio/ogg", (to + 1).saturating_sub(from), body);
+    answer.headers.push(("Accept-Ranges", "bytes".into()));
+    if status == 206 {
+        answer
+            .headers
+            .push(("Content-Range", format!("bytes {from}-{to}/{length}")));
+    }
+    answer.headers.push(("ETag", smaller.tag));
+    answer
 }
 
 /// Which version of a file this is, as a tag: its length and when it was last changed. A

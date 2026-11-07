@@ -1,7 +1,8 @@
 //! Music from a server on another computer, kept on this one so it plays again at once and
 //! through a slow network (see `freya_audio::set_cache`): where, and how much. By default a
 //! tenth of the free space on the disk, the music kept counted as free, at least 50 MB and at
-//! most 10 GB; or as many gigabytes as the user chose.
+//! most 10 GB; or as many gigabytes as the user chose. And how large it is fetched: as it is,
+//! or made smaller by the server.
 
 use std::path::{Path, PathBuf};
 
@@ -29,6 +30,21 @@ pub fn apply(chosen: Option<u32>) {
     };
     log::debug!("keeping up to {} of music from servers", size(limit));
     freya_audio::set_cache(dir, limit);
+}
+
+/// Fetches music from servers as large as `quality` says: "auto", "original", "high" or
+/// "normal"; false for none of them.
+pub fn set_quality(quality: &str) -> bool {
+    use freya_audio::StreamQuality;
+    let chosen = match quality {
+        "auto" => StreamQuality::Automatic,
+        "original" => StreamQuality::Original,
+        "high" => StreamQuality::High,
+        "normal" => StreamQuality::Normal,
+        _ => return false,
+    };
+    freya_audio::set_stream_quality(chosen);
+    true
 }
 
 /// How much is kept, and the most that may be, for Settings.

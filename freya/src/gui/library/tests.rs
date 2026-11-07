@@ -80,7 +80,7 @@ fn opens_the_album_of_the_track_playing_at_its_row() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let fixtures =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-audio/tests/fixtures");
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-decode/tests/fixtures");
     for name in ["sine.flac", "sine.ogg"] {
         std::fs::copy(fixtures.join(name), dir.join(name)).unwrap();
     }
@@ -119,7 +119,7 @@ fn a_server_is_asked_off_the_windows_thread() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let fixtures =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-audio/tests/fixtures");
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-decode/tests/fixtures");
     for name in ["sine.flac", "sine.ogg"] {
         std::fs::copy(fixtures.join(name), dir.join(name)).unwrap();
     }
@@ -191,7 +191,7 @@ fn shows_an_artist_by_what_the_user_changed() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let fixtures =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-audio/tests/fixtures");
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-decode/tests/fixtures");
     std::fs::copy(fixtures.join("sine.mp3"), dir.join("sine.mp3")).unwrap();
     let mut db = Library::open_in_memory().unwrap();
     let cancel = std::sync::atomic::AtomicBool::new(false);
@@ -239,7 +239,7 @@ fn changes_an_artist_from_the_form() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let fixtures =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-audio/tests/fixtures");
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-decode/tests/fixtures");
     std::fs::copy(fixtures.join("sine.mp3"), dir.join("sine.mp3")).unwrap();
     let mut db = Library::open_in_memory().unwrap();
     let cancel = std::sync::atomic::AtomicBool::new(false);
@@ -303,7 +303,7 @@ fn chooses_and_keeps_an_artists_pictures() {
     let album = dir.join("music").join("Freya").join("Sines");
     std::fs::create_dir_all(&album).unwrap();
     let fixtures =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-audio/tests/fixtures");
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-decode/tests/fixtures");
     std::fs::copy(fixtures.join("sine.mp3"), album.join("sine.mp3")).unwrap();
     image::RgbImage::from_pixel(1920, 1080, image::Rgb([0, 0, 200]))
         .save(dir.join("music").join("Freya").join("fanart.jpg"))
@@ -406,7 +406,7 @@ fn files_an_album_under_the_artist_it_is_matched_to() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let fixtures =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-audio/tests/fixtures");
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-decode/tests/fixtures");
     std::fs::copy(fixtures.join("sine.mp3"), dir.join("sine.mp3")).unwrap();
     let mut db = Library::open_in_memory().unwrap();
     let cancel = std::sync::atomic::AtomicBool::new(false);
@@ -464,7 +464,7 @@ fn matches_an_artist_from_the_form() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let fixtures =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-audio/tests/fixtures");
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-decode/tests/fixtures");
     std::fs::copy(fixtures.join("sine.mp3"), dir.join("sine.mp3")).unwrap();
     let mut db = Library::open_in_memory().unwrap();
     let cancel = std::sync::atomic::AtomicBool::new(false);
@@ -573,7 +573,7 @@ fn an_album_is_made_a_favourite_and_ordered_as_the_user_picks() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let fixtures =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-audio/tests/fixtures");
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-decode/tests/fixtures");
     std::fs::copy(fixtures.join("sine.mp3"), dir.join("sine.mp3")).unwrap();
     let mut db = Library::open_in_memory().unwrap();
     let cancel = std::sync::atomic::AtomicBool::new(false);
@@ -774,7 +774,7 @@ fn an_albums_page_has_its_heading_and_each_tracks_plays() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let fixtures =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-audio/tests/fixtures");
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-decode/tests/fixtures");
     for name in ["sine.flac", "sine.ogg"] {
         std::fs::copy(fixtures.join(name), dir.join(name)).unwrap();
     }
@@ -851,7 +851,7 @@ fn an_artists_page_has_their_summary_and_most_played_tracks() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let fixtures =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-audio/tests/fixtures");
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-decode/tests/fixtures");
     for name in ["sine.flac", "sine.ogg"] {
         std::fs::copy(fixtures.join(name), dir.join(name)).unwrap();
     }
@@ -969,7 +969,7 @@ fn sections_have_their_own_layouts() {
 #[test]
 fn an_artists_albums_are_filtered_by_their_kind() {
     let fixtures =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-audio/tests/fixtures");
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-decode/tests/fixtures");
     let mut db = Library::open_in_memory().unwrap();
     let cancel = std::sync::atomic::AtomicBool::new(false);
     freya_library::library::scan(&mut db, &[fixtures], &cancel, |_| {}).unwrap();
@@ -1049,7 +1049,7 @@ fn an_artists_albums_are_filtered_by_their_kind() {
 #[test]
 fn a_page_shows_anew_only_once_the_rows_of_what_opened_are_here() {
     let fixtures =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-audio/tests/fixtures");
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-decode/tests/fixtures");
     let mut db = Library::open_in_memory().unwrap();
     let cancel = std::sync::atomic::AtomicBool::new(false);
     freya_library::library::scan(&mut db, &[fixtures], &cancel, |_| {}).unwrap();

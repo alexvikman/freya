@@ -37,6 +37,9 @@ pub struct Settings {
     /// How many gigabytes of music from a server on another computer are kept on this one;
     /// `None` chooses by the free space (see `stream_cache`).
     pub stream_cache_gb: Option<u32>,
+    /// How large music from a server on another computer is fetched: "auto", "original",
+    /// "high" or "normal" (see `stream_cache::set_quality`).
+    pub stream_quality: String,
     /// When Freya last looked, in seconds since 1970.
     pub last_update_check: Option<u64>,
     /// A version the user does not want offered again.
@@ -118,6 +121,7 @@ impl Default for Settings {
             check_for_updates: true,
             close_minimizes: true,
             stream_cache_gb: None,
+            stream_quality: "auto".to_owned(),
             last_update_check: None,
             skipped_update: None,
             lastfm_user: None,

@@ -78,6 +78,13 @@ fn main() {
     }
     // A folder of its own, apart from Freya's: Freya's taken away keeps the library.
     let own = directories::ProjectDirs::from("", "", freya_protocol::SERVER_APP);
+    // Tracks made smaller for clients on a slow network: in the system's caches, which
+    // backups leave out; with a folder of its own given, in that.
+    let smaller = match (&data, &own) {
+        (Some(data), _) => Some(data.join("cache").join("smaller")),
+        (None, Some(own)) => Some(own.cache_dir().join("smaller")),
+        (None, None) => None,
+    };
     let Some(data) = data.or_else(|| own.map(|dirs| dirs.data_dir().to_owned())) else {
         eprintln!("freya-server: no folder to keep the library in");
         std::process::exit(1);
@@ -108,6 +115,9 @@ fn main() {
         freya_server::updates::wait_for(process);
     }
     start_log(&data.join("server.log"));
+    if let Some(smaller) = smaller {
+        freya_server::smaller::keep_in(smaller);
+    }
     if let Err(e) = run(&address, &data) {
         log::error!("{e}");
         eprintln!("freya-server: {e}");

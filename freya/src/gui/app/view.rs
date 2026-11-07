@@ -298,6 +298,10 @@ impl App {
                 ),
                 ("stream-cache-used", skin_state::string(stream_cache_used)),
                 (
+                    "stream-quality",
+                    skin_state::string(self.settings.stream_quality.clone()),
+                ),
+                (
                     "window-buttons-width",
                     Value::Number(f64::from(title_bar.buttons_width)),
                 ),

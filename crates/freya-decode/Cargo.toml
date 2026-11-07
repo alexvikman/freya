@@ -1,0 +1,22 @@
+[package]
+name = "freya-decode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# Reading music files as samples, for Freya's player and for Freya Server, which makes them
+# smaller for a slow network: the formats and decoders, and changing channels and rates.
+[dependencies]
+log = "0.4.34"
+rubato = "5.0.1"
+symphonia = { version = "0.6.1", features = ["all-codecs", "all-formats"] }
+symphonia-adapter-libopus = { version = "0.3.0", optional = true }
+
+[features]
+default = ["opus"]
+# Opus through libopus, built from source; needs cmake. Without it, Opus files fail to open.
+opus = ["dep:symphonia-adapter-libopus"]

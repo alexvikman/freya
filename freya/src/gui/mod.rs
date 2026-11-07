@@ -99,6 +99,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
 
     let settings = Settings::load();
     crate::stream_cache::apply(settings.stream_cache_gb);
+    crate::stream_cache::set_quality(&settings.stream_quality);
     // Absolute, so the saved setting still works when Freya is started from elsewhere.
     let saved_skin = options
         .skin

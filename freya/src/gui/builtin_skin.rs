@@ -1239,6 +1239,7 @@ skin_api! {
         App."close-minimizes" => set_close_minimizes, get_close_minimizes;
         App."stream-cache" => set_stream_cache, get_stream_cache;
         App."stream-cache-used" => set_stream_cache_used, get_stream_cache_used;
+        App."stream-quality" => set_stream_quality, get_stream_quality;
         App."autoscroll" => set_autoscroll, get_autoscroll;
         App."autoscroll-x" => set_autoscroll_x, get_autoscroll_x;
         App."autoscroll-y" => set_autoscroll_y, get_autoscroll_y;
@@ -1485,6 +1486,7 @@ skin_api! {
         App."set-close-minimizes" => on_set_close_minimizes, invoke_set_close_minimizes(minimizes: bool);
         App."set-stream-cache" => on_set_stream_cache, invoke_set_stream_cache(size: SharedString);
         App."clear-stream-cache" => on_clear_stream_cache, invoke_clear_stream_cache();
+        App."set-stream-quality" => on_set_stream_quality, invoke_set_stream_quality(quality: SharedString);
         App."toggle-equalizer" => on_toggle_equalizer, invoke_toggle_equalizer();
         App."drag-window" => on_drag_window, invoke_drag_window();
         App."minimize-window" => on_minimize_window, invoke_minimize_window();

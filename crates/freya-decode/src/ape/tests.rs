@@ -14,7 +14,7 @@ use symphonia::core::units::Timestamp;
 
 use super::ApeDecoder;
 use super::header::Header;
-use crate::source::{CODECS, PROBE};
+use crate::{CODECS, PROBE};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

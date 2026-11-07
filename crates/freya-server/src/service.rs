@@ -1175,7 +1175,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("music")).unwrap();
         let fixture =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../freya-audio/tests/fixtures/sine.flac");
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../freya-decode/tests/fixtures/sine.flac");
         std::fs::copy(fixture, dir.join("music/sine.flac")).unwrap();
         dir
     }

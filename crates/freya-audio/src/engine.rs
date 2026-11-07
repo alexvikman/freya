@@ -8,11 +8,11 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError};
 use rtrb::Producer;
 
-use crate::convert::{RateConverter, map_channels};
 use crate::source::Source;
 use crate::state::Shared;
 use crate::stream::Interrupt;
 use crate::{Error, Media, TrackInfo};
+use freya_decode::{RateConverter, map_channels};
 
 /// How often the thread wakes up while waiting on a full ring buffer or for playback to end.
 const POLL: Duration = Duration::from_millis(10);

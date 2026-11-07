@@ -59,6 +59,8 @@ freya-lastfm = { path = "../freya-lastfm" }
 freya-library = { path = "../freya-library" }
 freya-media = { path = "../freya-media" }
 freya-protocol = { path = "../freya-protocol" }
+# Tracks made smaller for clients on a slow network (see src/smaller.rs).
+freya-transcode = { path = "../freya-transcode" }
 freya-update = { path = "../freya-update" }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 # Backups' names, by the time on the server's computer (see src/backup.rs).

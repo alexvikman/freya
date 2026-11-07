@@ -32,7 +32,7 @@ To give someone else in your home their own account, an admin invites them under
 
 **Library.** Browse by artist, album, genre or playlist, or search as you type: every word you type matches the start of a word in the artist, album, title or genre, and accents don't matter. Click an artist or album to open it, double-click a track to play it, or use **+** to add it to Up Next. Artists get a picture, a biography and their most played tracks, and their albums can be narrowed to albums, singles and EPs, or compilations. Freya keeps the library in step with your folders: it notices new and changed files, and you can set how often it reads them all again.
 
-**From another computer.** Music from a server elsewhere in your home starts at once and keeps playing through a slow or unsteady network: Freya fetches ahead, waits with "Buffering…" rather than stutter, and keeps what you played on this computer, so it plays again without the network (Settings › General).
+**From another computer.** Music from a server elsewhere in your home starts at once and keeps playing through a slow or unsteady network: Freya fetches ahead, waits with "Buffering…" rather than stutter, and keeps what you played on this computer, so it plays again without the network. On a network too slow for a track as it is, the server sends it smaller, as Opus, by itself or as you choose (Settings › General).
 
 **Up Next.** What plays next. Drop files, folders or playlist files (M3U, M3U8, PLS) on the window to add what of them is in your library. Click, Shift-click and Ctrl/Cmd-click to select, drag to reorder, Delete to remove. Keep Up Next as a playlist from the File menu.
 

@@ -9388,6 +9388,39 @@ component SettingsView inherits Rectangle {
                 title: "Music from " + Server.name;
 
                 SettingsRow {
+                    label: "Quality";
+                    detail: "On a slow network, the server can send music smaller, so it plays without waiting. Automatic sends it as it is while the network keeps up, and smaller when it does not.";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        HorizontalLayout {
+                            spacing: 4px;
+
+                            ChoiceButton {
+                                text: "Automatic";
+                                selected: App.stream-quality == "auto";
+                                clicked => { App.set-stream-quality("auto"); }
+                            }
+                            ChoiceButton {
+                                text: "Original";
+                                selected: App.stream-quality == "original";
+                                clicked => { App.set-stream-quality("original"); }
+                            }
+                            ChoiceButton {
+                                text: "High";
+                                selected: App.stream-quality == "high";
+                                clicked => { App.set-stream-quality("high"); }
+                            }
+                            ChoiceButton {
+                                text: "Normal";
+                                selected: App.stream-quality == "normal";
+                                clicked => { App.set-stream-quality("normal"); }
+                            }
+                        }
+                    }
+                }
+                SettingsRow {
                     label: "Music kept on this computer";
                     detail: "What you play is kept here, so it plays again at once and keeps playing through a slow network. Automatic keeps up to a tenth of the free space, at most 10 GB." + (App.stream-cache-used != "" ? " " + App.stream-cache-used + "." : "");
 

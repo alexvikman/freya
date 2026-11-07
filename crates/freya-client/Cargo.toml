@@ -22,6 +22,7 @@ freya-audio = { path = "../freya-audio" }
 freya-library = { path = "../freya-library" }
 freya-media = { path = "../freya-media" }
 freya-server = { path = "../freya-server" }
+freya-transcode = { path = "../freya-transcode" }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 
 # The system's keychain for the servers' tokens (see src/session.rs).

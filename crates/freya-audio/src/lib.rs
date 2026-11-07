@@ -5,13 +5,12 @@
 //! notifications arrive on [`Player::events`].
 
 pub mod analysis;
-mod ape;
 mod cache;
-mod convert;
 mod engine;
 mod eq;
 mod null_output;
 mod output;
+mod quality;
 mod remote;
 mod source;
 mod state;
@@ -36,6 +35,7 @@ use crate::stream::Interrupt;
 pub use crate::cache::{cache_used, clear_cache, set_cache};
 pub use crate::engine::Event;
 pub use crate::eq::{BAND_FREQUENCIES, EqSettings, MAX_GAIN_DB};
+pub use crate::quality::{SMALLER, SMALLER_BY, StreamQuality, set_stream_quality};
 pub use crate::remote::REQUEST_TIMEOUT as REMOTE_TIMEOUT;
 pub use crate::source::{Bearer, Media, MediaTags, RemoteSource, TrackInfo};
 pub use crate::state::{PlaybackState, Status};

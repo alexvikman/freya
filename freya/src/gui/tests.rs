@@ -17,7 +17,7 @@ use super::*;
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../crates/freya-audio/tests/fixtures")
+        .join("../crates/freya-decode/tests/fixtures")
         .join(name)
 }
 

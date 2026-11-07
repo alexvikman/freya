@@ -18,7 +18,7 @@ fn served(name: &str) -> (Server, Arc<dyn LibraryApi>, Arc<dyn LibraryApi>, Path
     let dir = std::env::temp_dir().join(format!("freya-client-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("music")).unwrap();
-    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../freya-audio/tests/fixtures");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../freya-decode/tests/fixtures");
     for file in ["sine.flac", "sine.mp3"] {
         std::fs::copy(fixtures.join(file), dir.join("music").join(file)).unwrap();
     }
@@ -151,7 +151,7 @@ fn the_server_is_told_what_to_do_and_tells_what_happens() {
     let dir = std::env::temp_dir().join(format!("freya-client-control-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("music")).unwrap();
-    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../freya-audio/tests/fixtures");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../freya-decode/tests/fixtures");
     std::fs::copy(fixtures.join("sine.flac"), dir.join("music/sine.flac")).unwrap();
     let settings = ServerSettings {
         library_folders: vec![dir.join("music")],
@@ -381,7 +381,7 @@ fn answers_kept_are_never_out_of_date() {
     let dir = std::env::temp_dir().join(format!("freya-client-kept-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("music")).unwrap();
-    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../freya-audio/tests/fixtures");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../freya-decode/tests/fixtures");
     std::fs::copy(fixtures.join("sine.flac"), dir.join("music/sine.flac")).unwrap();
     let config = ServiceConfig {
         settings: ServerSettings {
@@ -535,6 +535,7 @@ fn a_track_plays_from_the_server() {
             url: audio_url(&address, &track.path),
             bearer: None,
             agent: None,
+            duration: None,
         }),
         ..freya_audio::Media::from(&track.path)
     });
@@ -560,6 +561,119 @@ fn a_track_plays_from_the_server() {
         }
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_track_is_made_smaller_for_a_slow_network() {
+    let (server, _remote, local, dir) = served("smaller");
+    freya_server::smaller::keep_in(dir.join("smaller"));
+    let address = format!("http://{}", server.address());
+    let tracks = local.all_tracks().unwrap();
+    let file = |extension: &str| {
+        tracks
+            .iter()
+            .find(|t| t.path.extension().is_some_and(|e| e == extension))
+            .unwrap()
+            .path
+            .clone()
+    };
+    let (flac, mp3) = (file("flac"), file("mp3"));
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build()
+        .into();
+    let get = |url: &str, range: Option<&str>| {
+        let mut request = agent.get(url);
+        if let Some(range) = range {
+            request = request.header("Range", range);
+        }
+        let mut answer = request.call().unwrap();
+        let header = |name: &str| {
+            answer
+                .headers()
+                .get(name)
+                .map(|v| v.to_str().unwrap().to_owned())
+        };
+        let (said, tag, kind) = (
+            header("content-range"),
+            header("etag"),
+            header("content-type"),
+        );
+        let status = answer.status().as_u16();
+        let body = answer.body_mut().read_to_vec().unwrap();
+        (status, said, tag, kind, body)
+    };
+    // The FLAC, made smaller: in parts, each as soon as it is made, all of one length.
+    let smaller = format!("{}&quality=normal", audio_url(&address, &flac));
+    let (status, said, tag, kind, body) = get(&smaller, Some("bytes=0-99"));
+    assert_eq!(status, 206);
+    assert_eq!(kind.as_deref(), Some("audio/ogg"));
+    assert_eq!(&body[..4], b"OggS");
+    let length: u64 = said.unwrap().rsplit_once('/').unwrap().1.parse().unwrap();
+    let (status, _, whole_tag, _, whole) = get(&smaller, None);
+    assert_eq!((status, whole.len() as u64), (200, length));
+    assert_eq!(whole_tag, tag);
+    assert_eq!(whole[..100], body[..]);
+    // Another version than the file as it is, and than at another quality.
+    let (_, _, original_tag, _, _) = get(&audio_url(&address, &flac), Some("bytes=0-0"));
+    assert_ne!(tag, original_tag);
+    let high = format!("{}&quality=high", audio_url(&address, &flac));
+    assert_ne!(get(&high, Some("bytes=0-0")).2, tag);
+    // Asked again, the one kept: the same.
+    assert_eq!(get(&smaller, None).4, whole);
+    // The MP3 is small already: as it is.
+    let (status, _, mp3_tag, _, mp3_body) = get(
+        &format!("{}&quality=normal", audio_url(&address, &mp3)),
+        None,
+    );
+    assert_eq!(status, 200);
+    assert_eq!(mp3_body, std::fs::read(&mp3).unwrap());
+    assert_eq!(mp3_tag, get(&audio_url(&address, &mp3), None).2);
+    assert_eq!(
+        get(
+            &format!("{}&quality=best", audio_url(&address, &flac)),
+            None
+        )
+        .0,
+        400
+    );
+
+    // And plays, from there.
+    let player = freya_audio::Player::silent(48_000);
+    player.play(freya_audio::Media {
+        remote: Some(freya_audio::RemoteSource {
+            url: smaller,
+            ..Default::default()
+        }),
+        ..freya_audio::Media::from(&flac)
+    });
+    let next = || {
+        player
+            .events()
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .unwrap()
+    };
+    match next() {
+        freya_audio::Event::TrackStarted(info) => assert_eq!(info.codec, "opus"),
+        other => panic!("expected the track to start, got {other:?}"),
+    }
+    loop {
+        match next() {
+            freya_audio::Event::Finished => break,
+            freya_audio::Event::Unplayable { .. } => panic!("it could not be played"),
+            _ => {}
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_player_reckons_the_sizes_the_server_makes() {
+    for (quality, name, bytes) in freya_audio::SMALLER {
+        let made = freya_transcode::Quality::from_name(name).unwrap();
+        assert_eq!(made.bytes_per_second(), bytes, "{quality:?}");
+    }
+    assert_eq!(freya_audio::SMALLER_BY, freya_transcode::SMALLER_BY);
 }
 
 /// An update of the server always available, counting how often it was asked for anew.
@@ -606,7 +720,7 @@ fn only_a_device_with_a_token_is_answered() {
     let dir = std::env::temp_dir().join(format!("freya-client-tokens-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("music")).unwrap();
-    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../freya-audio/tests/fixtures");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../freya-decode/tests/fixtures");
     std::fs::copy(fixtures.join("sine.flac"), dir.join("music/sine.flac")).unwrap();
     let path = dir.join("library.db");
     let mut db = Library::open(&path).unwrap();
@@ -956,6 +1070,7 @@ fn a_server_elsewhere_is_reached_over_tls_with_its_certificate_pinned() {
             url: audio_url_at(&base, &track),
             bearer: None,
             agent: Some(Arc::new(agent)),
+            duration: None,
         }),
         ..freya_audio::Media::from(&track)
     });
@@ -1556,6 +1671,7 @@ fn measure_a_real_library() {
             url: audio_url_at(&audio, &track.path),
             bearer: None,
             agent: Some(Arc::clone(&agent)),
+            duration: None,
         }),
         ..freya_audio::Media::from(&track.path)
     };

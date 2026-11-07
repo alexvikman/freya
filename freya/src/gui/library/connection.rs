@@ -109,6 +109,7 @@ impl LibraryPanel {
             url: String::new(),
             bearer: None,
             agent: None,
+            duration: None,
         };
         if freya_audio::is_url(&path.to_string_lossy()) {
             // Played from the web; one a server elsewhere names, only from far away.
@@ -124,6 +125,7 @@ impl LibraryPanel {
                 url: freya_client::audio_url_at(audio, path),
                 bearer: remote.0.bearer(),
                 agent: Some(Arc::clone(agent)),
+                duration: None,
             }),
             None if elsewhere => Some(nowhere()),
             None => None,

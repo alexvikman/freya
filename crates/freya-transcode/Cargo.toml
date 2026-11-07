@@ -1,0 +1,18 @@
+[package]
+name = "freya-transcode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# Music made smaller for a slow network, by Freya Server: decoded as the player decodes it, and
+# encoded again as Opus, in Ogg.
+[dependencies]
+freya-decode = { path = "../freya-decode" }
+log = "0.4.34"
+# libopus's encoder, from the copy built for its decoder already (see freya-decode).
+opusic-sys = "0.7.5"
+symphonia = { version = "0.6.1", features = ["all-codecs", "all-formats"] }

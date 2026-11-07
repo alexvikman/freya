@@ -609,13 +609,19 @@ impl RemoteFile {
                 .build()
                 .into()
         });
-        let fetcher = Fetcher {
+        let mut fetcher = Fetcher {
             agent,
             url: remote.url.clone(),
             bearer: remote.bearer.clone(),
             interrupt,
         };
-        let (store, ranges, known) = Store::open(&remote.url)?;
+        fetcher.url = crate::quality::url_for(remote, || {
+            fetcher
+                .ask_range("bytes=0-0", 1)
+                .map(|answer| answer.len)
+                .ok()
+        });
+        let (store, ranges, known) = Store::open(&fetcher.url)?;
         let (len, tag) = known.map_or((0, None), |(len, tag)| (len, Some(tag)));
         let was_whole = len > 0 && ranges.whole(len);
         let fetching = Fetching::start();

@@ -245,6 +245,22 @@ impl Random {
 }
 
 #[cfg(test)]
+/// What was seen when each second brought `bytes`, in turn, fetching all along.
+pub(crate) fn seen_at(rates: &[u64]) -> Throughput {
+    let mut seen = Throughput {
+        fetching: 1,
+        ..Default::default()
+    };
+    let start = Instant::now();
+    for (i, &bytes) in rates.iter().enumerate() {
+        let at = start + Duration::from_millis(i as u64 * 1000 + 500);
+        seen.came(at, bytes);
+    }
+    seen.came(start + Duration::from_secs(rates.len() as u64 + 1), 0);
+    seen
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -259,21 +275,6 @@ mod tests {
         }
         // Finer where it is slow: a level's width grows with it.
         assert!(bytes_of(3) - bytes_of(2) < bytes_of(20) - bytes_of(19));
-    }
-
-    /// What was seen when each second brought `bytes`, in turn, fetching all along.
-    fn seen_at(rates: &[u64]) -> Throughput {
-        let mut seen = Throughput {
-            fetching: 1,
-            ..Default::default()
-        };
-        let start = Instant::now();
-        for (i, &bytes) in rates.iter().enumerate() {
-            let at = start + Duration::from_millis(i as u64 * 1000 + 500);
-            seen.came(at, bytes);
-        }
-        seen.came(start + Duration::from_secs(rates.len() as u64 + 1), 0);
-        seen
     }
 
     #[test]

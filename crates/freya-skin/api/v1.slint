@@ -1165,6 +1165,11 @@ export global App {
     in property <string> stream-cache: "auto";
     /// How much is kept, and the most that may be: "1.2 GB of at most 10 GB".
     in property <string> stream-cache-used;
+    /// How large music from a server on another computer is fetched: "auto", the largest that
+    /// plays through without waiting, as the network has been; "original", as it is; or made
+    /// smaller by the server, "high" (160 kbit/s) or "normal" (96 kbit/s). Set with
+    /// `set-stream-quality`. Kept between runs.
+    in property <string> stream-quality: "auto";
     /// Whether the window scrolls by the mouse's middle button, which Freya does for any skin,
     /// and where in the window it was started: a skin may mark the place.
     in property <bool> autoscroll;
@@ -1220,6 +1225,8 @@ export global App {
     callback set-stream-cache(string);
     /// Forget the music kept; it is fetched again as it plays.
     callback clear-stream-cache();
+    /// "auto", "original", "high" or "normal".
+    callback set-stream-quality(string);
     callback toggle-equalizer();
     /// Call on a mouse press in an empty part of the top bar, when the skin draws into the
     /// title bar: the window follows the mouse, and a double click zooms or minimizes it, as
