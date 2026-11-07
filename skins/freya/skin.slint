@@ -2074,7 +2074,9 @@ component FilterChip inherits Rectangle {
 component ArtistPageHead inherits Rectangle {
     in property <ArtistPage> page;
     /// The sort and view of their albums.
-    callback options();
+    /// The sort and view of their albums, from the button at `right` and `bottom` in the
+    /// window, for the menu to open under it.
+    callback options(length, length);
     /// Read all of what Last.fm says.
     callback read-more();
     /// Show their picture whole and large.
@@ -2395,13 +2397,15 @@ component ArtistPageHead inherits Rectangle {
                 color: Theme.text;
                 vertical-alignment: center;
             }
-            Rectangle {
+            albums-button := Rectangle {
                 width: albums-options.preferred-width;
                 border-radius: 6px;
                 background: albums-touch.has-hover ? Theme.hover : transparent;
                 accessible-role: button;
                 accessible-label: "Sort and view";
-                accessible-action-default => { root.options(); }
+                accessible-action-default => {
+                    root.options(self.absolute-position.x + self.width, self.absolute-position.y + self.height);
+                }
 
                 albums-options := HorizontalLayout {
                     padding-left: 8px;
@@ -2425,7 +2429,9 @@ component ArtistPageHead inherits Rectangle {
                 }
                 albums-touch := TouchArea {
                     mouse-cursor: pointer;
-                    clicked => { root.options(); }
+                    clicked => {
+                        root.options(albums-button.absolute-position.x + albums-button.width, albums-button.absolute-position.y + albums-button.height);
+                    }
                 }
             }
         }
@@ -3560,6 +3566,23 @@ component LibraryPanel inherits FocusScope {
     property <bool> history-shown: Library.query == "" && (Library.section == "recently-played" || Library.section == "most-played");
 
     property <length> list-row-height: 42px;
+    /// Where the sort and view menu opens, its right edge and top: under the button it was
+    /// opened from.
+    property <length> options-right: root.width - 20px;
+    property <length> options-bottom: root.options-height - 2px;
+
+    /// Opens the sort and view menu under the button at `right` and `bottom` in the window;
+    /// with them negative, under the one over the page.
+    function show-options(right: length, bottom: length) {
+        if (right < 0) {
+            root.options-right = root.width - 20px - root.beside;
+            root.options-bottom = root.options-height - 2px;
+        } else {
+            root.options-right = right - root.absolute-position.x;
+            root.options-bottom = bottom - root.absolute-position.y + 4px;
+        }
+        options-menu.show();
+    }
     /// The space beside a page's content in a wide window, on each side (see `Page`).
     property <length> beside: Page.beside(root.width - root.letters-width - 48px, Page.widest);
     /// The letters beside the artists or albums, when shown.
@@ -3825,7 +3848,7 @@ component LibraryPanel inherits FocusScope {
             if line < root.head-lines: ArtistPageHead {
                 page: Library.artist-page;
                 pad: 24px + root.beside;
-                options => { options-menu.show(); }
+                options(right, bottom) => { root.show-options(right, bottom); }
                 edit => {
                     if (Library.artist-page.kind == "genre") {
                         root.edit-genre();
@@ -3979,7 +4002,7 @@ component LibraryPanel inherits FocusScope {
             if cell.head: ArtistPageHead {
                 page: Library.artist-page;
                 pad: 24px + root.beside;
-                options => { options-menu.show(); }
+                options(right, bottom) => { root.show-options(right, bottom); }
                 edit => {
                     if (Library.artist-page.kind == "genre") {
                         root.edit-genre();
@@ -4087,7 +4110,7 @@ component LibraryPanel inherits FocusScope {
             background: options-touch.has-hover ? Theme.hover : transparent;
             accessible-role: button;
             accessible-label: "Sort and view";
-            accessible-action-default => { options-menu.show(); }
+            accessible-action-default => { root.show-options(-1px, -1px); }
 
             options-label := HorizontalLayout {
                 padding-left: 8px;
@@ -4123,7 +4146,7 @@ component LibraryPanel inherits FocusScope {
             }
             options-touch := TouchArea {
                 mouse-cursor: pointer;
-                clicked => { options-menu.show(); }
+                clicked => { root.show-options(-1px, -1px); }
             }
         }
     }
@@ -4147,8 +4170,9 @@ component LibraryPanel inherits FocusScope {
     }
 
     options-menu := PopupWindow {
-        x: root.width - self.width - 20px;
-        y: root.options-height - 2px;
+        x: root.options-right - self.width;
+        // Within the panel, near its end.
+        y: min(root.options-bottom, root.height - self.height - 8px);
         width: 220px;
 
         MenuSurface {
