@@ -1277,7 +1277,8 @@ component TrackRowView inherits Rectangle {
             horizontal-stretch: 1;
             text: entry.title;
             color: entry.current ? Theme.accent-text : Theme.text;
-            font-weight: 600;
+            // One line a track: the one playing stands out.
+            font-weight: entry.current ? 600 : 400;
             vertical-alignment: center;
             overflow: elide;
         }
