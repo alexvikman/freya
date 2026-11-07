@@ -304,7 +304,13 @@ fn answer(
         let Some(ticket) = showing().claim.clone() else {
             return text(404, "Start again from Freya's settings, with the code.");
         };
-        format!("{}?{}&ticket={ticket}", request.path, request.query)
+        // Its ticket alone: one the address brought is left out, so no other is read first.
+        let asked: Vec<&str> = request
+            .query
+            .split('&')
+            .filter(|pair| !pair.is_empty() && pair.split('=').next() != Some("ticket"))
+            .collect();
+        format!("{}?{}&ticket={ticket}", request.path, asked.join("&"))
     } else if request.query.is_empty() {
         request.path.clone()
     } else {
@@ -668,6 +674,18 @@ mod tests {
         let body = shown.body_mut().read_to_string().unwrap();
         assert!(body.contains(&ticket), "the page carries the ticket");
         assert!(body.contains("Adopt"), "{body}");
+        // A ticket the address brought is left out: the proxy's own alone is read.
+        let (path, query) = page.split_once('?').unwrap();
+        let mut brought = browser
+            .get(&format!("{origin}{path}?ticket=brought-along&{query}"))
+            .header("Cookie", cookie.as_str())
+            .call()
+            .unwrap();
+        let body = brought.body_mut().read_to_string().unwrap();
+        assert!(
+            body.contains(&ticket) && !body.contains("brought-along"),
+            "{body}"
+        );
         let opened = page.split_once('?').unwrap().1;
         let typed = format!(
             "{opened}&ticket={ticket}&username=Ada+Owner&password=correct+horse&again=correct+horse"
