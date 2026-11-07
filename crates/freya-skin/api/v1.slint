@@ -547,6 +547,16 @@ export global Library {
     /// a kind, "portrait" or "backdrop", by its index; the choice is kept by `save-artist`.
     in property <[PictureChoice]> portrait-choices;
     in property <[PictureChoice]> backdrop-choices;
+    /// Choosing the cover of the album whose page is shown: `edit-cover` lists in
+    /// `cover-choices` the album's own cover first, its music's or the internet's, then each
+    /// of its editions' front covers in the Cover Art Archive and fanart.tv's covers of it
+    /// (with a fanart.tv key); more come while `finding-pictures`. `choose-picture`,
+    /// `pick-picture-file` and `picture-from-url` take the kind "cover"; `save-cover` keeps the
+    /// one chosen, over what the music and the internet give, and `cancel-cover` leaves it.
+    in property <[PictureChoice]> cover-choices;
+    callback edit-cover();
+    callback save-cover();
+    callback cancel-cover();
     in property <bool> finding-pictures;
     /// Why the last picture given could not be used; empty when it could.
     in property <string> picture-error;

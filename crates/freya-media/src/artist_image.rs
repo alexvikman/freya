@@ -25,6 +25,7 @@ const NO_PICTURE: &str = "d41d8cd98f00b204e9800998ecf8427e";
 const MUSICBRAINZ_SEARCH: &str = "https://musicbrainz.org/ws/2/artist/";
 const MUSICBRAINZ_ALBUMS: &str = "https://musicbrainz.org/ws/2/release-group/";
 const FANART: &str = "https://webservice.fanart.tv/v3/music";
+const MUSICBRAINZ_RELEASES: &str = "https://musicbrainz.org/ws/2/release";
 /// MusicBrainz asks for at most one request a second, and for a way to reach the program's
 /// makers in its user agent.
 pub const MUSICBRAINZ_INTERVAL: Duration = Duration::from_millis(1100);
@@ -251,7 +252,7 @@ pub fn musicbrainz_albums(title: &str, artist: &str) -> Result<Vec<AlbumCandidat
 /// Callers wait [`MUSICBRAINZ_INTERVAL`] between calls.
 pub fn musicbrainz_album(group: &str) -> Result<Option<AlbumCandidate>, String> {
     // An id, never anything to be read as part of the address.
-    if group.len() != 36 || !group.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+    if !is_mbid(group) {
         return Ok(None);
     }
     let answer = get_json(
@@ -445,6 +446,110 @@ fn fanart_answer(mbid: &str, key: &str) -> Result<Option<serde_json::Value>, Str
         .map_err(|e| e.to_string())
 }
 
+/// Whether `id` is a MusicBrainz id, never anything to be read as part of an address.
+fn is_mbid(id: &str) -> bool {
+    id.len() == 36 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+}
+
+/// The front covers the Cover Art Archive keeps of the releases of the release group `group`,
+/// each edition's, with what tells it apart: its year and country, "2005 · US". At most
+/// `most`. Callers wait [`MUSICBRAINZ_INTERVAL`] between calls.
+pub fn release_covers(group: &str, most: usize) -> Result<Vec<(String, String)>, String> {
+    if !is_mbid(group) {
+        return Ok(Vec::new());
+    }
+    let answer = get_json(
+        MUSICBRAINZ_RELEASES,
+        &[("release-group", group), ("fmt", "json"), ("limit", "100")],
+    )?;
+    Ok(release_cover_urls(&answer, most))
+}
+
+/// The front covers' addresses, at most 500 pixels, in a MusicBrainz answer of releases: of
+/// those whose front the Cover Art Archive has, the earliest first.
+fn release_cover_urls(answer: &serde_json::Value, most: usize) -> Vec<(String, String)> {
+    let mut releases: Vec<(String, String, String)> = answer
+        .get("releases")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|release| {
+            release
+                .pointer("/cover-art-archive/front")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+        })
+        .filter_map(|release| {
+            let id = release.get("id")?.as_str()?;
+            if !is_mbid(id) {
+                return None;
+            }
+            let text = |name: &str| release.get(name).and_then(serde_json::Value::as_str);
+            let date = text("date").unwrap_or_default().to_owned();
+            let year = date.get(..4).unwrap_or_default();
+            let label = [year, text("country").unwrap_or_default()]
+                .into_iter()
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join(" · ");
+            Some((
+                // Undated last.
+                if date.is_empty() {
+                    "~".to_owned()
+                } else {
+                    date
+                },
+                format!("https://coverartarchive.org/release/{id}/front-500"),
+                label,
+            ))
+        })
+        .collect();
+    releases.sort_by(|a, b| a.0.cmp(&b.0));
+    releases
+        .into_iter()
+        .take(most)
+        .map(|(_, url, label)| (url, label))
+        .collect()
+}
+
+/// The album covers fanart.tv has of the release group `group`, best liked first.
+pub fn fanart_album_covers(group: &str, key: &str) -> Result<Vec<String>, String> {
+    if !is_mbid(group) {
+        return Ok(Vec::new());
+    }
+    let agent = agent();
+    let response = call_patiently(|| {
+        agent
+            .get(format!("{FANART}/albums/{group}"))
+            .query("client_key", key)
+            .call()
+    });
+    let text = match response {
+        Ok(mut response) => response
+            .body_mut()
+            .with_config()
+            .limit(MAX_ANSWER_BYTES)
+            .read_to_string()
+            .map_err(|e| e.to_string())?,
+        Err(ureq::Error::StatusCode(404)) => return Ok(Vec::new()),
+        Err(ureq::Error::StatusCode(401 | 403)) => {
+            return Err("fanart.tv did not take the API key".to_owned());
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+    let answer: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    Ok(album_cover_urls(&answer, group))
+}
+
+fn album_cover_urls(answer: &serde_json::Value, group: &str) -> Vec<String> {
+    answer
+        .get("albums")
+        .and_then(|albums| albums.get(group))
+        .and_then(|album| album.get("albumcover"))
+        .map(by_likes)
+        .unwrap_or_default()
+}
+
 /// The addresses in a list of fanart.tv pictures, best liked first; those liked as much as
 /// fanart.tv lists them, as its users ranked them.
 fn by_likes(pictures: &serde_json::Value) -> Vec<String> {
@@ -523,6 +628,60 @@ pub fn collage_of(covers: Vec<DynamicImage>, size: u32) -> Option<RgbImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_editions_front_cover_earliest_first() {
+        let answer = serde_json::json!({"releases": [
+            {"id": "22222222-2222-2222-2222-222222222222", "date": "2016-03-11", "country": "XW",
+             "cover-art-archive": {"front": true}},
+            {"id": "11111111-1111-1111-1111-111111111111", "date": "2007-01-23", "country": "US",
+             "cover-art-archive": {"front": true}},
+            {"id": "33333333-3333-3333-3333-333333333333", "date": "2008",
+             "cover-art-archive": {"front": false}},
+            {"id": "not an id", "cover-art-archive": {"front": true}},
+            {"id": "44444444-4444-4444-4444-444444444444",
+             "cover-art-archive": {"front": true}}
+        ]});
+        let covers = release_cover_urls(&answer, 12);
+        assert_eq!(
+            covers,
+            vec![
+                (
+                    "https://coverartarchive.org/release/11111111-1111-1111-1111-111111111111/front-500".to_owned(),
+                    "2007 · US".to_owned()
+                ),
+                (
+                    "https://coverartarchive.org/release/22222222-2222-2222-2222-222222222222/front-500".to_owned(),
+                    "2016 · XW".to_owned()
+                ),
+                (
+                    "https://coverartarchive.org/release/44444444-4444-4444-4444-444444444444/front-500".to_owned(),
+                    String::new()
+                ),
+            ]
+        );
+        assert_eq!(release_cover_urls(&answer, 1).len(), 1);
+    }
+
+    #[test]
+    fn fanart_album_covers_best_liked_first() {
+        let group = "11111111-1111-1111-1111-111111111111";
+        let answer = serde_json::json!({"albums": {group: {
+            "albumcover": [
+                {"url": "https://assets.fanart.tv/a.jpg", "likes": "1"},
+                {"url": "https://assets.fanart.tv/b.jpg", "likes": "4"}
+            ],
+            "cdart": [{"url": "https://assets.fanart.tv/cd.png", "likes": "9"}]
+        }}});
+        assert_eq!(
+            album_cover_urls(&answer, group),
+            vec![
+                "https://assets.fanart.tv/b.jpg",
+                "https://assets.fanart.tv/a.jpg"
+            ]
+        );
+        assert!(album_cover_urls(&answer, "22222222-2222-2222-2222-222222222222").is_empty());
+    }
 
     #[test]
     fn takes_only_the_artist_of_that_name_from_deezer() {

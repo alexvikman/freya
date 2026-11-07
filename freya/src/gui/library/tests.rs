@@ -1077,3 +1077,58 @@ fn a_page_shows_anew_only_once_the_rows_of_what_opened_are_here() {
     panel.reload();
     assert_eq!(panel.opens, opens + 1);
 }
+
+#[test]
+fn an_albums_cover_is_chosen_kept_and_given_back() {
+    use slint::Model;
+    let dir = std::env::temp_dir().join(format!("freya-choose-cover-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let fixtures =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-decode/tests/fixtures");
+    std::fs::copy(fixtures.join("sine.flac"), dir.join("sine.flac")).unwrap();
+    let picture = dir.join("cover.png");
+    image::RgbImage::from_pixel(600, 600, image::Rgb([200, 90, 30]))
+        .save(&picture)
+        .unwrap();
+    let mut db = Library::open_in_memory().unwrap();
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    freya_library::library::scan(&mut db, std::slice::from_ref(&dir), &cancel, |_| {}).unwrap();
+    let mut panel = LibraryPanel::new(None, None);
+    panel.open(local(db, Some(dir.join("pictures"))));
+    panel.reload();
+    panel.set_playing(Some((&dir.join("sine.flac"), Duration::ZERO)));
+    assert!(panel.open_playing(true));
+    let key = panel.album_page.as_ref().unwrap().cover.clone();
+    let tiles = |panel: &LibraryPanel| match panel.cover_choice_rows.model_value() {
+        Value::Model(model) => model.row_count(),
+        _ => 0,
+    };
+    let chosen = |panel: &LibraryPanel| {
+        panel
+            .db
+            .as_ref()
+            .unwrap()
+            .album_covers()
+            .unwrap()
+            .get(&key)
+            .cloned()
+    };
+
+    panel.edit_cover();
+    assert_eq!(tiles(&panel), 1, "the album's own");
+    panel.add_cover_file(&picture);
+    assert_eq!(tiles(&panel), 2);
+    assert!(panel.cover_picked.is_some(), "the user's own is chosen");
+    panel.save_cover();
+    let kept = chosen(&panel).unwrap();
+    assert!(kept.chosen);
+    assert!(kept.color.is_some());
+
+    // Chosen again, the album's own: the music's again.
+    panel.edit_cover();
+    panel.choose_cover(0);
+    panel.save_cover();
+    assert!(chosen(&panel).is_none_or(|cover| !cover.chosen));
+    let _ = std::fs::remove_dir_all(&dir);
+}

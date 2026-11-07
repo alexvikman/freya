@@ -6,6 +6,7 @@ mod autoscroll;
 mod bindings;
 mod builtin_skin;
 mod cover_decoder;
+mod cover_finder;
 pub mod equalizer;
 mod history;
 mod hologram;

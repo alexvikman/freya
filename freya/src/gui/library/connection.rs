@@ -32,6 +32,11 @@ impl LibraryPanel {
             "backdrop-choices",
             self.backdrop_rows.model_value(),
         );
+        let _ = ui.set_global_property(
+            "Library",
+            "cover-choices",
+            self.cover_choice_rows.model_value(),
+        );
         let _ = ui.set_global_property("Library", "artist-matches", self.match_rows.model_value());
         let _ = ui.set_global_property("Library", "album-matches", self.album_rows.model_value());
         self.folders_shown = None;
@@ -289,6 +294,7 @@ impl LibraryPanel {
             self.thumbnails = Some(thumbnails);
         }
         self.finder = PictureFinder::new(Some(Arc::clone(&api)));
+        self.cover_finder = CoverFinder::new(Some(Arc::clone(&api)));
         self.db = Some(api);
         self.find_playing_album();
         self.clear_older_cache();

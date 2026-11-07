@@ -2576,6 +2576,8 @@ component AlbumPageHead inherits Rectangle {
     in property <AlbumPage> page;
     /// Match the album to the one in MusicBrainz it is.
     callback fix-match();
+    /// Choose another cover for it.
+    callback choose-cover();
     /// Show its cover whole and large.
     callback show-picture();
 
@@ -2755,6 +2757,10 @@ component AlbumPageHead inherits Rectangle {
                 VerticalLayout {
                     padding: 6px;
 
+                    MenuRow {
+                        text: "Choose Cover…";
+                        activated => { root.choose-cover(); }
+                    }
                     MenuRow {
                         text: "Fix Match…";
                         activated => { root.fix-match(); }
@@ -3564,9 +3570,11 @@ component LibraryPanel inherits FocusScope {
     /// The dialog for changing the artist whose page is shown, at a page of it: "general"
     /// or "match".
     callback edit-artist(string);
-    /// The dialogs for matching the artist or the album shown.
+    /// The dialogs for matching the artist or the album shown, and for choosing the album's
+    /// cover.
     callback match-artist();
     callback match-album();
+    callback choose-cover();
     /// The dialog for changing the genre whose page is shown.
     callback edit-genre();
     /// Show another view: the playlist just made.
@@ -4070,6 +4078,7 @@ component LibraryPanel inherits FocusScope {
             if index == 0: AlbumPageHead {
                 page: Library.album-page;
                 fix-match => { root.match-album(); }
+                choose-cover => { root.choose-cover(); }
                 show-picture => {
                     root.picture-of-album = true;
                     Library.show-album-cover();
@@ -7775,6 +7784,84 @@ component ArtistEditForm inherits MenuSurface {
                     }
                 }
             }
+        }
+        Rectangle {
+            height: 1px;
+            background: Theme.divider;
+        }
+        HorizontalLayout {
+            padding: 14px;
+            padding-left: 20px;
+            padding-right: 20px;
+            spacing: 8px;
+            alignment: end;
+
+            TextButton {
+                text: "Cancel";
+                clicked => { root.cancel(); }
+            }
+            TextButton {
+                text: "Save Changes";
+                primary: true;
+                clicked => { root.save(); }
+            }
+        }
+    }
+}
+
+/// Choosing an album's cover: its own, its editions' and fanart.tv's, or the user's.
+component AlbumCoverForm inherits MenuSurface {
+    callback closed();
+
+    function save() {
+        Library.save-cover();
+        root.closed();
+    }
+
+    public function cancel() {
+        Library.cancel-cover();
+        root.closed();
+    }
+
+    VerticalLayout {
+        HorizontalLayout {
+            padding: 20px;
+            padding-right: 12px;
+            spacing: 12px;
+
+            Icon {
+                width: 22px;
+                height: 22px;
+                y: (parent.height - self.height) / 2;
+                data: Icons.picture;
+                stroked: true;
+                color: Theme.text-secondary;
+            }
+            Text {
+                horizontal-stretch: 1;
+                text: "Cover of " + Library.album-page.title;
+                font-size: 20px;
+                font-weight: 600;
+                color: Theme.text;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            IconButton {
+                icon: Icons.close;
+                stroked: true;
+                size: 32px;
+                label: "Close";
+                clicked => { root.cancel(); }
+            }
+        }
+        Rectangle {
+            height: 1px;
+            background: Theme.divider;
+        }
+        PicturePage {
+            vertical-stretch: 1;
+            kind: "cover";
+            choices: Library.cover-choices;
         }
         Rectangle {
             height: 1px;
@@ -11877,6 +11964,10 @@ export component FreyaSkin inherits Window {
                                     Library.match-album();
                                     album-match-popup.show();
                                 }
+                                choose-cover => {
+                                    Library.edit-cover();
+                                    cover-popup.show();
+                                }
                                 match-artist => {
                                     Library.match-artist();
                                     artist-match-popup.show();
@@ -12261,6 +12352,40 @@ export component FreyaSkin inherits Window {
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
                     closed => { artist-popup.close(); }
+                }
+            }
+        }
+    }
+
+    // As the artist's dialog.
+    cover-popup := PopupWindow {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        close-policy: no-auto-close;
+
+        DialogFocus {
+            key-pressed(event) => {
+                if (event.text == Key.Escape) {
+                    cover-form.cancel();
+                    return accept;
+                }
+                reject
+            }
+
+            DialogScrim {
+                // A click beside the dialog, as Escape.
+                dismissed => {
+                    cover-form.cancel();
+                }
+
+                cover-form := AlbumCoverForm {
+                    width: min(780px, parent.width - 48px);
+                    height: min(600px, parent.height - 48px);
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    closed => { cover-popup.close(); }
                 }
             }
         }

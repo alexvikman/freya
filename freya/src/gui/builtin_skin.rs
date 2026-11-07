@@ -1182,6 +1182,7 @@ skin_api! {
         Library."artist-draft" => set_artist_draft, get_artist_draft;
         Library."genre-draft" => set_genre_draft, get_genre_draft;
         Library."portrait-choices" => set_portrait_choices, get_portrait_choices;
+        Library."cover-choices" => set_cover_choices, get_cover_choices;
         Library."backdrop-choices" => set_backdrop_choices, get_backdrop_choices;
         Library."finding-pictures" => set_finding_pictures, get_finding_pictures;
         Library."picture-error" => set_picture_error, get_picture_error;
@@ -1425,6 +1426,9 @@ skin_api! {
         Library."edit-artist" => on_edit_artist, invoke_edit_artist();
         Library."save-artist" => on_save_artist, invoke_save_artist(name: SharedString, sort_name: SharedString, mbid: SharedString, biography: SharedString, header: SharedString);
         Library."cancel-artist" => on_cancel_artist, invoke_cancel_artist();
+        Library."edit-cover" => on_edit_cover, invoke_edit_cover();
+        Library."save-cover" => on_save_cover, invoke_save_cover();
+        Library."cancel-cover" => on_cancel_cover, invoke_cancel_cover();
         Library."edit-genre" => on_edit_genre, invoke_edit_genre();
         Library."pick-genre-picture" => on_pick_genre_picture, invoke_pick_genre_picture(kind: SharedString);
         Library."clear-genre-picture" => on_clear_genre_picture, invoke_clear_genre_picture(kind: SharedString);

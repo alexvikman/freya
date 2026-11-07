@@ -271,12 +271,32 @@ pub(super) fn bind(b: &Binder) {
     );
     b.bind(
         "Library",
+        "edit-cover",
+        Box::new(|app, _| app.library.edit_cover()),
+    );
+    b.bind(
+        "Library",
+        "save-cover",
+        Box::new(|app, _| app.library.save_cover()),
+    );
+    b.bind(
+        "Library",
+        "cancel-cover",
+        Box::new(|app, _| app.library.cancel_cover()),
+    );
+    b.bind(
+        "Library",
         "choose-picture",
         Box::new(|app, args| {
             if let (Some(Value::String(kind)), Some(Value::Number(index))) =
                 (args.first(), args.get(1))
             {
-                app.library.choose_picture(kind, *index as usize);
+                // An album's cover, or an artist's picture.
+                if kind.as_str() == "cover" {
+                    app.library.choose_cover(*index as usize);
+                } else {
+                    app.library.choose_picture(kind, *index as usize);
+                }
             }
         }),
     );
@@ -345,7 +365,11 @@ pub(super) fn bind(b: &Binder) {
             if let (Some(Value::String(kind)), Some(Value::String(url))) =
                 (args.first(), args.get(1))
             {
-                app.library.picture_from_url(kind, url);
+                if kind.as_str() == "cover" {
+                    app.library.cover_from_url(url);
+                } else {
+                    app.library.picture_from_url(kind, url);
+                }
             }
         }),
     );
@@ -393,7 +417,11 @@ pub(super) fn bind(b: &Binder) {
                     && let Some(app) = app.upgrade()
                     && let Ok(mut app) = app.try_borrow_mut()
                 {
-                    app.library.add_picture_file(kind, &file);
+                    if kind.as_str() == "cover" {
+                        app.library.add_cover_file(&file);
+                    } else {
+                        app.library.add_picture_file(kind, &file);
+                    }
                     app.refresh();
                 }
                 Value::Void

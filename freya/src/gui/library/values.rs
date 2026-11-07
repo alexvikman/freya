@@ -150,7 +150,10 @@ impl LibraryPanel {
             ),
             ("artist-draft", self.draft_value()),
             ("genre-draft", self.genre_draft_value()),
-            ("finding-pictures", Value::Bool(self.finder.searching())),
+            (
+                "finding-pictures",
+                Value::Bool(self.finder.searching() || self.finding_covers()),
+            ),
             ("picture-error", string(&self.picture_error)),
             (
                 "finding-matches",

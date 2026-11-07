@@ -26,6 +26,7 @@ use playlist_page::{PlaylistDraft, PlaylistPage};
 mod album_page;
 mod artist_page;
 mod connection;
+mod cover_editing;
 mod editing;
 mod favorites;
 mod genre_page;
@@ -37,6 +38,7 @@ mod scans;
 mod search_page;
 mod text;
 mod values;
+use super::cover_finder::CoverFinder;
 use super::match_finder::{AlbumFinder, MatchFinder};
 use super::picture_finder::{Found, Pick, PictureFinder, Request};
 use super::skin_state::{ModelRows, format_time, string};
@@ -442,6 +444,13 @@ pub struct LibraryPanel {
     picture_error: String,
     portrait_rows: ModelRows,
     backdrop_rows: ModelRows,
+    /// While the user chooses an album's cover: which album, the covers found to choose
+    /// from, and the one chosen, none for the album's own.
+    cover_draft: Option<cover_editing::CoverDraft>,
+    cover_finder: CoverFinder,
+    cover_choices: Vec<cover_editing::CoverChoice>,
+    cover_picked: Option<String>,
+    cover_choice_rows: ModelRows,
     /// While the user matches an artist: who; and the artists MusicBrainz found by their name,
     /// with pictures by their id.
     artist_match: Option<Option<String>>,
@@ -610,6 +619,11 @@ impl LibraryPanel {
             picture_error: String::new(),
             portrait_rows: ModelRows::new(),
             backdrop_rows: ModelRows::new(),
+            cover_draft: None,
+            cover_finder: CoverFinder::new(None),
+            cover_choices: Vec::new(),
+            cover_picked: None,
+            cover_choice_rows: ModelRows::new(),
             artist_match: None,
             match_finder: MatchFinder::new(),
             matches: Vec::new(),
@@ -748,6 +762,7 @@ impl LibraryPanel {
                 self.show_matches();
             }
         }
+        self.take_found_covers();
         if self.draft.is_some() {
             let (found, failed) = self.finder.poll();
             if let Some(failed) = failed {
