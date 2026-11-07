@@ -1589,6 +1589,11 @@ component TrackList inherits FocusScope {
         accept
     }
 
+    // Under the rows: a click beside them lets go of the selection.
+    TouchArea {
+        clicked => { Playlist.clear-selection(); }
+    }
+
     // The columns' heading, over the rows, as a playlist's.
     if Playlist.rows.length > 0: Rectangle {
         x: 8px;
@@ -3820,6 +3825,12 @@ component LibraryPanel inherits FocusScope {
     }
 
     /// Row the keyboard acts on, or -1.
+    // A click elsewhere in the window takes the keyboard, and lets go of the row it was on.
+    focus-changed-event(reason) => {
+        if (!self.has-focus) {
+            root.cursor = -1;
+        }
+    }
     property <int> cursor: -1;
     property <bool> grid-shown: Library.layout == "grid";
     property <bool> table-shown: Library.layout == "table";
@@ -4019,6 +4030,11 @@ component LibraryPanel inherits FocusScope {
 
     // All three views always exist, so the functions above can reach them; the ones not
     // shown get no rows.
+    // Under the rows: a click beside them lets go of the row the keyboard is on.
+    TouchArea {
+        clicked => { root.cursor = -1; }
+    }
+
     list := ListView {
         visible: root.list-shown;
         x: 0;
