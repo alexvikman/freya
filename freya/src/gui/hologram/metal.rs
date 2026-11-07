@@ -566,7 +566,8 @@ mod tests {
     use super::*;
 
     /// The poses must be ready in moments: they were once scaled on the CPU, which took four
-    /// seconds before the hologram showed.
+    /// seconds before the hologram showed. Well under a second here; CI's virtual graphics
+    /// cards take half of one, so the bound leaves room for them and still catches that.
     #[test]
     fn poses_are_ready_quickly() {
         let Some(device) = MTLCreateSystemDefaultDevice() else {
@@ -578,7 +579,7 @@ mod tests {
         let took = started.elapsed();
         println!("{count} poses in {took:?}");
         assert_eq!(textures.len(), count.max(1));
-        assert!(took < Duration::from_millis(500), "{took:?}");
+        assert!(took < Duration::from_millis(1500), "{took:?}");
     }
 
     /// What a frame costs, drawn into a texture the size of a large window: the CPU's time on
