@@ -3412,10 +3412,36 @@ component LibraryPanel inherits FocusScope {
     property <int> restores: App.restores;
     changed shown => {
         if (root.shown) {
+            root.stale-shown = Library.pending;
             root.report-scroll();
         }
     }
-    changed restores => { root.restore-scroll(); }
+    // Scrolled back once the rows of where it goes back to are here.
+    changed restores => {
+        if (!Library.pending) {
+            root.restore-scroll();
+        }
+    }
+    // Something else opened: what was shown stays as it was until its rows are here, then
+    // it shows from the top, or where it was, going back or forward.
+    property <int> opens: Library.opens;
+    changed opens => {
+        if (App.restore-view == "library") {
+            root.restore-scroll();
+        } else {
+            root.start-over();
+        }
+    }
+    // Opened from another view while the rows are still those of what was open before:
+    // hidden until the rows of what is open now are here, so the old ones do not flash.
+    property <bool> stale-shown;
+    property <bool> pending: Library.pending;
+    changed pending => {
+        if (!root.pending) {
+            root.stale-shown = false;
+        }
+    }
+    opacity: root.stale-shown ? 0 : 1;
     // Opened from elsewhere, as the album of the track playing: from the top, or at its row.
     property <int> reveals: Library.reveals;
     changed reveals => {
@@ -3596,10 +3622,9 @@ component LibraryPanel inherits FocusScope {
         if (row < 0 || row >= Library.rows.length) {
             return;
         }
+        // Opening it shows its page from the top, once it is here (see `opens`).
         if (Library.rows[row].kind == "track") {
             root.cursor = row;
-        } else {
-            root.start-over();
         }
         Library.activate(row);
     }
@@ -3610,13 +3635,11 @@ component LibraryPanel inherits FocusScope {
     }
 
     public function back() {
-        root.start-over();
         Library.back();
     }
 
     /// A section chosen in the navigation.
     public function show(section: string) {
-        root.start-over();
         Library.show(section);
     }
 

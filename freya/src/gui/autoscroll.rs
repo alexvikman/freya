@@ -12,12 +12,16 @@ use slint::LogicalPosition;
 use slint::winit_030::winit::event::{ElementState, MouseButton, WindowEvent as WinitEvent};
 use slint::winit_030::winit::keyboard::{Key, NamedKey};
 
-/// How far the mouse may move from the mark without scrolling, in points.
+/// How far the mouse may move from the mark without scrolling, in points: the unit of the
+/// speed's curve, too.
 const STILL: f32 = 12.0;
-/// How many points a frame it scrolls for each point the mouse is beyond that…
-const SPEED: f32 = 0.12;
-/// …and at most.
-const FASTEST: f32 = 160.0;
+/// The speed grows faster than the distance: with the distance in units of [`STILL`], as
+/// its power 1.5, less one, in points each [`PER`], as web browsers scroll. Far away it
+/// races; near the mark it creeps.
+const POWER: f32 = 1.5;
+const PER: Duration = Duration::from_millis(20);
+/// The most it scrolls a frame.
+const FASTEST: f32 = 400.0;
 /// How often it scrolls while on: every frame of a 60 Hz screen.
 const FRAME: Duration = Duration::from_millis(16);
 
@@ -146,14 +150,14 @@ impl Autoscroll {
     pub fn step(&self) -> Option<Step> {
         let state = self.state.borrow();
         let mark = state.mark?;
-        let speed = |offset: f32| {
-            let beyond = offset.abs() - STILL;
-            if beyond <= 0.0 {
-                0.0
-            } else {
-                // Moving the mouse down shows what is further down, as the wheel turned so.
-                -offset.signum() * (beyond * SPEED).min(FASTEST)
+        let speed = |offset: f32| -> f32 {
+            let units = offset.abs() / STILL;
+            if units <= 1.0 {
+                return 0.0;
             }
+            let per_frame = (units.powf(POWER) - 1.0) * FRAME.as_secs_f32() / PER.as_secs_f32();
+            // Moving the mouse down shows what is further down, as the wheel turned so.
+            -offset.signum() * per_frame.min(FASTEST)
         };
         Some(Step {
             at: mark,
@@ -230,6 +234,13 @@ mod tests {
         at(&autoscroll, 100.0, 300.0);
         let faster = autoscroll.step().unwrap();
         assert!(faster.delta_y < down.delta_y);
+        // It speeds up faster than the distance grows: twice as far is more than twice as
+        // fast.
+        at(&autoscroll, 100.0, 200.0);
+        let near = autoscroll.step().unwrap().delta_y;
+        at(&autoscroll, 100.0, 300.0);
+        let far = autoscroll.step().unwrap().delta_y;
+        assert!(far < 2.0 * near, "{far} against {near}");
         assert_eq!(faster.at, LogicalPosition::new(100.0, 100.0));
         at(&autoscroll, 100.0, 50_000.0);
         assert_eq!(autoscroll.step().unwrap().delta_y, -FASTEST);

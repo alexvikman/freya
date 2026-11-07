@@ -1045,3 +1045,35 @@ fn an_artists_albums_are_filtered_by_their_kind() {
     panel.reload();
     assert_eq!(panel.album_filter, AlbumFilter::All);
 }
+
+#[test]
+fn a_page_shows_anew_only_once_the_rows_of_what_opened_are_here() {
+    let fixtures =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/freya-audio/tests/fixtures");
+    let mut db = Library::open_in_memory().unwrap();
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    freya_library::library::scan(&mut db, &[fixtures], &cancel, |_| {}).unwrap();
+    let artist = db.artists().unwrap()[0].name.clone();
+    let mut panel = LibraryPanel::new(None, None);
+    panel.open(local(db, None));
+    let value = |panel: &LibraryPanel, name: &str| {
+        panel
+            .values()
+            .into_iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, v)| v)
+            .unwrap()
+    };
+    let opens = panel.opens;
+    assert_eq!(value(&panel, "pending"), Value::Bool(false));
+    // An artist opened: until its rows are read, those shown are of what was open before.
+    panel.opened.push(Level::ArtistAlbums { artist });
+    assert_eq!(value(&panel, "pending"), Value::Bool(true));
+    assert_eq!(panel.opens, opens);
+    panel.reload();
+    assert_eq!(value(&panel, "pending"), Value::Bool(false));
+    assert_eq!(panel.opens, opens + 1);
+    // Read again, it is the same page.
+    panel.reload();
+    assert_eq!(panel.opens, opens + 1);
+}

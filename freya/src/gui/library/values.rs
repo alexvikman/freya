@@ -121,6 +121,11 @@ impl LibraryPanel {
             ("playing-known", Value::Bool(self.playing_album.is_some())),
             ("reveal-row", Value::Number(f64::from(self.reveal_row))),
             ("reveals", Value::Number(f64::from(self.reveals))),
+            ("opens", Value::Number(f64::from(self.opens))),
+            (
+                "pending",
+                Value::Bool(self.db.is_some() && self.read_for.as_ref() != Some(&self.place())),
+            ),
             ("album-page", self.album_page_value()),
             ("artist-page", self.artist_page_value()),
             (

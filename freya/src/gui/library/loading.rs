@@ -309,6 +309,17 @@ impl LibraryPanel {
         }
         self.rows.sync(rows);
         self.letter_rows.sync(self.letters());
+        // Of something else opened, not the same search typed on: a page anew.
+        let place = self.place();
+        let anew = self
+            .read_for
+            .as_ref()
+            .is_none_or(|before| *before != place && !before.continued_by(&place));
+        if anew {
+            self.opens += 1;
+            self.reveal_row = -1;
+        }
+        self.read_for = Some(place);
         self.find_playing_row();
         if let Some(album) = self.reveal_playing.take() {
             self.reveal_row = if album { self.playing_row } else { -1 };

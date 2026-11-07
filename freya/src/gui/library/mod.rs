@@ -418,6 +418,10 @@ pub struct LibraryPanel {
     /// up; -1 to show the list from the top.
     reveal_row: i32,
     reveals: i32,
+    /// What was open when the rows were read last, and how often they were of something else
+    /// opened: the skin shows a page anew then.
+    read_for: Option<LibraryPlace>,
+    opens: i32,
     /// How artists are ordered, and whether they show as a list rather than a grid of
     /// pictures.
     artist_order: ArtistOrder,
@@ -597,6 +601,8 @@ impl LibraryPanel {
             playing_album: None,
             reveal_row: -1,
             reveals: 0,
+            read_for: None,
+            opens: 0,
             play_counts: HashMap::new(),
             album_page: None,
             artist_order: ArtistOrder::Name,

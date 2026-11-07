@@ -373,6 +373,14 @@ export global Library {
     /// into view.
     in property <int> reveal-row: -1;
     in property <int> reveals;
+    /// Counts up each time the rows of something else opened are here, as an artist, an album
+    /// or a section: a page from the top (unless `App.restore-view` is "library", going back
+    /// or forward, which scrolls to `App.restore-scroll`). Until then the rows are still those
+    /// of what was open before, which stay as they were.
+    in property <int> opens;
+    /// True while the rows are those of what was open before, the rows of what is open now
+    /// being read: shown when the library view is opened from another, they would flash.
+    in property <bool> pending;
     /// True while the artists are shown, which `artist-sort` and `artist-view` apply to.
     in property <bool> artist-options;
     /// How the artists are ordered: "name", "most-played" or "recently-added". Kept between

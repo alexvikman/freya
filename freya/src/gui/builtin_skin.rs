@@ -1160,6 +1160,8 @@ skin_api! {
         Library."playing-known" => set_playing_known, get_playing_known;
         Library."reveal-row" => set_reveal_row, get_reveal_row;
         Library."reveals" => set_reveals, get_reveals;
+        Library."opens" => set_opens, get_opens;
+        Library."pending" => set_pending, get_pending;
         Library."folders-offered" => set_folders_offered, get_folders_offered;
         Library."last-scan" => set_last_scan, get_last_scan;
         Library."album-page" => set_album_page, get_album_page;
