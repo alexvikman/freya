@@ -129,6 +129,14 @@ pub struct LibraryPlace {
     query: String,
 }
 
+impl LibraryPlace {
+    /// One of the library's sections, as Artists or Albums, not something opened in one, nor
+    /// a search.
+    pub fn is_section(&self) -> bool {
+        self.opened.len() <= 1 && self.query.is_empty()
+    }
+}
+
 /// Which of an artist's albums show, by the kind of release they are.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AlbumFilter {

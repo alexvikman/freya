@@ -25,6 +25,12 @@ impl Place {
     fn same(&self, other: &Self) -> bool {
         self.view == other.view && self.library == other.library && self.playlist == other.playlist
     }
+
+    /// One of the places the user moves between, as the library's sections and the skin's
+    /// views, rather than something opened in them, as an artist, an album or a playlist.
+    fn is_section(&self) -> bool {
+        self.playlist.is_none() && self.library.as_ref().is_none_or(LibraryPlace::is_section)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -48,9 +54,15 @@ impl History {
             return false;
         }
         current.scroll = scroll;
+        // A section comes back scrolled where it was left; what was opened anew starts at its
+        // top.
+        let kept = (place.is_section())
+            .then(|| self.places.iter().rev().find(|p| p.same(&place)))
+            .flatten()
+            .map_or(0.0, |p| p.scroll);
         self.places.truncate(self.at + 1);
         self.places.push(Place {
-            scroll: 0.0,
+            scroll: kept,
             ..place
         });
         if self.places.len() > MAX_PLACES {
@@ -78,6 +90,11 @@ impl History {
         }
         self.places[self.at].scroll = scroll;
         self.at += 1;
+        self.places.get(self.at)
+    }
+
+    /// The place shown.
+    pub fn shown(&self) -> Option<&Place> {
         self.places.get(self.at)
     }
 
@@ -143,6 +160,29 @@ mod tests {
         history.visit(view("queue"), 0.0);
         history.visit(view("queue"), 300.0);
         assert!(!history.can_go_back());
+    }
+
+    #[test]
+    fn a_section_comes_back_where_it_was_left_and_an_opened_place_at_its_top() {
+        let mut history = History::default();
+        let scroll = |history: &History| history.shown().unwrap().scroll;
+        history.visit(view("queue"), 0.0);
+        // The queue left scrolled to 300, the radio to 50.
+        history.visit(view("radio"), 300.0);
+        assert_eq!(scroll(&history), 0.0);
+        history.visit(view("queue"), 50.0);
+        assert_eq!(scroll(&history), 300.0);
+        history.visit(view("radio"), 0.0);
+        assert_eq!(scroll(&history), 50.0);
+        // A playlist opened again starts at its top.
+        let playlist = Place {
+            playlist: Some(2),
+            ..view("playlist")
+        };
+        history.visit(playlist.clone(), 0.0);
+        history.visit(view("queue"), 500.0);
+        history.visit(playlist, 0.0);
+        assert_eq!(scroll(&history), 0.0);
     }
 
     #[test]

@@ -36,11 +36,18 @@ impl App {
         };
         let scroll = self.shown_scroll();
         if self.history.visit(place, scroll) {
-            // A place reached anew starts at its top, not where a restored one was.
-            let _ = self
-                .view
-                .ui
-                .set_global_property("App", "restore-view", skin_state::string(""));
+            // A section comes back where it was left (see `History::visit`); anything else
+            // reached anew starts at its top, not where a restored place was.
+            match self.history.shown().filter(|p| p.scroll > 0.0).cloned() {
+                Some(section) => self.restore_scroll(&section),
+                None => {
+                    let _ = self.view.ui.set_global_property(
+                        "App",
+                        "restore-view",
+                        skin_state::string(""),
+                    );
+                }
+            }
         }
     }
 
@@ -58,8 +65,6 @@ impl App {
         }
     }
 
-    /// Shows `place` again: the library or playlist as it was, the skin's view, and how far
-    /// down it was scrolled.
     /// Shows the skin's `view`, as the user would by choosing it.
     pub fn show_view(&mut self, view: &str) {
         let _ = self
@@ -68,6 +73,8 @@ impl App {
             .set_global_property("App", "view", skin_state::string(view));
     }
 
+    /// Shows `place` again: the library or playlist as it was, the skin's view, and how far
+    /// down it was scrolled.
     pub(super) fn show_place(&mut self, place: &Place) {
         if let Some(library) = &place.library {
             self.library.go_to(library);
@@ -75,10 +82,18 @@ impl App {
         if place.view == "playlist" {
             self.shown_playlist = place.playlist;
         }
+        let _ = self
+            .view
+            .ui
+            .set_global_property("App", "view", skin_state::string(&place.view));
+        self.restore_scroll(place);
+    }
+
+    /// Has the skin scroll `place`, shown now, to where it was.
+    fn restore_scroll(&mut self, place: &Place) {
         self.restores += 1;
         let ui = &self.view.ui;
         let scroll = Value::Number(f64::from(place.scroll));
-        let _ = ui.set_global_property("App", "view", skin_state::string(&place.view));
         let _ = ui.set_global_property("App", "scroll", scroll.clone());
         let _ = ui.set_global_property("App", "restore-scroll", scroll);
         let _ = ui.set_global_property("App", "restore-view", skin_state::string(&place.view));

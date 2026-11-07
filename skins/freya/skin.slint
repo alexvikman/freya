@@ -3825,7 +3825,8 @@ component LibraryPanel inherits FocusScope {
     }
 
     function report-scroll() {
-        App.scroll = -(root.grid-shown ? grid.content-y
+        App.scroll = -(root.search-page-shown ? search-page.content-y
+            : root.grid-shown ? grid.content-y
             : root.table-shown ? table.content-y
             : root.discography-shown ? discography.content-y
             : root.album-shown ? album.content-y
@@ -3852,7 +3853,9 @@ component LibraryPanel inherits FocusScope {
     }
 
     function scroll-back() {
-        if (root.grid-shown) {
+        if (root.search-page-shown) {
+            search-page.content-y = -App.restore-scroll;
+        } else if (root.grid-shown) {
             grid.content-y = -App.restore-scroll;
         } else if (root.table-shown) {
             table.content-y = -App.restore-scroll;
@@ -4045,6 +4048,7 @@ component LibraryPanel inherits FocusScope {
         grid.content-y = 0;
         discography.content-y = 0;
         album.content-y = 0;
+        search-page.content-y = 0;
     }
 
     /// Opens an artist, album or genre, or plays a track.
@@ -4135,10 +4139,17 @@ component LibraryPanel inherits FocusScope {
         }
     }
 
-    // A search's page of every kind of match.
-    if root.search-page-shown: SearchPage {
+    // A search's page of every kind of match; kept while hidden, so going back to it finds it
+    // scrolled where it was.
+    search-page := SearchPage {
+        visible: root.search-page-shown;
         y: root.options-height;
         height: root.height - root.options-height;
+        changed content-y => {
+            if (root.shown) {
+                root.report-scroll();
+            }
+        }
         cursor: root.cursor;
         activate(row) => { root.activate(row); }
         open-menu(row, x, y) => { root.open-menu(row, x, y); }
@@ -6153,8 +6164,27 @@ component PlaylistView inherits Rectangle {
     function restore-scroll() {
         if (App.restore-view == "playlist") {
             tracks.content-y = -App.restore-scroll;
+            root.restore-tries = 0;
+            restore-again.running = true;
         }
         App.scroll = -tracks.content-y;
+    }
+
+    // Scrolled back again until it stays: until the page is laid out with its entries, where
+    // it was would be beyond its end.
+    property <int> restore-tries;
+    restore-again := Timer {
+        interval: 30ms;
+        running: false;
+        triggered => {
+            root.restore-tries += 1;
+            if (App.restore-view != "playlist" || root.restore-tries > 20
+                    || tracks.content-y == -App.restore-scroll) {
+                self.running = false;
+                return;
+            }
+            tracks.content-y = -App.restore-scroll;
+        }
     }
 
     // The page's color fading out from under its heading, behind its buttons and first
