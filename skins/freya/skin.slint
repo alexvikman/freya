@@ -934,6 +934,13 @@ component EqualizerView inherits VerticalLayout {
     property <int> active: -1;
     property <length> label-height: 20px;
 
+    Text {
+        text: "Equalizer";
+        font-size: 28px;
+        font-weight: 800;
+        color: Theme.text;
+    }
+
     HorizontalLayout {
         spacing: 10px;
 
@@ -1537,6 +1544,9 @@ component TrackList inherits FocusScope {
     property <bool> album-shown: root.width > 560px;
     property <float> time-stretch: max(0, min(2, (root.width - 800px) / 200px));
     property <length> heading-height: 40px;
+    /// Whether its title shows over it: as the view, not beside the stage.
+    in property <bool> titled;
+    property <length> title-height: root.titled ? 84px : 0;
     // Where a right-click opened the menu, in this component.
     property <length> menu-x;
     property <length> menu-y;
@@ -1594,10 +1604,32 @@ component TrackList inherits FocusScope {
         clicked => { Playlist.clear-selection(); }
     }
 
+    if root.titled: VerticalLayout {
+        x: 24px;
+        y: 0;
+        width: root.width - 48px;
+        height: root.title-height;
+        alignment: center;
+        spacing: 2px;
+
+        Text {
+            text: "Up Next";
+            font-size: 28px;
+            font-weight: 800;
+            color: Theme.text;
+            overflow: elide;
+        }
+        if Playlist.summary != "": Text {
+            text: Playlist.summary;
+            font-size: 14px;
+            color: Theme.text-secondary;
+            overflow: elide;
+        }
+    }
     // The columns' heading, over the rows, as a playlist's.
     if Playlist.rows.length > 0: Rectangle {
         x: 8px;
-        y: 0;
+        y: root.title-height;
         width: root.width - 16px;
         height: root.heading-height;
 
@@ -1661,9 +1693,9 @@ component TrackList inherits FocusScope {
     // inside its corners.
     list := ListView {
         x: 8px;
-        y: root.heading-height + 4px;
+        y: root.title-height + root.heading-height + 4px;
         width: root.width - 16px;
-        height: root.height - root.heading-height - 4px - 8px;
+        height: root.height - root.title-height - root.heading-height - 4px - 8px;
         changed content-y => {
             if (root.shown) {
                 App.scroll = -self.content-y;
@@ -3864,7 +3896,10 @@ component LibraryPanel inherits FocusScope {
     /// Over the artists, and an artist's albums: how they are ordered and shown. The artist's
     /// page has these in its albums' heading.
     property <bool> options-shown: ((Library.album-options || Library.artist-options || Library.albums-options || Library.playlists-options) && !artist-page-shown) || Library.search-shown;
-    property <length> options-height: options-shown ? 44px : 0;
+    /// Whether a section's title shows over it, as "Albums" and how many: not on a page with
+    /// a heading of its own, nor a search's.
+    property <bool> titled: !root.album-shown && !root.artist-page-shown && !Library.search-shown;
+    property <length> options-height: root.titled ? 84px : options-shown ? 44px : 0;
     property <length> album-head-height: 188px;
     /// Recently Played and Most Played show when or how often each track was played.
     property <bool> played-column: Library.rows.length > 0 && Library.rows[0].played != "";
@@ -4369,6 +4404,29 @@ component LibraryPanel inherits FocusScope {
                 root.start-over();
                 Library.set-search-filter(chip.name);
             }
+        }
+    }
+    // The section's title, at the top of its page, its sort and view beside it.
+    if root.titled: VerticalLayout {
+        x: 24px + root.beside;
+        y: 0;
+        width: max(0, root.width / 2 - self.x);
+        height: root.options-height;
+        alignment: center;
+        spacing: 2px;
+
+        Text {
+            text: Library.title;
+            font-size: 28px;
+            font-weight: 800;
+            color: Theme.text;
+            overflow: elide;
+        }
+        if Library.subtitle != "" || Library.status != "": Text {
+            text: Library.subtitle != "" ? Library.subtitle : Library.status;
+            font-size: 14px;
+            color: Theme.text-secondary;
+            overflow: elide;
         }
     }
     if root.options-shown && !Library.search-shown: HorizontalLayout {
@@ -5237,6 +5295,27 @@ component RadioView inherits Rectangle {
     }
 
     VerticalLayout {
+        VerticalLayout {
+            height: 84px;
+            padding-left: 24px + root.beside;
+            padding-right: 24px + root.beside;
+            alignment: center;
+            spacing: 2px;
+
+            Text {
+                text: "Radio";
+                font-size: 28px;
+                font-weight: 800;
+                color: Theme.text;
+                overflow: elide;
+            }
+            if Radio.summary != "": Text {
+                text: Radio.summary;
+                font-size: 14px;
+                color: Theme.text-secondary;
+                overflow: elide;
+            }
+        }
         HorizontalLayout {
             height: 52px;
             padding-left: 24px + root.beside;
@@ -11183,14 +11262,9 @@ component AccountButton inherits Rectangle {
 component Toolbar inherits HorizontalLayout {
     /// Room kept free at the left, for the window buttons.
     in property <length> inset;
-    /// An album's page shows its name and buttons itself: here only once they scrolled away.
-    property <bool> page-head-shown: root.view == "library"
-        && ((Library.album-page.shown && App.scroll < 300px) || (Library.artist-page.shown && App.scroll < 340px));
     /// Whether back and forward show here: while the navigation, their own place, is hidden.
     in property <bool> nav-buttons;
     in property <string> view;
-    in property <string> title;
-    in property <string> subtitle;
     in property <bool> can-go-back;
     callback toggle-sidebar();
     callback back();
@@ -11262,30 +11336,8 @@ component Toolbar inherits HorizontalLayout {
         tooltip: "Show or hide the navigation";
         clicked => { root.toggle-sidebar(); }
     }
-    VerticalLayout {
-        horizontal-stretch: 1;
-        min-width: 0;
-        alignment: center;
-        padding-left: 6px;
-        spacing: 3px;
-
-        opacity: root.page-head-shown ? 0 : 1;
-        animate opacity { duration: 150ms; }
-
-        Text {
-            text: root.title;
-            font-size: 17px;
-            font-weight: 600;
-            color: Theme.text;
-            overflow: elide;
-        }
-        if root.subtitle != "": Text {
-            text: root.subtitle;
-            font-size: 13px;
-            color: Theme.text-secondary;
-            overflow: elide;
-        }
-    }
+    // What is shown says its own title, at the top of the page: none here.
+    Rectangle { horizontal-stretch: 1; }
 
     // The view's own actions. Up Next has none: what plays comes from the library, and a track
     // leaves it by its menu, or by Delete.
@@ -12058,18 +12110,6 @@ export component FreyaSkin inherits Window {
                                 inset: root.sidebar-shown ? 0 : App.window-buttons-width;
                                 nav-buttons: !root.sidebar-shown;
                                 view: root.view;
-                                title: root.view == "queue" ? "Up Next"
-                                    : root.view == "library" ? Library.title
-                                    : root.view == "radio" ? "Radio"
-                                    : root.view == "playlist" ? ""
-                                    : root.view == "visualizer" ? "Visualizer"
-                                    : root.view == "settings" || root.view == "about" || root.view == "activity" || root.view == "recents" ? ""
-                                    : "Equalizer";
-                                subtitle: root.view == "queue" ? Playlist.summary
-                                    : root.view == "library" ? (Library.subtitle != "" ? Library.subtitle : Library.status)
-                                    : root.view == "radio" ? Radio.summary
-                                    : root.view == "playlist" ? Playlists.summary
-                                    : "";
                                 can-go-back: root.view == "library" && Library.can-go-back;
                                 toggle-sidebar => { root.sidebar-shown = !root.sidebar-shown; }
                                 back => { library.back(); }
@@ -12105,6 +12145,7 @@ export component FreyaSkin inherits Window {
                             queue-list := TrackList {
                                 width: 100%;
                                 height: 100%;
+                                titled: true;
                                 visible: root.view == "queue";
                                 place: "queue";
                             }
