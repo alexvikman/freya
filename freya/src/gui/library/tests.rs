@@ -1017,16 +1017,20 @@ fn an_artists_albums_are_filtered_by_their_kind() {
     ];
     panel.reload();
     assert_eq!(albums(&panel).len(), all);
-    assert_eq!(filters(&panel), ["all", "albums", "singles"]);
+    // Every kind is offered, the same on every artist's page.
+    assert_eq!(
+        filters(&panel),
+        ["all", "albums", "singles", "compilations"]
+    );
     panel.set_album_filter("singles");
     assert_eq!(albums(&panel), [Some(named.clone())]);
     panel.set_album_filter("albums");
     assert_eq!(albums(&panel).len(), all - 1);
     assert!(!albums(&panel).contains(&Some(named.clone())));
-    // A kind the artist has none of shows them all.
+    // A kind the artist has none of shows none.
     panel.set_album_filter("compilations");
-    assert_eq!(panel.album_filter, AlbumFilter::All);
-    assert_eq!(albums(&panel).len(), all);
+    assert_eq!(panel.album_filter, AlbumFilter::Compilations);
+    assert!(albums(&panel).is_empty());
 
     // On another artist's page, all again.
     panel.set_album_filter("singles");
@@ -1037,9 +1041,10 @@ fn an_artists_albums_are_filtered_by_their_kind() {
         },
     ];
     panel.reload();
-    assert!(
-        filters(&panel).is_empty(),
-        "no albums of more than one kind: no filters"
+    assert_eq!(panel.album_filter, AlbumFilter::All);
+    assert_eq!(
+        filters(&panel),
+        ["all", "albums", "singles", "compilations"]
     );
     panel.opened = vec![Level::Artists, Level::ArtistAlbums { artist }];
     panel.reload();

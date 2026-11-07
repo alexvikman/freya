@@ -149,6 +149,9 @@ export struct LibraryRow {
     plays: string,
     /// For albums: whether it is one of the user's favourites.
     favorite: bool,
+    /// In an artist's discography, where albums and their tracks take turns: how many albums
+    /// come before this row. A skin places rows of two heights by it; 0 elsewhere.
+    albums-before: int,
 }
 
 /// What the user may change about an artist, for a form: see `Library.edit-artist`. Each
@@ -408,8 +411,8 @@ export global Library {
     /// Which of an artist's albums show: "all", "albums", "singles" (singles and EPs) or
     /// "compilations"; set with `set-album-filter`. All again on another artist's page.
     in property <string> album-filter: "all";
-    /// The filters an artist's albums offer: "all" and each of the others they have albums
-    /// of; empty when they have one kind alone.
+    /// The filters an artist's page offers: "all" and each of the others, the same on every
+    /// artist's page whichever kinds they have; empty elsewhere.
     in property <[string]> album-filters;
     callback set-album-filter(string);
     /// Heading for the rows: "Artists", "Albums", "Songs", "Genres", "Recently Added",

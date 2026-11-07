@@ -285,6 +285,7 @@ pub(super) fn row_value(
         ("album".to_owned(), string(album)),
         ("cover".to_owned(), string(cover)),
         ("favorite".to_owned(), Value::Bool(false)),
+        ("albums-before".to_owned(), Value::Number(0.0)),
         ("number".to_owned(), string(number)),
         ("duration".to_owned(), string(duration)),
         // Kept for skins that show it: nothing lists plays by track any more.

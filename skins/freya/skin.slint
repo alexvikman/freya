@@ -2607,7 +2607,7 @@ component ArtistPageHead inherits Rectangle {
                         padding: 6px;
 
                         MenuRow {
-                            text: "Fix Match…";
+                            text: "Fix match…";
                             activated => { root.fix-match(); }
                         }
                     }
@@ -2741,7 +2741,7 @@ component ArtistPageHead inherits Rectangle {
                 }
             }
         }
-        // Which of their albums show, when they have more than one kind.
+        // Which of their albums show.
         if Library.album-filters.length > 0: HorizontalLayout {
             height: 44px;
             padding-left: root.pad;
@@ -2949,11 +2949,11 @@ component AlbumPageHead inherits Rectangle {
                     padding: 6px;
 
                     MenuRow {
-                        text: "Choose Cover…";
+                        text: "Choose cover…";
                         activated => { root.choose-cover(); }
                     }
                     MenuRow {
-                        text: "Fix Match…";
+                        text: "Fix match…";
                         activated => { root.fix-match(); }
                     }
                 }
@@ -3832,10 +3832,26 @@ component LibraryPanel inherits FocusScope {
             : list.content-y);
     }
 
+    // Scrolled back once more after the page is laid out: until then a page just shown has
+    // no height, and where it was would be beyond its end.
+    restore-again := Timer {
+        interval: 1ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.scroll-back();
+        }
+    }
+
     function restore-scroll() {
         if (App.restore-view != "library") {
             return;
         }
+        root.scroll-back();
+        restore-again.running = true;
+    }
+
+    function scroll-back() {
         if (root.grid-shown) {
             grid.content-y = -App.restore-scroll;
         } else if (root.table-shown) {
@@ -3881,6 +3897,13 @@ component LibraryPanel inherits FocusScope {
     property <bool> list-shown: !grid-shown && !table-shown && !discography-shown && !album-shown && !search-page-shown;
     property <length> album-page-head-height: 300px + 96px + 37px;
     property <length> album-row-height: 56px;
+    /// The room under an album's or artist's tracks: as much as over the page's heading.
+    property <length> page-foot: 40px;
+    /// An artist's discography's albums and tracks, one under the other.
+    property <int> discography-albums: Library.rows.length == 0 ? 0
+        : Library.rows[Library.rows.length - 1].albums-before + (Library.rows[Library.rows.length - 1].kind == "album" ? 1 : 0);
+    property <length> discography-rows-height: root.discography-albums * root.album-head-height
+        + (Library.rows.length - root.discography-albums) * root.album-row-height;
     /// An artist's page over their albums; its height, by what it holds.
     property <bool> artist-page-shown: Library.artist-page.shown && (grid-shown || discography-shown);
     property <int> head-lines: artist-page-shown ? 1 : 0;
@@ -3947,6 +3970,8 @@ component LibraryPanel inherits FocusScope {
     property <int> columns: max(1, floor((grid.visible-width - 2 * grid-pad + grid-gap) / (tile-min + grid-gap)));
     property <length> tile-size: (grid.visible-width - 2 * grid-pad - (columns - 1) * grid-gap) / columns;
     property <length> grid-line-height: tile-size + 48px + grid-gap;
+    /// Room over the first line of a section's grid; an artist's page has its heading there.
+    property <length> grid-top: root.head-lines == 0 ? 24px : 0;
     property <int> grid-lines: floor((Library.rows.length + columns - 1) / columns);
 
     /// Rows in a page, for Page Up and Page Down.
@@ -3970,7 +3995,7 @@ component LibraryPanel inherits FocusScope {
             return;
         }
         if (root.grid-shown) {
-            grid.content-y = -min(max(0, grid.content-height - grid.visible-height), root.head-lines * root.artist-head-height + floor(row / root.columns) * root.grid-line-height);
+            grid.content-y = -min(max(0, grid.content-height - grid.visible-height), root.head-lines * root.artist-head-height + (row >= root.columns ? root.grid-top : 0) + floor(row / root.columns) * root.grid-line-height);
         } else if (root.list-shown) {
             list.content-y = -min(max(0, list.content-height - list.visible-height), row * root.list-row-height);
         }
@@ -3983,7 +4008,7 @@ component LibraryPanel inherits FocusScope {
             return;
         }
         if (root.grid-shown) {
-            grid.content-y = root.scrolled-to(grid.content-y, grid.visible-height, root.head-lines * root.artist-head-height + floor(row / root.columns) * root.grid-line-height, root.grid-line-height);
+            grid.content-y = root.scrolled-to(grid.content-y, grid.visible-height, root.head-lines * root.artist-head-height + (row >= root.columns ? root.grid-top : 0) + floor(row / root.columns) * root.grid-line-height, root.grid-line-height);
         } else if (root.table-shown) {
             table.content-y = root.scrolled-to(table.content-y, table.visible-height, row * root.table-row-height, root.table-row-height);
         } else if (root.discography-shown) {
@@ -4183,12 +4208,16 @@ component LibraryPanel inherits FocusScope {
         }
     }
 
-    grid := ListView {
+    // Placed exactly, rows of different heights and all: a list view would guess where its
+    // rows are from their average height, and the page would not scroll back where it was.
+    grid := ScrollView {
         visible: root.grid-shown;
         x: 0;
         y: root.options-height;
         width: root.width - root.letters-width;
         height: root.height - root.options-height;
+        content-width: self.visible-width;
+        content-height: root.grid-shown ? root.head-lines * root.artist-head-height + root.grid-top + root.grid-lines * root.grid-line-height : 0;
         changed content-y => {
             if (root.shown) {
                 root.report-scroll();
@@ -4198,8 +4227,16 @@ component LibraryPanel inherits FocusScope {
         // The artist's page first, when their albums are shown.
         for line in root.grid-shown ? root.grid-lines + root.head-lines : 0: grid-line := Rectangle {
             property <int> tiles: line - root.head-lines;
+            // Only the rows near those shown are made, as a long list's would be too many.
+            property <bool> near: self.y + self.height > -grid.content-y - grid.visible-height
+                && self.y < -grid.content-y + 2 * grid.visible-height;
 
-            height: line < root.head-lines ? root.artist-head-height : root.grid-line-height;
+            x: 0;
+            width: grid.visible-width;
+            y: line < root.head-lines ? 0
+                : root.head-lines * root.artist-head-height + (self.tiles > 0 ? root.grid-top : 0) + self.tiles * root.grid-line-height;
+            height: line < root.head-lines ? root.artist-head-height
+                : root.grid-line-height + (self.tiles == 0 ? root.grid-top : 0);
 
             if line < root.head-lines: ArtistPageHead {
                 page: Library.artist-page;
@@ -4218,9 +4255,9 @@ component LibraryPanel inherits FocusScope {
                     picture-popup.show();
                 }
             }
-            if line >= root.head-lines: HorizontalLayout {
+            if grid-line.near && line >= root.head-lines: HorizontalLayout {
                 padding-left: root.grid-pad;
-                padding-top: grid-line.tiles == 0 && root.head-lines == 0 ? 24px : 0;
+                padding-top: grid-line.tiles == 0 ? root.grid-top : 0;
                 spacing: root.grid-gap;
                 alignment: start;
 
@@ -4275,16 +4312,27 @@ component LibraryPanel inherits FocusScope {
     }
 
     // An album's tracks under its page, which scrolls with them.
-    album := ListView {
+    album := ScrollView {
         visible: root.album-shown;
+        content-width: self.visible-width;
+        content-height: root.album-shown ? root.album-page-head-height + Library.rows.length * root.album-row-height + root.page-foot : 0;
         changed content-y => {
             if (root.shown) {
                 root.report-scroll();
             }
         }
 
-        for index in root.album-shown ? Library.rows.length + 1 : 0: Rectangle {
-            height: index == 0 ? root.album-page-head-height : root.album-row-height;
+        // Last, as much room under the tracks as the page has over its heading.
+        for index in root.album-shown ? Library.rows.length + 2 : 0: album-cell := Rectangle {
+            // Only the rows near those shown are made, as a long list's would be too many.
+            property <bool> near: self.y + self.height > -album.content-y - album.visible-height
+                && self.y < -album.content-y + 2 * album.visible-height;
+
+            x: 0;
+            width: album.visible-width;
+            y: index == 0 ? 0 : root.album-page-head-height + (index - 1) * root.album-row-height;
+            height: index == 0 ? root.album-page-head-height
+                : index > Library.rows.length ? root.page-foot : root.album-row-height;
 
             if index == 0: AlbumPageHead {
                 page: Library.album-page;
@@ -4296,7 +4344,7 @@ component LibraryPanel inherits FocusScope {
                     picture-popup.show();
                 }
             }
-            if index > 0: AlbumTrackRow {
+            if album-cell.near && index > 0 && index <= Library.rows.length: AlbumTrackRow {
                 entry: Library.rows[index - 1];
                 index: index - 1;
                 cursor: index - 1 == root.cursor;
@@ -4334,10 +4382,12 @@ component LibraryPanel inherits FocusScope {
     }
 
     // An artist's albums, each followed by its tracks.
-    discography := ListView {
+    discography := ScrollView {
         visible: root.discography-shown;
         y: root.options-height;
         height: root.height - root.options-height;
+        content-width: self.visible-width;
+        content-height: root.discography-shown ? root.head-lines * root.artist-head-height + root.discography-rows-height + root.page-foot : 0;
         changed content-y => {
             if (root.shown) {
                 root.report-scroll();
@@ -4345,12 +4395,25 @@ component LibraryPanel inherits FocusScope {
         }
 
         // The artist's page first, then each album and its tracks.
-        for index in root.discography-shown ? Library.rows.length + root.head-lines : 0: cell := Rectangle {
+        // Last, as much room under the tracks as the page has over its heading.
+        for index in root.discography-shown ? Library.rows.length + root.head-lines + 1 : 0: cell := Rectangle {
             property <int> i: index - root.head-lines;
             property <bool> head: index < root.head-lines;
-            property <bool> album: !self.head && Library.rows[self.i].kind == "album";
+            property <bool> foot: self.i >= Library.rows.length;
+            property <bool> album: !self.head && !self.foot && Library.rows[self.i].kind == "album";
+            property <int> albums-before: Library.rows[self.i].albums-before;
+            // Only the rows near those shown are made, as a long list's would be too many.
+            property <bool> near: self.y + self.height > -discography.content-y - discography.visible-height
+                && self.y < -discography.content-y + 2 * discography.visible-height;
 
-            height: self.head ? root.artist-head-height : self.album ? root.album-head-height : root.album-row-height;
+            x: 0;
+            width: discography.visible-width;
+            y: self.head ? 0
+                : root.head-lines * root.artist-head-height
+                    + (self.foot ? root.discography-rows-height
+                        : self.albums-before * root.album-head-height + (self.i - self.albums-before) * root.album-row-height);
+            height: self.head ? root.artist-head-height : self.foot ? root.page-foot
+                : self.album ? root.album-head-height : root.album-row-height;
 
             if cell.head: ArtistPageHead {
                 page: Library.artist-page;
@@ -4369,13 +4432,13 @@ component LibraryPanel inherits FocusScope {
                     picture-popup.show();
                 }
             }
-            if cell.album: DiscographyAlbum {
+            if cell.near && cell.album: DiscographyAlbum {
                 entry: Library.rows[cell.i];
                 index: cell.i;
                 opened => { root.activate(cell.i); }
             }
             // Its tracks as an album's page shows them.
-            if !cell.head && !cell.album: AlbumTrackRow {
+            if cell.near && !cell.head && !cell.foot && !cell.album: AlbumTrackRow {
                 entry: Library.rows[cell.i];
                 index: cell.i;
                 cursor: cell.i == root.cursor;
@@ -4446,7 +4509,7 @@ component LibraryPanel inherits FocusScope {
 
         if Library.playlists-options: TextButton {
             y: (parent.height - self.height) / 2;
-            text: "New Playlist…";
+            text: "New playlist…";
             clicked => { new-playlist.show(); }
         }
         // Every artist's music.
@@ -4736,7 +4799,7 @@ component LibraryPanel inherits FocusScope {
             // An artist is changed on their page, which opens first.
             if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "artist": MenuDivider { }
             if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "artist": MenuRow {
-                text: "Edit Artist…";
+                text: "Edit artist…";
                 activated => {
                     row-menu.close();
                     root.activate(root.menu-row);
@@ -4759,7 +4822,7 @@ component LibraryPanel inherits FocusScope {
                 }
             }
             if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "album": MenuRow {
-                text: "Fix Match…";
+                text: "Fix match…";
                 activated => {
                     row-menu.close();
                     root.activate(root.menu-row);
@@ -4767,7 +4830,7 @@ component LibraryPanel inherits FocusScope {
                 }
             }
             if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "artist": MenuRow {
-                text: "Fix Match…";
+                text: "Fix match…";
                 activated => {
                     row-menu.close();
                     root.activate(root.menu-row);
@@ -4825,7 +4888,7 @@ component LibraryPanel inherits FocusScope {
             padding-top: 8px;
 
             TextButton {
-                text: "Server Settings…";
+                text: "Server settings…";
                 clicked => { root.show-server(); }
             }
         }
@@ -6116,17 +6179,29 @@ component PlaylistView inherits Rectangle {
         }
     }
 
-    tracks := ListView {
+    // Placed exactly, as the library's pages are (see `grid`).
+    tracks := ScrollView {
+        content-width: self.visible-width;
+        content-height: root.head-height + Playlists.entries.length * root.row-height + 40px;
         changed content-y => { App.scroll = -self.content-y; }
 
-        for index in Playlists.entries.length + 1: Rectangle {
-            height: index == 0 ? root.head-height : root.row-height;
+        // Last, as much room under the tracks as the page has over its heading.
+        for index in Playlists.entries.length + 2: entry-cell := Rectangle {
+            // Only the rows near those shown are made, as a long list's would be too many.
+            property <bool> near: self.y + self.height > -tracks.content-y - tracks.visible-height
+                && self.y < -tracks.content-y + 2 * tracks.visible-height;
+
+            x: 0;
+            width: tracks.visible-width;
+            y: index == 0 ? 0 : root.head-height + (index - 1) * root.row-height;
+            height: index == 0 ? root.head-height
+                : index > Playlists.entries.length ? 40px : root.row-height;
 
             if index == 0: PlaylistPageHead {
                 page: Playlists.page;
                 edit => { root.edit(); }
             }
-            if index > 0: PlaylistEntryView {
+            if entry-cell.near && index > 0 && index <= Playlists.entries.length: PlaylistEntryView {
                 entry: Playlists.entries[index - 1];
                 index: index - 1;
                 context-menu(x, y) => {
@@ -6641,7 +6716,7 @@ component BackupForm inherits MenuSurface {
                 }
             }
             TextButton {
-                text: "Choose Folder…";
+                text: "Choose folder…";
                 clicked => { Server.browse-for("backup"); }
             }
         }
@@ -6671,7 +6746,7 @@ component BackupForm inherits MenuSurface {
                 clicked => { root.closed(); }
             }
             if Server.backup-folder != "" && !(root.password != "" && root.mismatch): TextButton {
-                text: "Back Up";
+                text: "Back up";
                 primary: true;
                 clicked => {
                     Server.back-up(root.password);
@@ -6729,7 +6804,7 @@ component RestoreForm inherits MenuSurface {
                 }
             }
             TextButton {
-                text: "Choose Backup…";
+                text: "Choose backup…";
                 clicked => { Server.browse-for("restore"); }
             }
         }
@@ -6758,7 +6833,7 @@ component RestoreForm inherits MenuSurface {
                 clicked => { root.closed(); }
             }
             if Server.restore-file != "" && !Server.restoring: TextButton {
-                text: "Restore and Start Again";
+                text: "Restore and start again";
                 primary: true;
                 clicked => { Server.restore(root.password); }
             }
@@ -6967,17 +7042,17 @@ component FolderBrowser inherits MenuSurface {
                 clicked => { Server.browse-cancel(); }
             }
             if Server.browse-purpose == "music" && Server.browse-folder != "" && Server.browse-error == "": TextButton {
-                text: "Add This Folder";
+                text: "Add this folder";
                 primary: true;
                 clicked => { Server.browse-add(); }
             }
             if Server.browse-purpose == "backup" && Server.browse-folder != "" && Server.browse-error == "": TextButton {
-                text: "Back Up Here";
+                text: "Back up here";
                 primary: true;
                 clicked => { Server.browse-choose-folder(); }
             }
             if Server.browse-purpose == "export" && Server.browse-folder != "" && Server.browse-error == "": TextButton {
-                text: "Export Here";
+                text: "Export here";
                 primary: true;
                 clicked => { Server.browse-choose-folder(); }
             }
@@ -7078,7 +7153,7 @@ component FoldersForm inherits MenuSurface {
             alignment: start;
 
             TextButton {
-                text: "Add Folder…";
+                text: "Add folder…";
                 // Among the server's folders, wherever it runs.
                 clicked => { Server.browse-start(); }
             }
@@ -7093,7 +7168,7 @@ component FoldersForm inherits MenuSurface {
                 clicked => { root.closed(); }
             }
             TextButton {
-                text: "Save Changes";
+                text: "Save changes";
                 primary: true;
                 clicked => {
                     Library.save-folders();
@@ -8107,7 +8182,7 @@ component ArtistEditForm inherits MenuSurface {
                 clicked => { root.cancel(); }
             }
             TextButton {
-                text: "Save Changes";
+                text: "Save changes";
                 primary: true;
                 clicked => { root.save(); }
             }
@@ -8185,7 +8260,7 @@ component AlbumCoverForm inherits MenuSurface {
                 clicked => { root.cancel(); }
             }
             TextButton {
-                text: "Save Changes";
+                text: "Save changes";
                 primary: true;
                 clicked => { root.save(); }
             }
@@ -8276,7 +8351,7 @@ component FanartKeyForm inherits MenuSurface {
             spacing: 8px;
 
             if Library.fanart-key != "": TextButton {
-                text: "Remove Key";
+                text: "Remove key";
                 clicked => {
                     Library.set-fanart-key("");
                     root.closed();
@@ -8363,7 +8438,7 @@ component UpdateForm inherits MenuSurface {
             spacing: 8px;
 
             TextButton {
-                text: "Skip This Version";
+                text: "Skip this version";
                 clicked => {
                     Updates.skip();
                     root.closed();
@@ -8581,7 +8656,7 @@ component AppMenuButton inherits Rectangle {
                         if root.open == "File": VerticalLayout {
                             padding: 6px;
                             MenuRow {
-                                text: "New Playlist…";
+                                text: "New playlist…";
                                 shortcut: "Ctrl+N";
                                 activated => {
                                     root.act("new-playlist");
@@ -8589,7 +8664,7 @@ component AppMenuButton inherits Rectangle {
                                 }
                             }
                             MenuRow {
-                                text: "Keep Up Next as Playlist…";
+                                text: "Keep Up Next as playlist…";
                                 activated => {
                                     root.act("keep-queue");
                                     popup.close();
@@ -8597,7 +8672,7 @@ component AppMenuButton inherits Rectangle {
                             }
                             MenuDivider { }
                             MenuRow {
-                                text: "Open Playlist File…";
+                                text: "Open playlist file…";
                                 shortcut: "Ctrl+O";
                                 activated => {
                                     root.act("open-playlist-file");
@@ -8605,14 +8680,14 @@ component AppMenuButton inherits Rectangle {
                                 }
                             }
                             MenuRow {
-                                text: "Save Up Next as Playlist File…";
+                                text: "Save Up Next as playlist file…";
                                 activated => {
                                     root.act("save-playlist-file");
                                     popup.close();
                                 }
                             }
                             MenuRow {
-                                text: "Play Stream URL…";
+                                text: "Play stream URL…";
                                 shortcut: "Ctrl+U";
                                 activated => {
                                     root.act("play-url");
@@ -8620,14 +8695,14 @@ component AppMenuButton inherits Rectangle {
                                 }
                             }
                             MenuRow {
-                                text: "Add Files to Up Next…";
+                                text: "Add files to Up Next…";
                                 activated => {
                                     root.act("add-files");
                                     popup.close();
                                 }
                             }
                             MenuRow {
-                                text: "Add Folder to Up Next…";
+                                text: "Add folder to Up Next…";
                                 activated => {
                                     root.act("add-folder");
                                     popup.close();
@@ -8636,7 +8711,7 @@ component AppMenuButton inherits Rectangle {
                             MenuDivider { }
                             MenuRow {
                                 enabled: Server.chosen;
-                                text: "Log Out";
+                                text: "Log out";
                                 shortcut: "Ctrl+Shift+W";
                                 activated => {
                                     root.act("log-out");
@@ -8655,7 +8730,7 @@ component AppMenuButton inherits Rectangle {
                         if root.open == "Edit": VerticalLayout {
                             padding: 6px;
                             MenuRow {
-                                text: "Remove Selected from Up Next";
+                                text: "Remove selected from Up Next";
                                 activated => {
                                     root.act("remove-selected");
                                     popup.close();
@@ -8671,7 +8746,7 @@ component AppMenuButton inherits Rectangle {
                             MenuDivider { }
                             MenuRow {
                                 enabled: App.view == "playlist";
-                                text: "Rename Playlist…";
+                                text: "Rename playlist…";
                                 activated => {
                                     root.act("rename-playlist");
                                     popup.close();
@@ -8679,7 +8754,7 @@ component AppMenuButton inherits Rectangle {
                             }
                             MenuRow {
                                 enabled: App.view == "playlist";
-                                text: "Delete Playlist…";
+                                text: "Delete playlist…";
                                 activated => {
                                     root.act("delete-playlist");
                                     popup.close();
@@ -8688,7 +8763,7 @@ component AppMenuButton inherits Rectangle {
                             MenuDivider { }
                             MenuRow {
                                 enabled: Server.admin;
-                                text: "Library Folders…";
+                                text: "Library folders…";
                                 activated => {
                                     root.act("folders");
                                     popup.close();
@@ -8766,7 +8841,7 @@ component AppMenuButton inherits Rectangle {
                                 }
                             }
                             MenuRow {
-                                text: "Full Screen Visualizer";
+                                text: "Full screen visualizer";
                                 activated => {
                                     root.act("full-screen");
                                     popup.close();
@@ -8826,7 +8901,7 @@ component AppMenuButton inherits Rectangle {
                             }
                             MenuDivider { }
                             MenuRow {
-                                text: "Volume Up";
+                                text: "Volume up";
                                 shortcut: "Ctrl+↑";
                                 activated => {
                                     root.act("volume-up");
@@ -8834,7 +8909,7 @@ component AppMenuButton inherits Rectangle {
                                 }
                             }
                             MenuRow {
-                                text: "Volume Down";
+                                text: "Volume down";
                                 shortcut: "Ctrl+↓";
                                 activated => {
                                     root.act("volume-down");
@@ -8869,7 +8944,7 @@ component AppMenuButton inherits Rectangle {
                                 }
                             }
                             MenuRow {
-                                text: "Report a Problem";
+                                text: "Report a problem";
                                 external: true;
                                 activated => {
                                     root.act("issues");
@@ -8877,7 +8952,7 @@ component AppMenuButton inherits Rectangle {
                                 }
                             }
                             MenuRow {
-                                text: "Third-Party Licenses";
+                                text: "Third-party licenses";
                                 external: true;
                                 activated => {
                                     root.act("licenses");
@@ -8886,7 +8961,7 @@ component AppMenuButton inherits Rectangle {
                             }
                             MenuDivider { }
                             MenuRow {
-                                text: "Check for Updates…";
+                                text: "Check for updates…";
                                 activated => {
                                     root.act("updates");
                                     popup.close();
@@ -9706,7 +9781,7 @@ component ServerForm inherits MenuSurface {
             spacing: 8px;
 
             TextButton {
-                text: "Look Again";
+                text: "Look again";
                 clicked => { Server.find(); }
             }
             Rectangle { horizontal-stretch: 1; }
@@ -9821,7 +9896,7 @@ component WelcomeView inherits Rectangle {
                             alignment: center;
 
                             if Server.here: TextButton {
-                                text: "Use This Computer";
+                                text: "Use this computer";
                                 primary: true;
                                 clicked => { Server.use-this-computer(); }
                             }
@@ -9989,7 +10064,7 @@ component SettingsView inherits Rectangle {
                         alignment: center;
 
                         TextButton {
-                            text: "Choose Skin…";
+                            text: "Choose skin…";
                             clicked => { App.show-skins(); }
                         }
                     }
@@ -10095,7 +10170,7 @@ component SettingsView inherits Rectangle {
                         alignment: center;
 
                         TextButton {
-                            text: "Scan Folder";
+                            text: "Scan folder";
                             clicked => { Library.scan-one-folder(i); }
                         }
                     }
@@ -10116,11 +10191,11 @@ component SettingsView inherits Rectangle {
                                 clicked => { Library.stop-scan(); }
                             }
                             if !Library.scanning: TextButton {
-                                text: "Scan Library";
+                                text: "Scan library";
                                 clicked => { Library.rescan(); }
                             }
                             TextButton {
-                                text: "Manage Folders…";
+                                text: "Manage folders…";
                                 clicked => { root.manage-folders(); }
                             }
                         }
@@ -10326,7 +10401,7 @@ component SettingsView inherits Rectangle {
                             spacing: 8px;
 
                             if Server.state == "log-in": TextButton {
-                                text: "Log In…";
+                                text: "Log in…";
                                 primary: true;
                                 clicked => {
                                     Server.choose-address(Server.address);
@@ -10334,11 +10409,11 @@ component SettingsView inherits Rectangle {
                                 }
                             }
                             TextButton {
-                                text: "Another Server…";
+                                text: "Another server…";
                                 clicked => { root.find-servers(); }
                             }
                             TextButton {
-                                text: "Log Out";
+                                text: "Log out";
                                 clicked => { Server.log-out(); }
                             }
                         }
@@ -10363,7 +10438,7 @@ component SettingsView inherits Rectangle {
                             clicked => { App.cancel-activity("backup"); }
                         }
                         if Server.backup-state != "running": TextButton {
-                            text: "Back Up…";
+                            text: "Back up…";
                             clicked => { root.back-up(); }
                         }
                     }
@@ -10538,7 +10613,7 @@ component SettingsView inherits Rectangle {
                                 clicked => { Server.change-password(); }
                             }
                             TextButton {
-                                text: "Log Out";
+                                text: "Log out";
                                 clicked => { Server.log-out(); }
                             }
                         }
@@ -10572,23 +10647,38 @@ component SettingsView inherits Rectangle {
 
                     HorizontalLayout {
                         spacing: 8px;
+                        alignment: end;
 
-                        FormField {
-                            width: 180px;
-                            placeholder: "Name";
-                            text <=> root.invite-name;
-                            accepted => {
-                                Server.invite-user(root.invite-name, root.invite-admin);
-                                root.invite-name = "";
-                            }
-                        }
                         VerticalLayout {
                             alignment: center;
 
-                            Toggle {
-                                label: "Admin";
-                                checked: root.invite-admin;
-                                toggled => { root.invite-admin = !root.invite-admin; }
+                            FormField {
+                                width: 180px;
+                                placeholder: "Name";
+                                text <=> root.invite-name;
+                                accepted => {
+                                    Server.invite-user(root.invite-name, root.invite-admin);
+                                    root.invite-name = "";
+                                }
+                            }
+                        }
+                        // What they may do: play the library, or keep the server too.
+                        VerticalLayout {
+                            alignment: center;
+
+                            HorizontalLayout {
+                                spacing: 4px;
+
+                                ChoiceButton {
+                                    text: "Listener";
+                                    selected: !root.invite-admin;
+                                    clicked => { root.invite-admin = false; }
+                                }
+                                ChoiceButton {
+                                    text: "Admin";
+                                    selected: root.invite-admin;
+                                    clicked => { root.invite-admin = true; }
+                                }
                             }
                         }
                         VerticalLayout {
@@ -10692,7 +10782,7 @@ component SettingsView inherits Rectangle {
                             spacing: 8px;
 
                             TextButton {
-                                text: "Open the Page Again";
+                                text: "Open the page again";
                                 clicked => { LastFm.connect(); }
                             }
                             TextButton {
@@ -11160,7 +11250,7 @@ component AboutView inherits Rectangle {
                         spacing: 8px;
 
                         if root.state == "available": TextButton {
-                            text: "Release Notes";
+                            text: "Release notes";
                             clicked => { App.open-link("releases"); }
                         }
                         if root.state == "available": TextButton {
@@ -11169,7 +11259,7 @@ component AboutView inherits Rectangle {
                             clicked => { root.show-update(); }
                         }
                         TextButton {
-                            text: "Check for Updates";
+                            text: "Check for updates";
                             clicked => { Updates.check(); }
                         }
                     }
@@ -11488,7 +11578,7 @@ component Toolbar inherits HorizontalLayout {
                 }
                 MenuDivider { }
                 MenuRow {
-                    text: "Show Activity and Log";
+                    text: "Show activity and log";
                     activated => {
                         activity-popup.close();
                         root.show-view("activity");

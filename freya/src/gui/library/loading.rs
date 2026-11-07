@@ -36,9 +36,9 @@ impl LibraryPanel {
 
     // ----- What the skin shows -----------------------------------------------------------------
 
-    /// Reads what kind of release each of the shown artist's albums is, and the filters their
-    /// kinds offer: All, and each kind they have, when they have more than one. The filter
-    /// chosen goes back to All on another artist's page, and when it offers nothing now.
+    /// Reads what kind of release each of the shown artist's albums is. Every artist's page
+    /// offers the same filters, whichever kinds they have, so they are always where they were;
+    /// the filter chosen goes back to All on another artist's page.
     pub(super) fn load_album_kinds(&mut self) {
         let artist = match self.level() {
             Level::ArtistAlbums { artist } if !self.searching() => Some(artist.clone()),
@@ -59,20 +59,7 @@ impl LibraryPanel {
             .unwrap_or_default()
             .into_iter()
             .collect();
-        let albums = db.albums(artist.as_deref()).unwrap_or_default();
-        let offered: Vec<AlbumFilter> = AlbumFilter::ALL[1..]
-            .iter()
-            .copied()
-            .filter(|filter| albums.iter().any(|a| filter.admits(self.album_kind(a))))
-            .collect();
-        self.album_filters = if offered.len() > 1 {
-            std::iter::once(AlbumFilter::All).chain(offered).collect()
-        } else {
-            Vec::new()
-        };
-        if !self.album_filters.contains(&self.album_filter) {
-            self.album_filter = AlbumFilter::All;
-        }
+        self.album_filters = AlbumFilter::ALL.to_vec();
         let rows = self
             .album_filters
             .iter()
@@ -275,11 +262,17 @@ impl LibraryPanel {
         };
         let discography = self.discography();
         let mut rows = Vec::with_capacity(self.items.len());
+        let mut albums_before: u32 = 0;
         for item in &self.items {
             // In a discography, each album's tracks follow it, numbered as in the album.
             if discography && let Item::Album(album) = item {
                 album_artist = Some(album.artist.as_deref());
-                rows.push(row_value(item, None, None));
+                let mut row = row_value(item, None, None);
+                if let Value::Struct(row) = &mut row {
+                    row.set_field("albums-before".into(), Value::Number(albums_before.into()));
+                }
+                rows.push(row);
+                albums_before += 1;
                 continue;
             }
             let plays = item.track().and_then(|t| {
@@ -287,7 +280,13 @@ impl LibraryPanel {
                     .get(&(t.path.clone(), t.part.map(|p| p.start)))
                     .copied()
             });
-            rows.push(row_value(item, album_artist, plays));
+            let mut row = row_value(item, album_artist, plays);
+            if let Value::Struct(row) = &mut row
+                && discography
+            {
+                row.set_field("albums-before".into(), Value::Number(albums_before.into()));
+            }
+            rows.push(row);
         }
         for (row, item) in rows.iter_mut().zip(&self.items) {
             let favorite = match item {

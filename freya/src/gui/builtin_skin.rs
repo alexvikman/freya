@@ -496,6 +496,7 @@ impl Convert for LibraryRow {
             played: field(&s, "played"),
             plays: field(&s, "plays"),
             favorite: field(&s, "favorite"),
+            albums_before: field(&s, "albums-before"),
         })
     }
 
@@ -512,6 +513,7 @@ impl Convert for LibraryRow {
             ("played", self.played.to_value()),
             ("plays", self.plays.to_value()),
             ("favorite", self.favorite.to_value()),
+            ("albums-before", self.albums_before.to_value()),
         ])
     }
 }
