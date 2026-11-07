@@ -782,6 +782,45 @@ pub fn fill_library_albums(ui: &ComponentInstance) {
     show_library(ui, "albums", "grid", "Albums", "682 albums", rows);
 }
 
+/// An album's page: its heading, and its tracks with their plays.
+pub fn fill_library_album(ui: &ComponentInstance) {
+    fill(ui);
+    let tracks = [
+        ("She Painted Fire Across the Skyline, Part 1", "8:35", "12"),
+        ("She Painted Fire Across the Skyline, Part 2", "3:09", "9"),
+        ("She Painted Fire Across the Skyline, Part 3", "7:09", "7"),
+        ("The Misshapen Steed", "4:54", "3"),
+        ("Hallways of Enchanted Ebony", "9:59", ""),
+        ("Dead Winter Days", "7:51", ""),
+    ];
+    let rows = tracks
+        .iter()
+        .enumerate()
+        .map(|(i, (title, duration, plays))| {
+            let mut row = library_row("track", title, "", "Agalloch", "Pale Folklore", duration);
+            if let Value::Struct(row) = &mut row {
+                row.set_field("number".to_owned(), text(&(i + 1).to_string()));
+                row.set_field("plays".to_owned(), text(plays));
+            }
+            row
+        })
+        .collect();
+    show_library(ui, "albums", "list", "Pale Folklore", "", rows);
+    let page = Struct::from_iter([
+        ("shown".to_owned(), Value::Bool(true)),
+        ("title".to_owned(), text("Pale Folklore")),
+        ("artist".to_owned(), text("Agalloch")),
+        ("detail".to_owned(), text("2007 · 6 tracks, 41 min")),
+        (
+            "color".to_owned(),
+            Value::Brush(slint::Brush::SolidColor(slint::Color::from_rgb_u8(
+                96, 84, 72,
+            ))),
+        ),
+    ]);
+    let _ = ui.set_global_property("Library", "album-page", Value::Struct(page));
+}
+
 /// The library's Songs section: a table.
 pub fn fill_library_songs(ui: &ComponentInstance) {
     fill(ui);

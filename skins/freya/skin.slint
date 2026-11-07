@@ -2011,9 +2011,12 @@ component PopularRow inherits Rectangle {
                     image-fit: cover;
                 }
             }
+            // The columns share the width as the heading's do: the title five parts, the plays
+            // two, ending two thirds of the way, and the length four, at the end.
             VerticalLayout {
-                horizontal-stretch: 1;
+                horizontal-stretch: 5;
                 min-width: 0;
+                preferred-width: 0;
                 alignment: center;
                 spacing: 2px;
 
@@ -2032,7 +2035,9 @@ component PopularRow inherits Rectangle {
                 }
             }
             Text {
-                width: 100px;
+                horizontal-stretch: 2;
+                min-width: 60px;
+                preferred-width: 0;
                 text: root.entry.plays;
                 font-size: 14px;
                 color: Theme.text-secondary;
@@ -2040,7 +2045,10 @@ component PopularRow inherits Rectangle {
                 vertical-alignment: center;
             }
             Text {
-                width: 56px;
+                // Wide when the page is: a narrow one gives the title the room.
+                horizontal-stretch: max(0, min(4, (root.width - 800px) / 100px));
+                min-width: 56px;
+                preferred-width: 0;
                 text: root.entry.duration;
                 font-size: 14px;
                 color: Theme.text-secondary;
@@ -2672,15 +2680,20 @@ component AlbumPageHead inherits Rectangle {
                 horizontal-alignment: right;
                 vertical-alignment: center;
             }
+            // As the rows' columns share the width.
             Text {
-                horizontal-stretch: 1;
+                horizontal-stretch: 5;
+                min-width: 0;
+                preferred-width: 0;
                 text: "Title";
                 font-size: 14px;
                 color: Theme.text-secondary;
                 vertical-alignment: center;
             }
             Text {
-                width: 100px;
+                horizontal-stretch: 2;
+                min-width: 60px;
+                preferred-width: 0;
                 text: "Plays";
                 font-size: 14px;
                 color: Theme.text-secondary;
@@ -2688,7 +2701,10 @@ component AlbumPageHead inherits Rectangle {
                 vertical-alignment: center;
             }
             Rectangle {
-                width: 56px;
+                // Wide when the page is: a narrow one gives the title the room.
+                horizontal-stretch: max(0, min(4, (root.width - 800px) / 100px));
+                min-width: 56px;
+                preferred-width: 0;
 
                 Icon {
                     x: parent.width - self.width;
@@ -2778,9 +2794,12 @@ component AlbumTrackRow inherits Rectangle {
                     vertical-alignment: center;
                 }
             }
+            // The columns share the width as the heading's do: the title five parts, the plays
+            // two, ending two thirds of the way, and the length four, at the end.
             VerticalLayout {
-                horizontal-stretch: 1;
+                horizontal-stretch: 5;
                 min-width: 0;
+                preferred-width: 0;
                 alignment: center;
                 spacing: 2px;
 
@@ -2799,7 +2818,9 @@ component AlbumTrackRow inherits Rectangle {
                 }
             }
             Text {
-                width: 100px;
+                horizontal-stretch: 2;
+                min-width: 60px;
+                preferred-width: 0;
                 text: root.entry.plays;
                 font-size: 14px;
                 color: Theme.text-secondary;
@@ -2807,7 +2828,10 @@ component AlbumTrackRow inherits Rectangle {
                 vertical-alignment: center;
             }
             Text {
-                width: 56px;
+                // Wide when the page is: a narrow one gives the title the room.
+                horizontal-stretch: max(0, min(4, (root.width - 800px) / 100px));
+                min-width: 56px;
+                preferred-width: 0;
                 text: root.entry.duration;
                 font-size: 14px;
                 color: Theme.text-secondary;
@@ -3596,14 +3620,17 @@ component LibraryPanel inherits FocusScope {
         }
         options-menu.show();
     }
-    /// The space beside a page's content in a wide window, on each side (see `Page`).
+    /// The space beside a list's or a grid's content in a wide window, on each side (see
+    /// `Page`). Album, artist and playlist pages fill the width, as their headings do.
     property <length> beside: Page.beside(root.width - root.letters-width - 48px, Page.widest);
     /// The letters beside the artists or albums, when shown.
     property <length> letters-width: Library.letters.length > 0 && (root.grid-shown || root.list-shown) ? 28px : 0;
     property <length> table-row-height: 34px;
     // The grid fits as many columns of at least `tile-min` as it can, and stretches them to fill
     // the width.
-    property <length> grid-pad: 24px + root.beside;
+    // An artist's page fills the width, as album and playlist pages do; the grids of the
+    // library's sections keep to the middle (see `Page`).
+    property <length> grid-pad: 24px + (root.artist-page-shown ? 0 : root.beside);
     property <length> grid-gap: 20px;
     property <length> tile-min: 150px;
     property <int> columns: max(1, floor((grid.visible-width - 2 * grid-pad + grid-gap) / (tile-min + grid-gap)));
@@ -3860,7 +3887,6 @@ component LibraryPanel inherits FocusScope {
 
             if line < root.head-lines: ArtistPageHead {
                 page: Library.artist-page;
-                pad: 24px + root.beside;
                 options(right, bottom) => { root.show-options(right, bottom); }
                 edit => {
                     if (Library.artist-page.kind == "genre") {
@@ -3946,7 +3972,6 @@ component LibraryPanel inherits FocusScope {
 
             if index == 0: AlbumPageHead {
                 page: Library.album-page;
-                pad: 24px + root.beside;
                 fix-match => { root.match-album(); }
                 show-picture => {
                     root.picture-of-album = true;
@@ -3955,8 +3980,6 @@ component LibraryPanel inherits FocusScope {
                 }
             }
             if index > 0: AlbumTrackRow {
-                x: root.beside;
-                width: parent.width - 2 * root.beside;
                 entry: Library.rows[index - 1];
                 index: index - 1;
                 cursor: index - 1 == root.cursor;
@@ -4014,7 +4037,6 @@ component LibraryPanel inherits FocusScope {
 
             if cell.head: ArtistPageHead {
                 page: Library.artist-page;
-                pad: 24px + root.beside;
                 options(right, bottom) => { root.show-options(right, bottom); }
                 edit => {
                     if (Library.artist-page.kind == "genre") {
@@ -4031,15 +4053,11 @@ component LibraryPanel inherits FocusScope {
                 }
             }
             if cell.album: DiscographyAlbum {
-                x: root.beside;
-                width: parent.width - 2 * root.beside;
                 entry: Library.rows[cell.i];
                 index: cell.i;
                 opened => { root.activate(cell.i); }
             }
             if !cell.head && !cell.album: LibraryRowView {
-                x: root.beside;
-                width: parent.width - 2 * root.beside;
                 entry: Library.rows[cell.i];
                 index: cell.i;
                 cursor: cell.i == root.cursor;
@@ -5679,8 +5697,6 @@ component PlaylistView inherits Rectangle {
     property <int> restores: App.restores;
     property <length> head-height: 340px + 88px + 37px;
     property <length> row-height: 56px;
-    /// The space beside its content in a wide window (see `Page`).
-    property <length> beside: Page.beside(root.width - 48px, Page.widest);
     init => { root.restore-scroll(); }
     changed restores => { root.restore-scroll(); }
 
@@ -5722,12 +5738,9 @@ component PlaylistView inherits Rectangle {
 
             if index == 0: PlaylistPageHead {
                 page: Playlists.page;
-                pad: 24px + root.beside;
                 edit => { root.edit(); }
             }
             if index > 0: PlaylistEntryView {
-                x: root.beside;
-                width: parent.width - 2 * root.beside;
                 entry: Playlists.entries[index - 1];
                 index: index - 1;
             }
