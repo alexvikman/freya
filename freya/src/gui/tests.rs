@@ -1296,18 +1296,22 @@ fn a_rows_menu_opens_where_it_was_asked_and_its_items_act() {
     let queued = || app.borrow().playlist.entries().len();
     let before = queued();
     // A right-click on the album's first track: the menu opens where it was, its items under
-    // it: Play, then Add to Up Next.
-    press(400.0, 550.0, PointerEventButton::Right);
-    press(450.0, 550.0 + 6.0 + 32.0 + 16.0, PointerEventButton::Left);
-    assert_eq!(
-        queued(),
-        before + 1,
-        "Add to Up Next, where the menu opened"
-    );
+    // it: Play, then Add to Up Next. Where the track is depends on the system's fonts, which
+    // the page's heading is laid out in: it is found by right-clicking down the page until
+    // the item under the click adds a track.
+    let row = (480..900).step_by(8).map(|y| y as f32).find(|&y| {
+        press(400.0, y, PointerEventButton::Right);
+        press(450.0, y + 6.0 + 32.0 + 16.0, PointerEventButton::Left);
+        queued() > before
+    });
+    let Some(row) = row else {
+        panic!("no track's menu added to Up Next, where it opened");
+    };
+    assert_eq!(queued(), before + 1);
 
     // Near the window's right edge, it opens to the left of the click.
-    press(1000.0, 550.0, PointerEventButton::Right);
-    press(950.0, 550.0 + 6.0 + 32.0 + 16.0, PointerEventButton::Left);
+    press(1000.0, row, PointerEventButton::Right);
+    press(950.0, row + 6.0 + 32.0 + 16.0, PointerEventButton::Left);
     assert_eq!(
         queued(),
         before + 2,
@@ -1327,8 +1331,8 @@ fn a_rows_menu_opens_where_it_was_asked_and_its_items_act() {
             .map_or(0, |playlist| playlist.entries.len())
     };
     assert_eq!(in_playlist(), 0);
-    press(400.0, 550.0, PointerEventButton::Right);
-    let add_to = 550.0 + 6.0 + 2.0 * 32.0 + 16.0;
+    press(400.0, row, PointerEventButton::Right);
+    let add_to = row + 6.0 + 2.0 * 32.0 + 16.0;
     ui.window().dispatch_event(E::PointerMoved {
         position: slint::LogicalPosition::new(450.0, add_to),
     });
@@ -1336,7 +1340,7 @@ fn a_rows_menu_opens_where_it_was_asked_and_its_items_act() {
     // The first playlist, level with "Add to playlist", right of the menu.
     press(
         400.0 + 264.0 + 60.0,
-        550.0 + 2.0 * 32.0 + 6.0 + 16.0,
+        row + 2.0 * 32.0 + 6.0 + 16.0,
         PointerEventButton::Left,
     );
     assert_eq!(
