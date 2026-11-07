@@ -50,7 +50,8 @@ pub struct Online {
     pub fanart_key: Option<String>,
     pub lastfm: Option<Arc<dyn LastFm>>,
     pub wikipedia: bool,
-    /// MusicBrainz, for what kind of release albums whose tags do not say are.
+    /// MusicBrainz, for what kind of release albums whose tags do not say are, and the genres
+    /// of those whose tags give none.
     pub album_kinds: bool,
 }
 
@@ -431,6 +432,108 @@ pub(super) fn fetch_album_kinds(
                 if failed == 3 {
                     log::info!(
                         "MusicBrainz could not be reached; albums' kinds are asked again later"
+                    );
+                    break;
+                }
+            }
+        }
+        if told.elapsed() >= TELL_INTERVAL || done == total {
+            told = Instant::now();
+            progress(ScanEvent::Albums { done, total });
+        }
+    }
+    Ok(())
+}
+
+/// The most genres kept of an album from MusicBrainz.
+const ALBUM_GENRES: usize = 3;
+
+/// Asks MusicBrainz the genres of the albums whose tracks' tags give none: of the release
+/// group the user matched, or the one found for its kind, else searched for by its artist and
+/// title. An album it found nothing of is asked again after a while; one matched to another
+/// group since, at once. Stops early when `cancel` is set.
+pub(super) fn fetch_album_genres(
+    library: &Library,
+    online: &Online,
+    cancel: &AtomicBool,
+    progress: &mut impl FnMut(ScanEvent),
+) -> Result<()> {
+    if !online.album_kinds {
+        return Ok(());
+    }
+    let mut lacking = Vec::new();
+    for album in library.ungenred_albums()? {
+        let kept = library.album_online_genres(&album.album_artist, &album.album)?;
+        let ask = kept.is_none_or(|(group, kept)| {
+            (album.group.is_some() && group != album.group)
+                || (kept.answer.is_empty() && !kept.recent())
+        });
+        if ask {
+            lacking.push(album);
+        }
+    }
+    let total = lacking.len();
+    if total == 0 {
+        return Ok(());
+    }
+    progress(ScanEvent::Albums { done: 0, total });
+    let pace = Pace::new(artist_image::MUSICBRAINZ_INTERVAL);
+    let mut told = Instant::now();
+    let mut failed = 0;
+    for (done, album) in (1..).zip(&lacking) {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        let group = match &album.group {
+            Some(group) => Ok(Some(group.clone())),
+            None => {
+                pace.wait();
+                artist_image::musicbrainz_albums(&album.album, &album.album_artist).map(
+                    |candidates| {
+                        let mbid = library
+                            .artist_mbid(Some(&album.album_artist))
+                            .ok()
+                            .flatten();
+                        same_album(
+                            candidates,
+                            &album.album_artist,
+                            &album.album,
+                            mbid.as_deref(),
+                        )
+                        .map(|found| found.release_group)
+                    },
+                )
+            }
+        };
+        let found = group.and_then(|group| match group {
+            Some(group) => {
+                pace.wait();
+                artist_image::release_group_genres(&group, ALBUM_GENRES)
+                    .map(|genres| (Some(group), genres))
+            }
+            None => Ok((None, Vec::new())),
+        });
+        match found {
+            Ok((group, genres)) => {
+                failed = 0;
+                library.set_album_online_genres(
+                    &album.album_artist,
+                    &album.album,
+                    group.as_deref(),
+                    &genres,
+                    SystemTime::now(),
+                )?;
+            }
+            Err(e) => {
+                log::debug!(
+                    "could not ask MusicBrainz the genres of {} – {}: {e}",
+                    album.album_artist,
+                    album.album
+                );
+                failed += 1;
+                if failed == 3 {
+                    log::info!(
+                        "MusicBrainz could not be reached; albums' genres are asked again later"
                     );
                     break;
                 }

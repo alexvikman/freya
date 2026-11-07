@@ -5,6 +5,7 @@
 //! layout changes, they are rebuilt by the next scan. What the files cannot tell, when each
 //! track was played, is kept in a table of its own that a rebuild leaves alone.
 
+mod album_genres;
 mod covers;
 mod edits;
 mod favorites;
@@ -27,6 +28,8 @@ use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 use crate::cue::Part;
 use crate::tags::TagInfo;
 
+use album_genres::TRACK_GENRES;
+pub use album_genres::{OnlineGenres, Ungenred};
 pub use covers::AlbumCover;
 pub use edits::{ArtistEdit, Header};
 pub use favorites::{AlbumKey, AlbumOrder};
@@ -282,6 +285,7 @@ impl Library {
         edits::migrate(&db)?;
         db.execute_batch(matches::SCHEMA)?;
         db.execute_batch(kinds::SCHEMA)?;
+        db.execute_batch(album_genres::SCHEMA)?;
         db.execute_batch(covers::SCHEMA)?;
         db.execute_batch(playlists::SCHEMA)?;
         db.execute_batch(genres::SCHEMA)?;
@@ -468,18 +472,20 @@ impl Library {
         query.query_map([], album_from_row)?.collect()
     }
 
-    /// Every genre, alphabetically. Tracks without one are in none: they are reached through
+    /// Every genre, alphabetically: the tracks' tags', and for an album whose tags give none,
+    /// what MusicBrainz gives it. Tracks without one are in none: they are reached through
     /// their artists and albums.
     pub fn genres(&self) -> Result<Vec<Genre>> {
-        let mut query = self.db.prepare_cached(
-            "SELECT g.genre AS name,
+        let mut query = self.db.prepare_cached(&format!(
+            "WITH {TRACK_GENRES}
+             SELECT g.genre AS name,
                     count(DISTINCT ifnull(album_artist, '') || char(0) || ifnull(album, ''))
                         AS albums,
                     count(DISTINCT t.id) AS tracks
-             FROM track_genres g JOIN tracks t ON t.id = g.track
+             FROM track_genre g JOIN tracks t ON t.id = g.track
              GROUP BY g.genre COLLATE NOCASE
-             ORDER BY name COLLATE NOCASE",
-        )?;
+             ORDER BY name COLLATE NOCASE"
+        ))?;
         query
             .query_map([], |row| {
                 Ok(Genre {
@@ -493,23 +499,25 @@ impl Library {
 
     /// The albums with tracks in `genre`, by name.
     pub fn genre_albums(&self, genre: Option<&str>) -> Result<Vec<Album>> {
-        let mut query = self.db.prepare_cached(
-            "SELECT album_artist, album, min(year), count(*), min(path)
+        let mut query = self.db.prepare_cached(&format!(
+            "WITH {TRACK_GENRES}
+             SELECT album_artist, album, min(year), count(*), min(path)
              FROM tracks
-             WHERE CASE WHEN ?1 IS NULL THEN id NOT IN (SELECT track FROM track_genres)
-                   ELSE id IN (SELECT track FROM track_genres WHERE genre = ?1 COLLATE NOCASE) END
+             WHERE CASE WHEN ?1 IS NULL THEN id NOT IN (SELECT track FROM track_genre)
+                   ELSE id IN (SELECT track FROM track_genre WHERE genre = ?1 COLLATE NOCASE) END
              GROUP BY album_artist, album
-             ORDER BY album IS NULL, album COLLATE NOCASE, album_artist COLLATE NOCASE",
-        )?;
+             ORDER BY album IS NULL, album COLLATE NOCASE, album_artist COLLATE NOCASE"
+        ))?;
         query.query_map([genre], album_from_row)?.collect()
     }
 
     /// Every track in `genre`, album by album.
     pub fn genre_tracks(&self, genre: Option<&str>) -> Result<Vec<Track>> {
         let mut query = self.db.prepare_cached(&format!(
-            "SELECT {TRACK_COLUMNS} FROM tracks
-             WHERE CASE WHEN ?1 IS NULL THEN id NOT IN (SELECT track FROM track_genres)
-                   ELSE id IN (SELECT track FROM track_genres WHERE genre = ?1 COLLATE NOCASE) END
+            "WITH {TRACK_GENRES}
+             SELECT {TRACK_COLUMNS} FROM tracks
+             WHERE CASE WHEN ?1 IS NULL THEN id NOT IN (SELECT track FROM track_genre)
+                   ELSE id IN (SELECT track FROM track_genre WHERE genre = ?1 COLLATE NOCASE) END
              ORDER BY {ALBUM_ORDER}"
         ))?;
         query.query_map([genre], track_from_row)?.collect()

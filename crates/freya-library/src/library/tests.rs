@@ -18,7 +18,7 @@ fn scan_now(library: &mut Library, folders: &[PathBuf]) -> ScanSummary {
     scan(library, folders, &AtomicBool::new(false), |_| {}).unwrap()
 }
 
-fn tags(artist: &str, album: &str, title: &str, track: u32) -> TagInfo {
+pub(super) fn tags(artist: &str, album: &str, title: &str, track: u32) -> TagInfo {
     TagInfo {
         title: Some(title.into()),
         artist: Some(artist.into()),
@@ -43,7 +43,7 @@ fn whole_file(path: &str, tags: &TagInfo) -> NewTrack {
     }
 }
 
-fn add(library: &mut Library, path: &str, tags: &TagInfo) {
+pub(super) fn add(library: &mut Library, path: &str, tags: &TagInfo) {
     add_at(library, path, tags, 0);
 }
 

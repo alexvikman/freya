@@ -30,7 +30,7 @@ pub enum ScanEvent {
         total: usize,
     },
     /// MusicBrainz was asked what kind of release `done` of the `total` albums whose tags
-    /// do not say are.
+    /// do not say are, or their genres.
     Albums {
         done: usize,
         total: usize,
@@ -121,7 +121,8 @@ pub struct ServerSettings {
     /// Whether the opening of their Wikipedia article is asked, found by their MusicBrainz id.
     pub artist_wikipedia_online: bool,
     /// Whether MusicBrainz is asked what kind of release an album is (album, single, EP or
-    /// compilation) when its tags do not say, which is told the album's artist and title.
+    /// compilation) when its tags do not say, and its genres when they give none, which is
+    /// told the album's artist and title.
     pub album_kinds_online: bool,
     /// Whether the radio directory's stations come from Radio Browser, which is asked for them
     /// about once a week, and told which are played.

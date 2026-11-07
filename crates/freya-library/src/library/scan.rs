@@ -10,7 +10,9 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
 
-use super::fetch::{Online, fetch_album_covers, fetch_album_kinds, fetch_artists, fetch_genres};
+use super::fetch::{
+    Online, fetch_album_covers, fetch_album_genres, fetch_album_kinds, fetch_artists, fetch_genres,
+};
 use super::{AlbumCover, FileStamp, Library, NewTrack, Result, added, epoch_millis, put, remove};
 use crate::cover::ARTWORK_FOLDERS;
 use crate::cue::{self, Found};
@@ -270,6 +272,11 @@ pub fn scan_with(
         if !cancel.load(Ordering::Relaxed) {
             fetch_album_kinds(library, &options.online, cancel, &mut progress)?;
             laps.lap("album kinds online");
+        }
+        // After the kinds, whose release groups it asks of.
+        if !cancel.load(Ordering::Relaxed) {
+            fetch_album_genres(library, &options.online, cancel, &mut progress)?;
+            laps.lap("album genres online");
         }
     }
     log::info!("scan parts: {laps}");
@@ -756,6 +763,9 @@ impl Scanner {
                     )?;
                     fetch_album_covers(&library, &pictures, &stop)?;
                     fetch_album_kinds(&library, &online, &stop, &mut |e| {
+                        let _ = events.send(e);
+                    })?;
+                    fetch_album_genres(&library, &online, &stop, &mut |e| {
                         let _ = events.send(e);
                     })
                 });

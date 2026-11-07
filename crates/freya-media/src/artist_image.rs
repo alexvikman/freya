@@ -446,6 +446,63 @@ fn fanart_answer(mbid: &str, key: &str) -> Result<Option<serde_json::Value>, Str
         .map_err(|e| e.to_string())
 }
 
+/// The genres MusicBrainz's users gave the release group `group`, most voted first: at most
+/// `most`, and only those with at least half the votes of the first. Callers wait
+/// [`MUSICBRAINZ_INTERVAL`] between calls.
+pub fn release_group_genres(group: &str, most: usize) -> Result<Vec<String>, String> {
+    if !is_mbid(group) {
+        return Ok(Vec::new());
+    }
+    let answer = get_json(
+        &format!("{MUSICBRAINZ_ALBUMS}{group}"),
+        &[("fmt", "json"), ("inc", "genres")],
+    )?;
+    Ok(genres_of(&answer, most))
+}
+
+/// The genres in a MusicBrainz answer, most voted first, in title case: "Folk Metal".
+fn genres_of(answer: &serde_json::Value, most: usize) -> Vec<String> {
+    let mut genres: Vec<(u64, String)> = answer
+        .get("genres")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|genre| {
+            let name = genre.get("name")?.as_str()?.trim();
+            let count = genre
+                .get("count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            (!name.is_empty()).then(|| (count, title_case(name)))
+        })
+        .collect();
+    // Stable: equals keep MusicBrainz's order.
+    genres.sort_by_key(|(count, _)| std::cmp::Reverse(*count));
+    let top = genres.first().map_or(0, |(count, _)| *count);
+    genres
+        .into_iter()
+        .filter(|(count, _)| count * 2 >= top)
+        .take(most)
+        .map(|(_, name)| name)
+        .collect()
+}
+
+/// Each word of `name` begun with a capital, as tags mostly name genres: "post-rock" is
+/// "Post-Rock".
+fn title_case(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut start = true;
+    for c in name.chars() {
+        if start {
+            out.extend(c.to_uppercase());
+        } else {
+            out.push(c);
+        }
+        start = c == ' ' || c == '-' || c == '/';
+    }
+    out
+}
+
 /// Whether `id` is a MusicBrainz id, never anything to be read as part of an address.
 fn is_mbid(id: &str) -> bool {
     id.len() == 36 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
@@ -628,6 +685,23 @@ pub fn collage_of(covers: Vec<DynamicImage>, size: u32) -> Option<RgbImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_release_groups_genres_most_voted_first() {
+        let answer = serde_json::json!({"genres": [
+            {"name": "black metal", "count": 3},
+            {"name": "folk metal", "count": 6},
+            {"name": "post-rock", "count": 3},
+            {"name": "doom metal", "count": 2},
+            {"name": "", "count": 9}
+        ]});
+        assert_eq!(
+            genres_of(&answer, 3),
+            vec!["Folk Metal", "Black Metal", "Post-Rock"]
+        );
+        assert_eq!(genres_of(&answer, 1), vec!["Folk Metal"]);
+        assert!(genres_of(&serde_json::json!({}), 3).is_empty());
+    }
 
     #[test]
     fn each_editions_front_cover_earliest_first() {

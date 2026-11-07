@@ -4558,6 +4558,7 @@ component LibraryPanel inherits FocusScope {
                 : Library.scanning ? "Reading your music…"
                 : Library.query != "" ? "No matches"
                 : root.history-shown ? "Nothing played yet"
+                : Library.section == "genres" ? "No genres"
                 : "No music found";
             font-size: 16px;
             font-weight: 600;
@@ -4573,6 +4574,9 @@ component LibraryPanel inherits FocusScope {
                 : Library.scanning ? Library.status
                 : Library.query != "" ? "Nothing in the library matches “" + Library.query + "”."
                 : root.history-shown ? "Tracks you listen to show up here. A track counts once you have heard half of it, or four minutes."
+                : Library.section == "genres" ? (Library.album-kinds-online
+                    ? "None of your music's tags give a genre, and MusicBrainz gave none of its albums one yet: it is asked at the next scan."
+                    : "None of your music's tags give a genre. MusicBrainz can give its albums' genres: see Settings, on the Library tab.")
                 : "There are no music files in your music folders.";
             font-size: 15px;
             color: Theme.text-secondary;
@@ -9904,8 +9908,8 @@ component SettingsView inherits Rectangle {
                     }
                 }
                 SettingsRow {
-                    label: "Album, single, EP or compilation from MusicBrainz";
-                    detail: "For albums whose tags do not say what kind of release they are, to filter an artist's albums by. MusicBrainz is told the albums' artists and titles.";
+                    label: "Albums' kinds and genres from MusicBrainz";
+                    detail: "For albums whose tags do not say what kind of release they are (album, single, EP or compilation), to filter an artist's albums by, or give no genre, for Genres. MusicBrainz is told the albums' artists and titles.";
 
                     VerticalLayout {
                         alignment: center;

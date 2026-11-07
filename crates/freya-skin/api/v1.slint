@@ -359,8 +359,8 @@ export global Library {
     /// MusicBrainz id, which their pages show before what Last.fm says. Kept between runs.
     in property <bool> artist-wikipedia-online: true;
     /// Whether a scan asks MusicBrainz what kind of release albums are (album, single, EP or
-    /// compilation) whose tags do not say, telling it their artist and title. Kept between
-    /// runs.
+    /// compilation) whose tags do not say, and the genres of those whose tags give none,
+    /// telling it their artist and title. Kept between runs.
     in property <bool> album-kinds-online: true;
     /// Whether the server's radio directory has Radio Browser's stations, which it fetches about
     /// once a week and tells which are played; only the stations Freya picked otherwise.
