@@ -16,6 +16,22 @@ global Stage {
     in-out property <bool> on;
 }
 
+/// How wide a page's content grows. In a wider window it keeps to the middle, the space
+/// shared on both sides, so a large window shows a page as a smaller one does rather than
+/// stretched across it; what scrolls still fills the panel, so it scrolls from anywhere in it.
+global Page {
+    /// Libraries, lists and grids.
+    out property <length> widest: 1360px;
+    /// Settings and pages of text.
+    out property <length> narrow: 840px;
+
+    /// The space beside content of at most `widest` in `width`, on each side, beyond the
+    /// content's own.
+    public pure function beside(width: length, widest: length) -> length {
+        return max(0px, (width - widest) / 2);
+    }
+}
+
 global Theme {
     out property <bool> dark: Stage.on || App.theme == "dark" || (App.theme != "light" && Palette.color-scheme == ColorScheme.dark);
     // The window itself, around the panels; the toolbar and the player are on it.
@@ -1410,24 +1426,31 @@ component TrackList inherits FocusScope {
             }
         }
 
-        for track[i] in Playlist.rows: TrackRowView {
+        // In the middle of a wide window (see `Page`).
+        for track[i] in Playlist.rows: Rectangle {
             height: root.row-height;
-            entry: track;
-            index: i;
-            count: Playlist.rows.length;
-            drop-index: root.drop-index;
-            pressed => { root.focus(); }
-            drag-over(target) => {
-                root.drop-index = max(0, min(Playlist.rows.length, target));
-            }
-            drop => {
-                Playlist.move-selected(root.drop-index);
-                root.drop-index = -1;
-            }
-            context-menu(x, y) => {
-                root.menu-x = x - root.absolute-position.x;
-                root.menu-y = y - root.absolute-position.y;
-                row-menu.show();
+
+            TrackRowView {
+                x: Page.beside(parent.width, Page.widest);
+                width: parent.width - 2 * self.x;
+                height: parent.height;
+                entry: track;
+                index: i;
+                count: Playlist.rows.length;
+                drop-index: root.drop-index;
+                pressed => { root.focus(); }
+                drag-over(target) => {
+                    root.drop-index = max(0, min(Playlist.rows.length, target));
+                }
+                drop => {
+                    Playlist.move-selected(root.drop-index);
+                    root.drop-index = -1;
+                }
+                context-menu(x, y) => {
+                    root.menu-x = x - root.absolute-position.x;
+                    root.menu-y = y - root.absolute-position.y;
+                    row-menu.show();
+                }
             }
         }
     }
@@ -2061,7 +2084,8 @@ component ArtistPageHead inherits Rectangle {
     /// Match them to the artist in MusicBrainz they are.
     callback fix-match();
 
-    property <length> pad: 24px;
+    /// Its content's inset from its sides; its color goes to them.
+    in property <length> pad: 24px;
 
     accessible-role: groupbox;
     accessible-label: page.name;
@@ -2435,7 +2459,8 @@ component AlbumPageHead inherits Rectangle {
     callback show-picture();
 
     property <image> cover-image: page.cover == "" ? @image-url("") : Library.cover(page.cover, Library.covers-ready);
-    property <length> pad: 24px;
+    /// Its content's inset from its sides; its color goes to them.
+    in property <length> pad: 24px;
 
     accessible-role: groupbox;
     accessible-label: "Album " + page.title + " by " + page.artist + ", " + page.detail;
@@ -3259,12 +3284,16 @@ component SearchPage inherits ScrollView {
 
     property <length> tile: 160px;
     property <length> gap: 20px;
-    property <int> fit: max(1, floor((self.visible-width - 48px + self.gap) / (self.tile + self.gap)));
+    /// The page's width, at most [`Page.widest`] in the middle of a wide window.
+    property <length> page-width: root.visible-width - 48px - 2 * Page.beside(root.visible-width - 48px, Page.widest);
+    property <int> fit: max(1, floor((self.page-width + self.gap) / (self.tile + self.gap)));
 
     VerticalLayout {
         width: root.visible-width;
         alignment: start;
         padding: 24px;
+        padding-left: 24px + Page.beside(root.visible-width - 48px, Page.widest);
+        padding-right: 24px + Page.beside(root.visible-width - 48px, Page.widest);
         spacing: 32px;
 
         if Library.search-top >= 0 || Library.search-songs.count > 0: HorizontalLayout {
@@ -3272,7 +3301,7 @@ component SearchPage inherits ScrollView {
             height: 48px + 4 * 56px;
 
             if Library.search-top >= 0: VerticalLayout {
-                width: min(420px, (root.visible-width - 48px - 24px) * 0.45);
+                width: min(420px, (root.page-width - 24px) * 0.45);
                 spacing: 12px;
 
                 Text {
@@ -3531,12 +3560,14 @@ component LibraryPanel inherits FocusScope {
     property <bool> history-shown: Library.query == "" && (Library.section == "recently-played" || Library.section == "most-played");
 
     property <length> list-row-height: 42px;
+    /// The space beside a page's content in a wide window, on each side (see `Page`).
+    property <length> beside: Page.beside(root.width - root.letters-width - 48px, Page.widest);
     /// The letters beside the artists or albums, when shown.
     property <length> letters-width: Library.letters.length > 0 && (root.grid-shown || root.list-shown) ? 28px : 0;
     property <length> table-row-height: 34px;
     // The grid fits as many columns of at least `tile-min` as it can, and stretches them to fill
     // the width.
-    property <length> grid-pad: 24px;
+    property <length> grid-pad: 24px + root.beside;
     property <length> grid-gap: 20px;
     property <length> tile-min: 150px;
     property <int> columns: max(1, floor((grid.visible-width - 2 * grid-pad + grid-gap) / (tile-min + grid-gap)));
@@ -3680,18 +3711,23 @@ component LibraryPanel inherits FocusScope {
             }
         }
 
-        for row[i] in root.list-shown ? Library.rows : []: LibraryRowView {
+        for row[i] in root.list-shown ? Library.rows : []: Rectangle {
             height: root.list-row-height;
-            entry: row;
-            index: i;
-            cursor: i == root.cursor;
-            playing: i == Library.playing-row;
-            pressed => {
-                root.cursor = i;
-                root.focus();
+
+            LibraryRowView {
+                x: root.beside;
+                width: parent.width - 2 * root.beside;
+                entry: row;
+                index: i;
+                cursor: i == root.cursor;
+                playing: i == Library.playing-row;
+                pressed => {
+                    root.cursor = i;
+                    root.focus();
+                }
+                activated => { root.activate(i); }
+                context-menu(x, y) => { root.open-menu(i, x, y); }
             }
-            activated => { root.activate(i); }
-            context-menu(x, y) => { root.open-menu(i, x, y); }
         }
     }
 
@@ -3709,8 +3745,13 @@ component LibraryPanel inherits FocusScope {
         y: root.options-height;
         height: root.height - root.options-height;
 
-        if root.table-shown && Library.rows.length > 0: TrackTableHeader {
-            played-label: !root.played-column ? "" : Library.section == "most-played" ? "Plays" : "Last played";
+        if root.table-shown && Library.rows.length > 0: HorizontalLayout {
+            padding-left: root.beside;
+            padding-right: root.beside;
+
+            TrackTableHeader {
+                played-label: !root.played-column ? "" : Library.section == "most-played" ? "Plays" : "Last played";
+            }
         }
         table := ListView {
             changed content-y => {
@@ -3719,19 +3760,24 @@ component LibraryPanel inherits FocusScope {
                 }
             }
 
-            for row[i] in root.table-shown ? Library.rows : []: TrackTableRow {
+            for row[i] in root.table-shown ? Library.rows : []: Rectangle {
                 height: root.table-row-height;
-                played-column: root.played-column;
-                entry: row;
-                index: i;
-                cursor: i == root.cursor;
-                playing: i == Library.playing-row;
-                pressed => {
-                    root.cursor = i;
-                    root.focus();
+
+                TrackTableRow {
+                    x: root.beside;
+                    width: parent.width - 2 * root.beside;
+                    played-column: root.played-column;
+                    entry: row;
+                    index: i;
+                    cursor: i == root.cursor;
+                    playing: i == Library.playing-row;
+                    pressed => {
+                        root.cursor = i;
+                        root.focus();
+                    }
+                    activated => { root.activate(i); }
+                    context-menu(x, y) => { root.open-menu(i, x, y); }
                 }
-                activated => { root.activate(i); }
-                context-menu(x, y) => { root.open-menu(i, x, y); }
             }
         }
     }
@@ -3778,6 +3824,7 @@ component LibraryPanel inherits FocusScope {
 
             if line < root.head-lines: ArtistPageHead {
                 page: Library.artist-page;
+                pad: 24px + root.beside;
                 options => { options-menu.show(); }
                 edit => {
                     if (Library.artist-page.kind == "genre") {
@@ -3795,7 +3842,7 @@ component LibraryPanel inherits FocusScope {
             }
             if line >= root.head-lines: HorizontalLayout {
                 padding-left: root.grid-pad;
-                padding-top: grid-line.tiles == 0 && root.head-lines == 0 ? root.grid-pad : 0;
+                padding-top: grid-line.tiles == 0 && root.head-lines == 0 ? 24px : 0;
                 spacing: root.grid-gap;
                 alignment: start;
 
@@ -3863,6 +3910,7 @@ component LibraryPanel inherits FocusScope {
 
             if index == 0: AlbumPageHead {
                 page: Library.album-page;
+                pad: 24px + root.beside;
                 fix-match => { root.match-album(); }
                 show-picture => {
                     root.picture-of-album = true;
@@ -3871,6 +3919,8 @@ component LibraryPanel inherits FocusScope {
                 }
             }
             if index > 0: AlbumTrackRow {
+                x: root.beside;
+                width: parent.width - 2 * root.beside;
                 entry: Library.rows[index - 1];
                 index: index - 1;
                 cursor: index - 1 == root.cursor;
@@ -3928,6 +3978,7 @@ component LibraryPanel inherits FocusScope {
 
             if cell.head: ArtistPageHead {
                 page: Library.artist-page;
+                pad: 24px + root.beside;
                 options => { options-menu.show(); }
                 edit => {
                     if (Library.artist-page.kind == "genre") {
@@ -3944,11 +3995,15 @@ component LibraryPanel inherits FocusScope {
                 }
             }
             if cell.album: DiscographyAlbum {
+                x: root.beside;
+                width: parent.width - 2 * root.beside;
                 entry: Library.rows[cell.i];
                 index: cell.i;
                 opened => { root.activate(cell.i); }
             }
             if !cell.head && !cell.album: LibraryRowView {
+                x: root.beside;
+                width: parent.width - 2 * root.beside;
                 entry: Library.rows[cell.i];
                 index: cell.i;
                 cursor: cell.i == root.cursor;
@@ -3967,7 +4022,7 @@ component LibraryPanel inherits FocusScope {
     if Library.search-shown: HorizontalLayout {
         y: 0;
         height: root.options-height;
-        padding-left: 24px;
+        padding-left: 24px + root.beside;
         spacing: 8px;
         alignment: start;
 
@@ -3990,7 +4045,7 @@ component LibraryPanel inherits FocusScope {
     if root.options-shown && !Library.search-shown: HorizontalLayout {
         y: 0;
         height: root.options-height;
-        padding-right: 20px;
+        padding-right: 20px + root.beside;
         spacing: 4px;
         alignment: end;
 
@@ -4830,7 +4885,9 @@ component RadioView inherits Rectangle {
 
     property <length> tile: 176px;
     property <length> gap: 16px;
-    property <int> fit: max(1, floor((self.width - 48px + self.gap) / (self.tile + self.gap)));
+    /// The space beside its content in a wide window (see `Page`).
+    property <length> beside: Page.beside(root.width - 48px, Page.widest);
+    property <int> fit: max(1, floor((self.width - 48px - 2 * self.beside + self.gap) / (self.tile + self.gap)));
     property <int> restores: App.restores;
     init => { root.restore-scroll(); }
     changed restores => { root.restore-scroll(); }
@@ -4847,8 +4904,8 @@ component RadioView inherits Rectangle {
     VerticalLayout {
         HorizontalLayout {
             height: 52px;
-            padding-left: 24px;
-            padding-right: 24px;
+            padding-left: 24px + root.beside;
+            padding-right: 24px + root.beside;
             spacing: 22px;
 
             VerticalLayout {
@@ -4894,6 +4951,8 @@ component RadioView inherits Rectangle {
                 changed content-y => { App.scroll = -self.content-y; }
 
                 for station[i] in Radio.stations: StationRowView {
+                    x: root.beside;
+                    width: root.width - 2 * root.beside;
                     entry: station;
                     index: i;
                 }
@@ -4938,6 +4997,8 @@ component RadioView inherits Rectangle {
                     width: first-page.visible-width;
                     alignment: start;
                     padding: 24px;
+                    padding-left: 24px + root.beside;
+                    padding-right: 24px + root.beside;
                     spacing: 28px;
 
                     if Radio.directory == "loading" || Radio.directory == "failed" || Radio.directory == "off": Text {
@@ -5004,8 +5065,8 @@ component RadioView inherits Rectangle {
                 visible: root.tab == "browse" && Radio.total >= 0;
 
                 VerticalLayout {
-                    padding-left: 24px;
-                    padding-right: 24px;
+                    padding-left: 24px + root.beside;
+                    padding-right: 24px + root.beside;
                     padding-top: 16px;
                     padding-bottom: 12px;
                     spacing: 10px;
@@ -5059,6 +5120,8 @@ component RadioView inherits Rectangle {
                         }
 
                         for station[i] in Radio.found: DirectoryStationView {
+                            x: root.beside;
+                            width: root.width - 2 * root.beside;
                             entry: station;
                             index: i;
                         }
@@ -5183,7 +5246,8 @@ component PlaylistPageHead inherits Rectangle {
     /// Change its name, description and pictures.
     callback edit();
 
-    property <length> pad: 24px;
+    /// Its content's inset from its sides; its color goes to them.
+    in property <length> pad: 24px;
     property <image> picture: root.page.picture == "" ? @image-url("") : Library.cover(root.page.picture, Library.covers-ready);
 
     accessible-role: groupbox;
@@ -5577,6 +5641,8 @@ component PlaylistView inherits Rectangle {
     property <int> restores: App.restores;
     property <length> head-height: 340px + 88px + 37px;
     property <length> row-height: 56px;
+    /// The space beside its content in a wide window (see `Page`).
+    property <length> beside: Page.beside(root.width - 48px, Page.widest);
     init => { root.restore-scroll(); }
     changed restores => { root.restore-scroll(); }
 
@@ -5618,9 +5684,12 @@ component PlaylistView inherits Rectangle {
 
             if index == 0: PlaylistPageHead {
                 page: Playlists.page;
+                pad: 24px + root.beside;
                 edit => { root.edit(); }
             }
             if index > 0: PlaylistEntryView {
+                x: root.beside;
+                width: parent.width - 2 * root.beside;
                 entry: Playlists.entries[index - 1];
                 index: index - 1;
             }
@@ -9236,9 +9305,9 @@ component SettingsPage inherits ScrollView {
         alignment: start;
         padding-top: 28px;
         padding-bottom: 40px;
-        padding-left: 40px;
-        // Very wide windows keep the controls within reach of what they set.
-        padding-right: max(40px, root.visible-width - 40px - 1200px);
+        // In the middle of a wide window, the controls within reach of what they set.
+        padding-left: 40px + Page.beside(root.visible-width - 80px, Page.narrow);
+        padding-right: 40px + Page.beside(root.visible-width - 80px, Page.narrow);
         spacing: 32px;
 
         if root.title != "": Text {
@@ -9276,8 +9345,9 @@ component SettingsView inherits Rectangle {
         VerticalLayout {
             vertical-stretch: 0;
             padding-top: 28px;
-            padding-left: 40px;
-            padding-right: max(40px, root.width - 40px - 1200px);
+            // As the page under them.
+            padding-left: 40px + Page.beside(root.width - 80px, Page.narrow);
+            padding-right: 40px + Page.beside(root.width - 80px, Page.narrow);
             spacing: 16px;
 
             Text {
@@ -10277,8 +10347,8 @@ component RecentRowView inherits Rectangle {
 component RecentsView inherits Rectangle {
     VerticalLayout {
         padding-top: 28px;
-        padding-left: 40px;
-        padding-right: 40px;
+        padding-left: 40px + Page.beside(root.width - 80px, Page.widest);
+        padding-right: 40px + Page.beside(root.width - 80px, Page.widest);
         spacing: 16px;
 
         Text {
@@ -10336,8 +10406,8 @@ component ActivityView inherits Rectangle {
     VerticalLayout {
         padding-top: 28px;
         padding-bottom: 24px;
-        padding-left: 40px;
-        padding-right: 40px;
+        padding-left: 40px + Page.beside(root.width - 80px, Page.narrow);
+        padding-right: 40px + Page.beside(root.width - 80px, Page.narrow);
         spacing: 16px;
 
         Text {
