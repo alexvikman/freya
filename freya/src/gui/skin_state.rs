@@ -257,6 +257,7 @@ pub fn player_values(
         ),
         ("volume", Value::Number(f64::from(volume))),
         ("live", Value::Bool(live)),
+        ("buffering", Value::Bool(playing && status.buffering)),
     ]
 }
 

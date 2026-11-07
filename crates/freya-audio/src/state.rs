@@ -21,6 +21,8 @@ pub struct Status {
     pub state: PlaybackState,
     pub track: Option<Arc<TrackInfo>>,
     pub position: Duration,
+    /// Whether playing waits for the rest of the track to come from its server.
+    pub buffering: bool,
 }
 
 pub(crate) struct Shared {
@@ -39,6 +41,10 @@ pub(crate) struct Shared {
     pub visualize: AtomicBool,
     /// Set by the audio stream when its device is gone and the stream must be built again.
     pub device_lost: AtomicBool,
+    /// Set by the decoder thread while it holds playing back until enough of the track came.
+    pub holding: AtomicBool,
+    /// The track being decoded as it comes from its server, when it does.
+    pub download: Mutex<Option<Arc<crate::remote::Download>>>,
     timeline: Mutex<Timeline>,
 }
 
@@ -54,6 +60,8 @@ impl Shared {
             eq: SharedEq::new(),
             visualize: AtomicBool::new(false),
             device_lost: AtomicBool::new(false),
+            holding: AtomicBool::new(false),
+            download: Mutex::new(None),
             timeline: Mutex::new(Timeline::new(sample_rate)),
         }
     }
@@ -92,6 +100,17 @@ impl Shared {
         (gain * (1.0 - b).min(1.0), gain * (1.0 + b).min(1.0))
     }
 
+    /// Whether playing waits for the track to come: held back, or its reader waiting.
+    fn buffering(&self) -> bool {
+        self.holding.load(Ordering::Relaxed)
+            || self
+                .download
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .is_some_and(|download| download.buffering())
+    }
+
     pub fn timeline(&self) -> MutexGuard<'_, Timeline> {
         self.timeline.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -107,11 +126,13 @@ impl Shared {
                 },
                 track: Some(playing.track),
                 position: playing.position,
+                buffering: self.buffering(),
             },
             None => Status {
                 state: PlaybackState::Stopped,
                 track: None,
                 position: Duration::ZERO,
+                buffering: false,
             },
         }
     }

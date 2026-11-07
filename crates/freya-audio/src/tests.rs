@@ -851,3 +851,273 @@ fn a_server_that_never_answers_is_given_up_on() {
     assert!(crate::source::Source::open(&media, &Default::default()).is_err());
     assert!(started.elapsed() < Duration::from_secs(10));
 }
+
+/// How a test server serves its file: the bytes, its version, how fast, and where it
+/// stops for a while once.
+#[derive(Default)]
+struct Serving {
+    bytes: Vec<u8>,
+    /// The version it says the file is; none says nothing.
+    tag: Option<String>,
+    /// Bytes a second it sends at most.
+    rate: Option<usize>,
+    /// Once it sent this many bytes in all, it sends nothing for the while.
+    outage: Option<(usize, Duration)>,
+}
+
+/// A server of what `serving` holds, as Freya's serves files: the ranges asked for, one
+/// connection a request. Its address, and the ranges it was asked for.
+fn serve(serving: Arc<std::sync::Mutex<Serving>>) -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/audio", listener.local_addr().unwrap());
+    let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (asked_of, sent) = (
+        Arc::clone(&asked),
+        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+    );
+    std::thread::spawn(move || {
+        for connection in listener.incoming().flatten() {
+            let (serving, asked, sent) = (
+                Arc::clone(&serving),
+                Arc::clone(&asked_of),
+                Arc::clone(&sent),
+            );
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(connection);
+                let mut range = String::new();
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("range: bytes=") {
+                        range = value.trim().to_owned();
+                    }
+                }
+                asked.lock().unwrap().push(range.clone());
+                let (bytes, tag, rate, outage) = {
+                    let serving = serving.lock().unwrap();
+                    (
+                        serving.bytes.clone(),
+                        serving.tag.clone(),
+                        serving.rate,
+                        serving.outage,
+                    )
+                };
+                let (from, to) = range.split_once('-').unwrap();
+                let (from, to) = match from.parse::<usize>() {
+                    Ok(from) => (
+                        from,
+                        to.parse::<usize>()
+                            .map_or(bytes.len() - 1, |to| to.min(bytes.len() - 1)),
+                    ),
+                    Err(_) => (
+                        bytes.len().saturating_sub(to.parse().unwrap()),
+                        bytes.len() - 1,
+                    ),
+                };
+                let mut connection = reader.into_inner();
+                let tag = tag
+                    .map(|tag| format!("ETag: {tag}\r\n"))
+                    .unwrap_or_default();
+                let head = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {from}-{to}/{}\r\nContent-Length: {}\r\n{tag}Connection: close\r\n\r\n",
+                    bytes.len(),
+                    to + 1 - from
+                );
+                let _ = connection.write_all(head.as_bytes());
+                for piece in bytes[from..=to].chunks(1024) {
+                    let before = sent.fetch_add(piece.len(), Ordering::Relaxed);
+                    if let Some((at, wait)) = outage
+                        && before < at
+                        && before + piece.len() >= at
+                    {
+                        std::thread::sleep(wait);
+                    }
+                    if let Some(rate) = rate {
+                        std::thread::sleep(Duration::from_secs_f64(
+                            piece.len() as f64 / rate as f64,
+                        ));
+                    }
+                    if connection.write_all(piece).is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    (url, asked)
+}
+
+/// Media playing `url`, named as `file` is.
+fn remote_media(file: &Path, url: &str) -> Media {
+    Media {
+        remote: Some(crate::RemoteSource {
+            url: url.to_owned(),
+            bearer: None,
+            agent: None,
+        }),
+        ..Media::from(file)
+    }
+}
+
+/// Keeps files fetched from servers in a folder of these tests, from now on, for every test.
+fn cache_in_tests() {
+    static SET: std::sync::Once = std::sync::Once::new();
+    SET.call_once(|| {
+        let dir = std::env::temp_dir().join(format!("freya-{}-cache", std::process::id()));
+        crate::set_cache(Some(dir), 1 << 30);
+    });
+}
+
+#[test]
+fn a_file_played_again_comes_from_the_cache() {
+    cache_in_tests();
+    let file = fixture("sine.flac");
+    let serving = Arc::new(std::sync::Mutex::new(Serving {
+        bytes: std::fs::read(&file).unwrap(),
+        tag: Some("\"first\"".into()),
+        ..Default::default()
+    }));
+    let (url, asked) = serve(Arc::clone(&serving));
+    let media = remote_media(&file, &url);
+    let local = frames_from(&Media::from(file.clone()), Duration::ZERO);
+    assert_eq!(frames_from(&media, Duration::ZERO), local);
+    // Let go, it is noted as whole once its fetching ended.
+    let whole = || {
+        let started = Instant::now();
+        while asked.lock().unwrap().len() < 2 && started.elapsed() < TIMEOUT {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    whole();
+    asked.lock().unwrap().clear();
+    // Again: only asked whether it is still the same file.
+    assert_eq!(frames_from(&media, Duration::ZERO), local);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(*asked.lock().unwrap(), vec!["0-0".to_owned()]);
+
+    // Changed on the server: still played from the cache once, then fetched again.
+    serving.lock().unwrap().tag = Some("\"second\"".into());
+    asked.lock().unwrap().clear();
+    assert_eq!(frames_from(&media, Duration::ZERO), local);
+    std::thread::sleep(Duration::from_millis(300));
+    asked.lock().unwrap().clear();
+    assert_eq!(frames_from(&media, Duration::ZERO), local);
+    assert!(
+        asked.lock().unwrap().len() > 1,
+        "fetched again: {:?}",
+        asked.lock().unwrap()
+    );
+}
+
+#[test]
+fn a_file_without_a_version_is_not_kept() {
+    cache_in_tests();
+    let file = fixture("sine.mp3");
+    let (url, asked) = serve(Arc::new(std::sync::Mutex::new(Serving {
+        bytes: std::fs::read(&file).unwrap(),
+        ..Default::default()
+    })));
+    let media = remote_media(&file, &url);
+    frames_from(&media, Duration::ZERO);
+    std::thread::sleep(Duration::from_millis(300));
+    asked.lock().unwrap().clear();
+    frames_from(&media, Duration::ZERO);
+    assert!(
+        asked.lock().unwrap().len() > 1,
+        "{:?}",
+        asked.lock().unwrap()
+    );
+}
+
+/// Plays `media` to its end on a player that plays in real time: whether it was said to be
+/// buffering at some point, and how many frames were heard.
+fn play_through(media: Media) -> (bool, u64) {
+    let player = Player::silent(48_000);
+    player.play(media);
+    let mut buffering = false;
+    let started = Instant::now();
+    loop {
+        buffering |= player.status().buffering;
+        match player.events().recv_timeout(Duration::from_millis(5)) {
+            Ok(Event::Finished) => break,
+            Ok(Event::Error(e) | Event::Unplayable(_, e)) => panic!("{e}"),
+            _ => {}
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "never finished"
+        );
+    }
+    (buffering, player.shared.consumed.load(Ordering::Relaxed))
+}
+
+#[test]
+fn a_track_whose_server_stops_for_a_while_waits_and_plays_on() {
+    // Three seconds, then the server sends nothing for two after the first second of it.
+    let file = write_wav("outage", 8000, 24_000);
+    let bytes = std::fs::read(&file).unwrap();
+    let (url, _) = serve(Arc::new(std::sync::Mutex::new(Serving {
+        rate: Some(64_000),
+        outage: Some((40_000, Duration::from_secs(2))),
+        bytes,
+        ..Default::default()
+    })));
+    let (buffering, heard) = play_through(remote_media(&file, &url));
+    assert!(buffering, "said to be buffering while it waited");
+    // All of it heard, at 48 kHz: none lost while it waited.
+    assert!(heard >= 3 * 48_000, "{heard}");
+}
+
+#[test]
+fn a_slow_network_waits_before_it_plays_rather_than_running_dry() {
+    // Four seconds, sent at three quarters of the speed it plays at.
+    let file = write_wav("slow", 8000, 32_000);
+    let bytes = std::fs::read(&file).unwrap();
+    let (url, _) = serve(Arc::new(std::sync::Mutex::new(Serving {
+        rate: Some(24_000),
+        bytes,
+        ..Default::default()
+    })));
+    let player = Player::silent(48_000);
+    player.play(remote_media(&file, &url));
+    let started = Instant::now();
+    let mut first_heard = None;
+    let mut last = Duration::ZERO;
+    let mut stood_still = Duration::ZERO;
+    loop {
+        let status = player.status();
+        if status.position > Duration::ZERO {
+            first_heard.get_or_insert(started.elapsed());
+            // Once it plays, it plays on: the position never stands still for long.
+            if status.position == last && status.state == PlaybackState::Playing {
+                stood_still += Duration::from_millis(5);
+            } else {
+                stood_still = Duration::ZERO;
+            }
+            assert!(
+                stood_still < Duration::from_millis(400),
+                "ran dry at {:?}",
+                status.position
+            );
+            last = status.position;
+        }
+        match player.events().recv_timeout(Duration::from_millis(5)) {
+            Ok(Event::Finished) => break,
+            Ok(Event::Error(e) | Event::Unplayable(_, e)) => panic!("{e}"),
+            _ => {}
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "never finished"
+        );
+    }
+    // It waited for most of it before it started.
+    assert!(
+        first_heard.unwrap() > Duration::from_millis(800),
+        "{first_heard:?}"
+    );
+}

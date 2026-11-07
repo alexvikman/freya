@@ -34,6 +34,9 @@ pub struct Settings {
     /// Whether the window's close button keeps Freya running, playing on, as music apps do:
     /// in the notification area on Windows, minimized on Linux (see `gui::app::closing`).
     pub close_minimizes: bool,
+    /// How many gigabytes of music from a server on another computer are kept on this one;
+    /// `None` chooses by the free space (see `stream_cache`).
+    pub stream_cache_gb: Option<u32>,
     /// When Freya last looked, in seconds since 1970.
     pub last_update_check: Option<u64>,
     /// A version the user does not want offered again.
@@ -114,6 +117,7 @@ impl Default for Settings {
             equalizer: EqualizerSettings::default(),
             check_for_updates: true,
             close_minimizes: true,
+            stream_cache_gb: None,
             last_update_check: None,
             skipped_update: None,
             lastfm_user: None,

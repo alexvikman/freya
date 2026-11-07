@@ -132,6 +132,9 @@ pub struct View {
     /// had been logged then.
     log_rows: ModelRows,
     log_shown: Option<(log::Level, u64)>,
+    /// How much music is kept, as last told to Settings, and when: told again now and then
+    /// while Settings shows, as counting it reads the cache's folder.
+    pub stream_cache_shown: Option<(Instant, String)>,
     /// The playlists' version and the playlist shown when their rows were last given to the
     /// skin; rows are only rebuilt when either changes.
     playlists_synced: Option<(u64, Option<usize>)>,
@@ -174,6 +177,7 @@ impl View {
             activity_rows: ModelRows::new(),
             log_rows: ModelRows::new(),
             log_shown: None,
+            stream_cache_shown: None,
             playlists_synced: None,
             eq_bands_shown: None,
             visualizer: Visualizer::new(&ui),

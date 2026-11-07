@@ -210,6 +210,8 @@ pub struct Source {
     info_changed: bool,
     /// What a seek asks a server for ahead, for a FLAC file without a seek table.
     seek_ahead: Option<crate::remote::SeekAhead>,
+    /// The file as it is fetched, when it is read from a server.
+    download: Option<std::sync::Arc<crate::remote::Download>>,
 }
 
 impl Source {
@@ -223,6 +225,7 @@ impl Source {
         let mut titles = None;
         let mut file_len = None;
         let mut seek_ahead = None;
+        let mut download = None;
 
         let input: Box<dyn MediaSource> = match path.to_str().filter(|p| stream::is_url(p)) {
             _ if let Some(remote) = &media.remote => {
@@ -235,6 +238,7 @@ impl Source {
                 })?;
                 file_len = file.byte_len();
                 seek_ahead = file.take_seek_ahead();
+                download = Some(file.download());
                 if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                     hint.with_extension(ext);
                 }
@@ -305,6 +309,9 @@ impl Source {
             )),
             _ => None,
         };
+        if let (Some(download), Some(len), Some(d)) = (&download, file_len, duration) {
+            download.set_rate(len as f64 / d.as_secs_f64());
+        }
         let bitrate_kbps = match (file_len, duration) {
             (Some(len), Some(d)) if d.as_secs_f64() > 0.0 => {
                 Some((len as f64 * 8.0 / d.as_secs_f64() / 1000.0).round() as u32)
@@ -350,6 +357,7 @@ impl Source {
             titles,
             info_changed: false,
             seek_ahead,
+            download,
         };
         source.play_part(media);
         if !media.start.is_zero() {
@@ -441,6 +449,11 @@ impl Source {
         &self.info
     }
 
+    /// The file as it is fetched, when it is read from a server.
+    pub fn download(&self) -> Option<&std::sync::Arc<crate::remote::Download>> {
+        self.download.as_ref()
+    }
+
     /// Decodes the first block of audio ahead, kept for [`Self::next_chunk`]: for a track
     /// opened ahead, so what it reads first is read before it plays.
     pub fn prime(&mut self) -> Result<(), Error> {
@@ -495,9 +508,8 @@ impl Source {
                 Err(SymError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                     return Ok(false);
                 }
-                Err(SymError::IoError(e))
-                    if e.kind() == stream::interrupted().kind() && self.titles.is_some() =>
-                {
+                // A stream, or a file from a server, waited on when something else is to play.
+                Err(SymError::IoError(e)) if e.kind() == stream::interrupted().kind() => {
                     return Err(Error::Interrupted);
                 }
                 Err(e) => return Err(Error::Decode(e.to_string())),

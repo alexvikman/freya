@@ -469,7 +469,7 @@ component PlayerBar inherits Rectangle {
                 // Kept while a track is loaded, even when empty, so the title does not jump
                 // when playback starts.
                 if Player.title != "" || Player.error != "": Text {
-                    text: Player.error != "" ? Player.error : Player.format-info;
+                    text: Player.error != "" ? Player.error : Player.buffering ? "Buffering…" : Player.format-info;
                     font-size: 12px;
                     color: Player.error != "" ? Theme.danger : Theme.text-secondary;
                     overflow: elide;
@@ -8510,7 +8510,7 @@ component StageBar inherits Rectangle {
         // Room for "10:00:00 / 10:00:00"; only this much is redrawn each second.
         width: min(time-slot.width, 200px);
         height: time-slot.height;
-        text: Player.live ? "Live" : Player.position-text + " / " + Player.length-text;
+        text: Player.buffering ? "Buffering…" : Player.live ? "Live" : Player.position-text + " / " + Player.length-text;
         font-size: 16px;
         color: Theme.text-secondary;
         vertical-alignment: center;
@@ -9356,6 +9356,57 @@ component SettingsView inherits Rectangle {
                         TextButton {
                             text: "Choose Skin…";
                             clicked => { App.show-skins(); }
+                        }
+                    }
+                }
+            }
+
+            if root.tab == "general" && Server.remote: SettingsSection {
+                title: "Music from " + Server.name;
+
+                SettingsRow {
+                    label: "Music kept on this computer";
+                    detail: "What you play is kept here, so it plays again at once and keeps playing through a slow network. Automatic keeps up to a tenth of the free space, at most 10 GB." + (App.stream-cache-used != "" ? " " + App.stream-cache-used + "." : "");
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        HorizontalLayout {
+                            spacing: 4px;
+
+                            ChoiceButton {
+                                text: "Automatic";
+                                selected: App.stream-cache == "auto";
+                                clicked => { App.set-stream-cache("auto"); }
+                            }
+                            ChoiceButton {
+                                text: "5 GB";
+                                selected: App.stream-cache == "5";
+                                clicked => { App.set-stream-cache("5"); }
+                            }
+                            ChoiceButton {
+                                text: "20 GB";
+                                selected: App.stream-cache == "20";
+                                clicked => { App.set-stream-cache("20"); }
+                            }
+                            ChoiceButton {
+                                text: "50 GB";
+                                selected: App.stream-cache == "50";
+                                clicked => { App.set-stream-cache("50"); }
+                            }
+                        }
+                    }
+                }
+                SettingsRow {
+                    label: "Clear the music kept";
+                    detail: "It is fetched again as you play it.";
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        TextButton {
+                            text: "Clear";
+                            clicked => { App.clear-stream-cache(); }
                         }
                     }
                 }

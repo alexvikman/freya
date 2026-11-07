@@ -488,21 +488,33 @@ fn a_tracks_file_is_served_whole_or_in_parts() {
             .headers()
             .get("content-range")
             .map(|v| v.to_str().unwrap().to_owned());
+        let version = answer
+            .headers()
+            .get("etag")
+            .map(|v| v.to_str().unwrap().to_owned());
         let body = answer.body_mut().read_to_vec().unwrap();
-        (status, said, body)
+        (status, said, body, version)
     };
     let url = audio_url(&address, &track);
-    let (status, said, body) = get(&url, Some("bytes=10-109"));
+    let (status, said, body, version) = get(&url, Some("bytes=10-109"));
     assert_eq!(status, 206);
     assert_eq!(said, Some(format!("bytes 10-109/{}", bytes.len())));
     assert_eq!(body, bytes[10..110]);
-    let (status, _, body) = get(&url, None);
+    // Which version of the file it is, the same for every part of it.
+    assert!(version.is_some());
+    let (status, _, body, whole) = get(&url, None);
     assert_eq!((status, body.len()), (200, bytes.len()));
-    let (status, said, _) = get(&url, Some(&format!("bytes={}-", bytes.len())));
+    assert_eq!(whole, version);
+    // Changed, it is another.
+    let file = std::fs::File::options().write(true).open(&track).unwrap();
+    file.set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1))
+        .unwrap();
+    assert_ne!(get(&url, Some("bytes=0-0")).3, version);
+    let (status, said, _, _) = get(&url, Some(&format!("bytes={}-", bytes.len())));
     assert_eq!(status, 416);
     assert_eq!(said, Some(format!("bytes */{}", bytes.len())));
     // Only the library's music.
-    let (status, _, _) = get(&audio_url(&address, &dir.join("library.db")), None);
+    let (status, _, _, _) = get(&audio_url(&address, &dir.join("library.db")), None);
     assert_eq!(status, 404);
     let _ = std::fs::remove_dir_all(&dir);
 }

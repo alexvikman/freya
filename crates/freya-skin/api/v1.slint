@@ -37,6 +37,8 @@ export global Player {
     in property <string> format-info;
     /// True for internet radio: there is no length, and seeking does nothing.
     in property <bool> live;
+    /// True while playing waits for the track to come from the server, as on a slow network.
+    in property <bool> buffering;
     /// Why the last track could not be played, until another one starts. Empty otherwise.
     in property <string> error;
     in property <PlaybackState> state: PlaybackState.stopped;
@@ -1149,6 +1151,12 @@ export global App {
     /// Windows, minimized in the taskbar on Linux; otherwise it quits. On macOS closing leaves
     /// Freya in the Dock either way. Kept between runs.
     in property <bool> close-minimizes: true;
+    /// How much music from a server on another computer is kept on this one, so it plays
+    /// again at once and through a slow network: "auto", or a number of gigabytes; set with
+    /// `set-stream-cache`. Kept between runs.
+    in property <string> stream-cache: "auto";
+    /// How much is kept, and the most that may be: "1.2 GB of at most 10 GB".
+    in property <string> stream-cache-used;
     /// Whether the window scrolls by the mouse's middle button, which Freya does for any skin,
     /// and where in the window it was started: a skin may mark the place.
     in property <bool> autoscroll;
@@ -1200,6 +1208,10 @@ export global App {
     /// "system", "light" or "dark".
     callback set-theme(string);
     callback set-close-minimizes(bool);
+    /// "auto", or a number of gigabytes.
+    callback set-stream-cache(string);
+    /// Forget the music kept; it is fetched again as it plays.
+    callback clear-stream-cache();
     callback toggle-equalizer();
     /// Call on a mouse press in an empty part of the top bar, when the skin draws into the
     /// title bar: the window follows the mouse, and a double click zooms or minimizes it, as

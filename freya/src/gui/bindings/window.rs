@@ -83,6 +83,32 @@ pub(super) fn bind(b: &Binder) {
     );
     b.bind(
         "App",
+        "set-stream-cache",
+        Box::new(|app, args| {
+            if let Some(Value::String(size)) = args.first() {
+                let chosen = match size.as_str() {
+                    "auto" => None,
+                    gb => match gb.parse::<u32>() {
+                        Ok(gb @ 1..=1000) => Some(gb),
+                        _ => return,
+                    },
+                };
+                app.settings.stream_cache_gb = chosen;
+                crate::stream_cache::apply(chosen);
+                app.view.stream_cache_shown = None;
+            }
+        }),
+    );
+    b.bind(
+        "App",
+        "clear-stream-cache",
+        Box::new(|app, _| {
+            crate::stream_cache::clear();
+            app.view.stream_cache_shown = None;
+        }),
+    );
+    b.bind(
+        "App",
         "toggle-equalizer",
         Box::new(|app, _| app.settings.equalizer_visible = !app.settings.equalizer_visible),
     );

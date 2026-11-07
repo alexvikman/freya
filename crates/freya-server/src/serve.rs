@@ -618,14 +618,15 @@ fn audio(served: &Served, request: &Request) -> Response {
     let Some(mut file) = opened else {
         return Response::error(404, "no such track");
     };
-    let length = match file.metadata() {
-        Ok(metadata) => metadata.len(),
+    let (length, version) = match file.metadata() {
+        Ok(metadata) => (metadata.len(), file_version(&metadata)),
         Err(e) => return Response::error(500, e),
     };
     let kind = audio_type(&path);
     let Some(range) = request.header("range") else {
         let mut whole = Response::read(200, kind, length, Box::new(file));
         whole.headers.push(("Accept-Ranges", "bytes".into()));
+        whole.headers.push(("ETag", version));
         return whole;
     };
     let Some((from, to)) = byte_range(range, length) else {
@@ -643,7 +644,19 @@ fn audio(served: &Served, request: &Request) -> Response {
     part.headers.push(("Accept-Ranges", "bytes".into()));
     part.headers
         .push(("Content-Range", format!("bytes {from}-{to}/{length}")));
+    part.headers.push(("ETag", version));
     part
+}
+
+/// Which version of a file this is, as a tag: its length and when it was last changed. A
+/// client keeping it knows by this whether it changed since.
+fn file_version(metadata: &std::fs::Metadata) -> String {
+    let changed = metadata
+        .modified()
+        .ok()
+        .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |since| since.as_nanos());
+    format!("\"{:x}-{changed:x}\"", metadata.len())
 }
 
 /// The first and last byte a `Range` header asks for of a file of `length` bytes: "bytes=0-99",

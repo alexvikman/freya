@@ -21,6 +21,11 @@ const POLL: Duration = Duration::from_millis(10);
 const REFILL_WAIT_MAX: Duration = Duration::from_millis(50);
 /// How long to wait for the audio callback to acknowledge a flush.
 const FLUSH_TIMEOUT: Duration = Duration::from_millis(500);
+/// How often playing that is held back for a track from a server asks whether it can go on.
+const HOLD_POLL: Duration = Duration::from_millis(50);
+/// The next track from a server is opened, and starts coming, this long before the one
+/// playing ends.
+const NEXT_AHEAD: Duration = Duration::from_secs(30);
 
 pub(crate) enum Command {
     Play(Media),
@@ -81,8 +86,12 @@ pub(crate) struct Engine {
     current: Option<Current>,
     next: Option<Media>,
     /// The next track, opened ahead on a thread when it is read from a server, so it follows
-    /// without a gap.
+    /// without a gap: [`NEXT_AHEAD`] before the one playing ends.
     ahead: Option<OpenedAhead>,
+    /// Whether playing is held back until enough of the track came from its server.
+    holding: bool,
+    /// The download the status was told of last.
+    told: Option<Arc<crate::remote::Download>>,
     /// Resampler and the input rate it was built for.
     converter: Option<(u32, RateConverter)>,
     mapped: Vec<f32>,
@@ -116,6 +125,8 @@ impl Engine {
             current: None,
             next: None,
             ahead: None,
+            holding: false,
+            told: None,
             converter: None,
             mapped: Vec::new(),
             pending: Vec::new(),
@@ -129,6 +140,8 @@ impl Engine {
     pub fn run(mut self) {
         loop {
             self.report_progress();
+            self.tell_download();
+            self.open_ahead_when_due();
 
             let busy = self.current.is_some() || self.has_pending();
             let wake = if busy {
@@ -169,9 +182,102 @@ impl Engine {
                 }
                 continue;
             }
+            if self.held() {
+                match self.wait_command(Some(HOLD_POLL)) {
+                    Wake::Command(cmd) => {
+                        if !self.handle(cmd) {
+                            return;
+                        }
+                    }
+                    Wake::Disconnected => return,
+                    Wake::Timeout => {}
+                }
+                continue;
+            }
             if self.current.is_some() {
                 self.decode_step();
+                self.hold_when_dry();
             }
+        }
+    }
+
+    fn download(&self) -> Option<&Arc<crate::remote::Download>> {
+        self.current.as_ref().and_then(|cur| cur.source.download())
+    }
+
+    /// Holds playing back, or lets it go on: what is buffered still plays out.
+    fn hold(&mut self, holding: bool) {
+        if self.holding != holding {
+            self.holding = holding;
+            self.shared.holding.store(holding, Ordering::Relaxed);
+        }
+    }
+
+    /// Holds back a track just started from a server until it can play through.
+    fn hold_unless_playable(&mut self) {
+        let playable = self.download().is_none_or(|download| download.can_play());
+        self.hold(!playable);
+    }
+
+    /// Whether playing is held back still; let go once enough came.
+    fn held(&mut self) -> bool {
+        if self.holding && self.download().is_none_or(|download| download.can_play()) {
+            log::debug!("enough came; playing on");
+            self.hold(false);
+        }
+        self.holding
+    }
+
+    /// When the reader had to wait for the network long enough to be heard, it ran dry:
+    /// playing pauses there until it can go on without running dry again.
+    fn hold_when_dry(&mut self) {
+        let dry = self
+            .download()
+            .is_some_and(|download| download.take_stalled() && !download.can_play());
+        if dry {
+            log::info!("the track from the server ran dry; buffering");
+            self.hold(true);
+        }
+    }
+
+    /// Tells the status which track is coming from a server, for whether it waits for it.
+    fn tell_download(&mut self) {
+        let now = self.download();
+        let same = match (&self.told, now) {
+            (Some(told), Some(now)) => Arc::ptr_eq(told, now),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            self.told = now.cloned();
+            *self
+                .shared
+                .download
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = self.told.clone();
+        }
+    }
+
+    /// Opens the next track from a server once the one playing is near its end, or of a
+    /// length not known.
+    fn open_ahead_when_due(&mut self) {
+        let due = self.ahead.is_none()
+            && self.next.as_ref().is_some_and(|next| next.remote.is_some())
+            && self.current.is_some()
+            && {
+                let consumed = self.shared.consumed.load(Ordering::Acquire);
+                self.shared
+                    .timeline()
+                    .current(consumed)
+                    .is_none_or(|playing| {
+                        playing.track.duration.is_none_or(|length| {
+                            length.saturating_sub(playing.position) <= NEXT_AHEAD
+                        })
+                    })
+            };
+        if due {
+            let next = self.next.clone();
+            self.open_ahead(next.as_ref());
         }
     }
 
@@ -209,7 +315,12 @@ impl Engine {
         match cmd {
             Command::Play(media) => self.play(&media),
             Command::SetNext(media) => {
-                self.open_ahead(media.as_ref());
+                // Opened when it is due, unless it is the one opened already.
+                if self.ahead.as_ref().map(|ahead| &ahead.media) != media.as_ref()
+                    && let Some(ahead) = self.ahead.take()
+                {
+                    ahead.given_up.raise();
+                }
                 self.next = media;
             }
             Command::Seek(position) => self.seek(position),
@@ -236,6 +347,7 @@ impl Engine {
                     Arc::clone(&cur.info),
                 );
                 self.current = Some(cur);
+                self.hold_unless_playable();
             }
             Err(e) => self.emit_unplayable(media, &e),
         }
@@ -392,6 +504,7 @@ impl Engine {
     fn reset_output(&mut self) {
         self.flush_output();
         self.shared.timeline().clear();
+        self.hold(false);
     }
 
     /// Discards everything buffered so that new audio is heard immediately. The timeline still
@@ -502,6 +615,7 @@ impl Engine {
                         Arc::clone(&cur.info),
                     );
                     self.current = Some(cur);
+                    self.hold_unless_playable();
                     return;
                 }
                 Err(e) => self.emit_unplayable(&media, &e),

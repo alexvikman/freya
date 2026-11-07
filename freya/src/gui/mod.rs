@@ -98,6 +98,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
     select_backend(options.renderer, &window_events)?;
 
     let settings = Settings::load();
+    crate::stream_cache::apply(settings.stream_cache_gb);
     // Absolute, so the saved setting still works when Freya is started from elsewhere.
     let saved_skin = options
         .skin

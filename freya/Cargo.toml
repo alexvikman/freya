@@ -129,8 +129,9 @@ x11rb = { version = "0.13.2", features = ["shape"] }
 
 [target.'cfg(unix)'.dependencies]
 # The computer's name for the server's list of devices (see settings.rs), asked of the system
-# rather than of a program on the path; and on macOS the hologram's drawing thread measures its
-# own CPU time with it (see gui/hologram/metal.rs).
+# rather than of a program on the path; the free space for the music kept (see
+# stream_cache.rs); and on macOS the hologram's drawing thread measures its own CPU time with it
+# (see gui/hologram/metal.rs).
 libc = "0.2.190"
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -150,10 +151,11 @@ objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["
 objc2-metal = { version = "0.3.2", default-features = false, features = ["std", "MTLAllocation", "MTLBlitCommandEncoder", "MTLCommandBuffer", "MTLCommandEncoder", "MTLCommandQueue", "MTLDevice", "MTLDrawable", "MTLLibrary", "MTLPixelFormat", "MTLRenderCommandEncoder", "MTLRenderPass", "MTLRenderPipeline", "MTLResource", "MTLTexture", "MTLTypes", "objc2-core-foundation"] }
 
 [target.'cfg(windows)'.dependencies]
-# Printing to the terminal Freya was started from, and a frameless window's edges (see
-# gui/title_bar/windows.rs).
+# Printing to the terminal Freya was started from, a frameless window's edges (see
+# gui/title_bar/windows.rs), and the free space for the music kept (see stream_cache.rs).
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Storage_FileSystem",
     "Win32_System_Console",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",

@@ -2,6 +2,9 @@
 
 use super::*;
 
+/// How often Settings is told anew how much music is kept, while it shows.
+const STREAM_CACHE_EVERY: Duration = Duration::from_secs(5);
+
 impl App {
     /// Writes current state into the skin.
     pub fn refresh(&mut self) {
@@ -265,9 +268,35 @@ impl App {
                 view.log_rows.sync(log_rows(log_level));
             }
         }
+        let settings_shown = matches!(
+            ui.get_global_property("App", "view"),
+            Ok(Value::String(shown)) if shown == "settings"
+        );
+        let stale = view
+            .stream_cache_shown
+            .as_ref()
+            .is_none_or(|(at, _)| at.elapsed() >= STREAM_CACHE_EVERY);
+        if settings_shown && stale {
+            let told = crate::stream_cache::describe(self.settings.stream_cache_gb);
+            view.stream_cache_shown = Some((Instant::now(), told));
+        }
+        let stream_cache_used = view
+            .stream_cache_shown
+            .as_ref()
+            .map(|(_, told)| told.clone())
+            .unwrap_or_default();
         view.app_out.write(
             ui,
             vec![
+                (
+                    "stream-cache",
+                    skin_state::string(
+                        self.settings
+                            .stream_cache_gb
+                            .map_or_else(|| "auto".to_owned(), |gb| gb.to_string()),
+                    ),
+                ),
+                ("stream-cache-used", skin_state::string(stream_cache_used)),
                 (
                     "window-buttons-width",
                     Value::Number(f64::from(title_bar.buttons_width)),
