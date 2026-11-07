@@ -38,26 +38,35 @@ pub fn fill(ui: &ComponentInstance) {
     set("Server", "user-initial", text("A"));
 
     let tracks = [
-        ("Kraftwerk - Computer Love", "7:15"),
-        ("Daft Punk - Something About Us", "3:52"),
-        ("Aphex Twin - Avril 14th", "2:05"),
-        ("Röyksopp - Eple", "3:40"),
-        ("Boards of Canada - Roygbiv", "2:31"),
-        ("Massive Attack - Teardrop", "5:30"),
-        ("Portishead - Glory Box", "5:06"),
+        ("Kraftwerk - Computer Love", "Computer World", "7:15"),
+        ("Daft Punk - Something About Us", "Discovery", "3:52"),
+        ("Aphex Twin - Avril 14th", "Drukqs", "2:05"),
+        ("Röyksopp - Eple", "Melody A.M.", "3:40"),
+        (
+            "Boards of Canada - Roygbiv",
+            "Music Has the Right to Children",
+            "2:31",
+        ),
+        ("Massive Attack - Teardrop", "Mezzanine", "5:30"),
+        ("Portishead - Glory Box", "Dummy", "5:06"),
         (
             "Lykke Li - I Follow Rivers (The Magician Remix, an unusually long title)",
+            "Wounded Rhymes",
             "4:47",
         ),
-        ("untagged file", ""),
+        ("untagged file", "", ""),
     ];
     let rows: Vec<Value> = tracks
         .iter()
         .enumerate()
-        .map(|(i, (title, duration))| {
+        .map(|(i, (title, album, duration))| {
+            let (artist, name) = title.split_once(" - ").unwrap_or(("", title));
             Value::Struct(Struct::from_iter([
                 ("number".to_owned(), Value::Number(i as f64 + 1.0)),
                 ("title".to_owned(), text(title)),
+                ("name".to_owned(), text(name)),
+                ("artist".to_owned(), text(artist)),
+                ("album".to_owned(), text(album)),
                 ("duration".to_owned(), text(duration)),
                 ("selected".to_owned(), Value::Bool(i == 4 || i == 5)),
                 ("current".to_owned(), Value::Bool(i == 2)),

@@ -20,6 +20,11 @@ export struct TrackRow {
     number: int,
     /// "Artist - Title" when tagged, otherwise the file name.
     title: string,
+    /// The track's title alone; the file name when it has none.
+    name: string,
+    /// Its artist and its album, when its tags say them; empty otherwise.
+    artist: string,
+    album: string,
     /// "3:45", or empty when unknown.
     duration: string,
     selected: bool,

@@ -178,6 +178,18 @@ pub fn track_row(index: usize, entry: &Entry, current: bool) -> Value {
         ("number".to_owned(), Value::Number(index as f64 + 1.0)),
         ("title".to_owned(), string(entry.display_title())),
         (
+            "name".to_owned(),
+            string(entry.title.clone().unwrap_or_else(|| entry.display_title())),
+        ),
+        (
+            "artist".to_owned(),
+            string(entry.artist.clone().unwrap_or_default()),
+        ),
+        (
+            "album".to_owned(),
+            string(entry.album.clone().unwrap_or_default()),
+        ),
+        (
             "duration".to_owned(),
             string(entry.duration.map(format_time).unwrap_or_default()),
         ),

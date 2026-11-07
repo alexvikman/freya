@@ -221,6 +221,9 @@ impl Convert for TrackRow {
         Some(Self {
             number: field(&s, "number"),
             title: field(&s, "title"),
+            name: field(&s, "name"),
+            artist: field(&s, "artist"),
+            album: field(&s, "album"),
             duration: field(&s, "duration"),
             selected: field(&s, "selected"),
             current: field(&s, "current"),
@@ -231,6 +234,9 @@ impl Convert for TrackRow {
         structure(vec![
             ("number", self.number.to_value()),
             ("title", self.title.to_value()),
+            ("name", self.name.to_value()),
+            ("artist", self.artist.to_value()),
+            ("album", self.album.to_value()),
             ("duration", self.duration.to_value()),
             ("selected", self.selected.to_value()),
             ("current", self.current.to_value()),

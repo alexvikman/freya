@@ -1231,6 +1231,9 @@ component TrackRowView inherits Rectangle {
     in property <TrackRow> entry;
     in property <int> index;
     in property <int> count;
+    /// How the columns share the width, as the heading's do (see TrackList).
+    in property <bool> album-shown: true;
+    in property <float> time-stretch;
     /// Row the dragged tracks would land before, or -1.
     in property <int> drop-index;
     callback drag-over(int);
@@ -1251,41 +1254,69 @@ component TrackRowView inherits Rectangle {
     HorizontalLayout {
         padding-left: 12px;
         padding-right: 20px;
-        spacing: 10px;
+        spacing: 16px;
 
         Rectangle {
-            width: 36px;
+            width: 30px;
 
             if !entry.current: Text {
                 width: parent.width;
                 height: parent.height;
                 text: entry.number;
-                font-size: 14px;
+                font-size: 15px;
                 color: Theme.text-secondary;
                 horizontal-alignment: right;
                 vertical-alignment: center;
             }
             if entry.current: Icon {
                 x: parent.width - 14px;
+                y: (parent.height - self.height) / 2;
                 width: 12px;
                 height: 12px;
                 data: Icons.play;
                 color: Theme.accent-text;
             }
         }
-        Text {
-            horizontal-stretch: 1;
-            text: entry.title;
-            color: entry.current ? Theme.accent-text : Theme.text;
-            // One line a track: the one playing stands out.
-            font-weight: entry.current ? 600 : 400;
+        // The title over its artist, the album beside them, the length at the end.
+        VerticalLayout {
+            horizontal-stretch: 6;
+            min-width: 0;
+            preferred-width: 0;
+            alignment: center;
+            spacing: 2px;
+
+            Text {
+                text: entry.name;
+                font-size: 16px;
+                font-weight: 600;
+                color: entry.current ? Theme.accent-text : Theme.text;
+                overflow: elide;
+            }
+            if entry.artist != "": Text {
+                text: entry.artist;
+                font-size: 14px;
+                color: Theme.text-secondary;
+                overflow: elide;
+            }
+        }
+        if root.album-shown: Text {
+            horizontal-stretch: 4;
+            min-width: 0;
+            preferred-width: 0;
+            text: entry.album;
+            font-size: 14px;
+            color: Theme.text-secondary;
             vertical-alignment: center;
             overflow: elide;
         }
         Text {
+            horizontal-stretch: root.time-stretch;
+            min-width: 48px;
+            preferred-width: 0;
             text: entry.duration;
             font-size: 14px;
             color: Theme.text-secondary;
+            horizontal-alignment: right;
             vertical-alignment: center;
         }
     }
@@ -1365,7 +1396,12 @@ component TrackList inherits FocusScope {
         }
     }
 
-    property <length> row-height: 34px;
+    property <length> row-height: 56px;
+    /// The album's column, where there is room for it, and the length's share of the width:
+    /// none in a narrow list, more as it widens, as album pages do.
+    property <bool> album-shown: root.width > 560px;
+    property <float> time-stretch: max(0, min(2, (root.width - 800px) / 200px));
+    property <length> heading-height: 40px;
     // Where a right-click opened the menu, in this component.
     property <length> menu-x;
     property <length> menu-y;
@@ -1417,26 +1453,87 @@ component TrackList inherits FocusScope {
         accept
     }
 
-    // Inset from the panel's edges, so the rows' rounded highlights sit inside its corners.
+    // The columns' heading, over the rows, as a playlist's.
+    if Playlist.rows.length > 0: Rectangle {
+        x: 8px;
+        y: 0;
+        width: root.width - 16px;
+        height: root.heading-height;
+
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 20px;
+            spacing: 16px;
+
+            Text {
+                width: 30px;
+                text: "#";
+                font-size: 14px;
+                color: Theme.text-secondary;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+            Text {
+                horizontal-stretch: 6;
+                min-width: 0;
+                preferred-width: 0;
+                text: "Title";
+                font-size: 14px;
+                color: Theme.text-secondary;
+                vertical-alignment: center;
+            }
+            if root.album-shown: Text {
+                horizontal-stretch: 4;
+                min-width: 0;
+                preferred-width: 0;
+                text: "Album";
+                font-size: 14px;
+                color: Theme.text-secondary;
+                vertical-alignment: center;
+            }
+            Rectangle {
+                horizontal-stretch: root.time-stretch;
+                min-width: 48px;
+                preferred-width: 0;
+
+                Icon {
+                    x: parent.width - self.width;
+                    y: (parent.height - self.height) / 2;
+                    width: 16px;
+                    height: 16px;
+                    data: Icons.clock;
+                    stroked: true;
+                    color: Theme.text-secondary;
+                }
+            }
+        }
+        Rectangle {
+            y: parent.height - 1px;
+            height: 1px;
+            background: Theme.divider;
+        }
+    }
+
+    // Under the heading; inset from the panel's edges, so the rows' rounded highlights sit
+    // inside its corners.
     list := ListView {
         x: 8px;
-        y: 8px;
+        y: root.heading-height + 4px;
         width: root.width - 16px;
-        height: root.height - 16px;
+        height: root.height - root.heading-height - 4px - 8px;
         changed content-y => {
             if (root.shown) {
                 App.scroll = -self.content-y;
             }
         }
 
-        // In the middle of a wide window (see `Page`).
         for track[i] in Playlist.rows: Rectangle {
             height: root.row-height;
 
             TrackRowView {
-                x: Page.beside(parent.width, Page.widest);
-                width: parent.width - 2 * self.x;
                 height: parent.height;
+                album-shown: root.album-shown;
+                time-stretch: root.time-stretch;
                 entry: track;
                 index: i;
                 count: Playlist.rows.length;
@@ -4033,7 +4130,7 @@ component LibraryPanel inherits FocusScope {
             property <bool> head: index < root.head-lines;
             property <bool> album: !self.head && Library.rows[self.i].kind == "album";
 
-            height: self.head ? root.artist-head-height : self.album ? root.album-head-height : root.list-row-height;
+            height: self.head ? root.artist-head-height : self.album ? root.album-head-height : root.album-row-height;
 
             if cell.head: ArtistPageHead {
                 page: Library.artist-page;
@@ -4057,7 +4154,8 @@ component LibraryPanel inherits FocusScope {
                 index: cell.i;
                 opened => { root.activate(cell.i); }
             }
-            if !cell.head && !cell.album: LibraryRowView {
+            // Its tracks as an album's page shows them.
+            if !cell.head && !cell.album: AlbumTrackRow {
                 entry: Library.rows[cell.i];
                 index: cell.i;
                 cursor: cell.i == root.cursor;
