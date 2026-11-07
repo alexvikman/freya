@@ -1,7 +1,7 @@
 <!-- Freya's and Freya Server's installer: cargo-packager 0.11.8's WiX template (MIT or
      Apache-2.0), changed so the shortcuts on the Start menu and the desktop are each the
      user's choice, in the setup dialog's list of features, and the programs themselves are
-     not. cargo-packager fills in the {{ }}; see docs/PACKAGING.md. -->
+     not. cargo-packager fills in its placeholders; see docs/PACKAGING.md. -->
 <?if $(sys.BUILDARCH)="x86"?>
     <?define Win64 = "no" ?>
     <?define PlatformProgramFilesFolder = "ProgramFilesFolder" ?>
