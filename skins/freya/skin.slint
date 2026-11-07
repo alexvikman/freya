@@ -187,7 +187,7 @@ component TooltipBox inherits Rectangle {
 
         Text {
             text: root.text;
-            font-size: 12px;
+            font-size: 13px;
             color: Theme.text;
         }
     }
@@ -467,7 +467,7 @@ component PlayerBar inherits Rectangle {
                 // The track's album, and its artist, open in the library.
                 LinkText {
                     text: Player.title == "" ? "Nothing playing" : Player.title;
-                    font-size: 15px;
+                    font-size: 16px;
                     font-weight: Player.title == "" ? 400 : 600;
                     color: Player.title == "" ? Theme.text-secondary : Theme.text;
                     enabled: Library.playing-known && Player.title != "";
@@ -476,7 +476,7 @@ component PlayerBar inherits Rectangle {
                 }
                 if Player.artist != "": LinkText {
                     text: Player.artist;
-                    font-size: 13px;
+                    font-size: 14px;
                     color: Theme.text-secondary;
                     enabled: Library.playing-known;
                     label: "Show " + Player.artist;
@@ -486,6 +486,8 @@ component PlayerBar inherits Rectangle {
                 // when playback starts.
                 if Player.title != "" || Player.error != "": Text {
                     text: Player.error != "" ? Player.error : Player.buffering ? "Buffering…" : Player.format-info;
+                    // Small, as the least of what is said of the track, so it fits beside the
+                    // controls.
                     font-size: 12px;
                     color: Player.error != "" ? Theme.danger : Theme.text-secondary;
                     overflow: elide;
@@ -626,7 +628,7 @@ component PlayerBar inherits Rectangle {
         width: position-slot.width;
         height: position-slot.height;
         text: Player.position-text;
-        font-size: 12px;
+        font-size: 13px;
         color: Theme.text-secondary;
         horizontal-alignment: right;
         vertical-alignment: center;
@@ -637,7 +639,7 @@ component PlayerBar inherits Rectangle {
         width: remaining-slot.width;
         height: remaining-slot.height;
         text: Player.length > 0 ? Player.remaining-text : (Player.live ? "Live" : "");
-        font-size: 12px;
+        font-size: 13px;
         color: Theme.text-secondary;
         vertical-alignment: center;
     }
@@ -699,7 +701,7 @@ component MenuRow inherits Rectangle {
         }
         if root.shortcut != "": Text {
             text: root.shortcut;
-            font-size: 12px;
+            font-size: 13px;
             color: Theme.text-secondary;
             vertical-alignment: center;
         }
@@ -744,7 +746,7 @@ component TextButton inherits Rectangle {
 
     label := Text {
         text: root.text;
-        font-size: 13px;
+        font-size: 14px;
         font-weight: root.primary ? 600 : 400;
         color: root.primary ? Theme.on-accent : Theme.text;
     }
@@ -778,13 +780,13 @@ component ActivityRow inherits HorizontalLayout {
 
         Text {
             text: root.text;
-            font-size: 13px;
+            font-size: 14px;
             color: Theme.text;
             overflow: elide;
         }
         if root.detail != "": Text {
             text: root.detail;
-            font-size: 12px;
+            font-size: 13px;
             color: Theme.text-secondary;
             overflow: elide;
         }
@@ -851,7 +853,7 @@ component MenuHeading inherits HorizontalLayout {
 
     Text {
         text: root.text;
-        font-size: 12px;
+        font-size: 13px;
         font-weight: 600;
         color: Theme.text-secondary;
         vertical-alignment: center;
@@ -951,7 +953,7 @@ component EqualizerView inherits VerticalLayout {
                     : root.active >= 0
                         ? Equalizer.band-labels[root.active] + " Hz: " + Gain.text(Equalizer.bands[root.active])
                         : Equalizer.preset-name;
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 overflow: elide;
             }
@@ -1009,7 +1011,7 @@ component EqualizerView inherits VerticalLayout {
             Text {
                 height: root.label-height;
                 text: "Pre";
-                font-size: 12px;
+                font-size: 13px;
                 color: Theme.text-secondary;
                 horizontal-alignment: center;
                 vertical-alignment: bottom;
@@ -1078,7 +1080,7 @@ component EqualizerView inherits VerticalLayout {
                 Text {
                     height: root.label-height;
                     text: Equalizer.band-labels[i];
-                    font-size: 12px;
+                    font-size: 13px;
                     color: root.active == i ? Theme.text : Theme.text-secondary;
                     horizontal-alignment: center;
                     vertical-alignment: bottom;
@@ -1179,13 +1181,13 @@ component StreamUrlForm inherits MenuSurface {
 
         Text {
             text: "Play a stream";
-            font-size: 15px;
+            font-size: 16px;
             font-weight: 600;
             color: Theme.text;
         }
         Text {
             text: "The address of an internet radio stream, or of a station's .pls or .m3u file.";
-            font-size: 13px;
+            font-size: 14px;
             color: Theme.text-secondary;
             wrap: word-wrap;
         }
@@ -1258,7 +1260,7 @@ component TrackRowView inherits Rectangle {
                 width: parent.width;
                 height: parent.height;
                 text: entry.number;
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 horizontal-alignment: right;
                 vertical-alignment: center;
@@ -1275,13 +1277,13 @@ component TrackRowView inherits Rectangle {
             horizontal-stretch: 1;
             text: entry.title;
             color: entry.current ? Theme.accent-text : Theme.text;
-            font-weight: entry.current ? 600 : 400;
+            font-weight: 600;
             vertical-alignment: center;
             overflow: elide;
         }
         Text {
             text: entry.duration;
-            font-size: 13px;
+            font-size: 14px;
             color: Theme.text-secondary;
             vertical-alignment: center;
         }
@@ -1490,7 +1492,7 @@ component TrackList inherits FocusScope {
         }
         Text {
             text: "Play an album, an artist or a playlist from the library, or add them here.";
-            font-size: 14px;
+            font-size: 15px;
             color: Theme.text-secondary;
             horizontal-alignment: center;
         }
@@ -1628,7 +1630,7 @@ component LibraryRowView inherits Rectangle {
                 width: parent.width;
                 height: parent.height;
                 text: root.entry.number;
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 horizontal-alignment: right;
                 vertical-alignment: center;
@@ -1650,19 +1652,19 @@ component LibraryRowView inherits Rectangle {
             Text {
                 text: entry.title;
                 color: root.playing ? Theme.accent : Theme.text;
-                font-weight: entry.kind == "track" ? 400 : 600;
+                font-weight: 600;
                 overflow: elide;
             }
             if entry.detail != "": Text {
                 text: entry.detail;
-                font-size: 12px;
+                font-size: 13px;
                 color: Theme.text-secondary;
                 overflow: elide;
             }
         }
         if entry.duration != "": Text {
             text: entry.duration;
-            font-size: 13px;
+            font-size: 14px;
             color: Theme.text-secondary;
             vertical-alignment: center;
         }
@@ -1730,6 +1732,7 @@ component TrackTableRow inherits Rectangle {
             preferred-width: 0;
             horizontal-stretch: 3;
             text: entry.title;
+            font-weight: 600;
             color: root.playing ? Theme.accent : Theme.text;
             vertical-alignment: center;
             overflow: elide;
@@ -1755,7 +1758,7 @@ component TrackTableRow inherits Rectangle {
         if root.played-column: Text {
             width: 104px;
             text: entry.played;
-            font-size: 13px;
+            font-size: 14px;
             color: Theme.text-secondary;
             horizontal-alignment: right;
             vertical-alignment: center;
@@ -1764,7 +1767,7 @@ component TrackTableRow inherits Rectangle {
         Text {
             width: 48px;
             text: entry.duration;
-            font-size: 13px;
+            font-size: 14px;
             color: Theme.text-secondary;
             horizontal-alignment: right;
             vertical-alignment: center;
@@ -1794,7 +1797,7 @@ component TrackTableHeader inherits HorizontalLayout {
         preferred-width: 0;
         horizontal-stretch: 3;
         text: "Title";
-        font-size: 12px;
+        font-size: 13px;
         font-weight: 600;
         color: Theme.text-secondary;
         vertical-alignment: center;
@@ -1804,7 +1807,7 @@ component TrackTableHeader inherits HorizontalLayout {
         preferred-width: 0;
         horizontal-stretch: 2;
         text: "Artist";
-        font-size: 12px;
+        font-size: 13px;
         font-weight: 600;
         color: Theme.text-secondary;
         vertical-alignment: center;
@@ -1814,7 +1817,7 @@ component TrackTableHeader inherits HorizontalLayout {
         preferred-width: 0;
         horizontal-stretch: 2;
         text: "Album";
-        font-size: 12px;
+        font-size: 13px;
         font-weight: 600;
         color: Theme.text-secondary;
         vertical-alignment: center;
@@ -1822,7 +1825,7 @@ component TrackTableHeader inherits HorizontalLayout {
     if root.played-label != "": Text {
         width: 104px;
         text: root.played-label;
-        font-size: 12px;
+        font-size: 13px;
         font-weight: 600;
         color: Theme.text-secondary;
         horizontal-alignment: right;
@@ -1831,7 +1834,7 @@ component TrackTableHeader inherits HorizontalLayout {
     Text {
         width: 48px;
         text: "Time";
-        font-size: 12px;
+        font-size: 13px;
         font-weight: 600;
         color: Theme.text-secondary;
         horizontal-alignment: right;
@@ -1913,7 +1916,7 @@ component AlbumTile inherits Rectangle {
         Rectangle { height: 4px; }
         Text {
             text: root.entry.title;
-            font-size: 13px;
+            font-size: 14px;
             font-weight: 600;
             color: Theme.text;
             overflow: elide;
@@ -1921,7 +1924,7 @@ component AlbumTile inherits Rectangle {
         // In an artist's albums the artist is the heading; the year and size say more.
         Text {
             text: root.entry.kind == "genre" || root.entry.kind == "playlist" || root.entry.artist == Library.title ? root.entry.detail : root.entry.artist;
-            font-size: 12px;
+            font-size: 13px;
             color: Theme.text-secondary;
             overflow: elide;
         }
@@ -1986,7 +1989,7 @@ component PopularRow inherits Rectangle {
                     width: parent.width;
                     height: parent.height;
                     text: root.entry.number;
-                    font-size: 14px;
+                    font-size: 15px;
                     color: Theme.text-secondary;
                     horizontal-alignment: right;
                     vertical-alignment: center;
@@ -2015,13 +2018,14 @@ component PopularRow inherits Rectangle {
 
                 Text {
                     text: root.entry.title;
-                    font-size: 15px;
+                    font-size: 16px;
+                    font-weight: 600;
                     color: Theme.text;
                     overflow: elide;
                 }
                 Text {
                     text: root.entry.album;
-                    font-size: 13px;
+                    font-size: 14px;
                     color: Theme.text-secondary;
                     overflow: elide;
                 }
@@ -2029,7 +2033,7 @@ component PopularRow inherits Rectangle {
             Text {
                 width: 100px;
                 text: root.entry.plays;
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 horizontal-alignment: right;
                 vertical-alignment: center;
@@ -2037,7 +2041,7 @@ component PopularRow inherits Rectangle {
             Text {
                 width: 56px;
                 text: root.entry.duration;
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 horizontal-alignment: right;
                 vertical-alignment: center;
@@ -2063,7 +2067,7 @@ component FilterChip inherits Rectangle {
 
     label := Text {
         text: root.text;
-        font-size: 13px;
+        font-size: 14px;
         font-weight: 600;
         color: root.selected ? Theme.background : Theme.text;
     }
@@ -2208,7 +2212,7 @@ component ArtistPageHead inherits Rectangle {
                     Text {
                         text: root.page.kind == "genre" ? "Genre"
                             : root.page.note == "" ? "Artist" : "Artist · " + root.page.note;
-                        font-size: 13px;
+                        font-size: 14px;
                         font-weight: 600;
                         color: #ffffff;
                     }
@@ -2223,7 +2227,7 @@ component ArtistPageHead inherits Rectangle {
                     }
                     Text {
                         text: root.page.detail + (root.page.genres == "" ? "" : " · " + root.page.genres);
-                        font-size: 14px;
+                        font-size: 15px;
                         color: #ffffffd9;
                         overflow: elide;
                     }
@@ -2324,7 +2328,7 @@ component ArtistPageHead inherits Rectangle {
                 height: 84px;
                 max-width: 760px;
                 text: root.page.summary;
-                font-size: 14px;
+                font-size: 15px;
                 color: Theme.text;
                 wrap: word-wrap;
                 overflow: elide;
@@ -2335,7 +2339,7 @@ component ArtistPageHead inherits Rectangle {
 
                 if root.page.biography != "": Text {
                     text: "More";
-                    font-size: 13px;
+                    font-size: 14px;
                     font-weight: 600;
                     color: Theme.accent-text;
 
@@ -2346,7 +2350,7 @@ component ArtistPageHead inherits Rectangle {
                 }
                 Text {
                     text: root.page.own-biography ? "" : (root.page.tags == "" ? "" : root.page.tags + " · ") + "From " + root.page.biography-from;
-                    font-size: 12px;
+                    font-size: 13px;
                     color: Theme.text-secondary;
                     overflow: elide;
                 }
@@ -2376,7 +2380,7 @@ component ArtistPageHead inherits Rectangle {
 
                 Text {
                     text: root.page.more ? "Show less" : "Show more";
-                    font-size: 13px;
+                    font-size: 14px;
                     font-weight: 600;
                     color: Theme.text-secondary;
                     vertical-alignment: center;
@@ -2420,7 +2424,7 @@ component ArtistPageHead inherits Rectangle {
                     Text {
                         text: Library.album-sort == "name" ? "Name" : "Release date";
                         width: ceil(self.preferred-width / 1px) * 1px;
-                        font-size: 13px;
+                        font-size: 14px;
                         color: Theme.text-secondary;
                         vertical-alignment: center;
                     }
@@ -2539,7 +2543,7 @@ component AlbumPageHead inherits Rectangle {
 
                     Text {
                         text: "Album";
-                        font-size: 13px;
+                        font-size: 14px;
                         font-weight: 600;
                         color: #ffffff;
                     }
@@ -2560,7 +2564,7 @@ component AlbumPageHead inherits Rectangle {
 
                         Text {
                             text: root.page.artist;
-                            font-size: 14px;
+                            font-size: 15px;
                             font-weight: 700;
                             color: #ffffff;
 
@@ -2571,7 +2575,7 @@ component AlbumPageHead inherits Rectangle {
                         }
                         Text {
                             text: " · " + root.page.detail;
-                            font-size: 14px;
+                            font-size: 15px;
                             color: #ffffffcc;
                             overflow: elide;
                         }
@@ -2662,7 +2666,7 @@ component AlbumPageHead inherits Rectangle {
             Text {
                 width: 30px;
                 text: "#";
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 horizontal-alignment: right;
                 vertical-alignment: center;
@@ -2670,14 +2674,14 @@ component AlbumPageHead inherits Rectangle {
             Text {
                 horizontal-stretch: 1;
                 text: "Title";
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 vertical-alignment: center;
             }
             Text {
                 width: 100px;
                 text: "Plays";
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 horizontal-alignment: right;
                 vertical-alignment: center;
@@ -2767,7 +2771,7 @@ component AlbumTrackRow inherits Rectangle {
                     width: parent.width;
                     height: parent.height;
                     text: root.entry.number;
-                    font-size: 14px;
+                    font-size: 15px;
                     color: Theme.text-secondary;
                     horizontal-alignment: right;
                     vertical-alignment: center;
@@ -2781,13 +2785,14 @@ component AlbumTrackRow inherits Rectangle {
 
                 Text {
                     text: root.entry.title;
-                    font-size: 15px;
+                    font-size: 16px;
+                    font-weight: 600;
                     color: root.playing ? Theme.accent : Theme.text;
                     overflow: elide;
                 }
                 Text {
                     text: root.entry.artist;
-                    font-size: 13px;
+                    font-size: 14px;
                     color: Theme.text-secondary;
                     overflow: elide;
                 }
@@ -2795,7 +2800,7 @@ component AlbumTrackRow inherits Rectangle {
             Text {
                 width: 100px;
                 text: root.entry.plays;
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 horizontal-alignment: right;
                 vertical-alignment: center;
@@ -2803,7 +2808,7 @@ component AlbumTrackRow inherits Rectangle {
             Text {
                 width: 56px;
                 text: root.entry.duration;
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 horizontal-alignment: right;
                 vertical-alignment: center;
@@ -2885,7 +2890,7 @@ component DiscographyAlbum inherits Rectangle {
             }
             Text {
                 text: "Album · " + root.entry.detail;
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
             }
             HorizontalLayout {
@@ -2950,7 +2955,7 @@ component FormField inherits VerticalLayout {
 
     if root.label != "": Text {
         text: root.label;
-        font-size: 13px;
+        font-size: 14px;
         color: Theme.text-secondary;
     }
     Rectangle {
@@ -2985,7 +2990,7 @@ component FormField inherits VerticalLayout {
     }
     if root.hint != "": Text {
         text: root.hint;
-        font-size: 12px;
+        font-size: 13px;
         color: Theme.text-secondary;
         wrap: word-wrap;
     }
@@ -3023,7 +3028,7 @@ component PlaylistNameForm inherits MenuSurface {
 
         Text {
             text: root.title;
-            font-size: 15px;
+            font-size: 16px;
             font-weight: 600;
             color: Theme.text;
         }
@@ -3033,7 +3038,7 @@ component PlaylistNameForm inherits MenuSurface {
         }
         if Playlists.error != "": Text {
             text: Playlists.error;
-            font-size: 13px;
+            font-size: 14px;
             color: Theme.danger;
             wrap: word-wrap;
         }
@@ -3115,13 +3120,14 @@ component SuggestionRow inherits Rectangle {
 
             Text {
                 text: root.entry.title;
-                font-size: 14px;
+                font-size: 15px;
+                font-weight: 600;
                 color: Theme.text;
                 overflow: elide;
             }
             Text {
                 text: Matches.kind(root.entry);
-                font-size: 12px;
+                font-size: 13px;
                 color: Theme.text-secondary;
                 overflow: elide;
             }
@@ -3203,20 +3209,21 @@ component SearchSongRow inherits Rectangle {
 
             Text {
                 text: root.entry.title;
-                font-size: 14px;
+                font-size: 15px;
+                font-weight: 600;
                 color: Theme.text;
                 overflow: elide;
             }
             Text {
                 text: root.entry.artist;
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 overflow: elide;
             }
         }
         Text {
             text: root.entry.duration;
-            font-size: 13px;
+            font-size: 14px;
             color: Theme.text-secondary;
             vertical-alignment: center;
         }
@@ -3277,7 +3284,7 @@ component TopResult inherits Rectangle {
 
                 kind := Text {
                     text: Matches.kind(root.entry);
-                    font-size: 12px;
+                    font-size: 13px;
                     font-weight: 600;
                     color: Theme.text;
                 }
@@ -3373,7 +3380,7 @@ component SearchPage inherits ScrollView {
         }
         if Library.rows.length == 0: Text {
             text: "Nothing in the library matches";
-            font-size: 15px;
+            font-size: 16px;
             color: Theme.text-secondary;
         }
     }
@@ -3397,7 +3404,7 @@ component LetterBar inherits Rectangle {
         width: root.width;
         height: root.letter-height;
         text: jump.letter;
-        font-size: 11px;
+        font-size: 12px;
         font-weight: 600;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -3570,7 +3577,7 @@ component LibraryPanel inherits FocusScope {
     property <bool> played-column: Library.rows.length > 0 && Library.rows[0].played != "";
     property <bool> history-shown: Library.query == "" && (Library.section == "recently-played" || Library.section == "most-played");
 
-    property <length> list-row-height: 42px;
+    property <length> list-row-height: 48px;
     /// Where the sort and view menu opens, its right edge and top: under the button it was
     /// opened from.
     property <length> options-right: root.width - 20px;
@@ -4137,7 +4144,7 @@ component LibraryPanel inherits FocusScope {
                         : (Library.album-sort == "name" ? "Name" : "Release date");
                     // A whole number of pixels, so the icon after it falls on a pixel.
                     width: ceil(self.preferred-width / 1px) * 1px;
-                    font-size: 13px;
+                    font-size: 14px;
                     color: Theme.text-secondary;
                     vertical-alignment: center;
                 }
@@ -4323,7 +4330,7 @@ component LibraryPanel inherits FocusScope {
                         VerticalLayout {
                             Text {
                                 text: Library.artist-page.biography;
-                                font-size: 14px;
+                                font-size: 15px;
                                 color: Theme.text;
                                 wrap: word-wrap;
                             }
@@ -4335,7 +4342,7 @@ component LibraryPanel inherits FocusScope {
                             text: Library.artist-page.own-biography ? ""
                                 : Library.artist-page.biography-from == "Wikipedia" ? "From Wikipedia, the free encyclopedia (CC BY-SA)"
                                 : "From Last.fm, by its listeners (CC BY-SA)";
-                            font-size: 12px;
+                            font-size: 13px;
                             color: Theme.text-secondary;
                             vertical-alignment: center;
                         }
@@ -4441,7 +4448,7 @@ component LibraryPanel inherits FocusScope {
                 : Library.query != "" ? "Nothing in the library matches “" + Library.query + "”."
                 : root.history-shown ? "Tracks you listen to show up here. A track counts once you have heard half of it, or four minutes."
                 : "There are no music files in your music folders.";
-            font-size: 14px;
+            font-size: 15px;
             color: Theme.text-secondary;
             horizontal-alignment: center;
             wrap: word-wrap;
@@ -4508,19 +4515,19 @@ component StationRowView inherits Rectangle {
             Text {
                 text: root.entry.name;
                 color: root.entry.playing ? Theme.accent-text : Theme.text;
-                font-weight: root.entry.playing ? 600 : 400;
+                font-weight: 600;
                 overflow: elide;
             }
             Text {
                 text: root.entry.address;
-                font-size: 12px;
+                font-size: 13px;
                 color: Theme.text-secondary;
                 overflow: elide;
             }
         }
         if root.entry.playing: Text {
             text: "Playing";
-            font-size: 12px;
+            font-size: 13px;
             color: Theme.accent-text;
             vertical-alignment: center;
         }
@@ -4552,7 +4559,7 @@ component PageTab inherits Rectangle {
     bold := Text {
         visible: false;
         text: root.text;
-        font-size: 14px;
+        font-size: 15px;
         font-weight: 600;
     }
     Text {
@@ -4560,7 +4567,7 @@ component PageTab inherits Rectangle {
         y: 4px;
         width: self.preferred-width;
         text: root.text;
-        font-size: 14px;
+        font-size: 15px;
         font-weight: root.selected ? 600 : 400;
         color: root.selected || touch.has-hover ? Theme.text : Theme.text-secondary;
     }
@@ -4594,7 +4601,7 @@ component QualityBadge inherits Rectangle {
 
     label := Text {
         text: root.text;
-        font-size: 11px;
+        font-size: 12px;
         font-weight: 600;
         color: root.raised ? (root.lossless ? Theme.on-accent : #ffffff) : root.lossless ? Theme.accent-text : Theme.text-secondary;
     }
@@ -4617,7 +4624,7 @@ component TagChip inherits Rectangle {
     label := Text {
         x: 12px;
         text: root.tag.name;
-        font-size: 13px;
+        font-size: 14px;
         font-weight: 600;
         color: root.tag.chosen ? Theme.background : Theme.text;
     }
@@ -4645,7 +4652,7 @@ component TagGroupRow inherits HorizontalLayout {
     Text {
         width: 84px;
         text: root.group.title;
-        font-size: 12px;
+        font-size: 13px;
         font-weight: 600;
         color: Theme.text-secondary;
         vertical-alignment: center;
@@ -4741,14 +4748,14 @@ component StationTile inherits Rectangle {
         Rectangle { height: 4px; }
         Text {
             text: root.entry.name;
-            font-size: 13px;
+            font-size: 14px;
             font-weight: 600;
             color: root.entry.playing ? Theme.accent-text : Theme.text;
             overflow: elide;
         }
         Text {
             text: root.entry.detail;
-            font-size: 12px;
+            font-size: 13px;
             color: Theme.text-secondary;
             overflow: elide;
         }
@@ -4810,19 +4817,19 @@ component DirectoryStationView inherits Rectangle {
             Text {
                 text: root.entry.name;
                 color: root.entry.playing ? Theme.accent-text : Theme.text;
-                font-weight: root.entry.playing ? 600 : 400;
+                font-weight: 600;
                 overflow: elide;
             }
             Text {
                 text: root.entry.detail;
-                font-size: 12px;
+                font-size: 13px;
                 color: Theme.text-secondary;
                 overflow: elide;
             }
         }
         if root.entry.playing: Text {
             text: "Playing";
-            font-size: 12px;
+            font-size: 13px;
             color: Theme.accent-text;
             vertical-alignment: center;
         }
@@ -5001,7 +5008,7 @@ component RadioView inherits Rectangle {
                     text: Server.admin
                         ? "Save the stations you listen to from Browse, and play them from here."
                         : "The stations the server keeps show here.";
-                    font-size: 14px;
+                    font-size: 15px;
                     color: Theme.text-secondary;
                     horizontal-alignment: center;
                 }
@@ -5036,7 +5043,7 @@ component RadioView inherits Rectangle {
                             : Radio.directory == "failed"
                             ? "Radio Browser's stations could not be fetched; the server tries again later. Here are the ones Freya picked."
                             : "The server does not ask Radio Browser for its stations, so here are the ones Freya picked. An admin can change that in Settings, on the Library tab.";
-                        font-size: 13px;
+                        font-size: 14px;
                         color: Theme.text-secondary;
                         wrap: word-wrap;
                     }
@@ -5067,7 +5074,7 @@ component RadioView inherits Rectangle {
                                 LinkText {
                                     text: "Show all";
                                     label: "Show all of " + shelf.title;
-                                    font-size: 13px;
+                                    font-size: 14px;
                                     color: Theme.accent-text;
                                     clicked => { Radio.show-shelf(s); }
                                 }
@@ -5113,7 +5120,7 @@ component RadioView inherits Rectangle {
                             LinkText {
                                 text: "Back to Browse";
                                 label: "Back to Browse";
-                                font-size: 13px;
+                                font-size: 14px;
                                 color: Theme.accent-text;
                                 clicked => { Radio.clear-find(); }
                             }
@@ -5122,7 +5129,7 @@ component RadioView inherits Rectangle {
                         Text {
                             text: Radio.searching && Radio.found.length == 0 ? "Searching…"
                                 : Radio.total == 1 ? "1 station" : Radio.total + " stations";
-                            font-size: 13px;
+                            font-size: 14px;
                             color: Theme.text-secondary;
                             vertical-alignment: center;
                         }
@@ -5157,7 +5164,7 @@ component RadioView inherits Rectangle {
                     }
                     if !Radio.searching && Radio.total == 0: Text {
                         text: "No stations match";
-                        font-size: 15px;
+                        font-size: 16px;
                         color: Theme.text-secondary;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -5190,7 +5197,7 @@ component AddStationForm inherits MenuSurface {
 
         Text {
             text: "Add a station";
-            font-size: 15px;
+            font-size: 16px;
             font-weight: 600;
             color: Theme.text;
         }
@@ -5206,7 +5213,7 @@ component AddStationForm inherits MenuSurface {
         }
         if Radio.error != "": Text {
             text: Radio.error;
-            font-size: 13px;
+            font-size: 14px;
             color: Theme.danger;
             wrap: word-wrap;
         }
@@ -5237,14 +5244,14 @@ component DeletePlaylistForm inherits MenuSurface {
 
         Text {
             text: "Delete " + (Playlists.shown >= 0 ? Playlists.playlists[Playlists.shown].name : "the playlist") + "?";
-            font-size: 15px;
+            font-size: 16px;
             font-weight: 600;
             color: Theme.text;
             wrap: word-wrap;
         }
         Text {
             text: "The playlist and its file are removed. The music stays.";
-            font-size: 13px;
+            font-size: 14px;
             color: Theme.text-secondary;
             wrap: word-wrap;
         }
@@ -5354,7 +5361,7 @@ component PlaylistPageHead inherits Rectangle {
 
                     Text {
                         text: "Playlist";
-                        font-size: 13px;
+                        font-size: 14px;
                         font-weight: 600;
                         color: #ffffff;
                     }
@@ -5369,7 +5376,7 @@ component PlaylistPageHead inherits Rectangle {
                     }
                     if root.page.description != "": Text {
                         text: root.page.description;
-                        font-size: 15px;
+                        font-size: 16px;
                         color: #ffffffd9;
                         wrap: word-wrap;
                         overflow: elide;
@@ -5377,7 +5384,7 @@ component PlaylistPageHead inherits Rectangle {
                     }
                     Text {
                         text: root.page.summary;
-                        font-size: 14px;
+                        font-size: 15px;
                         color: #ffffffd9;
                         overflow: elide;
                     }
@@ -5454,7 +5461,7 @@ component PlaylistPageHead inherits Rectangle {
                             : root.page.sort == "added" ? "Date added"
                             : root.page.sort == "duration" ? "Duration"
                             : "Custom order";
-                        font-size: 14px;
+                        font-size: 15px;
                         color: sort-touch.has-hover ? Theme.text : Theme.text-secondary;
                         vertical-alignment: center;
                     }
@@ -5507,7 +5514,7 @@ component PlaylistPageHead inherits Rectangle {
             Text {
                 width: 32px;
                 text: "#";
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 horizontal-alignment: right;
                 vertical-alignment: center;
@@ -5515,21 +5522,21 @@ component PlaylistPageHead inherits Rectangle {
             Text {
                 horizontal-stretch: 2;
                 text: "Title";
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 vertical-alignment: center;
             }
             Text {
                 horizontal-stretch: 1.4;
                 text: "Album";
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 vertical-alignment: center;
             }
             Text {
                 width: 120px;
                 text: "Date added";
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 vertical-alignment: center;
             }
@@ -5580,7 +5587,7 @@ component PlaylistEntryView inherits Rectangle {
         Text {
             width: 32px;
             text: root.entry.number;
-            font-size: 14px;
+            font-size: 15px;
             color: Theme.text-secondary;
             horizontal-alignment: right;
             vertical-alignment: center;
@@ -5610,13 +5617,14 @@ component PlaylistEntryView inherits Rectangle {
 
                 Text {
                     text: root.entry.title;
-                    font-size: 14px;
+                    font-size: 15px;
+                    font-weight: 600;
                     color: Theme.text;
                     overflow: elide;
                 }
                 if root.entry.artist != "": Text {
                     text: root.entry.artist;
-                    font-size: 13px;
+                    font-size: 14px;
                     color: Theme.text-secondary;
                     overflow: elide;
                 }
@@ -5626,7 +5634,7 @@ component PlaylistEntryView inherits Rectangle {
             horizontal-stretch: 1.4;
             min-width: 0;
             text: root.entry.album;
-            font-size: 13px;
+            font-size: 14px;
             color: Theme.text-secondary;
             vertical-alignment: center;
             overflow: elide;
@@ -5634,7 +5642,7 @@ component PlaylistEntryView inherits Rectangle {
         Text {
             width: 120px;
             text: root.entry.added;
-            font-size: 13px;
+            font-size: 14px;
             color: Theme.text-secondary;
             vertical-alignment: center;
         }
@@ -5645,7 +5653,7 @@ component PlaylistEntryView inherits Rectangle {
 
             Text {
                 text: root.entry.duration;
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 vertical-alignment: center;
             }
@@ -5742,7 +5750,7 @@ component PlaylistView inherits Rectangle {
         }
         Text {
             text: "Right-click tracks or albums in the library, or tracks in Up Next, to add them here.";
-            font-size: 14px;
+            font-size: 15px;
             color: Theme.text-secondary;
             horizontal-alignment: center;
             wrap: word-wrap;
@@ -5795,7 +5803,7 @@ component GenreEditForm inherits MenuSurface {
 
             Text {
                 text: "Description";
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
             }
             Rectangle {
@@ -5810,7 +5818,7 @@ component GenreEditForm inherits MenuSurface {
                     x: 10px;
                     y: 9px;
                     text: "What it is";
-                    font-size: 13px;
+                    font-size: 14px;
                     color: Theme.text-secondary;
                 }
                 genre-description := TextInput {
@@ -5819,7 +5827,7 @@ component GenreEditForm inherits MenuSurface {
                     width: parent.width - 20px;
                     height: parent.height - 18px;
                     text <=> root.description;
-                    font-size: 13px;
+                    font-size: 14px;
                     color: Theme.text;
                     wrap: word-wrap;
                     single-line: false;
@@ -5827,7 +5835,7 @@ component GenreEditForm inherits MenuSurface {
             }
             Text {
                 text: "Empty, it is what the internet says of it.";
-                font-size: 12px;
+                font-size: 13px;
                 color: Theme.text-secondary;
             }
         }
@@ -5845,7 +5853,7 @@ component GenreEditForm inherits MenuSurface {
 
                 Text {
                     text: kind.text;
-                    font-size: 13px;
+                    font-size: 14px;
                     color: Theme.text-secondary;
                 }
                 Rectangle {
@@ -5864,7 +5872,7 @@ component GenreEditForm inherits MenuSurface {
                     }
                     if genre-box.shown.width == 0: Text {
                         text: kind.empty;
-                        font-size: 12px;
+                        font-size: 13px;
                         color: Theme.text-secondary;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -5888,7 +5896,7 @@ component GenreEditForm inherits MenuSurface {
         }
         if Library.genre-draft.error != "": Text {
             text: Library.genre-draft.error;
-            font-size: 13px;
+            font-size: 14px;
             color: Theme.danger;
             wrap: word-wrap;
         }
@@ -5961,7 +5969,7 @@ component PlaylistEditForm inherits MenuSurface {
 
             Text {
                 text: "Description";
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
             }
             Rectangle {
@@ -5976,7 +5984,7 @@ component PlaylistEditForm inherits MenuSurface {
                     x: 10px;
                     y: 9px;
                     text: "What it is for";
-                    font-size: 13px;
+                    font-size: 14px;
                     color: Theme.text-secondary;
                 }
                 description-input := TextInput {
@@ -5985,7 +5993,7 @@ component PlaylistEditForm inherits MenuSurface {
                     width: parent.width - 20px;
                     height: parent.height - 18px;
                     text <=> root.description;
-                    font-size: 13px;
+                    font-size: 14px;
                     color: Theme.text;
                     wrap: word-wrap;
                     single-line: false;
@@ -6006,7 +6014,7 @@ component PlaylistEditForm inherits MenuSurface {
 
                 Text {
                     text: kind.text;
-                    font-size: 13px;
+                    font-size: 14px;
                     color: Theme.text-secondary;
                 }
                 Rectangle {
@@ -6025,7 +6033,7 @@ component PlaylistEditForm inherits MenuSurface {
                     }
                     if kind-box.shown.width == 0: Text {
                         text: kind.empty;
-                        font-size: 12px;
+                        font-size: 13px;
                         color: Theme.text-secondary;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -6049,7 +6057,7 @@ component PlaylistEditForm inherits MenuSurface {
         }
         if Playlists.draft.error != "": Text {
             text: Playlists.draft.error;
-            font-size: 13px;
+            font-size: 14px;
             color: Theme.danger;
             wrap: word-wrap;
         }
@@ -6085,7 +6093,7 @@ component SidebarHeading inherits HorizontalLayout {
     Text {
         horizontal-stretch: 1;
         text: root.text;
-        font-size: 12px;
+        font-size: 13px;
         font-weight: 600;
         color: Theme.text-secondary;
         vertical-alignment: center;
@@ -6144,7 +6152,7 @@ component SidebarItem inherits Rectangle {
         }
         if root.badge != "": Text {
             text: root.badge;
-            font-size: 12px;
+            font-size: 13px;
             color: Theme.text-secondary;
             vertical-alignment: center;
         }
@@ -6187,7 +6195,7 @@ component BackupForm inherits MenuSurface {
             Text {
                 text: "Everything the server keeps goes in one file: the library, the pictures and covers, playlists, stations, settings, users and their passwords, and the server's certificate. Keep it somewhere safe."
                     + (Server.backup-size != "" ? " About " + Server.backup-size + " before it is compressed." : "");
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
             }
@@ -6223,7 +6231,7 @@ component BackupForm inherits MenuSurface {
         }
         if Server.backup-error != "" || (root.password != "" && root.again != "" && root.mismatch): Text {
             text: Server.backup-error != "" ? Server.backup-error : "The passwords differ.";
-            font-size: 13px;
+            font-size: 14px;
             color: Theme.danger;
             wrap: word-wrap;
         }
@@ -6275,7 +6283,7 @@ component RestoreForm inherits MenuSurface {
             }
             Text {
                 text: "Everything the server keeps becomes as it was in the backup, its users and passwords too, and the server starts again. What it has now is kept in a folder beside its own, until you take it away.";
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
             }
@@ -6305,13 +6313,13 @@ component RestoreForm inherits MenuSurface {
         }
         if Server.restore-error != "": Text {
             text: Server.restore-error;
-            font-size: 13px;
+            font-size: 14px;
             color: Theme.danger;
             wrap: word-wrap;
         }
         if Server.restoring: Text {
             text: "Checking the backup…";
-            font-size: 13px;
+            font-size: 14px;
             color: Theme.text-secondary;
         }
         HorizontalLayout {
@@ -6360,7 +6368,7 @@ component FolderBrowser inherits MenuSurface {
                 text: Platform.os == OperatingSystemType.windows
                     ? "The folders on " + Server.name + ", as Freya Server sees them. Type \\\\computer to see the folders a computer shares."
                     : "The folders on " + Server.name + ", as Freya Server sees them.";
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
             }
@@ -6436,7 +6444,7 @@ component FolderBrowser inherits MenuSurface {
                     x: 16px;
                     width: parent.width - 32px;
                     text: Server.browse-error != "" ? Server.browse-error : "No folders in it.";
-                    font-size: 13px;
+                    font-size: 14px;
                     color: Server.browse-error != "" ? Theme.danger : Theme.text-secondary;
                     horizontal-alignment: center;
                     wrap: word-wrap;
@@ -6568,7 +6576,7 @@ component FoldersForm inherits MenuSurface {
             }
             Text {
                 text: "Freya lists the music in these folders by artist and album, and checks them for changes each time it starts. A folder taken out takes its tracks out of the library; what you played is remembered.";
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
             }
@@ -6582,7 +6590,7 @@ component FoldersForm inherits MenuSurface {
 
             Text {
                 text: "No folders. Add the folder your music is in.";
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
             }
         }
@@ -6698,7 +6706,7 @@ component FormTab inherits Rectangle {
         }
         Text {
             text: root.text;
-            font-size: 14px;
+            font-size: 15px;
             font-weight: root.selected ? 600 : 400;
             color: root.selected ? Theme.accent-text : Theme.text;
             vertical-alignment: center;
@@ -6778,7 +6786,7 @@ component PictureTile inherits VerticalLayout {
     Text {
         width: root.tile-width;
         text: root.choice.source;
-        font-size: 13px;
+        font-size: 14px;
         font-weight: root.choice.chosen ? 600 : 400;
         color: Theme.text;
         overflow: elide;
@@ -6787,7 +6795,7 @@ component PictureTile inherits VerticalLayout {
         width: root.tile-width;
         // Kept when empty, so the tiles of a row line up.
         text: root.choice.size == "" ? " " : root.choice.size;
-        font-size: 12px;
+        font-size: 13px;
         color: Theme.text-secondary;
         overflow: elide;
     }
@@ -6814,7 +6822,7 @@ component PicturePage inherits VerticalLayout {
 
         LinkText {
             text: "Choose an image…";
-            font-size: 13px;
+            font-size: 14px;
             font-weight: 600;
             color: Theme.accent-text;
             label: "Choose an image file";
@@ -6822,12 +6830,12 @@ component PicturePage inherits VerticalLayout {
         }
         Text {
             text: "·";
-            font-size: 13px;
+            font-size: 14px;
             color: Theme.text-secondary;
         }
         LinkText {
             text: "Enter a URL";
-            font-size: 13px;
+            font-size: 14px;
             font-weight: 600;
             color: Theme.accent-text;
             label: "Enter the address of a picture";
@@ -6837,7 +6845,7 @@ component PicturePage inherits VerticalLayout {
     if Library.finding-pictures: Text {
         x: root.pad;
         text: "Looking for more pictures on the internet…";
-        font-size: 12px;
+        font-size: 13px;
         color: Theme.text-secondary;
     }
     if root.url-shown: HorizontalLayout {
@@ -6863,7 +6871,7 @@ component PicturePage inherits VerticalLayout {
     if Library.picture-error != "": Text {
         x: root.pad;
         text: Library.picture-error;
-        font-size: 12px;
+        font-size: 13px;
         color: Theme.danger;
         wrap: word-wrap;
     }
@@ -6947,20 +6955,20 @@ component MatchRow inherits Rectangle {
 
             Text {
                 text: root.choice.name;
-                font-size: 15px;
+                font-size: 16px;
                 font-weight: 600;
                 color: Theme.text;
                 overflow: elide;
             }
             if root.choice.detail != "": Text {
                 text: root.choice.detail;
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text;
                 overflow: elide;
             }
             if root.choice.facts != "": Text {
                 text: root.choice.facts;
-                font-size: 12px;
+                font-size: 13px;
                 color: Theme.text-secondary;
                 overflow: elide;
             }
@@ -7044,26 +7052,26 @@ component AlbumMatchRow inherits Rectangle {
                 Text {
                     horizontal-stretch: 1;
                     text: root.choice.title;
-                    font-size: 15px;
+                    font-size: 16px;
                     font-weight: 600;
                     color: Theme.text;
                     overflow: elide;
                 }
                 Text {
                     text: root.choice.facts;
-                    font-size: 12px;
+                    font-size: 13px;
                     color: Theme.text-secondary;
                 }
             }
             Text {
                 text: root.choice.artist;
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text;
                 overflow: elide;
             }
             if root.choice.detail != "": Text {
                 text: root.choice.detail;
-                font-size: 12px;
+                font-size: 13px;
                 color: Theme.text-secondary;
                 overflow: elide;
             }
@@ -7111,7 +7119,7 @@ component ChoiceButton inherits Rectangle {
 
     label := Text {
         text: root.text;
-        font-size: 13px;
+        font-size: 14px;
         font-weight: root.selected ? 600 : 400;
         color: Theme.text;
     }
@@ -7211,13 +7219,13 @@ component ArtistMatchForm inherits MenuSurface {
                     : root.picked != "" ? "Matched by you: their pictures and biography are of this artist."
                     : root.draft.found-mbid != "" ? "Matched by Freya, from the tags or the name. Choose another if it is someone else."
                     : "Not matched yet: Freya matches by the name.";
-                font-size: 12px;
+                font-size: 13px;
                 color: Library.match-error != "" ? Theme.danger : Theme.text-secondary;
                 wrap: word-wrap;
             }
             if root.picked != "": LinkText {
                 text: "Auto Match";
-                font-size: 12px;
+                font-size: 13px;
                 font-weight: 600;
                 color: Theme.accent-text;
                 label: "Let Freya match this artist again";
@@ -7326,7 +7334,7 @@ component AlbumMatchForm inherits MenuSurface {
             }
             if root.draft.folder != "": Text {
                 text: "Location: " + root.draft.folder;
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 overflow: elide;
             }
@@ -7374,13 +7382,13 @@ component AlbumMatchForm inherits MenuSurface {
                     : Library.finding-album-matches ? "Asking MusicBrainz…"
                     : root.picked != "" ? "Matched by you: filed under the artist who made it."
                     : "Filed as its tags say. Choose the album it is to file it under the artist who made it.";
-                font-size: 12px;
+                font-size: 13px;
                 color: Library.album-match-error != "" ? Theme.danger : Theme.text-secondary;
                 wrap: word-wrap;
             }
             if root.picked != "": LinkText {
                 text: "Auto Match";
-                font-size: 12px;
+                font-size: 13px;
                 font-weight: 600;
                 color: Theme.accent-text;
                 label: "File the album as its tags say again";
@@ -7543,7 +7551,7 @@ component ArtistEditForm inherits MenuSurface {
 
                     Text {
                         text: "Kept in Freya: your music's files and tags are not changed. What you leave empty is what the tags and the internet say.";
-                        font-size: 13px;
+                        font-size: 14px;
                         color: Theme.text-secondary;
                         wrap: word-wrap;
                     }
@@ -7563,7 +7571,7 @@ component ArtistEditForm inherits MenuSurface {
 
                         Text {
                             text: "Top of the page";
-                            font-size: 13px;
+                            font-size: 14px;
                             font-weight: 600;
                             color: Theme.text-secondary;
                         }
@@ -7589,7 +7597,7 @@ component ArtistEditForm inherits MenuSurface {
                         }
                         Text {
                             text: "Automatic shows their wide picture when they have one, else their picture beside their name.";
-                            font-size: 12px;
+                            font-size: 13px;
                             color: Theme.text-secondary;
                             wrap: word-wrap;
                         }
@@ -7605,7 +7613,7 @@ component ArtistEditForm inherits MenuSurface {
 
                         Text {
                             text: "Biography";
-                            font-size: 13px;
+                            font-size: 14px;
                             font-weight: 600;
                             color: Theme.text-secondary;
                         }
@@ -7621,7 +7629,7 @@ component ArtistEditForm inherits MenuSurface {
                                 x: 10px;
                                 y: 9px;
                                 text: "No biography";
-                                font-size: 13px;
+                                font-size: 14px;
                                 color: Theme.text-secondary;
                             }
                             ScrollView {
@@ -7634,7 +7642,7 @@ component ArtistEditForm inherits MenuSurface {
                                         text <=> root.biography;
                                         single-line: false;
                                         wrap: word-wrap;
-                                        font-size: 13px;
+                                        font-size: 14px;
                                         color: Theme.text;
                                         selection-background-color: Theme.selection;
                                         selection-foreground-color: Theme.text;
@@ -7648,7 +7656,7 @@ component ArtistEditForm inherits MenuSurface {
                             text: root.draft.biography-from != ""
                                 ? "From " + root.draft.biography-from + ". Change it to make it yours: it is then shown in its place, and the internet is not asked for it again. Empty, " + root.draft.biography-from + "'s is shown."
                                 : "Yours, shown in place of what Wikipedia and Last.fm say. Empty, theirs is shown again.";
-                            font-size: 12px;
+                            font-size: 13px;
                             color: Theme.text-secondary;
                             wrap: word-wrap;
                         }
@@ -7708,7 +7716,7 @@ component FanartKeyForm inherits MenuSurface {
             }
             Text {
                 text: "With your personal key, the top of an artist's page shows a wide picture of them from fanart.tv. The key is free with a fanart.tv account. fanart.tv is told the artists' MusicBrainz ids; MusicBrainz is told the names of artists whose tags lack them.";
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
             }
@@ -7717,7 +7725,7 @@ component FanartKeyForm inherits MenuSurface {
 
                 Text {
                     text: "Get a personal API key at fanart.tv";
-                    font-size: 13px;
+                    font-size: 14px;
                     font-weight: 600;
                     color: Theme.accent-text;
 
@@ -7739,7 +7747,7 @@ component FanartKeyForm inherits MenuSurface {
                 x: 10px;
                 height: parent.height;
                 text: Library.fanart-key == "" ? "Personal API key" : "A key is saved; paste another to replace it";
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 vertical-alignment: center;
             }
@@ -7749,7 +7757,7 @@ component FanartKeyForm inherits MenuSurface {
                 height: parent.height;
                 input-type: password;
                 single-line: true;
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text;
                 selection-background-color: Theme.selection;
                 selection-foreground-color: Theme.text;
@@ -7800,7 +7808,7 @@ component UpdateForm inherits MenuSurface {
                 : state == "installed" ? "Restarting into Freya " + Updates.version + "…"
                 : state == "failed" ? "The update did not work"
                 : "Updates";
-            font-size: 15px;
+            font-size: 16px;
             font-weight: 600;
             color: Theme.text;
             wrap: word-wrap;
@@ -7811,7 +7819,7 @@ component UpdateForm inherits MenuSurface {
                 : state == "failed" ? Updates.error
                 : "";
             visible: self.text != "";
-            font-size: 13px;
+            font-size: 14px;
             color: state == "failed" ? Theme.danger : Theme.text-secondary;
             wrap: word-wrap;
         }
@@ -7827,7 +7835,7 @@ component UpdateForm inherits MenuSurface {
 
                     Text {
                         text: Updates.notes;
-                        font-size: 13px;
+                        font-size: 14px;
                         color: Theme.text;
                         wrap: word-wrap;
                     }
@@ -8545,7 +8553,7 @@ component Sidebar inherits Rectangle {
                     width: parent.width - 24px;
                     text: Updates.state == "downloading" ? "Downloading Freya " + Updates.version + "…"
                         : "Freya " + Updates.version + " is available";
-                    font-size: 13px;
+                    font-size: 14px;
                     font-weight: 600;
                     color: Theme.accent-text;
                     vertical-alignment: center;
@@ -8923,7 +8931,7 @@ component VisualizerView inherits Rectangle {
                                 }
                                 Text {
                                     text: Playlist.summary;
-                                    font-size: 13px;
+                                    font-size: 14px;
                                     color: Theme.text-secondary;
                                     overflow: elide;
                                 }
@@ -8986,13 +8994,13 @@ component SettingsRow inherits HorizontalLayout {
 
         if root.label != "": Text {
             text: root.label;
-            font-size: 14px;
+            font-size: 15px;
             color: Theme.text-secondary;
             wrap: word-wrap;
         }
         if root.detail != "": Text {
             text: root.detail;
-            font-size: 12px;
+            font-size: 13px;
             color: Theme.text-secondary;
             wrap: word-wrap;
         }
@@ -9035,7 +9043,7 @@ component LinkRow inherits Rectangle {
         }
         Text {
             text: root.text;
-            font-size: 14px;
+            font-size: 15px;
             color: touch.has-hover ? Theme.accent-text : Theme.text-secondary;
             vertical-alignment: center;
         }
@@ -9075,14 +9083,14 @@ component FoundServerView inherits Rectangle {
 
         Text {
             text: root.entry.name + "  ·  " + root.entry.address;
-            font-size: 14px;
+            font-size: 15px;
             font-weight: 600;
             color: Theme.text;
             overflow: elide;
         }
         Text {
             text: root.entry.fingerprint;
-            font-size: 12px;
+            font-size: 13px;
             color: Theme.text-secondary;
             wrap: word-wrap;
         }
@@ -9134,7 +9142,7 @@ component ServerForm inherits MenuSurface {
                     : Server.login-kind == "adopt" ? "Nobody owns this server yet. You become its owner, with the name and password you choose."
                     : Server.login-kind == "join" ? "You were invited as " + Server.login-user + ". You choose your own password."
                     : "It is the server whose computer showed the code, or the one this computer used before.";
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
             }
@@ -9143,12 +9151,12 @@ component ServerForm inherits MenuSurface {
         // Finding a server.
         if !Server.logging-in && Server.finding: Text {
             text: "Looking…";
-            font-size: 13px;
+            font-size: 14px;
             color: Theme.text-secondary;
         }
         if !Server.logging-in && !Server.finding && Server.found.length == 0: Text {
             text: "None answered. Type its name or address below.";
-            font-size: 13px;
+            font-size: 14px;
             color: Theme.text-secondary;
         }
         for server[i] in Server.logging-in ? [] : Server.found: FoundServerView {
@@ -9177,14 +9185,14 @@ component ServerForm inherits MenuSurface {
                 : (Server.login-kind == "log-in"
                     ? "You log in in your browser, where your password manager can fill in the user and password."
                     : "You choose it in your browser, where your password manager keeps it.");
-            font-size: 13px;
+            font-size: 14px;
             color: Theme.text-secondary;
             wrap: word-wrap;
         }
 
         if Server.login-error != "": Text {
             text: Server.login-error;
-            font-size: 13px;
+            font-size: 14px;
             color: Theme.danger;
             wrap: word-wrap;
         }
@@ -9275,7 +9283,7 @@ component WelcomeView inherits Rectangle {
                     }
                     Text {
                         text: "Freya plays the music of a Freya Server, on this computer or another. Connect to one to begin.";
-                        font-size: 15px;
+                        font-size: 16px;
                         color: Theme.text-secondary;
                         wrap: word-wrap;
                     }
@@ -9299,7 +9307,7 @@ component WelcomeView inherits Rectangle {
                             Text {
                                 text: Server.here ? "Use its library. Nobody has adopted it yet? You become its owner, with the name and password you choose."
                                     : "No Freya Server runs here. Install it to keep your library on this computer, or connect to one on another.";
-                                font-size: 13px;
+                                font-size: 14px;
                                 color: Theme.text-secondary;
                                 wrap: word-wrap;
                             }
@@ -10350,13 +10358,13 @@ component RecentRowView inherits Rectangle {
             Text {
                 text: entry.title;
                 font-size: root.song ? 14px : 15px;
-                font-weight: root.song ? 400 : 600;
+                font-weight: 600;
                 color: Theme.text;
                 overflow: elide;
             }
             if entry.detail != "": Text {
                 text: entry.detail;
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 overflow: elide;
             }
@@ -10404,7 +10412,7 @@ component RecentsView inherits Rectangle {
         }
         if Recents.error != "": Text {
             text: Recents.error;
-            font-size: 13px;
+            font-size: 14px;
             color: Theme.danger;
             wrap: word-wrap;
         }
@@ -10413,7 +10421,7 @@ component RecentsView inherits Rectangle {
                 : Recents.filter == "radio" ? "No radio was listened to in the last 30 days."
                 : Recents.filter == "added" ? "Nothing was added in the last 30 days."
                 : "Nothing was played or added in the last 30 days.";
-            font-size: 14px;
+            font-size: 15px;
             color: Theme.text-secondary;
         }
         ListView {
@@ -10480,7 +10488,7 @@ component ActivityView inherits Rectangle {
         }
         if Library.last-scan != "" && !Library.scanning: Text {
             text: Library.last-scan;
-            font-size: 13px;
+            font-size: 14px;
             color: Theme.text-secondary;
             wrap: word-wrap;
         }
@@ -10539,7 +10547,7 @@ component ActivityView inherits Rectangle {
 
             if App.log.length == 0: Text {
                 text: "Nothing logged at this level";
-                font-size: 13px;
+                font-size: 14px;
                 color: Theme.text-secondary;
             }
             ListView {
@@ -10558,14 +10566,14 @@ component ActivityView inherits Rectangle {
 
                         Text {
                             text: entry.time;
-                            font-size: 12px;
+                            font-size: 13px;
                             color: Theme.text-secondary;
                         }
                         Text {
                             text: entry.level == "error" ? "Error"
                                 : entry.level == "warning" ? "Warning"
                                 : entry.level == "info" ? "Info" : "Debug";
-                            font-size: 12px;
+                            font-size: 13px;
                             font-weight: 700;
                             color: entry.level == "error" ? Theme.danger
                                 : entry.level == "warning" ? Theme.accent-text
@@ -10574,7 +10582,7 @@ component ActivityView inherits Rectangle {
                     }
                     Text {
                         text: entry.message;
-                        font-size: 13px;
+                        font-size: 14px;
                         color: Theme.text;
                         wrap: word-wrap;
                     }
@@ -10616,12 +10624,12 @@ component AboutView inherits Rectangle {
                 }
                 Text {
                     text: "Version " + App.version + (App.build-date != "" ? " · built " + App.build-date : "");
-                    font-size: 13px;
+                    font-size: 14px;
                     color: Theme.text-secondary;
                 }
                 Text {
                     text: "A music player you can make look your own.";
-                    font-size: 13px;
+                    font-size: 14px;
                     color: Theme.text-secondary;
                 }
             }
@@ -10721,7 +10729,7 @@ component AboutView inherits Rectangle {
             }
             Text {
                 text: "© 2026 Alexander Vikman. MIT or Apache-2.0.";
-                font-size: 12px;
+                font-size: 13px;
                 color: Theme.text-secondary;
             }
         }
@@ -10750,7 +10758,7 @@ component AccountButton inherits Rectangle {
 
         Text {
             text: Server.user-initial;
-            font-size: 13px;
+            font-size: 14px;
             font-weight: 700;
             color: Theme.on-accent;
         }
@@ -10862,7 +10870,7 @@ component Toolbar inherits HorizontalLayout {
         }
         if root.subtitle != "": Text {
             text: root.subtitle;
-            font-size: 12px;
+            font-size: 13px;
             color: Theme.text-secondary;
             overflow: elide;
         }
@@ -11086,14 +11094,14 @@ component Toolbar inherits HorizontalLayout {
 
                     Text {
                         text: Server.user;
-                        font-size: 14px;
+                        font-size: 15px;
                         font-weight: 600;
                         color: Theme.text;
                         overflow: elide;
                     }
                     Text {
                         text: (Server.admin ? "Admin" : "Listener") + " · " + Server.name;
-                        font-size: 12px;
+                        font-size: 13px;
                         color: Theme.text-secondary;
                         overflow: elide;
                     }
@@ -11214,7 +11222,7 @@ export component FreyaSkin inherits Window {
     min-width: 760px;
     min-height: 520px;
     background: Theme.base;
-    default-font-size: 14px;
+    default-font-size: 15px;
     forward-focus: shortcuts;
     // On Windows the skin draws the window buttons itself, without the system's frame.
     no-frame: App.window-controls;
