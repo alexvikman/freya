@@ -974,7 +974,22 @@ fn a_cleared_up_next_shows_nothing_of_what_played() {
         assert!(started.elapsed() < Duration::from_secs(5), "it stops");
         std::thread::sleep(Duration::from_millis(10));
     }
-    app.borrow_mut().tick();
+    // The player's last words of the track may come a moment after it stopped, on a busy
+    // machine: what plays shows nothing once they are in, and stays so.
+    let started = Instant::now();
+    while global(&ui, "Player", "title") != text("") {
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the title stays: {:?}",
+            global(&ui, "Player", "title")
+        );
+        app.borrow_mut().tick();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    for _ in 0..10 {
+        app.borrow_mut().tick();
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert_eq!(global(&ui, "Player", "title"), text(""));
     assert_eq!(global(&ui, "Player", "album"), text(""));
 }
