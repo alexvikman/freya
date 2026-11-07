@@ -172,11 +172,21 @@ fn answer(
     // A page elsewhere that names this computer by DNS, or a form sent from one, is not
     // answered.
     if request.header("host") != Some(address) {
+        log::info!(
+            "the pages' proxy refused {}: asked of {:?}",
+            request.path,
+            request.header("host")
+        );
         return text(403, "Open this page from Freya.");
     }
     let origin = format!("http://{address}");
     // A form is taken only from the pages themselves, as a browser says it sent it.
     if request.method == "POST" && request.header("origin") != Some(origin.as_str()) {
+        log::info!(
+            "the pages' proxy refused a form for {}: sent from {:?}",
+            request.path,
+            request.header("origin")
+        );
         return text(403, "Open this page from Freya.");
     }
     let open = format!("{PAGES_PATH}/open");
@@ -201,7 +211,10 @@ fn answer(
             ("Location", showing.page.clone()),
             (
                 "Set-Cookie",
-                format!("{COOKIE}={cookie}; HttpOnly; SameSite=Strict; Path=/"),
+                // Lax, not Strict: a browser started by another program, Freya, may take the
+                // page it opens as from another site, and keep a Strict cookie from it. A
+                // form from another site is still refused, by its origin, above.
+                format!("{COOKIE}={cookie}; HttpOnly; SameSite=Lax; Path=/"),
             ),
         ]);
         return sent;
@@ -216,7 +229,20 @@ fn answer(
             .is_some_and(|(cookie, sent)| same(cookie, sent))
     };
     if !came {
-        return text(403, "Open this page from Freya.");
+        let sent = sent_cookie(request).is_some();
+        log::info!(
+            "the pages' proxy refused {}: {}",
+            request.path,
+            if sent {
+                "the browser sent another page's cookie"
+            } else {
+                "the browser sent no cookie"
+            }
+        );
+        return text(
+            403,
+            "This page opens only in the browser Freya opened it in, as it came. Start again from Freya's settings, and go on in the window that opens.",
+        );
     }
     if (request.method.as_str(), request.path.as_str()) == ("GET", "/callback") {
         // Taken only by the login's own state, so another page cannot end it.
@@ -398,7 +424,7 @@ mod tests {
     fn cookie_of(answer: &ureq::http::Response<ureq::Body>) -> String {
         let set = header(answer, "set-cookie");
         assert!(
-            set.contains("HttpOnly") && set.contains("SameSite=Strict"),
+            set.contains("HttpOnly") && set.contains("SameSite=Lax"),
             "{set}"
         );
         set.split(';').next().unwrap().to_owned()
