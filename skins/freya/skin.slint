@@ -1551,6 +1551,9 @@ component TrackList inherits FocusScope {
     property <length> menu-x;
     property <length> menu-y;
     property <int> menu-row;
+    /// Whether a row's menu opens to the left of where it was asked for: no room to the right
+    /// for it and the playlists beside it.
+    property <bool> menu-left: root.menu-x + 504px > root.width;
     property <int> drop-index: -1;
     property <int> cursor: Playlist.cursor;
     property <int> page: max(1, floor(list.visible-height / root.row-height) - 1);
@@ -1733,15 +1736,17 @@ component TrackList inherits FocusScope {
 
     // On the selection, which a right-click or the row's menu button makes the row it is on.
     row-menu := PopupWindow {
-        property <bool> left: root.menu-x + row-menu-body.width > root.width;
-
-        x: self.left ? root.menu-x - row-menu-body.width : root.menu-x;
+        // To the left of where it was opened when there is no room to the right; as large as
+        // its menu and the playlists beside it, so the pointer reaches them.
+        x: root.menu-left ? root.menu-x - row-menu-body.width : root.menu-x;
         y: min(root.menu-y, root.height - row-menu-body.height - 8px);
+        width: row-menu-body.width;
+        height: row-menu-body.height;
         // Open while the playlists beside it are pointed at; each item closes it.
         close-policy: close-on-click-outside;
 
         row-menu-body := RowMenuBody {
-            playlists-left: row-menu.left;
+            playlists-left: root.menu-left;
             can-enqueue: false;
             remove-text: "Remove from Up Next";
             play => { Playlist.activate(root.menu-row); }
@@ -3848,6 +3853,9 @@ component LibraryPanel inherits FocusScope {
     property <int> menu-row: -1;
     property <length> menu-x;
     property <length> menu-y;
+    /// Whether a row's menu opens to the left of where it was asked for: no room to the right
+    /// for it and the playlists beside it.
+    property <bool> menu-left: root.menu-x + 504px > root.width;
 
     function open-menu(row: int, x: length, y: length) {
         root.menu-row = row;
@@ -4709,15 +4717,17 @@ component LibraryPanel inherits FocusScope {
     }
 
     row-menu := PopupWindow {
-        property <bool> left: root.menu-x + library-menu-body.width > root.width;
-
-        x: self.left ? root.menu-x - library-menu-body.width : root.menu-x;
+        // To the left of where it was opened when there is no room to the right; as large as
+        // its menu and the playlists beside it, so the pointer reaches them.
+        x: root.menu-left ? root.menu-x - library-menu-body.width : root.menu-x;
         y: min(root.menu-y, root.height - library-menu-body.height - 8px);
+        width: library-menu-body.width;
+        height: library-menu-body.height;
         // Open while the playlists beside it are pointed at; each item closes it.
         close-policy: close-on-click-outside;
 
         library-menu-body := RowMenuBody {
-            playlists-left: row-menu.left;
+            playlists-left: root.menu-left;
             play => { Library.play(root.menu-row); }
             enqueue => { Library.enqueue(root.menu-row); }
             add-to(i) => { Playlists.add-library-row(i, root.menu-row); }
@@ -6070,6 +6080,9 @@ component PlaylistView inherits Rectangle {
     property <int> menu-row;
     property <length> menu-x;
     property <length> menu-y;
+    /// Whether a row's menu opens to the left of where it was asked for: no room to the right
+    /// for it and the playlists beside it.
+    property <bool> menu-left: root.menu-x + 504px > root.width;
     init => { root.restore-scroll(); }
     changed restores => { root.restore-scroll(); }
 
@@ -6127,15 +6140,17 @@ component PlaylistView inherits Rectangle {
     }
 
     entry-menu := PopupWindow {
-        property <bool> left: root.menu-x + entry-menu-body.width > root.width;
-
-        x: self.left ? root.menu-x - entry-menu-body.width : root.menu-x;
+        // To the left of where it was opened when there is no room to the right; as large as
+        // its menu and the playlists beside it, so the pointer reaches them.
+        x: root.menu-left ? root.menu-x - entry-menu-body.width : root.menu-x;
         y: min(root.menu-y, root.height - entry-menu-body.height - 8px);
+        width: entry-menu-body.width;
+        height: entry-menu-body.height;
         // Open while the playlists beside it are pointed at; each item closes it.
         close-policy: close-on-click-outside;
 
         entry-menu-body := RowMenuBody {
-            playlists-left: entry-menu.left;
+            playlists-left: root.menu-left;
             remove-text: "Remove from this playlist";
             play => { Playlists.play(root.menu-row); }
             enqueue => { Playlists.enqueue-entry(root.menu-row); }

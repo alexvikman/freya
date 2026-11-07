@@ -1259,3 +1259,89 @@ fn shortcuts_hear_the_keyboard_whatever_was_clicked_or_hidden() {
     show("settings");
     assert!(heard(), "the library left");
 }
+
+#[test]
+fn a_rows_menu_opens_where_it_was_asked_and_its_items_act() {
+    use slint::platform::{PointerEventButton, WindowEvent as E};
+    let app = silent_app();
+    let ui = current_ui(&app);
+    ui.set_global_property("Server", "chosen", Value::Bool(true))
+        .unwrap();
+    ui.window()
+        .set_size(slint::LogicalSize::new(1100.0, 1300.0));
+    scanned(&app, &[("sine.flac", "a/1.flac"), ("sine.mp3", "a/2.mp3")]);
+    call(&ui, "Library", "show", &[text("albums")]);
+    app.borrow_mut().refresh();
+    call(&ui, "Library", "activate", &[num(0.0)]);
+    for _ in 0..20 {
+        app.borrow_mut().refresh();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    ui.set_global_property("App", "view", text("library"))
+        .unwrap();
+    app.borrow_mut().refresh();
+    let press = |x: f32, y: f32, button: PointerEventButton| {
+        let at = slint::LogicalPosition::new(x, y);
+        ui.window().dispatch_event(E::PointerMoved { position: at });
+        ui.window().dispatch_event(E::PointerPressed {
+            position: at,
+            button,
+        });
+        ui.window().dispatch_event(E::PointerReleased {
+            position: at,
+            button,
+        });
+        app.borrow_mut().refresh();
+    };
+    let queued = || app.borrow().playlist.entries().len();
+    let before = queued();
+    // A right-click on the album's first track: the menu opens where it was, its items under
+    // it: Play, then Add to Up Next.
+    press(400.0, 550.0, PointerEventButton::Right);
+    press(450.0, 550.0 + 6.0 + 32.0 + 16.0, PointerEventButton::Left);
+    assert_eq!(
+        queued(),
+        before + 1,
+        "Add to Up Next, where the menu opened"
+    );
+
+    // Near the window's right edge, it opens to the left of the click.
+    press(1000.0, 550.0, PointerEventButton::Right);
+    press(950.0, 550.0 + 6.0 + 32.0 + 16.0, PointerEventButton::Left);
+    assert_eq!(
+        queued(),
+        before + 2,
+        "Add to Up Next, left of where the menu opened"
+    );
+
+    // Add to playlist: the playlists beside it, pointed at.
+    call(&ui, "Playlists", "create", &[text("Test")]);
+    for _ in 0..20 {
+        app.borrow_mut().refresh();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let in_playlist = || {
+        app.borrow()
+            .playlists
+            .get(0)
+            .map_or(0, |playlist| playlist.entries.len())
+    };
+    assert_eq!(in_playlist(), 0);
+    press(400.0, 550.0, PointerEventButton::Right);
+    let add_to = 550.0 + 6.0 + 2.0 * 32.0 + 16.0;
+    ui.window().dispatch_event(E::PointerMoved {
+        position: slint::LogicalPosition::new(450.0, add_to),
+    });
+    app.borrow_mut().refresh();
+    // The first playlist, level with "Add to playlist", right of the menu.
+    press(
+        400.0 + 264.0 + 60.0,
+        550.0 + 2.0 * 32.0 + 6.0 + 16.0,
+        PointerEventButton::Left,
+    );
+    assert_eq!(
+        in_playlist(),
+        1,
+        "added to the playlist chosen beside the menu"
+    );
+}
