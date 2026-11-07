@@ -1391,6 +1391,8 @@ skin_api! {
         Playlists."play" => on_play, invoke_play(row: i32);
         Playlists."enqueue" => on_enqueue, invoke_enqueue();
         Playlists."remove" => on_remove, invoke_remove(row: i32);
+        Playlists."enqueue-entry" => on_enqueue_entry, invoke_enqueue_entry(row: i32);
+        Playlists."add-entry" => on_add_entry, invoke_add_entry(playlist: i32, row: i32);
         Playlists."add-queue-selection" => on_add_queue_selection, invoke_add_queue_selection(index: i32);
         Playlists."add-library-row" => on_add_library_row, invoke_add_library_row(index: i32, row: i32);
         Playlists."shuffle" => on_shuffle, invoke_shuffle();

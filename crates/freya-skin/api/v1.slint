@@ -713,6 +713,10 @@ export global Playlists {
     callback enqueue();
     /// Remove a track from the playlist shown.
     callback remove(int);
+    /// Add a track of the playlist shown to the end of Up Next.
+    callback enqueue-entry(int);
+    /// Add a track of the playlist shown to a playlist: `add-entry(playlist, row)`.
+    callback add-entry(int, int);
     /// Add Up Next's selected tracks (all of them when none is selected) to a playlist.
     callback add-queue-selection(int);
     /// Add everything a library row stands for to a playlist: `add-library-row(playlist, row)`.

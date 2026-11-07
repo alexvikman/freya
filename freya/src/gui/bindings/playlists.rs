@@ -109,6 +109,26 @@ pub(super) fn bind(b: &Binder) {
     );
     b.bind(
         "Playlists",
+        "enqueue-entry",
+        Box::new(|app, args| {
+            let entries = app.shown_playlist_entries();
+            if let Some(entry) = entries.get(index(args, 0)) {
+                app.enqueue_entries(vec![entry.clone()]);
+            }
+        }),
+    );
+    b.bind(
+        "Playlists",
+        "add-entry",
+        Box::new(|app, args| {
+            let entries = app.shown_playlist_entries();
+            if let Some(entry) = entries.get(index(args, 1)) {
+                app.add_to_playlist(index(args, 0), vec![entry.clone()]);
+            }
+        }),
+    );
+    b.bind(
+        "Playlists",
         "add-queue-selection",
         Box::new(|app, args| {
             let entries = app.queue_selection();

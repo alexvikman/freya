@@ -211,6 +211,8 @@ component IconButton inherits Rectangle {
     in property <bool> enabled: true;
     /// A red dot at the top right, for something that needs looking at.
     in property <bool> badge;
+    /// Whether the pointer is on it, for a row to keep it shown.
+    out property <bool> hovered: touch.has-hover;
     callback clicked;
 
     width: size;
@@ -1163,6 +1165,122 @@ component MenuDivider inherits Rectangle {
     }
 }
 
+/// What a track's menu offers, or a library row's: Play, Add to Up Next, Add to playlist with
+/// the playlists beside it when pointed at, scrolling when there are many, and removing it as
+/// `remove-text` says; then what the place adds, as its children. As wide as both, the
+/// playlists to the right of the menu, or to its left with `playlists-left`, where the window
+/// has no room to the right.
+component RowMenuBody inherits Rectangle {
+    in property <bool> can-play: true;
+    in property <bool> can-enqueue: true;
+    /// "Remove from Up Next", "Remove from this playlist"; empty for none.
+    in property <string> remove-text;
+    in property <bool> playlists-left;
+    callback play();
+    callback enqueue();
+    callback remove();
+    /// Add it to the `index`th playlist.
+    callback add-to(int);
+    /// Close the menu it is in.
+    callback done();
+
+    property <bool> playlists-open;
+    property <length> menu-width: 260px;
+    property <length> playlists-width: 240px;
+    property <length> gap: 4px;
+
+    width: root.menu-width + root.gap + root.playlists-width;
+    height: max(menu.preferred-height, playlists.y + playlists.preferred-height);
+
+    menu := MenuSurface {
+        x: root.playlists-left ? root.playlists-width + root.gap : 0;
+        y: 0;
+        width: root.menu-width;
+        height: self.preferred-height;
+
+        VerticalLayout {
+            padding: 6px;
+
+            if root.can-play: MenuRow {
+                text: "Play";
+                changed hovered => {
+                    if (self.hovered) {
+                        root.playlists-open = false;
+                    }
+                }
+                activated => {
+                    root.play();
+                    root.done();
+                }
+            }
+            if root.can-enqueue: MenuRow {
+                text: "Add to Up Next";
+                changed hovered => {
+                    if (self.hovered) {
+                        root.playlists-open = false;
+                    }
+                }
+                activated => {
+                    root.enqueue();
+                    root.done();
+                }
+            }
+            MenuRow {
+                text: "Add to playlist";
+                submenu: true;
+                enabled: Playlists.playlists.length > 0;
+                background: root.playlists-open ? Theme.hover : transparent;
+                changed hovered => {
+                    if (self.hovered && self.enabled) {
+                        root.playlists-open = true;
+                    }
+                }
+                activated => { root.playlists-open = true; }
+            }
+            if root.remove-text != "": MenuDivider { }
+            if root.remove-text != "": MenuRow {
+                text: root.remove-text;
+                changed hovered => {
+                    if (self.hovered) {
+                        root.playlists-open = false;
+                    }
+                }
+                activated => {
+                    root.remove();
+                    root.done();
+                }
+            }
+            @children
+        }
+    }
+    // The playlists, level with "Add to playlist".
+    playlists := MenuSurface {
+        x: root.playlists-left ? 0 : root.menu-width + root.gap;
+        y: ((root.can-play ? 1 : 0) + (root.can-enqueue ? 1 : 0)) * 32px;
+        width: root.playlists-width;
+        height: self.preferred-height;
+        visible: root.playlists-open;
+
+        VerticalLayout {
+            padding: 6px;
+
+            ScrollView {
+                height: min(Playlists.playlists.length * 32px, 320px);
+
+                VerticalLayout {
+                    for playlist[i] in Playlists.playlists: MenuRow {
+                        text: playlist.name;
+                        activated => {
+                            root.add-to(i);
+                            root.done();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Asks for the address of a radio stream to play.
 component StreamUrlForm inherits MenuSurface {
     callback done();
@@ -1251,76 +1369,6 @@ component TrackRowView inherits Rectangle {
     accessible-label: entry.title + (entry.duration == "" ? "" : ", " + entry.duration);
     accessible-action-default => { Playlist.activate(root.index); }
 
-    HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 20px;
-        spacing: 16px;
-
-        Rectangle {
-            width: 30px;
-
-            if !entry.current: Text {
-                width: parent.width;
-                height: parent.height;
-                text: entry.number;
-                font-size: 15px;
-                color: Theme.text-secondary;
-                horizontal-alignment: right;
-                vertical-alignment: center;
-            }
-            if entry.current: Icon {
-                x: parent.width - 14px;
-                y: (parent.height - self.height) / 2;
-                width: 12px;
-                height: 12px;
-                data: Icons.play;
-                color: Theme.accent-text;
-            }
-        }
-        // The title over its artist, the album beside them, the length at the end.
-        VerticalLayout {
-            horizontal-stretch: 6;
-            min-width: 0;
-            preferred-width: 0;
-            alignment: center;
-            spacing: 2px;
-
-            Text {
-                text: entry.name;
-                font-size: 16px;
-                font-weight: 600;
-                color: entry.current ? Theme.accent-text : Theme.text;
-                overflow: elide;
-            }
-            if entry.artist != "": Text {
-                text: entry.artist;
-                font-size: 14px;
-                color: Theme.text-secondary;
-                overflow: elide;
-            }
-        }
-        if root.album-shown: Text {
-            horizontal-stretch: 4;
-            min-width: 0;
-            preferred-width: 0;
-            text: entry.album;
-            font-size: 14px;
-            color: Theme.text-secondary;
-            vertical-alignment: center;
-            overflow: elide;
-        }
-        Text {
-            horizontal-stretch: root.time-stretch;
-            min-width: 48px;
-            preferred-width: 0;
-            text: entry.duration;
-            font-size: 14px;
-            color: Theme.text-secondary;
-            horizontal-alignment: right;
-            vertical-alignment: center;
-        }
-    }
-
     // Where dragged rows would be dropped.
     if root.drop-index == root.index: Rectangle {
         y: 0;
@@ -1334,6 +1382,93 @@ component TrackRowView inherits Rectangle {
     }
 
     touch := TouchArea {
+        // Inside, so the row stays hovered while the pointer is on its menu button, which
+        // takes its own clicks.
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 20px;
+            spacing: 16px;
+
+            Rectangle {
+                width: 30px;
+
+                if !entry.current: Text {
+                    width: parent.width;
+                    height: parent.height;
+                    text: entry.number;
+                    font-size: 15px;
+                    color: Theme.text-secondary;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+                if entry.current: Icon {
+                    x: parent.width - 14px;
+                    y: (parent.height - self.height) / 2;
+                    width: 12px;
+                    height: 12px;
+                    data: Icons.play;
+                    color: Theme.accent-text;
+                }
+            }
+            // The title over its artist, the album beside them, the length at the end.
+            VerticalLayout {
+                horizontal-stretch: 6;
+                min-width: 0;
+                preferred-width: 0;
+                alignment: center;
+                spacing: 2px;
+
+                Text {
+                    text: entry.name;
+                    font-size: 16px;
+                    font-weight: 600;
+                    color: entry.current ? Theme.accent-text : Theme.text;
+                    overflow: elide;
+                }
+                if entry.artist != "": Text {
+                    text: entry.artist;
+                    font-size: 14px;
+                    color: Theme.text-secondary;
+                    overflow: elide;
+                }
+            }
+            if root.album-shown: Text {
+                horizontal-stretch: 4;
+                min-width: 0;
+                preferred-width: 0;
+                text: entry.album;
+                font-size: 14px;
+                color: Theme.text-secondary;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Text {
+                horizontal-stretch: root.time-stretch;
+                min-width: 48px;
+                preferred-width: 0;
+                text: entry.duration;
+                font-size: 14px;
+                color: Theme.text-secondary;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+            // Its menu, under the pointer: the same as a right-click's.
+            menu-button := IconButton {
+                y: (parent.height - self.height) / 2;
+                opacity: touch.has-hover ? 1 : 0;
+                icon: Icons.more;
+                size: 30px;
+                label: "More for " + root.entry.title;
+                tooltip: "More";
+                clicked => {
+                    if (!root.entry.selected) {
+                        Playlist.select(root.index, false, false);
+                    }
+                    root.context-menu(self.absolute-position.x + self.width, self.absolute-position.y + self.height);
+                }
+            }
+        }
+
         pointer-event(event) => {
             if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
                 // The menu acts on the selection, so a row outside it becomes the selection.
@@ -1405,6 +1540,7 @@ component TrackList inherits FocusScope {
     // Where a right-click opened the menu, in this component.
     property <length> menu-x;
     property <length> menu-y;
+    property <int> menu-row;
     property <int> drop-index: -1;
     property <int> cursor: Playlist.cursor;
     property <int> page: max(1, floor(list.visible-height / root.row-height) - 1);
@@ -1506,6 +1642,8 @@ component TrackList inherits FocusScope {
                     color: Theme.text-secondary;
                 }
             }
+            // Over the rows' menu buttons.
+            Rectangle { width: 30px; }
         }
         Rectangle {
             y: parent.height - 1px;
@@ -1547,6 +1685,7 @@ component TrackList inherits FocusScope {
                     root.drop-index = -1;
                 }
                 context-menu(x, y) => {
+                    root.menu-row = i;
                     root.menu-x = x - root.absolute-position.x;
                     root.menu-y = y - root.absolute-position.y;
                     row-menu.show();
@@ -1555,25 +1694,23 @@ component TrackList inherits FocusScope {
         }
     }
 
+    // On the selection, which a right-click or the row's menu button makes the row it is on.
     row-menu := PopupWindow {
-        x: root.menu-x;
-        y: root.menu-y;
-        width: 260px;
+        property <bool> left: root.menu-x + row-menu-body.width > root.width;
 
-        MenuSurface {
-            VerticalLayout {
-                padding: 6px;
+        x: self.left ? root.menu-x - row-menu-body.width : root.menu-x;
+        y: min(root.menu-y, root.height - row-menu-body.height - 8px);
+        // Open while the playlists beside it are pointed at; each item closes it.
+        close-policy: close-on-click-outside;
 
-                for playlist[i] in Playlists.playlists: MenuRow {
-                    text: "Add to " + playlist.name;
-                    activated => { Playlists.add-queue-selection(i); }
-                }
-                if Playlists.playlists.length > 0: MenuDivider { }
-                MenuRow {
-                    text: "Remove from Up Next";
-                    activated => { Playlist.remove-selected(); }
-                }
-            }
+        row-menu-body := RowMenuBody {
+            playlists-left: row-menu.left;
+            can-enqueue: false;
+            remove-text: "Remove from Up Next";
+            play => { Playlist.activate(root.menu-row); }
+            remove => { Playlist.remove-selected(); }
+            add-to(i) => { Playlists.add-queue-selection(i); }
+            done => { row-menu.close(); }
         }
     }
 
@@ -1766,12 +1903,18 @@ component LibraryRowView inherits Rectangle {
             color: Theme.text-secondary;
             vertical-alignment: center;
         }
+        // Its menu, under the pointer: the same as a right-click's.
         IconButton {
-            icon: Icons.plus;
-            stroked: true;
+            y: (parent.height - self.height) / 2;
+            opacity: touch.has-hover || self.hovered ? 1 : 0;
+            icon: Icons.more;
             size: 30px;
-            label: "Add to Up Next";
-            clicked => { Library.enqueue(root.index); }
+            label: "More for " + root.entry.title;
+            tooltip: "More";
+            clicked => {
+                root.pressed();
+                root.context-menu(self.absolute-position.x + self.width, self.absolute-position.y + self.height);
+            }
         }
         // Empty for tracks, so the add buttons line up.
         Rectangle {
@@ -1870,12 +2013,18 @@ component TrackTableRow inherits Rectangle {
             horizontal-alignment: right;
             vertical-alignment: center;
         }
+        // Its menu, under the pointer: the same as a right-click's.
         IconButton {
-            icon: Icons.plus;
-            stroked: true;
+            y: (parent.height - self.height) / 2;
+            opacity: touch.has-hover || self.hovered ? 1 : 0;
+            icon: Icons.more;
             size: 30px;
-            label: "Add to Up Next";
-            clicked => { Library.enqueue(root.index); }
+            label: "More for " + root.entry.title;
+            tooltip: "More";
+            clicked => {
+                root.pressed();
+                root.context-menu(self.absolute-position.x + self.width, self.absolute-position.y + self.height);
+            }
         }
     }
 }
@@ -2941,15 +3090,18 @@ component AlbumTrackRow inherits Rectangle {
                 horizontal-alignment: right;
                 vertical-alignment: center;
             }
+            // Its menu, under the pointer: the same as a right-click's.
             IconButton {
                 y: (parent.height - self.height) / 2;
                 opacity: touch.has-hover ? 1 : 0;
-                icon: Icons.plus;
-                stroked: true;
+                icon: Icons.more;
                 size: 30px;
-                label: "Add " + root.entry.title + " to Up Next";
-                tooltip: "Add to Up Next";
-                clicked => { Library.enqueue(root.index); }
+                label: "More for " + root.entry.title;
+                tooltip: "More";
+                clicked => {
+                    root.pressed();
+                    root.context-menu(self.absolute-position.x + self.width, self.absolute-position.y + self.height);
+                }
             }
         }
     }
@@ -4483,58 +4635,59 @@ component LibraryPanel inherits FocusScope {
     }
 
     row-menu := PopupWindow {
-        x: root.menu-x;
-        y: root.menu-y;
-        width: 260px;
+        property <bool> left: root.menu-x + library-menu-body.width > root.width;
 
-        MenuSurface {
-            VerticalLayout {
-                padding: 6px;
+        x: self.left ? root.menu-x - library-menu-body.width : root.menu-x;
+        y: min(root.menu-y, root.height - library-menu-body.height - 8px);
+        // Open while the playlists beside it are pointed at; each item closes it.
+        close-policy: close-on-click-outside;
 
-                MenuRow {
-                    text: "Play";
-                    activated => { Library.play(root.menu-row); }
+        library-menu-body := RowMenuBody {
+            playlists-left: row-menu.left;
+            play => { Library.play(root.menu-row); }
+            enqueue => { Library.enqueue(root.menu-row); }
+            add-to(i) => { Playlists.add-library-row(i, root.menu-row); }
+            done => { row-menu.close(); }
+
+            // An artist is changed on their page, which opens first.
+            if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "artist": MenuDivider { }
+            if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "artist": MenuRow {
+                text: "Edit Artist…";
+                activated => {
+                    row-menu.close();
+                    root.activate(root.menu-row);
+                    root.edit-artist("general");
                 }
-                MenuRow {
-                    text: "Add to Up Next";
-                    activated => { Library.enqueue(root.menu-row); }
+            }
+            if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "album": MenuDivider { }
+            if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "album": MenuRow {
+                text: Library.rows[root.menu-row].favorite ? "Remove from Favorites" : "Add to Favorites";
+                activated => {
+                    Library.toggle-favorite(root.menu-row);
+                    row-menu.close();
                 }
-                if Playlists.playlists.length > 0: MenuDivider { }
-                for playlist[i] in Playlists.playlists: MenuRow {
-                    text: "Add to " + playlist.name;
-                    activated => { Playlists.add-library-row(i, root.menu-row); }
+            }
+            if root.menu-row >= 0 && root.menu-row < Library.rows.length && (Library.rows[root.menu-row].kind == "artist" || Library.rows[root.menu-row].kind == "playlist"): MenuRow {
+                text: Library.rows[root.menu-row].favorite ? "Remove from Favorites" : "Add to Favorites";
+                activated => {
+                    Library.toggle-favorite(root.menu-row);
+                    row-menu.close();
                 }
-                // An artist is changed on their page, which opens first.
-                if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "artist": MenuDivider { }
-                if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "artist": MenuRow {
-                    text: "Edit Artist…";
-                    activated => {
-                        root.activate(root.menu-row);
-                        root.edit-artist("general");
-                    }
+            }
+            if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "album": MenuRow {
+                text: "Fix Match…";
+                activated => {
+                    row-menu.close();
+                    root.activate(root.menu-row);
+                    root.match-album();
                 }
-                if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "album": MenuDivider { }
-                if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "album": MenuRow {
-                    text: Library.rows[root.menu-row].favorite ? "Remove from Favorites" : "Add to Favorites";
-                    activated => { Library.toggle-favorite(root.menu-row); }
-                }
-                if root.menu-row >= 0 && root.menu-row < Library.rows.length && (Library.rows[root.menu-row].kind == "artist" || Library.rows[root.menu-row].kind == "playlist"): MenuRow {
-                    text: Library.rows[root.menu-row].favorite ? "Remove from Favorites" : "Add to Favorites";
-                    activated => { Library.toggle-favorite(root.menu-row); }
-                }
-                if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "album": MenuRow {
-                    text: "Fix Match…";
-                    activated => {
-                        root.activate(root.menu-row);
-                        root.match-album();
-                    }
-                }
-                if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "artist": MenuRow {
-                    text: "Fix Match…";
-                    activated => {
-                        root.activate(root.menu-row);
-                        root.match-artist();
-                    }
+            }
+            if root.menu-row >= 0 && root.menu-row < Library.rows.length && Library.rows[root.menu-row].kind == "artist": MenuRow {
+                text: "Fix Match…";
+                activated => {
+                    row-menu.close();
+                    root.activate(root.menu-row);
+                    root.match-artist();
                 }
             }
         }
@@ -5699,6 +5852,8 @@ component PlaylistPageHead inherits Rectangle {
 component PlaylistEntryView inherits Rectangle {
     in property <PlaylistEntryRow> entry;
     in property <int> index;
+    /// Its menu, at this point in the window: a right-click's, or its menu button's.
+    callback context-menu(length, length);
 
     background: touch.has-hover ? Theme.hover : transparent;
     accessible-role: list-item;
@@ -5707,6 +5862,11 @@ component PlaylistEntryView inherits Rectangle {
 
     touch := TouchArea {
         double-clicked => { Playlists.play(root.index); }
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                root.context-menu(root.absolute-position.x + self.mouse-x, root.absolute-position.y + self.mouse-y);
+            }
+        }
     }
 
     HorizontalLayout {
@@ -5787,14 +5947,17 @@ component PlaylistEntryView inherits Rectangle {
                 color: Theme.text-secondary;
                 vertical-alignment: center;
             }
+            // Its menu, under the pointer: the same as a right-click's.
             IconButton {
                 y: (parent.height - self.height) / 2;
-                icon: Icons.trash;
-                stroked: true;
-                size: 28px;
-                label: "Remove from the playlist";
-                tooltip: "Remove";
-                clicked => { Playlists.remove(root.index); }
+                opacity: touch.has-hover || self.hovered ? 1 : 0;
+                icon: Icons.more;
+                size: 30px;
+                label: "More for " + root.entry.title;
+                tooltip: "More";
+                clicked => {
+                    root.context-menu(self.absolute-position.x + self.width, self.absolute-position.y + self.height);
+                }
             }
         }
     }
@@ -5808,6 +5971,10 @@ component PlaylistView inherits Rectangle {
     property <int> restores: App.restores;
     property <length> head-height: 340px + 88px + 37px;
     property <length> row-height: 56px;
+    // The track a menu is open for, and where.
+    property <int> menu-row;
+    property <length> menu-x;
+    property <length> menu-y;
     init => { root.restore-scroll(); }
     changed restores => { root.restore-scroll(); }
 
@@ -5854,7 +6021,32 @@ component PlaylistView inherits Rectangle {
             if index > 0: PlaylistEntryView {
                 entry: Playlists.entries[index - 1];
                 index: index - 1;
+                context-menu(x, y) => {
+                    root.menu-row = index - 1;
+                    root.menu-x = x - root.absolute-position.x;
+                    root.menu-y = y - root.absolute-position.y;
+                    entry-menu.show();
+                }
             }
+        }
+    }
+
+    entry-menu := PopupWindow {
+        property <bool> left: root.menu-x + entry-menu-body.width > root.width;
+
+        x: self.left ? root.menu-x - entry-menu-body.width : root.menu-x;
+        y: min(root.menu-y, root.height - entry-menu-body.height - 8px);
+        // Open while the playlists beside it are pointed at; each item closes it.
+        close-policy: close-on-click-outside;
+
+        entry-menu-body := RowMenuBody {
+            playlists-left: entry-menu.left;
+            remove-text: "Remove from this playlist";
+            play => { Playlists.play(root.menu-row); }
+            enqueue => { Playlists.enqueue-entry(root.menu-row); }
+            add-to(i) => { Playlists.add-entry(i, root.menu-row); }
+            remove => { Playlists.remove(root.menu-row); }
+            done => { entry-menu.close(); }
         }
     }
 
@@ -11079,30 +11271,8 @@ component Toolbar inherits HorizontalLayout {
         }
     }
 
-    // The view's own actions.
-    if root.view == "queue": IconButton {
-        icon: Icons.plus;
-        stroked: true;
-        size: 36px;
-        label: "Add files";
-        tooltip: "Add files";
-        clicked => { Playlist.add-files(); }
-    }
-    if root.view == "queue": IconButton {
-        icon: Icons.folder-plus;
-        stroked: true;
-        size: 36px;
-        label: "Add folder";
-        clicked => { Playlist.add-folder(); }
-    }
-    if root.view == "queue": IconButton {
-        icon: Icons.trash;
-        stroked: true;
-        size: 36px;
-        label: "Remove selected";
-        tooltip: "Remove the selected tracks";
-        clicked => { Playlist.remove-selected(); }
-    }
+    // The view's own actions. Up Next has none: what plays comes from the library, and a track
+    // leaves it by its menu, or by Delete.
     // The server's admins keep the stations; its listeners play them.
     if root.view == "radio" && Server.admin: IconButton {
         icon: Icons.plus;
