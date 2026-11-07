@@ -518,7 +518,9 @@ fn listen(served: &Served, identity: &Identity) -> Option<(Server, Option<Discov
 
 /// Logs to `file`, from this run on, and to the terminal as `RUST_LOG` says.
 fn start_log(file: &Path) {
-    let env = env_logger::Env::default().default_filter_or("info");
+    // Not lofty's guesses of each MP3's length from its bitrate, a line for every such file
+    // a scan reads; the scanner says what it does itself.
+    let env = env_logger::Env::default().default_filter_or("info,lofty=error");
     let mut builder = env_logger::Builder::from_env(env);
     // The user's alone, as the rest of the server's folder.
     let mut options = std::fs::OpenOptions::new();

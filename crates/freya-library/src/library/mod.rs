@@ -16,6 +16,7 @@ mod matches;
 mod online;
 mod playlists;
 mod scan;
+mod scan_log;
 pub mod transfer;
 pub mod users;
 

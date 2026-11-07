@@ -13,6 +13,7 @@ use std::time::{Duration, Instant, SystemTime};
 use super::fetch::{
     Online, fetch_album_covers, fetch_album_genres, fetch_album_kinds, fetch_artists, fetch_genres,
 };
+use super::scan_log::ScanLog;
 use super::{AlbumCover, FileStamp, Library, NewTrack, Result, added, epoch_millis, put, remove};
 use crate::cover::ARTWORK_FOLDERS;
 use crate::cue::{self, Found};
@@ -715,17 +716,31 @@ impl Scanner {
             .name("freya-scan".into())
             .spawn(move || {
                 let started = Instant::now();
+                let shown: Vec<_> = folders.iter().map(|f| f.display().to_string()).collect();
+                log::info!("scan: started, of {}", shown.join(", "));
+                let mut told = ScanLog::new();
                 let result = Library::open(&database).and_then(|mut library| {
                     scan_with(&mut library, &folders, &options, &stop, |e| {
+                        told.note(&e);
                         let _ = events.send(e);
                     })
                 });
                 let event = match result {
                     Ok(summary) => {
-                        log::info!("library scan took {:?}: {summary:?}", started.elapsed());
+                        log::info!(
+                            "scan: done in {:.1?}: {} added, {} updated, {} removed, {} unchanged",
+                            started.elapsed(),
+                            summary.added,
+                            summary.updated,
+                            summary.removed,
+                            summary.unchanged
+                        );
                         ScanEvent::Finished(summary)
                     }
-                    Err(e) => ScanEvent::Failed(e.to_string()),
+                    Err(e) => {
+                        log::warn!("scan: failed: {e}");
+                        ScanEvent::Failed(e.to_string())
+                    }
                 };
                 let _ = events.send(event);
             })
@@ -750,6 +765,12 @@ impl Scanner {
         let thread = std::thread::Builder::new()
             .name("freya-fetch".into())
             .spawn(move || {
+                log::info!("scan: asking the internet, without reading the files");
+                let mut told = ScanLog::new();
+                let mut send = |e: ScanEvent| {
+                    told.note(&e);
+                    let _ = events.send(e);
+                };
                 let result = Library::open(&database).and_then(|library| {
                     fetch_artists(
                         &library,
@@ -757,21 +778,21 @@ impl Scanner {
                         &online,
                         &pictures,
                         &stop,
-                        &mut |e| {
-                            let _ = events.send(e);
-                        },
+                        &mut send,
                     )?;
                     fetch_album_covers(&library, &pictures, &stop)?;
-                    fetch_album_kinds(&library, &online, &stop, &mut |e| {
-                        let _ = events.send(e);
-                    })?;
-                    fetch_album_genres(&library, &online, &stop, &mut |e| {
-                        let _ = events.send(e);
-                    })
+                    fetch_album_kinds(&library, &online, &stop, &mut send)?;
+                    fetch_album_genres(&library, &online, &stop, &mut send)
                 });
                 let event = match result {
-                    Ok(()) => ScanEvent::Finished(ScanSummary::default()),
-                    Err(e) => ScanEvent::Failed(e.to_string()),
+                    Ok(()) => {
+                        log::info!("scan: done asking the internet");
+                        ScanEvent::Finished(ScanSummary::default())
+                    }
+                    Err(e) => {
+                        log::warn!("scan: asking the internet failed: {e}");
+                        ScanEvent::Failed(e.to_string())
+                    }
                 };
                 let _ = events.send(event);
             })

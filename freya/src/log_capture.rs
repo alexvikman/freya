@@ -89,8 +89,10 @@ impl Log for Logger {
 /// Logs as `RUST_LOG` says, warnings by default, and keeps the log for the page and in the
 /// file at `path`, reading what earlier runs logged there first.
 pub fn init(path: Option<&Path>) {
-    let printed =
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).build();
+    let printed = env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("warn,lofty=error"),
+    )
+    .build();
     let max = printed.filter().max(LevelFilter::Debug);
     let file = path.and_then(|path| match open(path) {
         Ok(file) => Some(Mutex::new(file)),
