@@ -19,7 +19,7 @@ Without GitHub, `ci/check.sh package` builds the Linux AppImage and `.deb` in Do
 
 ## Icons
 
-[`assets/icon-art.png`](../assets/icon-art.png) is the artwork (1024 pixels square). `swift ci/make-icons.swift` (on a Mac) puts it on a rounded square following the macOS icon grid, with a soft shadow and transparent corners, and writes the PNG sizes and `icon.ico` (16–256 pixels) into `assets/icons/`; cargo-packager makes the macOS `.icns` from the PNGs. Run it again after changing the artwork.
+[`assets/icon-art.png`](../assets/icon-art.png) is the artwork (1024 pixels square). `swift ci/make-icons.swift` (on a Mac) puts it on a rounded square following the macOS icon grid, with a soft shadow and transparent corners, and writes the PNG sizes and `icon.ico` (16–256 pixels) into `assets/icons/`; cargo-packager makes the macOS `.icns` from the PNGs. Freya Server's icons are the same artwork on a circle, so the two are told apart at a glance: `swift ci/make-icons.swift --round assets/icon-art.png assets/icons/server`. Run both again after changing the artwork.
 
 Freya also carries its icon itself, for where the system takes it from the running program rather than from a package:
 

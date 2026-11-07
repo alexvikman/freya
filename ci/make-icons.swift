@@ -1,16 +1,21 @@
 // Makes Freya's icons from the artwork in assets/icon-art.png: the artwork on a rounded
 // square following the macOS icon grid (824 of 1024 points, with a soft shadow and transparent
-// corners), as the PNG sizes cargo-packager and Freya use and as a Windows .ico.
+// corners), as the PNG sizes cargo-packager and Freya use and as a Windows .ico. With --round,
+// on a circle as large, for Freya Server: the same artwork, told apart at a glance.
 //
-//   swift ci/make-icons.swift [assets/icon-art.png] [assets/icons] [preview.png]
+//   swift ci/make-icons.swift [--round] [assets/icon-art.png] [assets/icons] [preview.png]
 import AppKit
 
 let srgb = CGColorSpace(name: CGColorSpace.sRGB)!
 
+var round = false
+
 /// The icon on a 1024×1024 canvas, y up, drawn at `scale` pixels per point.
 func drawIcon(in ctx: CGContext, art: CGImage, scale: CGFloat) {
     let tile = CGRect(x: 100, y: 100, width: 824, height: 824)
-    let path = CGPath(roundedRect: tile, cornerWidth: 185, cornerHeight: 185, transform: nil)
+    let path = round
+        ? CGPath(ellipseIn: tile, transform: nil)
+        : CGPath(roundedRect: tile, cornerWidth: 185, cornerHeight: 185, transform: nil)
 
     ctx.saveGState()
     // A shadow's offset and blur are in pixels, whatever the context is scaled by: at 1024
@@ -60,7 +65,11 @@ func ico(_ images: [(Int, Data)]) -> Data {
     return out
 }
 
-let args = CommandLine.arguments
+var args = CommandLine.arguments
+if let at = args.firstIndex(of: "--round") {
+    round = true
+    args.remove(at: at)
+}
 let source = args.count > 1 ? args[1] : "assets/icon-art.png"
 let outDir = URL(fileURLWithPath: args.count > 2 ? args[2] : "assets/icons")
 guard let image = CGImageSourceCreateWithURL(URL(fileURLWithPath: source) as CFURL, nil),

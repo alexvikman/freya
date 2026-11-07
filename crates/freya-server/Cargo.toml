@@ -27,13 +27,15 @@ binaries-dir = "../../target/release"
 binaries = [{ path = "freya-server", main = true }]
 # The licenses of what is built into it, which go with it (see docs/DEPENDENCIES.md).
 resources = ["../../licenses/THIRD-PARTY.html"]
+# Freya's icon on a circle, where Freya's is on a rounded square: of the same family, told
+# apart at a glance (see docs/PACKAGING.md).
 icons = [
-    "../../assets/icons/32x32.png",
-    "../../assets/icons/64x64.png",
-    "../../assets/icons/128x128.png",
-    "../../assets/icons/256x256.png",
-    "../../assets/icons/icon.png",
-    "../../assets/icons/icon.ico",
+    "../../assets/icons/server/32x32.png",
+    "../../assets/icons/server/64x64.png",
+    "../../assets/icons/server/128x128.png",
+    "../../assets/icons/server/256x256.png",
+    "../../assets/icons/server/icon.png",
+    "../../assets/icons/server/icon.ico",
 ]
 
 # Windows: the server asked to stop before its files are replaced (see wix/stop-server.wxs).
