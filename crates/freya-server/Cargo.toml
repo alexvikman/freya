@@ -38,8 +38,10 @@ icons = [
     "../../assets/icons/server/icon.ico",
 ]
 
-# Windows: the server asked to stop before its files are replaced (see wix/stop-server.wxs).
+# Windows: the server asked to stop before its files are replaced (see wix/stop-server.wxs);
+# the shortcuts on the Start menu and the desktop each the user's choice (see ../../wix/main.wxs).
 [package.metadata.packager.wix]
+template = "../../wix/main.wxs"
 fragment-paths = ["wix/stop-server.wxs"]
 custom-action-refs = ["StopFreyaServer"]
 
