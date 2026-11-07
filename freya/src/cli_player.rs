@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, bail};
-use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEventKind, KeyModifiers};
-use crossterm::{cursor, terminal};
 use freya_audio::{Event, Media, PlaybackState, Player, Status, TrackInfo};
+
+use crate::terminal::{self, CLEAR_LINE, Key};
 
 const SEEK_STEP: Duration = Duration::from_secs(5);
 const VOLUME_STEP: f32 = 0.05;
@@ -65,31 +65,24 @@ pub fn run(paths: &[PathBuf]) -> anyhow::Result<()> {
         }
         draw_status(&status, player.volume());
 
-        if !event::poll(Duration::from_millis(100))? {
-            continue;
-        }
-        let TermEvent::Key(key) = event::read()? else {
+        let Some(key) = terminal::read_key(Duration::from_millis(100))? else {
             continue;
         };
-        if key.kind != KeyEventKind::Press {
-            continue;
-        }
         let status = player.status();
-        match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => break,
+        match key {
             // Raw mode turns Ctrl+C into a key instead of a signal.
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
-            KeyCode::Char(' ') => player.toggle_pause(),
-            KeyCode::Right => player.seek(status.position + SEEK_STEP),
-            KeyCode::Left => player.seek(status.position.saturating_sub(SEEK_STEP)),
-            KeyCode::Up => player.set_volume(player.volume() + VOLUME_STEP),
-            KeyCode::Down => player.set_volume(player.volume() - VOLUME_STEP),
-            KeyCode::Char('n') => {
+            Key::Char('q') | Key::Escape | Key::CtrlC => break,
+            Key::Char(' ') => player.toggle_pause(),
+            Key::Right => player.seek(status.position + SEEK_STEP),
+            Key::Left => player.seek(status.position.saturating_sub(SEEK_STEP)),
+            Key::Up => player.set_volume(player.volume() + VOLUME_STEP),
+            Key::Down => player.set_volume(player.volume() - VOLUME_STEP),
+            Key::Char('n') => {
                 if let Some(path) = queue.jump(1) {
                     player.play(path);
                 }
             }
-            KeyCode::Char('p') => {
+            Key::Char('p') => {
                 if let Some(path) = queue.jump(-1) {
                     player.play(path);
                 }
@@ -170,8 +163,7 @@ fn print_track(track: &TrackInfo) {
 
 fn print_line(text: &str) {
     let mut out = stdout();
-    let _ = crossterm::execute!(out, terminal::Clear(terminal::ClearType::CurrentLine));
-    let _ = write!(out, "\r{text}\r\n");
+    let _ = write!(out, "{CLEAR_LINE}{text}\r\n");
 }
 
 fn draw_status(status: &Status, volume: f32) {
@@ -186,14 +178,9 @@ fn draw_status(status: &Status, volume: f32) {
         .and_then(|t| t.duration)
         .map_or_else(|| "--:--".into(), format_time);
     let mut out = stdout();
-    let _ = crossterm::execute!(
-        out,
-        cursor::MoveToColumn(0),
-        terminal::Clear(terminal::ClearType::CurrentLine)
-    );
     let _ = write!(
         out,
-        "{icon} {} / {total}   vol {:3.0}%",
+        "{CLEAR_LINE}{icon} {} / {total}   vol {:3.0}%",
         format_time(status.position),
         volume * 100.0
     );
@@ -205,19 +192,20 @@ fn format_time(d: Duration) -> String {
     format!("{:02}:{:02}", secs / 60, secs % 60)
 }
 
-/// Restores the terminal when dropped, including on early return.
-struct RawMode;
+/// The terminal in raw mode, put back when dropped, on an early return too, with the status
+/// line ended.
+struct RawMode(#[allow(dead_code, reason = "held for its drop")] terminal::RawMode);
 
 impl RawMode {
     fn enable() -> anyhow::Result<Self> {
-        terminal::enable_raw_mode()?;
-        Ok(Self)
+        Ok(Self(terminal::RawMode::enable()?))
     }
 }
 
 impl Drop for RawMode {
     fn drop(&mut self) {
-        let _ = terminal::disable_raw_mode();
-        println!();
+        // Still in raw mode, which the field's drop ends after this.
+        print!("\r\n");
+        let _ = stdout().flush();
     }
 }

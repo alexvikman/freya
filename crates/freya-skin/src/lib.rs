@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::task::{Context, Poll, Waker};
 
 use slint_interpreter::{
     CompilationResult, Compiler, ComponentDefinition, ComponentInstance, DiagnosticLevel,
@@ -102,8 +103,8 @@ fn compiler() -> Compiler {
 /// must be one only this user can write to: in the shared temporary folder on Linux, another
 /// user could plant one there and make every skin fail to compile.
 fn api_root() -> PathBuf {
-    directories::ProjectDirs::from("", "", "Freya")
-        .map(|dirs| dirs.cache_dir().join(API_DIR))
+    freya_dirs::of("Freya")
+        .map(|dirs| dirs.cache.join(API_DIR))
         .unwrap_or_else(|| std::env::temp_dir().join(API_DIR))
 }
 
@@ -139,6 +140,20 @@ pub fn compile(source: &SkinSource) -> Result<ComponentDefinition, Error> {
     compile_with_warnings(source).map(|(component, _)| component)
 }
 
+/// Runs a future to its end on this thread, polling it until it is ready. Slint's compiler
+/// gives futures, but reads its files at once (see `compiler`), so they are ready within a
+/// few polls and nothing is waited for.
+pub fn block_on<F: Future>(future: F) -> F::Output {
+    let mut future = std::pin::pin!(future);
+    let mut context = Context::from_waker(Waker::noop());
+    loop {
+        if let Poll::Ready(output) = future.as_mut().poll(&mut context) {
+            return output;
+        }
+        std::thread::yield_now();
+    }
+}
+
 /// Compiles a skin and reports its warnings, for skin authors (`freya skin check`).
 pub fn check(source: &SkinSource) -> Result<Vec<String>, Error> {
     compile_with_warnings(source).map(|(_, warnings)| warnings)
@@ -149,10 +164,10 @@ fn compile_with_warnings(source: &SkinSource) -> Result<(ComponentDefinition, Ve
     SkinInfo::read(source)?;
     let compiler = compiler();
     let result = match source.main_file()? {
-        None => spin_on::spin_on(
+        None => block_on(
             compiler.build_from_source(BUILTIN_SKIN.to_owned(), PathBuf::from(BUILTIN_PATH)),
         ),
-        Some(path) => spin_on::spin_on(compiler.build_from_path(path)),
+        Some(path) => block_on(compiler.build_from_path(path)),
     };
     let warnings = diagnostics(&result)?;
     // Which of several would be the window is down to a hash map's order.
@@ -177,7 +192,7 @@ pub fn load(source: &SkinSource) -> Result<ComponentInstance, Error> {
 
 /// Creates the About window (not yet shown). Its `version` property should be set.
 pub fn about_window() -> Result<ComponentInstance, Error> {
-    let result = spin_on::spin_on(compiler().build_from_source(
+    let result = block_on(compiler().build_from_source(
         ABOUT_WINDOW.to_owned(),
         PathBuf::from("builtin/about.slint"),
     ));
@@ -191,7 +206,7 @@ pub fn about_window() -> Result<ComponentInstance, Error> {
 
 /// Creates the skin picker window (not yet shown).
 pub fn skin_picker_window() -> Result<ComponentInstance, Error> {
-    let result = spin_on::spin_on(compiler().build_from_source(
+    let result = block_on(compiler().build_from_source(
         SKIN_PICKER.to_owned(),
         PathBuf::from("builtin/skin-picker.slint"),
     ));
@@ -206,7 +221,7 @@ pub fn skin_picker_window() -> Result<ComponentInstance, Error> {
 /// Creates Freya's icon in the notification area, not yet shown: its `app-icon` is to be set
 /// at once, and it is shown when it is wanted, by its `show()`.
 pub fn tray_icon() -> Result<ComponentInstance, Error> {
-    let result = spin_on::spin_on(
+    let result = block_on(
         compiler().build_from_source(TRAY.to_owned(), PathBuf::from("builtin/tray.slint")),
     );
     diagnostics(&result)?;
@@ -263,7 +278,7 @@ mod tests {
 
     #[test]
     fn skin_picker_compiles_cleanly() {
-        let result = spin_on::spin_on(compiler().build_from_source(
+        let result = block_on(compiler().build_from_source(
             SKIN_PICKER.to_owned(),
             PathBuf::from("builtin/skin-picker.slint"),
         ));
@@ -273,7 +288,7 @@ mod tests {
 
     #[test]
     fn tray_icon_compiles_cleanly() {
-        let result = spin_on::spin_on(
+        let result = block_on(
             compiler().build_from_source(TRAY.to_owned(), PathBuf::from("builtin/tray.slint")),
         );
         let diagnostics: Vec<String> = result.diagnostics().map(|d| d.to_string()).collect();
@@ -423,7 +438,7 @@ mod tests {
 
     #[test]
     fn about_window_compiles_cleanly() {
-        let result = spin_on::spin_on(compiler().build_from_source(
+        let result = block_on(compiler().build_from_source(
             ABOUT_WINDOW.to_owned(),
             PathBuf::from("builtin/about.slint"),
         ));
@@ -434,7 +449,7 @@ mod tests {
     #[test]
     fn builtin_skin_compiles_cleanly() {
         let compiler = compiler();
-        let result = spin_on::spin_on(
+        let result = block_on(
             compiler.build_from_source(BUILTIN_SKIN.to_owned(), PathBuf::from(BUILTIN_PATH)),
         );
         let diagnostics: Vec<String> = result.diagnostics().map(|d| d.to_string()).collect();

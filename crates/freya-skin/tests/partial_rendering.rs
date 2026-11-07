@@ -49,8 +49,9 @@ export component Scene inherits Window {
 fn a_path_is_not_drawn_over_a_menu_beyond_what_is_redrawn() {
     let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
     slint::platform::set_platform(Box::new(Headless(Rc::clone(&window)))).unwrap();
-    let result =
-        spin_on::spin_on(Compiler::default().build_from_source(SCENE.into(), "scene.slint".into()));
+    let result = freya_skin::block_on(
+        Compiler::default().build_from_source(SCENE.into(), "scene.slint".into()),
+    );
     let ui = result.component("Scene").unwrap().create().unwrap();
     ui.show().unwrap();
     window.set_size(PhysicalSize::new(400, 400));

@@ -105,10 +105,7 @@ fn path_of(_file: &std::fs::File) -> Option<PathBuf> {
 /// user's home for none. On Windows, `\\computer` lists that computer's shared folders.
 pub fn listing(folder: Option<&Path>) -> FolderListing {
     let places = places();
-    let Some(folder) = folder
-        .map(Path::to_owned)
-        .or_else(|| directories::UserDirs::new().map(|dirs| dirs.home_dir().to_owned()))
-    else {
+    let Some(folder) = folder.map(Path::to_owned).or_else(freya_dirs::home) else {
         return FolderListing {
             places,
             ..FolderListing::default()
@@ -197,9 +194,8 @@ fn place(path: PathBuf, name: impl Into<String>, kind: &str) -> FolderPlace {
 /// Where to start looking: the user's home, and the drives and volumes the computer has,
 /// network ones among them.
 fn places() -> Vec<FolderPlace> {
-    let mut places: Vec<FolderPlace> = directories::UserDirs::new()
-        .map(|dirs| {
-            let home = dirs.home_dir().to_owned();
+    let mut places: Vec<FolderPlace> = freya_dirs::home()
+        .map(|home| {
             let name = home
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
@@ -441,11 +437,7 @@ mod tests {
         assert_eq!(listing.folders, [dir.join("A"), dir.join("b")]);
         assert_eq!(listing.parent.as_deref(), dir.parent());
         let start = super::listing(None);
-        assert_eq!(
-            start.folder,
-            directories::UserDirs::new().map(|dirs| dirs.home_dir().to_owned()),
-            "the home folder first"
-        );
+        assert_eq!(start.folder, freya_dirs::home(), "the home folder first");
         assert_eq!(start.places[0].kind, "home");
         assert!(start.places.iter().any(|p| p.kind == "drive"));
         let gone = super::listing(Some(&dir.join("gone")));

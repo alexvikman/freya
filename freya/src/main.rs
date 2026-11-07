@@ -12,6 +12,7 @@ mod playlist;
 mod search;
 mod settings;
 mod stream_cache;
+mod terminal;
 mod update;
 
 use std::path::PathBuf;

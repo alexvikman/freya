@@ -112,7 +112,7 @@ pub(super) fn thousands(n: usize) -> String {
 
 /// A folder as the user knows it: "~/Music" rather than "/Users/name/Music".
 pub(super) fn display_path(path: &Path) -> String {
-    let home = directories::BaseDirs::new().map(|d| d.home_dir().to_owned());
+    let home = freya_dirs::home();
     match home.as_deref().and_then(|h| path.strip_prefix(h).ok()) {
         Some(rest) if cfg!(unix) => format!("~/{}", rest.display()),
         _ => path.display().to_string(),

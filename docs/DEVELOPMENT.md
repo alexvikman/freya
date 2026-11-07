@@ -43,6 +43,7 @@ Installers of Freya and of Freya Server for macOS (`.dmg`), Windows (`.msi`) and
 |---|---|
 | `freya/` | Freya, the player: its window, Up Next, the equalizer's presets and `.eqf` files, and the terminal player |
 | `crates/freya-audio/` | Audio engine: 10-band equalizer, output, gapless playback, files from a server through a slow network |
+| `crates/freya-dirs/` | Where Freya and its server keep their files on each system: settings, data and cache folders, and the user's home |
 | `crates/freya-decode/` | Reading music files as samples, for both: the formats and decoders (Symphonia's, Opus from libopus, Monkey's Audio), and changing channels and rates |
 | `crates/freya-client/` | The client's side of the library: a Freya server's library, called over HTTP |
 | `crates/freya-http/` | A small HTTP/1.1 server, over TLS or not: Freya Server's, and Freya's login proxy |

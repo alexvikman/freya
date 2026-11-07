@@ -97,8 +97,7 @@ mod platform {
     use super::{LABEL, Launch, run, write_if_changed};
 
     pub fn file() -> Option<PathBuf> {
-        let home = directories::BaseDirs::new()?.home_dir().to_owned();
-        Some(home.join(format!("Library/LaunchAgents/{LABEL}.plist")))
+        Some(freya_dirs::home()?.join(format!("Library/LaunchAgents/{LABEL}.plist")))
     }
 
     pub fn registered() -> bool {
@@ -192,12 +191,7 @@ mod platform {
     const UNIT: &str = "freya-server.service";
 
     pub fn file() -> Option<PathBuf> {
-        Some(
-            directories::BaseDirs::new()?
-                .config_dir()
-                .join("systemd/user")
-                .join(UNIT),
-        )
+        Some(freya_dirs::config_home()?.join("systemd/user").join(UNIT))
     }
 
     pub fn registered() -> bool {

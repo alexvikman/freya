@@ -1,0 +1,18 @@
+[package]
+name = "freya-dirs"
+description = "Where Freya and its server keep their files on this computer, as the system has it"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# The home folder of a user without HOME set (see src/lib.rs), asked of the system.
+libc = "0.2.190"
+
+[target.'cfg(windows)'.dependencies]
+# The user's profile and AppData folders (see src/lib.rs), as the system knows them.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell"] }

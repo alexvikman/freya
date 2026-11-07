@@ -235,9 +235,9 @@ fn unpack(package: &Path) -> Result<PathBuf, Error> {
 /// Not the shared temporary folder, where another user of the computer could plant a
 /// folder that Freya would then load as the skin.
 pub(crate) fn package_cache() -> Result<PathBuf, Error> {
-    let dirs = directories::ProjectDirs::from("", "", "Freya")
+    let dirs = freya_dirs::of("Freya")
         .ok_or_else(|| Error::Package("no cache folder for this user".into()))?;
-    let cache = dirs.cache_dir().join("skins");
+    let cache = dirs.cache.join("skins");
     let mut builder = std::fs::DirBuilder::new();
     builder.recursive(true);
     #[cfg(unix)]

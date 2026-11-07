@@ -119,6 +119,37 @@ steps. Work them down most-exposed first: what Freya calls directly and what par
 from outside (symphonia, lofty, image, the M3U and CUE readers' dependencies, zip), then
 build-time code, then the rest.
 
+On 2026-11-07, every direct dependency was looked at for signs of being given up: its last
+release, whether its repository is archived, how many maintain it. Three were replaced by
+Freya's own code, each a small thing that had brought a crate nobody tends:
+
+- **directories** (the settings, data and cache folders and the user's home), whose
+  repository is archived, with `dirs-sys` and `option-ext`, archived too. The new crate
+  `freya-dirs` (`crates/freya-dirs`) gives the same folders on every platform, so nothing a
+  user kept moves; its tests say which. It asks the system directly: `getpwuid_r` for a home
+  without `HOME`, `SHGetKnownFolderPath` on Windows.
+- **spin_on** (running Slint's compiler, whose futures are ready at once), one release in
+  2020 by one person, which brought `pin-utils`, given up and ignored in `deny.toml`. The skin
+  crate's own `block_on` does the same in a dozen lines. Slint itself still uses spin_on, so
+  both crates stay in the tree until Slint drops them; the ignore stays with that reason.
+- **crossterm** (the command-line player's keys and status line), maintained, but 27 crates
+  for four calls, among them `winapi 0.3` from 2020, which nobody maintains. `freya/src/
+  terminal.rs` puts the terminal in raw mode and reads keys with the libc and windows-sys
+  Freya already had, and clears the line with the terminal's own escape sequence.
+
+Also looked at and kept: `subtle` (one constant-time comparison; its last release is from
+2024, but rustls brings it anyway, and constant time is not something to write oneself),
+`ring` (no release since 2025-03 and a README that calls itself an experiment, but an active
+repository and rustls's cryptography; the alternative would be aws-lc-rs), and
+`raw-window-handle` (from 2024, but an interface crate whose version Slint and winit set).
+The old crates deeper in the tree (byteorder, scopeguard, same-file, foreign-types and the
+like) are small, finished, and come with Slint, wgpu, cpal and rusqlite.
+
+`Cargo.lock` went from 708 to 698 crates. `cargo vet prune` dropped the exemptions for the
+crates that went and for four others (getrandom, tinyvec, untrusted, web-time) that the
+auditors Freya trusts have covered since, leaving 349 crates covered, 6 partly and 327
+exempted. The new crate, as Freya's own, needs no audit.
+
 ## Patched crates
 
 A crate Freya needs changed is copied into [`vendor/`](../vendor) from the release it is

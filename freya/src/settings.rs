@@ -140,44 +140,44 @@ impl Default for Settings {
 }
 
 /// Freya Server's folders, on this computer, apart from Freya's.
-fn server_dirs() -> Option<directories::ProjectDirs> {
-    directories::ProjectDirs::from("", "", freya_protocol::SERVER_APP)
+fn server_dirs() -> Option<freya_dirs::Dirs> {
+    freya_dirs::of(freya_protocol::SERVER_APP)
 }
 
-fn dirs() -> Option<directories::ProjectDirs> {
-    directories::ProjectDirs::from("", "", "Freya")
+fn dirs() -> Option<freya_dirs::Dirs> {
+    freya_dirs::of("Freya")
 }
 
 fn settings_path() -> Option<PathBuf> {
-    dirs().map(|d| d.config_dir().join("settings.toml"))
+    dirs().map(|d| d.config.join("settings.toml"))
 }
 
 /// Where installed skins are kept.
 pub fn skins_dir() -> Option<PathBuf> {
-    dirs().map(|d| d.data_dir().join("skins"))
+    dirs().map(|d| d.data.join("skins"))
 }
 
 /// Files that can always be made again, like the cover shown in the system's Now Playing.
 pub fn cache_dir() -> Option<PathBuf> {
-    dirs().map(|d| d.cache_dir().to_owned())
+    dirs().map(|d| d.cache)
 }
 
 /// The code Freya Server on this computer is adopted with, in its folder while it is not
 /// adopted yet: readable by its user alone, as Freya here is.
 pub fn adoption_code_path() -> Option<PathBuf> {
-    server_dirs().map(|d| d.data_dir().join(freya_protocol::ADOPTION_CODE))
+    server_dirs().map(|d| d.data.join(freya_protocol::ADOPTION_CODE))
 }
 
 /// The certificate Freya's server on this computer keeps in its folder, which the client here
 /// pins.
 pub fn server_certificate_path() -> Option<PathBuf> {
-    server_dirs().map(|d| d.data_dir().join(freya_protocol::CERTIFICATE_FILE))
+    server_dirs().map(|d| d.data.join(freya_protocol::CERTIFICATE_FILE))
 }
 
 /// Where this computer keeps the refresh tokens servers gave it, by their address: the
 /// system's keychain where Freya uses one, else a file only the user can read.
 pub fn token_store() -> Option<freya_client::TokenStore> {
-    dirs().map(|d| freya_client::TokenStore::new(d.config_dir().join("servers.json"), true))
+    dirs().map(|d| freya_client::TokenStore::new(d.config.join("servers.json"), true))
 }
 
 /// What this computer is called, for the server's list of devices.
@@ -212,17 +212,17 @@ fn host_name() -> Option<String> {
 
 /// Freya's log, of this run and earlier ones.
 pub fn log_path() -> Option<PathBuf> {
-    dirs().map(|d| d.data_dir().join("freya.log"))
+    dirs().map(|d| d.data.join("freya.log"))
 }
 
 /// Where the running Freya says how one started later reaches it (see gui/one_freya.rs).
 pub fn one_freya_path() -> Option<PathBuf> {
-    dirs().map(|d| d.data_local_dir().join("one-freya"))
+    dirs().map(|d| d.data_local.join("one-freya"))
 }
 
 /// Where the playlist is kept between runs.
 pub fn playlist_path() -> Option<PathBuf> {
-    dirs().map(|d| d.data_dir().join("playlist.m3u8"))
+    dirs().map(|d| d.data.join("playlist.m3u8"))
 }
 
 impl Settings {
