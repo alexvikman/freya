@@ -11107,38 +11107,6 @@ component Toolbar inherits HorizontalLayout {
         label: "Add a station";
         clicked => { root.add-station(); }
     }
-    if root.view == "library" && Library.can-go-back && Library.rows.length > 0 && !root.page-head-shown: VerticalLayout {
-        alignment: center;
-
-        TextButton {
-            text: "Play";
-            clicked => { Library.play-all(); }
-        }
-    }
-    if root.view == "library" && Library.can-go-back && Library.rows.length > 0 && !root.page-head-shown: VerticalLayout {
-        alignment: center;
-
-        TextButton {
-            text: "Add to Up Next";
-            clicked => { Library.enqueue-all(); }
-        }
-    }
-    if root.view == "playlist" && Playlists.tracks.length > 0: VerticalLayout {
-        alignment: center;
-
-        TextButton {
-            text: "Play";
-            clicked => { Playlists.play(0); }
-        }
-    }
-    if root.view == "playlist" && Playlists.tracks.length > 0: VerticalLayout {
-        alignment: center;
-
-        TextButton {
-            text: "Add to Up Next";
-            clicked => { Playlists.enqueue(); }
-        }
-    }
     if root.view == "visualizer": VerticalLayout {
         alignment: center;
 
