@@ -304,13 +304,17 @@ fn answer(
         let Some(ticket) = showing().claim.clone() else {
             return text(404, "Start again from Freya's settings, with the code.");
         };
-        // Its ticket alone: one the address brought is left out, so no other is read first.
+        // Its ticket alone: first, as the server reads the first of a name, and one the
+        // address brought is left out, its name read as the server reads it.
         let asked: Vec<&str> = request
             .query
             .split('&')
-            .filter(|pair| !pair.is_empty() && pair.split('=').next() != Some("ticket"))
+            .filter(|pair| {
+                let name = pair.split_once('=').map_or(*pair, |(name, _)| name);
+                !pair.is_empty() && decoded(name).is_some_and(|name| name != "ticket")
+            })
             .collect();
-        format!("{}?{}&ticket={ticket}", request.path, asked.join("&"))
+        format!("{}?ticket={ticket}&{}", request.path, asked.join("&"))
     } else if request.query.is_empty() {
         request.path.clone()
     } else {
@@ -374,6 +378,26 @@ fn sent_cookie(request: &Request) -> Option<String> {
 /// Whether `given` is `secret`, compared in the same time whatever they are.
 fn same(given: &str, secret: &str) -> bool {
     freya_protocol::same_secret(given.as_bytes(), secret.as_bytes())
+}
+
+/// A name in a query as the server reads it: `+` a space, and `%XX` escapes undone; none when
+/// they are not valid, or not UTF-8.
+fn decoded(name: &str) -> Option<String> {
+    let name = name.replace('+', " ");
+    let bytes = name.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = std::str::from_utf8(bytes.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 fn random_hex() -> String {
@@ -677,7 +701,9 @@ mod tests {
         // A ticket the address brought is left out: the proxy's own alone is read.
         let (path, query) = page.split_once('?').unwrap();
         let mut brought = browser
-            .get(&format!("{origin}{path}?ticket=brought-along&{query}"))
+            .get(&format!(
+                "{origin}{path}?ticket=brought-along&%74icket=brought-along&{query}"
+            ))
             .header("Cookie", cookie.as_str())
             .call()
             .unwrap();
