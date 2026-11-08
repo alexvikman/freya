@@ -15,6 +15,8 @@ pub(super) struct AlbumPage {
     pub(super) cover_full: Option<Image>,
     /// A track of the album, which its cover is read from.
     pub(super) track: PathBuf,
+    /// Its editions, when it has several.
+    pub(super) editions: Vec<AlbumEdition>,
 }
 
 /// An album's cover whole, read on a thread: the album's cover key, and the picture.
@@ -65,6 +67,15 @@ impl LibraryPanel {
             size = format!("{size}, {}", long_time(total));
         }
         detail.push(size);
+        let editions = db
+            .album_editions(artist.as_deref(), album.as_deref())
+            .unwrap_or_else(|e| {
+                log::warn!("library: {e}");
+                Vec::new()
+            });
+        if editions.len() > 1 {
+            detail.push(count(editions.len(), "edition"));
+        }
         // Read already, while the same album shows.
         let cover_full = before
             .filter(|page| page.cover == cover)
@@ -77,6 +88,7 @@ impl LibraryPanel {
             cover,
             color: None,
             cover_full,
+            editions,
         });
         self.color_album_page();
     }
@@ -100,6 +112,48 @@ impl LibraryPanel {
         }
     }
 
+    /// Has the album shown show its edition in `folder`.
+    pub fn choose_edition(&mut self, folder: &str) {
+        let Level::AlbumTracks {
+            artist: Some(artist),
+            album: Some(album),
+        } = self.level().clone()
+        else {
+            return;
+        };
+        let Some(db) = &mut self.db else {
+            return;
+        };
+        if let Err(e) = db.set_preferred_edition(&artist, &album, Path::new(folder)) {
+            log::warn!("could not choose the edition of {album}: {e}");
+            return;
+        }
+        self.reload_now();
+    }
+
+    /// The editions of the album shown, for `Library.album-editions`.
+    pub(super) fn album_editions_value(&self) -> Value {
+        let rows: Vec<Value> = self
+            .album_page
+            .iter()
+            .flat_map(|page| &page.editions)
+            .map(|edition| {
+                let size = count(edition.tracks as usize, "track");
+                let detail = match edition.year {
+                    Some(year) => format!("{year} · {size}"),
+                    None => size,
+                };
+                Value::Struct(Struct::from_iter([
+                    ("key".to_owned(), string(edition.folder.to_string_lossy())),
+                    ("title".to_owned(), string(&edition.label)),
+                    ("detail".to_owned(), string(detail)),
+                    ("selected".to_owned(), Value::Bool(edition.preferred)),
+                ]))
+            })
+            .collect();
+        Value::Model(slint::ModelRc::new(slint::VecModel::from(rows)))
+    }
+
     pub(super) fn album_page_value(&self) -> Value {
         let page = self.album_page.clone().filter(|_| !self.searching());
         let [r, g, b] = page
@@ -114,6 +168,7 @@ impl LibraryPanel {
             color: None,
             cover_full: None,
             track: PathBuf::new(),
+            editions: Vec::new(),
         });
         Value::Struct(Struct::from_iter([
             ("shown".to_owned(), Value::Bool(!page.title.is_empty())),

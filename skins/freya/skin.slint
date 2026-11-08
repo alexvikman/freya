@@ -4,7 +4,7 @@
 // contrast against the background it is drawn on (WCAG AA), light and dark mode follow the
 // system.
 
-import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, Recents, RecentRow, App, Updates, LastFm, Server, ServerDevice, ServerUser, FoundServer, PlaybackState, Shortcuts, TrackRow, LibraryRow, AlbumPage, ArtistPage, ArtistDraft, PictureChoice, MatchChoice, AlbumMatchDraft, AlbumMatchChoice, ArtistMatchDraft, PlaylistRow, PlaylistPage, PlaylistEntryRow, SearchSection, StationRow, DirectoryStationRow, RadioTagRow, RadioTagGroup, NativeSpectrum, NativeOscilloscope, NativeHologram, Organize, OrganizeRow, OrganizeFile, OrganizeField } from "@freya/v1.slint";
+import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, Recents, RecentRow, App, Updates, LastFm, Server, ServerDevice, ServerUser, FoundServer, PlaybackState, Shortcuts, TrackRow, LibraryRow, AlbumPage, ArtistPage, ArtistDraft, PictureChoice, MatchChoice, AlbumMatchDraft, AlbumMatchChoice, ArtistMatchDraft, PlaylistRow, PlaylistPage, PlaylistEntryRow, SearchSection, StationRow, DirectoryStationRow, RadioTagRow, RadioTagGroup, NativeSpectrum, NativeOscilloscope, NativeHologram, Organize, OrganizeRow, OrganizeFile, OrganizeField, AlbumEditionRow } from "@freya/v1.slint";
 import { AboutSlint, ListView, Palette, ScrollView } from "std-widgets.slint";
 
 // Every skin re-exports the API globals so the app can reach them.
@@ -2929,6 +2929,11 @@ component AlbumPageHead inherits Rectangle {
                     tooltip: root.page.favorite ? "Remove from Favorites" : "Add to Favorites";
                     clicked => { Library.toggle-album-favorite(); }
                 }
+                if Library.album-editions.length > 1: editions-button := TextButton {
+                    y: (parent.height - self.height) / 2;
+                    text: Library.album-editions.length + " editions";
+                    clicked => { editions-menu.show(); }
+                }
                 album-more := IconButton {
                     y: (parent.height - self.height) / 2;
                     icon: Icons.more;
@@ -2936,6 +2941,27 @@ component AlbumPageHead inherits Rectangle {
                     label: "More for " + root.page.title;
                     tooltip: "More";
                     clicked => { album-menu.show(); }
+                }
+            }
+        }
+        editions-menu := PopupWindow {
+            x: album-more.absolute-position.x - root.absolute-position.x - 240px;
+            y: album-more.absolute-position.y - root.absolute-position.y + album-more.height;
+            width: 320px;
+
+            MenuSurface {
+                VerticalLayout {
+                    padding: 6px;
+
+                    MenuHeading { text: "Editions"; }
+                    for edition in Library.album-editions: MenuRow {
+                        text: (edition.selected ? "✓ " : "") + edition.title + " · " + edition.detail;
+                        activated => {
+                            if (Server.admin) {
+                                Library.choose-edition(edition.key);
+                            }
+                        }
+                    }
                 }
             }
         }

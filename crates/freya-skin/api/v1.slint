@@ -313,6 +313,18 @@ export struct AlbumPage {
     picture-full: image,
 }
 
+/// One of the editions of the album shown: see `Library.album-editions`.
+export struct AlbumEditionRow {
+    /// What `Library.choose-edition` chooses it by.
+    key: string,
+    /// "2016 Remastered".
+    title: string,
+    /// "2016 · 8 tracks".
+    detail: string,
+    /// Whether it is the one the album shows.
+    selected: bool,
+}
+
 /// A section of the search page: rows `first` to `first + count` of `Library.rows`, of the
 /// kind "songs", "artists", "albums", "playlists" or "genres", titled "Songs" and so on.
 export struct SearchSection {
@@ -539,6 +551,10 @@ export global Library {
     /// `pick-genre-picture` asks for a file and `clear-genre-picture` takes one away, "picture"
     /// or "backdrop"; `save-genre` keeps the description given with the pictures chosen,
     /// `cancel-genre` none of it.
+    /// The editions of the album shown, when it has several; `choose-edition` has the album
+    /// show another.
+    in property <[AlbumEditionRow]> album-editions;
+    callback choose-edition(string);
     in property <GenreDraft> genre-draft;
     callback edit-genre();
     callback pick-genre-picture(string);

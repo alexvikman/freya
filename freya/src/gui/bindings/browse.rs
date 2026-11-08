@@ -68,6 +68,11 @@ pub(super) fn bind(b: &Binder) {
     );
     b.bind(
         "Library",
+        "choose-edition",
+        Box::new(|app, args| app.library.choose_edition(&text_arg(args, 0))),
+    );
+    b.bind(
+        "Library",
         "edit-genre",
         Box::new(|app, _| app.library.edit_genre()),
     );

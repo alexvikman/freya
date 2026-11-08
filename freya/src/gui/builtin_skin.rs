@@ -534,6 +534,13 @@ macro_rules! plain_struct {
     };
 }
 
+plain_struct!(AlbumEditionRow {
+    key: "key",
+    title: "title",
+    detail: "detail",
+    selected: "selected",
+});
+
 plain_struct!(OrganizeRow {
     kind: "kind",
     title: "title",
@@ -1220,6 +1227,7 @@ skin_api! {
         Library."folders-offered" => set_folders_offered, get_folders_offered;
         Library."last-scan" => set_last_scan, get_last_scan;
         Library."album-page" => set_album_page, get_album_page;
+        Library."album-editions" => set_album_editions, get_album_editions;
         Library."artist-options" => set_artist_options, get_artist_options;
         Library."artist-page" => set_artist_page, get_artist_page;
         Library."popular" => set_popular, get_popular;
@@ -1505,6 +1513,7 @@ skin_api! {
         Library."save-artist-match" => on_save_artist_match, invoke_save_artist_match(mbid: SharedString);
         Library."cancel-artist-match" => on_cancel_artist_match, invoke_cancel_artist_match();
         Library."match-album" => on_match_album, invoke_match_album();
+        Library."choose-edition" => on_choose_edition, invoke_choose_edition(key: SharedString);
         Library."find-album-matches" => on_find_album_matches, invoke_find_album_matches(title: SharedString, artist: SharedString);
         Library."save-album-match" => on_save_album_match, invoke_save_album_match(release_group: SharedString);
         Library."cancel-album-match" => on_cancel_album_match, invoke_cancel_album_match();

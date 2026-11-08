@@ -128,6 +128,10 @@ macro_rules! with_library_data {
             /// When each of a playlist's tracks was added to it.
             fn playlist_added(playlist: &str) -> Vec<($crate::PlaylistTrack, ::std::time::SystemTime)>;
             fn note_playlist_added(playlist: &str, tracks: &[$crate::PlaylistTrack], at: ::std::time::SystemTime) -> ();
+            /// The editions of the album, when it has several.
+            fn album_editions(artist: Option<&str>, album: Option<&str>) -> Vec<$crate::AlbumEdition>;
+            /// Makes the edition in `folder` the one the album shows.
+            fn set_preferred_edition(artist: &str, album: &str, folder: &::std::path::Path) -> ();
             /// The library's folders of music.
             fn organize_folders() -> Vec<$crate::OrganizeFolder>;
             /// What is to be changed in the files at `paths`, those that have a draft.
@@ -317,6 +321,7 @@ with_server_control!(calls {
 /// server's settings, which hold the admin's own keys. A call not named here is the admin's alone, so one added
 /// later is too until it is named.
 pub const LISTENER_CALLS: &[&str] = &[
+    "album_editions",
     "stats",
     "artists",
     "artists_by",
@@ -377,6 +382,7 @@ pub const OWNER_CALLS: &[&str] = &[
 /// kept, and a client's own call of it may have changed the library; so one added later is
 /// read anew each time until it is named.
 pub const CACHED_CALLS: &[&str] = &[
+    "album_editions",
     "organize_folders",
     "tag_drafts",
     "tag_saves",

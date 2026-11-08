@@ -209,3 +209,17 @@ pub struct OrganizeFile {
     /// Why tags cannot be written in it, if so.
     pub not_taggable: Option<String>,
 }
+
+/// One of the editions of an album.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AlbumEdition {
+    /// The folder it is in, which it is chosen by.
+    pub folder: PathBuf,
+    /// What tells it from the others: "2016 Remastered".
+    pub label: String,
+    pub tracks: u32,
+    /// When it came out.
+    pub year: Option<u32>,
+    /// Whether it is the one the album shows.
+    pub preferred: bool,
+}

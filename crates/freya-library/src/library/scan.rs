@@ -228,6 +228,8 @@ pub fn scan_with(
         Ok(())
     })?;
     laps.lap("tracks");
+    library.assign_editions()?;
+    laps.lap("editions");
     if let Some(pictures) = &options.pictures
         && !cancel.load(Ordering::Relaxed)
     {

@@ -10,9 +10,9 @@ use std::time::{Duration, Instant, SystemTime};
 use freya_media::Entry;
 use freya_media::thumbnails::{ArtistSource, Thumbnail, Thumbnails};
 use freya_protocol::{
-    Album, AlbumKey, AlbumKind, AlbumMatch, AlbumOrder, Artist, ArtistEdit, ArtistOrder, CHOSEN,
-    Genre, Header, LibraryApi, Part, PictureKind, PictureRow, Played, ScanEvent, Server,
-    ServerSettings, ServiceEvent, Track, plain_name, split_artist,
+    Album, AlbumEdition, AlbumKey, AlbumKind, AlbumMatch, AlbumOrder, Artist, ArtistEdit,
+    ArtistOrder, CHOSEN, Genre, Header, LibraryApi, Part, PictureKind, PictureRow, Played,
+    ScanEvent, Server, ServerSettings, ServiceEvent, Track, plain_name, split_artist,
 };
 #[cfg(test)]
 use freya_server::{Service, ServiceConfig};

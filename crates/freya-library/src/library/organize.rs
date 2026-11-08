@@ -38,6 +38,7 @@ pub(super) const SCHEMA: &str = "
     );
 ";
 
+pub mod editions;
 pub mod names;
 
 /// A file a save changed.
@@ -351,7 +352,7 @@ fn named(fields: &TagMap, field: TagField) -> Option<&str> {
         .filter(|value| !value.is_empty())
 }
 
-fn carry_album(
+pub(super) fn carry_album(
     tx: &Transaction<'_>,
     artist: &str,
     album: &str,
@@ -380,7 +381,7 @@ fn carry_album(
     )?;
     let old_key = Thumbnails::key(Some(artist), Some(album));
     let new_key = Thumbnails::key(Some(filed), Some(new_album));
-    for table in ["album_online_covers", "album_chosen_covers"] {
+    for table in ["album_covers", "album_online_covers", "album_chosen_covers"] {
         tx.execute(
             &format!("UPDATE OR REPLACE {table} SET key = ?1 WHERE key = ?2"),
             params![new_key, old_key],
