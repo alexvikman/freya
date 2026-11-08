@@ -91,6 +91,8 @@ pub struct OrganizeState {
     waiting: u32,
     asked: Option<Instant>,
     answers: Answers,
+    /// Whether what is shown may have changed since it was last made.
+    changed: bool,
 }
 
 impl Default for OrganizeState {
@@ -114,6 +116,7 @@ impl Default for OrganizeState {
             waiting: 0,
             asked: None,
             answers: Answers::default(),
+            changed: true,
         }
     }
 }
@@ -171,6 +174,7 @@ impl OrganizeState {
         let answers: Vec<Answer> =
             std::mem::take(&mut *self.answers.lock().unwrap_or_else(|e| e.into_inner()));
         for answer in answers {
+            self.changed = true;
             self.waiting = self.waiting.saturating_sub(1);
             self.take(answer, &remote);
         }
@@ -336,6 +340,7 @@ impl OrganizeState {
         action: &str,
         value: &str,
     ) -> Option<(Vec<Track>, usize)> {
+        self.changed = true;
         match action {
             "filter" => self.filter = value.to_owned(),
             "search" => self.search = value.to_lowercase(),
@@ -543,6 +548,7 @@ impl OrganizeState {
         let Some(field) = TagField::from_name(field) else {
             return;
         };
+        self.changed = true;
         let value = value.trim().to_owned();
         let chosen = self.file.clone();
         let mut drafts = Vec::new();
@@ -781,6 +787,12 @@ impl OrganizeState {
         parts.join(" · ")
     }
 
+    /// What to show, when it may have changed since it was last asked: a library's folders
+    /// are many to make rows of on every refresh.
+    pub fn take_shown(&mut self) -> Option<Shown> {
+        std::mem::take(&mut self.changed).then(|| self.shown())
+    }
+
     pub fn shown(&self) -> Shown {
         let folder = self
             .selected
@@ -968,6 +980,15 @@ mod tests {
         );
         organize.edit_field(None, "album", "Album");
         assert!(organize.files.iter().all(|f| f.draft.is_empty()));
+    }
+
+    #[test]
+    fn what_is_shown_is_made_only_when_it_may_have_changed() {
+        let mut organize = state();
+        assert!(organize.take_shown().is_some());
+        assert!(organize.take_shown().is_none());
+        organize.act(None, "filter", "ready");
+        assert!(organize.take_shown().is_some());
     }
 
     #[test]
