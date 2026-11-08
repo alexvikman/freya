@@ -194,7 +194,11 @@ impl Copy {
     /// Takes the place of `path`, which must still be the regular file at `real`, the place
     /// it was found at: a folder or the file swapped for a link meanwhile stops it.
     fn take_place_of(mut self, path: &Path, real: &Path) -> Result<(), WriteError> {
-        File::open(&self.path)?.sync_all()?;
+        // Opened to write: Windows flushes a file only through a handle that may write to it.
+        OpenOptions::new()
+            .write(true)
+            .open(&self.path)?
+            .sync_all()?;
         if !fs::symlink_metadata(path)?.is_file() || fs::canonicalize(path)? != real {
             return Err(WriteError::Mismatch("it was replaced meanwhile".into()));
         }
