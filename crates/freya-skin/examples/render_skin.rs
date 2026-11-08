@@ -2,7 +2,7 @@
 //!
 //! Usage: cargo run -p freya-skin --example render_skin -- <out.png> [skin | builtin | picker]
 //!        [scale] [width] [height]
-//!        [library | library-search | albums | album | songs | most-played | stations | playlist | visualizer
+//!        [library | library-search | albums | album | artist-empty | songs | most-played | stations | playlist | visualizer
 //!        | equalizer | radio | directory | directory-search | recents | settings | about | error]
 //!
 //! The last argument shows another of the built-in skin's views than Up Next (the library at an
@@ -42,14 +42,14 @@ fn main() {
                 "library-search" => freya_skin::sample::fill_library_search(ui),
                 "albums" => freya_skin::sample::fill_library_albums(ui),
                 "album" => freya_skin::sample::fill_library_album(ui),
+                "artist-empty" => freya_skin::sample::fill_library_artist_empty(ui),
                 "songs" => freya_skin::sample::fill_library_songs(ui),
                 "most-played" => freya_skin::sample::fill_library_most_played(ui),
                 _ => freya_skin::sample::fill(ui),
             }
             let view = match panel.as_str() {
-                "library" | "library-search" | "albums" | "album" | "songs" | "most-played" => {
-                    "library"
-                }
+                "library" | "library-search" | "albums" | "album" | "artist-empty" | "songs"
+                | "most-played" => "library",
                 "stations" | "directory" | "directory-search" => "radio",
                 "playlist" | "visualizer" | "equalizer" | "recents" | "settings" | "about" => {
                     panel.as_str()

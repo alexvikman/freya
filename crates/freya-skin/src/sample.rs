@@ -830,6 +830,28 @@ pub fn fill_library_album(ui: &ComponentInstance) {
     let _ = ui.set_global_property("Library", "album-page", Value::Struct(page));
 }
 
+/// An artist's page with the compilations chosen, of which they have none.
+pub fn fill_library_artist_empty(ui: &ComponentInstance) {
+    fill(ui);
+    show_library(ui, "artists", "grid", "Agalloch", "", Vec::new());
+    if let Ok(Value::Struct(mut page)) = ui.get_global_property("Library", "artist-page") {
+        for (field, value) in [
+            ("shown", Value::Bool(true)),
+            ("kind", text("artist")),
+            ("name", text("Agalloch")),
+            ("detail", text("6 albums · 52 tracks")),
+        ] {
+            page.set_field(field.to_owned(), value);
+        }
+        let _ = ui.set_global_property("Library", "artist-page", Value::Struct(page));
+    }
+    let filters = ["all", "albums", "singles", "compilations"]
+        .map(text)
+        .to_vec();
+    let _ = ui.set_global_property("Library", "album-filters", model(filters));
+    let _ = ui.set_global_property("Library", "album-filter", text("compilations"));
+}
+
 /// The library's Songs section: a table.
 pub fn fill_library_songs(ui: &ComponentInstance) {
     fill(ui);

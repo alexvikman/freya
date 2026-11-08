@@ -3710,6 +3710,32 @@ component SearchPage inherits ScrollView {
 
 /// Letters down the side of a list, to jump to the first row each starts: clicked, or swept
 /// over with the mouse held down.
+/// Under an artist's page's filters, when they have no albums of the chosen kind.
+component ArtistPageEmpty inherits VerticalLayout {
+    in property <length> pad: 24px;
+    padding-left: root.pad;
+    padding-right: root.pad;
+    padding-top: 8px;
+    spacing: 4px;
+    alignment: start;
+
+    Text {
+        text: Library.album-filter == "albums" ? "No albums"
+            : Library.album-filter == "singles" ? "No singles or EPs"
+            : Library.album-filter == "compilations" ? "No compilations"
+            : "No albums";
+        font-size: 16px;
+        font-weight: 600;
+        color: Theme.text;
+    }
+    Text {
+        text: "Choose All to see every album.";
+        font-size: 15px;
+        color: Theme.text-secondary;
+        wrap: word-wrap;
+    }
+}
+
 component LetterBar inherits Rectangle {
     callback jump(int);
 
@@ -3910,6 +3936,9 @@ component LibraryPanel inherits FocusScope {
     /// An artist's page over their albums; its height, by what it holds.
     property <bool> artist-page-shown: Library.artist-page.shown && (grid-shown || discography-shown);
     property <int> head-lines: artist-page-shown ? 1 : 0;
+    /// An artist's page whose chosen kind of album they have none of: said under the filters.
+    property <bool> artist-page-empty: root.artist-page-shown && Library.rows.length == 0;
+    property <length> artist-page-empty-height: 96px;
     // An artist's albums switched between the grid and the list keep the page where it was, as
     // far as its head goes: the head does not move.
     changed discography-shown => {
@@ -4228,13 +4257,20 @@ component LibraryPanel inherits FocusScope {
         width: root.width - root.letters-width;
         height: root.height - root.options-height;
         content-width: self.visible-width;
-        content-height: root.grid-shown ? root.head-lines * root.artist-head-height + root.grid-top + root.grid-lines * root.grid-line-height : 0;
+        content-height: root.grid-shown ? root.head-lines * root.artist-head-height + root.grid-top + root.grid-lines * root.grid-line-height
+            + (root.artist-page-empty ? root.artist-page-empty-height : 0) : 0;
         changed content-y => {
             if (root.shown) {
                 root.report-scroll();
             }
         }
 
+        if root.artist-page-empty: ArtistPageEmpty {
+            x: 0;
+            y: root.head-lines * root.artist-head-height;
+            width: grid.visible-width;
+            height: root.artist-page-empty-height;
+        }
         // The artist's page first, when their albums are shown.
         for line in root.grid-shown ? root.grid-lines + root.head-lines : 0: grid-line := Rectangle {
             property <int> tiles: line - root.head-lines;
@@ -4398,13 +4434,20 @@ component LibraryPanel inherits FocusScope {
         y: root.options-height;
         height: root.height - root.options-height;
         content-width: self.visible-width;
-        content-height: root.discography-shown ? root.head-lines * root.artist-head-height + root.discography-rows-height + root.page-foot : 0;
+        content-height: root.discography-shown ? root.head-lines * root.artist-head-height + root.discography-rows-height + root.page-foot
+            + (root.artist-page-empty ? root.artist-page-empty-height : 0) : 0;
         changed content-y => {
             if (root.shown) {
                 root.report-scroll();
             }
         }
 
+        if root.artist-page-empty: ArtistPageEmpty {
+            x: 0;
+            y: root.head-lines * root.artist-head-height;
+            width: discography.visible-width;
+            height: root.artist-page-empty-height;
+        }
         // The artist's page first, then each album and its tracks.
         // Last, as much room under the tracks as the page has over its heading.
         for index in root.discography-shown ? Library.rows.length + root.head-lines + 1 : 0: cell := Rectangle {
@@ -4855,7 +4898,7 @@ component LibraryPanel inherits FocusScope {
     /// What the library's server is called here: its name, or this computer's.
     property <string> server-called: Server.name;
 
-    if Library.rows.length == 0: VerticalLayout {
+    if Library.rows.length == 0 && !root.artist-page-empty: VerticalLayout {
         alignment: center;
         padding-left: 32px;
         padding-right: 32px;
