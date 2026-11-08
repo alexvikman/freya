@@ -1317,6 +1317,8 @@ skin_api! {
         Organize."busy" => set_busy, get_busy;
         Organize."can-save" => set_can_save, get_can_save;
         Organize."can-undo" => set_can_undo, get_can_undo;
+        Organize."status" => set_status, get_status;
+        Organize."candidates" => set_candidates, get_candidates;
         Organize."files" => set_files, get_files;
         Organize."fields" => set_fields, get_fields;
         Organize."scope" => set_scope, get_scope;

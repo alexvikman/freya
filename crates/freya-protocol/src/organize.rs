@@ -223,3 +223,55 @@ pub struct AlbumEdition {
     /// Whether it is the one the album shows.
     pub preferred: bool,
 }
+
+/// A release a folder may be.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ReleaseCandidate {
+    pub release_id: String,
+    pub title: String,
+    pub artist: String,
+    /// When it came out, as MusicBrainz gives it.
+    pub date: String,
+    pub country: String,
+    /// What MusicBrainz says tells it from others: "2016 remaster".
+    pub disambiguation: String,
+    pub label: String,
+    pub format: String,
+    pub tracks: u32,
+    /// How well it fits the folder, 0 to 1.
+    pub score: f64,
+}
+
+/// What came of asking which release a folder is.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum ProposalState {
+    /// Nothing fit well enough.
+    None,
+    /// One fits best, but the user should look at it.
+    Review,
+    /// One fits well enough to save.
+    Ready,
+}
+
+/// The releases a folder may be, the best first, and the one its drafts are of.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct FolderProposal {
+    pub folder: PathBuf,
+    pub state: ProposalState,
+    pub chosen: Option<String>,
+    pub candidates: Vec<ReleaseCandidate>,
+}
+
+/// What the server is doing with the folders it was asked to go through.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct OrganizeStatus {
+    /// Folders waiting, the one being worked on among them.
+    pub waiting: u32,
+    /// Folders done since it last had nothing to do.
+    pub done: u32,
+    /// The folder being worked on.
+    pub current: Option<PathBuf>,
+    /// What it could not do most lately.
+    pub error: Option<String>,
+}

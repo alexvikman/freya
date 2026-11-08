@@ -2,6 +2,7 @@
 //! playlists in SQLite, the scans that keep it in line with the music's folders, and what is
 //! fetched online for it. Freya, the player, has none of it: it asks the server.
 
+pub mod identify;
 pub mod library;
 pub mod tagging;
 pub mod wikipedia;

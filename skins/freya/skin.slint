@@ -11201,6 +11201,52 @@ component OrganizeRowView inherits Rectangle {
     }
 }
 
+/// A release the folder may be, which a click makes the one its drafts are of.
+component OrganizeCandidateRow inherits Rectangle {
+    in property <OrganizeRow> entry;
+
+    height: 48px;
+    border-radius: 6px;
+    background: root.entry.selected ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { Organize.act("choose", root.entry.key); }
+    }
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 10px;
+
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+
+            Text {
+                text: root.entry.title;
+                font-size: 14px;
+                font-weight: root.entry.selected ? 600 : 400;
+                color: Theme.text;
+                overflow: elide;
+            }
+            Text {
+                text: root.entry.detail;
+                font-size: 12px;
+                color: Theme.text-secondary;
+                overflow: elide;
+            }
+        }
+        Text {
+            width: 44px;
+            text: root.entry.state;
+            font-size: 14px;
+            color: Theme.text-secondary;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+        }
+    }
+}
+
 /// A field of the tags: what it says now, and what it is to become.
 component OrganizeFieldRow inherits HorizontalLayout {
     in property <OrganizeField> item;
@@ -11355,7 +11401,7 @@ component OrganizeView inherits Rectangle {
                     color: Theme.text;
                 }
                 Text {
-                    text: Organize.summary;
+                    text: Organize.status != "" ? Organize.status : Organize.summary;
                     font-size: 14px;
                     color: Theme.text-secondary;
                 }
@@ -11394,6 +11440,18 @@ component OrganizeView inherits Rectangle {
             spacing: 8px;
             alignment: start;
 
+            TextButton {
+                text: "Identify all";
+                clicked => { Organize.act("identify-all", ""); }
+            }
+            TextButton {
+                text: "Save all ready";
+                clicked => { Organize.act("save-ready", ""); }
+            }
+            if Organize.status != "": TextButton {
+                text: "Stop";
+                clicked => { Organize.act("stop", ""); }
+            }
             for choice in [
                 { key: "all", name: "All" },
                 { key: "unidentified", name: "Not identified" },
@@ -11476,6 +11534,10 @@ component OrganizeView inherits Rectangle {
                             alignment: start;
 
                             TextButton {
+                                text: "Identify";
+                                clicked => { Organize.act("identify", ""); }
+                            }
+                            TextButton {
                                 text: "Save";
                                 primary: Organize.can-save;
                                 clicked => {
@@ -11498,6 +11560,17 @@ component OrganizeView inherits Rectangle {
                             font-size: 14px;
                             color: Theme.text-secondary;
                             wrap: word-wrap;
+                        }
+                        if Organize.candidates.length > 0: Text {
+                            text: "Releases";
+                            font-size: 15px;
+                            font-weight: 700;
+                            color: Theme.text;
+                        }
+                        VerticalLayout {
+                            for candidate in Organize.candidates: OrganizeCandidateRow {
+                                entry: candidate;
+                            }
                         }
                         Text {
                             text: Organize.scope;

@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use freya_client::Http;
 use freya_protocol::{
-    FolderState, LibraryData, OrganizeFile, OrganizeFolder, Remote, SaveOutcome, ServerControl,
-    TagDraft, TagField, TagMap, TagSave, Track,
+    FolderProposal, FolderState, LibraryData, OrganizeFile, OrganizeFolder, OrganizeStatus, Remote,
+    SaveOutcome, ServerControl, TagDraft, TagField, TagMap, TagSave, Track,
 };
 use slint_interpreter::{Struct, Value};
 
@@ -44,6 +44,8 @@ enum Answer {
     Folders(Result<Vec<OrganizeFolder>, String>),
     Files(PathBuf, Result<(Vec<OrganizeFile>, Vec<Track>), String>),
     Saves(Vec<TagSave>),
+    Proposal(PathBuf, Option<FolderProposal>),
+    Status(OrganizeStatus),
     Saved(Result<SaveOutcome, String>, &'static str),
     Failed(String),
 }
@@ -53,6 +55,7 @@ type Answers = Arc<Mutex<Vec<Answer>>>;
 /// What the view shows now.
 pub struct Shown {
     pub rows: Vec<Value>,
+    pub candidates: Vec<Value>,
     pub files: Vec<Value>,
     pub fields: Vec<Value>,
     pub values: Vec<(&'static str, Value)>,
@@ -68,6 +71,8 @@ pub struct OrganizeState {
     files: Vec<OrganizeFile>,
     tracks: Vec<Track>,
     saves: Vec<TagSave>,
+    proposal: Option<FolderProposal>,
+    status: OrganizeStatus,
     message: String,
     /// Things asked of the server that have not been answered.
     waiting: u32,
@@ -86,6 +91,8 @@ impl Default for OrganizeState {
             files: Vec::new(),
             tracks: Vec::new(),
             saves: Vec::new(),
+            proposal: None,
+            status: OrganizeStatus::default(),
             message: String::new(),
             waiting: 0,
             asked: None,
@@ -153,6 +160,13 @@ impl OrganizeState {
         if self.asked.is_none_or(|at| at.elapsed() >= ASK_EVERY) {
             self.asked = Some(Instant::now());
             self.ask_folders(&remote);
+            if let Some(remote) = remote {
+                self.waiting += 1;
+                errand(&self.answers, move || match remote.organize_status() {
+                    Ok(status) => Answer::Status(status),
+                    Err(e) => Answer::Failed(e.to_string()),
+                });
+            }
         }
     }
 
@@ -168,6 +182,19 @@ impl OrganizeState {
             }
             Answer::Files(_, Err(e)) => self.message = e,
             Answer::Saves(saves) => self.saves = saves,
+            Answer::Proposal(folder, proposal) => {
+                if self.selected.as_deref() == Some(folder.as_path()) {
+                    self.proposal = proposal;
+                }
+            }
+            Answer::Status(status) => {
+                // When it comes to an end, or moves on, what is shown may have changed.
+                let moved = status.done != self.status.done;
+                self.status = status;
+                if moved {
+                    self.reload(remote);
+                }
+            }
             Answer::Saved(Ok(outcome), done) => {
                 self.message = said(&outcome, done);
                 self.reload(remote);
@@ -189,6 +216,13 @@ impl OrganizeState {
         self.ask_folders(remote);
         let Some(remote) = remote.clone() else { return };
         if let Some(folder) = self.selected.clone() {
+            let of = Arc::clone(&remote);
+            let asked = folder.clone();
+            self.waiting += 1;
+            errand(&self.answers, move || match of.folder_proposal(&asked) {
+                Ok(proposal) => Answer::Proposal(asked, proposal),
+                Err(e) => Answer::Failed(e.to_string()),
+            });
             let from = Arc::clone(&remote);
             self.waiting += 1;
             errand(&self.answers, move || {
@@ -223,6 +257,7 @@ impl OrganizeState {
                 self.file = None;
                 self.files.clear();
                 self.tracks.clear();
+                self.proposal = None;
                 self.message.clear();
                 self.reload(&remote);
             }
@@ -239,9 +274,46 @@ impl OrganizeState {
             "save" => self.save(&remote),
             "discard" => self.discard(&remote),
             "undo" => self.undo(&remote),
+            "identify" => {
+                if let Some(folder) = self.selected.clone() {
+                    self.message = "Asking MusicBrainz…".to_owned();
+                    self.command(&remote, move |r| r.identify_folders(&[folder]));
+                }
+            }
+            "identify-all" => self.command(&remote, |r| r.identify_folders(&[])),
+            "save-ready" => self.command(&remote, |r| r.save_ready_folders()),
+            "stop" => self.command(&remote, |r| r.stop_organizing()),
+            "choose" => {
+                if let Some(folder) = self.selected.clone() {
+                    let release = value.to_owned();
+                    let asking = remote.clone()?;
+                    self.waiting += 1;
+                    errand(&self.answers, move || {
+                        match asking.choose_release(&folder, &release) {
+                            Ok(()) => Answer::Saved(Ok(SaveOutcome::default()), "Chose it for"),
+                            Err(e) => Answer::Failed(e.to_string()),
+                        }
+                    });
+                }
+            }
             _ => {}
         }
         None
+    }
+
+    /// Asks the server to do something it says nothing back about but how it goes.
+    fn command(
+        &mut self,
+        remote: &Remoted,
+        ask: impl FnOnce(&Remote<Http>) -> freya_protocol::ApiResult<()> + Send + 'static,
+    ) {
+        let Some(remote) = remote.clone() else { return };
+        self.asked = None;
+        self.waiting += 1;
+        errand(&self.answers, move || match ask(&remote) {
+            Ok(()) => Answer::Status(OrganizeStatus::default()),
+            Err(e) => Answer::Failed(e.to_string()),
+        });
     }
 
     fn drafted_paths(&self) -> Vec<PathBuf> {
@@ -389,6 +461,58 @@ impl OrganizeState {
         rows
     }
 
+    fn candidate_rows(&self) -> Vec<Value> {
+        let Some(proposal) = &self.proposal else {
+            return Vec::new();
+        };
+        proposal
+            .candidates
+            .iter()
+            .map(|release| {
+                let mut facts = vec![plural(release.tracks as usize, "track", "tracks")];
+                for fact in [
+                    &release.date,
+                    &release.country,
+                    &release.format,
+                    &release.label,
+                    &release.disambiguation,
+                ] {
+                    if !fact.is_empty() {
+                        facts.push(fact.clone());
+                    }
+                }
+                row(
+                    "candidate",
+                    &format!("{} — {}", release.artist, release.title),
+                    &facts.join(" · "),
+                    &format!("{:.0}%", release.score * 100.0),
+                    &release.release_id,
+                    proposal.chosen.as_deref() == Some(release.release_id.as_str()),
+                )
+            })
+            .collect()
+    }
+
+    /// What the server is going through, in words.
+    fn status_text(&self) -> String {
+        let total = self.status.waiting + self.status.done;
+        let mut text = if self.status.waiting > 0 {
+            format!(
+                "Going through folder {} of {total}",
+                (self.status.done + 1).min(total)
+            )
+        } else {
+            String::new()
+        };
+        if let Some(error) = &self.status.error {
+            if !text.is_empty() {
+                text.push_str(" · ");
+            }
+            text.push_str(error);
+        }
+        text
+    }
+
     fn file_rows(&self) -> Vec<Value> {
         self.files
             .iter()
@@ -512,9 +636,11 @@ impl OrganizeState {
             ),
             ("can-undo", Value::Bool(self.undoable().is_some())),
             ("scope", skin_state::string(scope)),
+            ("status", skin_state::string(self.status_text())),
         ];
         Shown {
             rows: self.rows(),
+            candidates: self.candidate_rows(),
             files: self.file_rows(),
             fields: self.field_rows(),
             values,

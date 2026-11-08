@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use freya_protocol::{
-    FolderState, OrganizeFolder, TagDraft, TagField, TagMap, TagSave, plain_name,
+    FolderProposal, FolderState, OrganizeFolder, ProposalState, ReleaseCandidate, TagDraft,
+    TagField, TagMap, TagSave, plain_name,
 };
 use rusqlite::{OptionalExtension, Transaction, params};
 
@@ -20,12 +21,21 @@ pub(super) const SCHEMA: &str = "
         path TEXT NOT NULL PRIMARY KEY,
         changes TEXT NOT NULL
     );
+    -- Which releases a folder may be, and the one its drafts are of.
+    CREATE TABLE IF NOT EXISTS folder_proposals (
+        folder TEXT NOT NULL PRIMARY KEY,
+        state TEXT NOT NULL,
+        chosen TEXT,
+        candidates TEXT NOT NULL
+    );
     -- Each time drafts were written to files, to undo it.
     CREATE TABLE IF NOT EXISTS tag_saves (
         id INTEGER PRIMARY KEY,
         at INTEGER NOT NULL,
         folder TEXT NOT NULL,
-        undone INTEGER NOT NULL DEFAULT 0
+        undone INTEGER NOT NULL DEFAULT 0,
+        -- A cover the save added beside the music, which undoing it takes away.
+        cover TEXT
     );
     CREATE TABLE IF NOT EXISTS tag_saved_files (
         save INTEGER NOT NULL,
@@ -50,6 +60,22 @@ pub struct SavedFile {
     pub before: TagMap,
     /// What they are now.
     pub after: TagMap,
+}
+
+fn state_name(state: ProposalState) -> &'static str {
+    match state {
+        ProposalState::None => "none",
+        ProposalState::Review => "review",
+        ProposalState::Ready => "ready",
+    }
+}
+
+fn state_from_name(name: &str) -> ProposalState {
+    match name {
+        "review" => ProposalState::Review,
+        "ready" => ProposalState::Ready,
+        _ => ProposalState::None,
+    }
 }
 
 fn file_name(path: &Path) -> String {
@@ -121,6 +147,11 @@ impl Library {
             drafts: u32,
             albums: HashMap<String, u32>,
         }
+        let reviewed: HashSet<String> = self
+            .db
+            .prepare_cached("SELECT folder FROM folder_proposals WHERE state = 'review'")?
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<_>>()?;
         let drafted: HashSet<String> = self
             .db
             .prepare_cached("SELECT path FROM tag_drafts")?
@@ -149,7 +180,9 @@ impl Library {
                 let name = file_name(&path);
                 let group = path.parent().map(file_name).unwrap_or_default();
                 let most = folder.albums.values().copied().max().unwrap_or(0);
-                let state = if folder.drafts > 0 {
+                let state = if folder.drafts > 0 && reviewed.contains(&text(&path)) {
+                    FolderState::Review
+                } else if folder.drafts > 0 {
                     FolderState::Ready
                 } else if folder.identified == folder.files {
                     FolderState::Identified
@@ -184,6 +217,43 @@ impl Library {
             }
         }
         Ok(files)
+    }
+
+    /// The releases the album's folder `folder` may be, when it was asked.
+    pub fn folder_proposal(&self, folder: &Path) -> Result<Option<FolderProposal>> {
+        self.db
+            .prepare_cached(
+                "SELECT state, chosen, candidates FROM folder_proposals WHERE folder = ?1",
+            )?
+            .query_row([text(folder)], |row| {
+                let candidates: String = row.get(2)?;
+                Ok(FolderProposal {
+                    folder: folder.to_path_buf(),
+                    state: state_from_name(&row.get::<_, String>(0)?),
+                    chosen: row.get(1)?,
+                    candidates: serde_json::from_str::<Vec<ReleaseCandidate>>(&candidates)
+                        .unwrap_or_default(),
+                })
+            })
+            .optional()
+    }
+
+    /// Keeps what came of asking which release a folder is.
+    pub fn set_folder_proposal(&mut self, proposal: &FolderProposal) -> Result<()> {
+        let candidates =
+            serde_json::to_string(&proposal.candidates).unwrap_or_else(|_| "[]".to_owned());
+        self.db
+            .prepare_cached(
+                "INSERT OR REPLACE INTO folder_proposals (folder, state, chosen, candidates)
+                 VALUES (?1, ?2, ?3, ?4)",
+            )?
+            .execute(params![
+                text(&proposal.folder),
+                state_name(proposal.state),
+                proposal.chosen,
+                candidates
+            ])?;
+        Ok(())
     }
 
     /// The last `limit` saves, the latest first.
@@ -233,9 +303,33 @@ impl Library {
                 ],
             )?;
             tx.execute("DELETE FROM tag_drafts WHERE path = ?1", [text(&file.path)])?;
+            tx.execute(
+                "DELETE FROM folder_proposals WHERE folder = ?1",
+                [text(&names::album_folder(&file.path))],
+            )?;
         }
         tx.commit()?;
         Ok(save)
+    }
+
+    /// Notes the cover the save `save` added beside the music.
+    pub fn note_save_cover(&self, save: i64, cover: &Path) -> Result<()> {
+        self.db.execute(
+            "UPDATE tag_saves SET cover = ?2 WHERE id = ?1",
+            params![save, text(cover)],
+        )?;
+        Ok(())
+    }
+
+    /// The cover the save `save` added beside the music, if it did.
+    pub fn save_cover(&self, save: i64) -> Result<Option<PathBuf>> {
+        Ok(self
+            .db
+            .prepare_cached("SELECT cover FROM tag_saves WHERE id = ?1")?
+            .query_row([save], |row| row.get::<_, Option<String>>(0))
+            .optional()?
+            .flatten()
+            .map(PathBuf::from))
     }
 
     /// The files of the save `save`, as they are to be put back; none when it was undone or

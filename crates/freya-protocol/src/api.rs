@@ -132,6 +132,8 @@ macro_rules! with_library_data {
             fn album_editions(artist: Option<&str>, album: Option<&str>) -> Vec<$crate::AlbumEdition>;
             /// Makes the edition in `folder` the one the album shows.
             fn set_preferred_edition(artist: &str, album: &str, folder: &::std::path::Path) -> ();
+            /// The releases the album's folder `folder` may be, when it was asked.
+            fn folder_proposal(folder: &::std::path::Path) -> Option<$crate::FolderProposal>;
             /// The library's folders of music.
             fn organize_folders() -> Vec<$crate::OrganizeFolder>;
             /// What is to be changed in the files at `paths`, those that have a draft.
@@ -163,6 +165,16 @@ macro_rules! with_server_control {
             fn stop_scan() -> ();
             /// The files of the album's folder `folder`, as their tags are on disk now.
             fn organize_files(folder: &::std::path::Path) -> Vec<$crate::OrganizeFile>;
+            /// Asks which release each of `folders` is, in the background; those not yet
+            /// identified when none are named.
+            fn identify_folders(folders: &[::std::path::PathBuf]) -> ();
+            /// Has `folder` be the release `release`, as the user chose.
+            fn choose_release(folder: &::std::path::Path, release: &str) -> ();
+            /// Saves every folder ready to save, in the background.
+            fn save_ready_folders() -> ();
+            /// Takes away what waits to be gone through.
+            fn stop_organizing() -> ();
+            fn organize_status() -> $crate::OrganizeStatus;
             /// Writes the drafts of the files at `paths` to them, and scans them.
             fn save_tag_drafts(paths: &[::std::path::PathBuf]) -> $crate::SaveOutcome;
             /// Puts the files of the save `save` back as they were.
@@ -383,6 +395,7 @@ pub const OWNER_CALLS: &[&str] = &[
 /// read anew each time until it is named.
 pub const CACHED_CALLS: &[&str] = &[
     "album_editions",
+    "folder_proposal",
     "organize_folders",
     "tag_drafts",
     "tag_saves",

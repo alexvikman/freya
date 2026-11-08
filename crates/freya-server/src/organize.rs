@@ -2,10 +2,18 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
+use freya_library::identify::{
+    self, FileToMatch, FolderToMatch, Found, Release, Source, album_and_edition,
+};
 use freya_library::library::organize::SavedFile;
+use freya_library::library::organize::names::{album_folder, parse_folder_name};
 use freya_library::tagging;
+use freya_media::artist_image::{
+    MUSICBRAINZ_INTERVAL, cover_art, musicbrainz_release, musicbrainz_release_search,
+};
 use freya_protocol::{OrganizeFile, SaveFailure, TagDraft, TagField, TagMap};
 
 use crate::folders::music_file;
@@ -123,6 +131,118 @@ pub fn files_as_they_are(
         .collect()
 }
 
+/// What to find a folder's release by: what its files and its name say.
+pub fn folder_to_match(folder: &Path, files: &[OrganizeFile]) -> FolderToMatch {
+    let taggable: Vec<&OrganizeFile> = files.iter().filter(|f| f.not_taggable.is_none()).collect();
+    let most_said = |field: TagField| -> Option<String> {
+        let mut counts: HashMap<&str, u32> = HashMap::new();
+        for file in &taggable {
+            if let Some(value) = file.fields.get(&field) {
+                *counts.entry(value.as_str()).or_default() += 1;
+            }
+        }
+        counts
+            .into_iter()
+            .max_by_key(|(value, count)| (*count, std::cmp::Reverse(*value)))
+            .map(|(value, _)| value.to_owned())
+    };
+    let name = folder
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let parsed = parse_folder_name(&name);
+    let (album, edition) = album_and_edition(most_said(TagField::Album).as_deref(), &parsed);
+    let number = |file: &OrganizeFile, field| {
+        file.fields
+            .get(&field)
+            .and_then(|value: &String| value.parse().ok())
+    };
+    let artist = most_said(TagField::AlbumArtist)
+        .or_else(|| most_said(TagField::Artist))
+        .or_else(|| {
+            folder
+                .parent()
+                .and_then(Path::file_name)
+                .map(|name| name.to_string_lossy().into_owned())
+        });
+    FolderToMatch {
+        artist,
+        album,
+        edition,
+        release_id: most_said(TagField::ReleaseId),
+        files: taggable
+            .iter()
+            .map(|file| FileToMatch {
+                path: file.path.clone(),
+                title: file.fields.get(&TagField::Title).cloned(),
+                track: number(file, TagField::Track),
+                disc: number(file, TagField::Disc),
+                duration: file.duration,
+            })
+            .collect(),
+    }
+}
+
+/// Adds the release group's cover beside the music of `saved`, when they became a release and
+/// their folder has no picture. The cover written, if one was.
+pub fn add_cover(saved: &[SavedFile]) -> Option<PathBuf> {
+    let group = saved
+        .iter()
+        .find_map(|file| file.after.get(&TagField::ReleaseGroupId))?;
+    let folder = album_folder(&saved.first()?.path_after);
+    let has_picture = std::fs::read_dir(&folder).ok()?.flatten().any(|entry| {
+        let name = entry.file_name().to_string_lossy().to_lowercase();
+        name.ends_with(".jpg") || name.ends_with(".jpeg") || name.ends_with(".png")
+    });
+    if has_picture {
+        return None;
+    }
+    let picture = match cover_art(group) {
+        Ok(picture) => picture?,
+        Err(e) => {
+            log::info!("no cover for {}: {e}", folder.display());
+            return None;
+        }
+    };
+    let path = folder.join("cover.jpg");
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .ok()?;
+    std::io::Write::write_all(&mut file, &picture).ok()?;
+    Some(path)
+}
+
+/// MusicBrainz, asked no faster than it wants to be.
+#[derive(Default)]
+pub struct MusicBrainz {
+    last: Mutex<Option<Instant>>,
+}
+
+impl MusicBrainz {
+    fn wait(&self) {
+        let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(wait) = last.and_then(|at| MUSICBRAINZ_INTERVAL.checked_sub(at.elapsed())) {
+            std::thread::sleep(wait);
+        }
+        *last = Some(Instant::now());
+    }
+}
+
+impl Source for MusicBrainz {
+    fn search(&self, query: &str) -> Result<Vec<Found>, String> {
+        self.wait();
+        Ok(identify::parse_search(&musicbrainz_release_search(query)?))
+    }
+
+    fn release(&self, id: &str) -> Result<Release, String> {
+        self.wait();
+        identify::parse_release(&musicbrainz_release(id)?)
+            .ok_or_else(|| format!("MusicBrainz said nothing of {id}"))
+    }
+}
+
 /// The file at `path`, when it is music within `folders`: a client names it.
 fn library_file(path: &Path, folders: &[PathBuf]) -> Result<PathBuf, String> {
     music_file(path, folders).ok_or_else(|| "it is not in the library's folders".to_owned())
@@ -172,6 +292,43 @@ mod tests {
             path: path.to_path_buf(),
             changes: TagMap::from([(TagField::Title, title.to_owned())]),
         }
+    }
+
+    /// Asks MusicBrainz: `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn finds_a_real_release() {
+        let source = MusicBrainz::default();
+        let folder = FolderToMatch {
+            artist: Some("Metallica".to_owned()),
+            album: Some("Master of Puppets".to_owned()),
+            files: [
+                ("Battery", 313),
+                ("Master of Puppets", 516),
+                ("The Thing That Should Not Be", 397),
+                ("Welcome Home (Sanitarium)", 387),
+                ("Disposable Heroes", 497),
+                ("Leper Messiah", 340),
+                ("Orion", 508),
+                ("Damage, Inc.", 332),
+            ]
+            .iter()
+            .enumerate()
+            .map(|(at, (title, seconds))| FileToMatch {
+                path: PathBuf::from(format!("/m/{at}.flac")),
+                title: Some((*title).to_owned()),
+                track: Some(at as u32 + 1),
+                disc: None,
+                duration: Some(Duration::from_secs(*seconds)),
+            })
+            .collect(),
+            ..FolderToMatch::default()
+        };
+        let found = identify::identify(&folder, &source).unwrap();
+        println!("{:?} {:#?}", found.state, found.candidates);
+        assert_eq!(found.drafts.len(), 8);
+        assert_eq!(found.drafts[0].changes[&TagField::AlbumArtist], "Metallica");
+        assert!(found.drafts[0].changes.contains_key(&TagField::RecordingId));
     }
 
     #[test]

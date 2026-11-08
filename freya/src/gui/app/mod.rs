@@ -129,6 +129,7 @@ pub struct View {
     playlist_track_rows: ModelRows,
     activity_rows: ModelRows,
     organize_rows: ModelRows,
+    organize_candidates: ModelRows,
     organize_files: ModelRows,
     organize_fields: ModelRows,
     organize_out: GlobalWriter,
@@ -180,6 +181,7 @@ impl View {
             playlist_track_rows: ModelRows::new(),
             activity_rows: ModelRows::new(),
             organize_rows: ModelRows::new(),
+            organize_candidates: ModelRows::new(),
             organize_files: ModelRows::new(),
             organize_fields: ModelRows::new(),
             organize_out: GlobalWriter::new(&ui, "Organize"),
@@ -232,6 +234,7 @@ impl View {
         if view.organize_out.available {
             for (name, rows) in [
                 ("rows", &view.organize_rows),
+                ("candidates", &view.organize_candidates),
                 ("files", &view.organize_files),
                 ("fields", &view.organize_fields),
             ] {

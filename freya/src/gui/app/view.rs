@@ -276,6 +276,7 @@ impl App {
             self.organize.poll(self.library.remote());
             let shown = self.organize.shown();
             view.organize_rows.sync(shown.rows);
+            view.organize_candidates.sync(shown.candidates);
             view.organize_files.sync(shown.files);
             view.organize_fields.sync(shown.fields);
             view.organize_out.write(ui, shown.values);
