@@ -1197,7 +1197,7 @@ export struct OrganizeField {
 export global Organize {
     /// Headings and folders, as `filter` and the search leave them.
     in property <[OrganizeRow]> rows;
-    /// "all", "unidentified", "review", "ready" or "identified".
+    /// "all", "unidentified", "review", "ready", "identified" or "inbox".
     in property <string> filter: "all";
     /// "412 folders · 38 not identified".
     in property <string> summary;
@@ -1213,6 +1213,10 @@ export global Organize {
     in property <string> status;
     /// Where files belong by their tags; empty leaves them where they are.
     in property <string> pattern;
+    /// The folder new music waits in; empty when there is none.
+    in property <string> inbox;
+    /// Whether the folder chosen waits in the inbox.
+    in property <bool> in-inbox;
     /// The AcoustID key, for finding files by their sound; empty means they are not.
     in property <string> acoustid-key;
     /// Where the files of the folder chosen would go by `pattern`, as rows of kind "move":
@@ -1226,7 +1230,8 @@ export global Organize {
     in property <string> scope;
     /// "filter", "search", "select" a folder or "select-file" by their keys, "" for all its
     /// files; "play-file", "save", "discard" or "undo"; "identify" the folder chosen,
-    /// "identify-all", "choose" a candidate by its key, "save-ready" or "stop"; "set-pattern", "set-acoustid-key",
+    /// "identify-all", "choose" a candidate by its key, "save-ready" or "stop"; "set-pattern", "set-acoustid-key", "set-inbox",
+    /// "accept" the folder chosen from the inbox or "accept-all",
     /// "suggest-pattern", "move" the folder chosen or "move-all".
     callback act(string, string);
     /// Has a field of what is chosen become a value.

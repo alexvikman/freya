@@ -49,6 +49,7 @@ enum Answer {
     Status(OrganizeStatus),
     Pattern(String),
     Key(String),
+    Inbox(String),
     Moves(PathBuf, Result<Vec<PlannedMove>, String>),
     Saved(Result<SaveOutcome, String>, &'static str),
     Failed(String),
@@ -82,6 +83,8 @@ pub struct OrganizeState {
     pattern: Option<String>,
     /// The AcoustID key, once the server said.
     acoustid_key: String,
+    /// The folder new music waits in, once the server said.
+    inbox: String,
     moves: Vec<PlannedMove>,
     message: String,
     /// Things asked of the server that have not been answered.
@@ -105,6 +108,7 @@ impl Default for OrganizeState {
             status: OrganizeStatus::default(),
             pattern: None,
             acoustid_key: String::new(),
+            inbox: String::new(),
             moves: Vec::new(),
             message: String::new(),
             waiting: 0,
@@ -178,10 +182,10 @@ impl OrganizeState {
             let answers = Arc::clone(&self.answers);
             errand(&self.answers, move || match asking.settings() {
                 Ok(settings) => {
-                    answers
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .push(Answer::Key(settings.acoustid_key.unwrap_or_default()));
+                    let inbox = settings.inbox_folder.unwrap_or_default();
+                    let mut list = answers.lock().unwrap_or_else(|e| e.into_inner());
+                    list.push(Answer::Key(settings.acoustid_key.unwrap_or_default()));
+                    list.push(Answer::Inbox(inbox.to_string_lossy().into_owned()));
                     Answer::Pattern(settings.naming_pattern)
                 }
                 Err(e) => Answer::Failed(e.to_string()),
@@ -223,6 +227,7 @@ impl OrganizeState {
                 self.ask_moves(remote);
             }
             Answer::Key(key) => self.acoustid_key = key,
+            Answer::Inbox(inbox) => self.inbox = inbox,
             Answer::Moves(folder, moves) => {
                 if self.selected.as_deref() == Some(folder.as_path()) {
                     match moves {
@@ -373,6 +378,32 @@ impl OrganizeState {
                     settings.acoustid_key = Some(key).filter(|key| !key.is_empty());
                     r.set_settings(&settings)
                 });
+            }
+            "set-inbox" => {
+                let inbox = value.trim().to_owned();
+                self.inbox = inbox.clone();
+                self.command(&remote, move |r| {
+                    let mut settings = r.settings()?;
+                    settings.inbox_folder =
+                        Some(PathBuf::from(inbox)).filter(|p| !p.as_os_str().is_empty());
+                    r.set_settings(&settings)
+                });
+            }
+            "accept" => {
+                if let Some(folder) = self.selected.clone() {
+                    self.command(&remote, move |r| r.accept_folders(&[folder]));
+                }
+            }
+            "accept-all" => {
+                let folders: Vec<PathBuf> = self
+                    .folders
+                    .iter()
+                    .filter(|f| {
+                        f.inbox && matches!(f.state, FolderState::Ready | FolderState::Identified)
+                    })
+                    .map(|f| f.path.clone())
+                    .collect();
+                self.command(&remote, move |r| r.accept_folders(&folders));
             }
             "set-pattern" => self.set_pattern(&remote, value),
             "suggest-pattern" => self.set_pattern(&remote, SUGGESTED_PATTERN),
@@ -539,7 +570,11 @@ impl OrganizeState {
     }
 
     fn row_matches(&self, folder: &OrganizeFolder) -> bool {
-        let wanted = self.filter == "all" || self.filter == state_name(folder.state);
+        let wanted = match self.filter.as_str() {
+            "all" => true,
+            "inbox" => folder.inbox,
+            filter => filter == state_name(folder.state),
+        };
         wanted
             && (self.search.is_empty()
                 || folder.name.to_lowercase().contains(&self.search)
@@ -557,6 +592,9 @@ impl OrganizeState {
             let mut detail = plural(folder.files as usize, "file", "files");
             if folder.mixed {
                 detail.push_str(" · mixed");
+            }
+            if folder.inbox {
+                detail.push_str(" · inbox");
             }
             rows.push(row(
                 "folder",
@@ -777,6 +815,8 @@ impl OrganizeState {
                 skin_state::string(self.pattern.clone().unwrap_or_default()),
             ),
             ("acoustid-key", skin_state::string(&self.acoustid_key)),
+            ("inbox", skin_state::string(&self.inbox)),
+            ("in-inbox", Value::Bool(folder.is_some_and(|f| f.inbox))),
         ];
         Shown {
             rows: self.rows(),
@@ -829,6 +869,7 @@ mod tests {
             files: 2,
             state,
             mixed: false,
+            inbox: false,
         }
     }
 

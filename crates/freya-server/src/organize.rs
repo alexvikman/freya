@@ -603,6 +603,23 @@ mod tests {
     }
 
     #[test]
+    fn music_from_the_inbox_goes_into_the_library() {
+        let root = folder("inbox");
+        let (inbox, music) = (root.join("inbox"), root.join("music"));
+        let from = inbox.join("New stuff");
+        fs::create_dir_all(&from).unwrap();
+        fs::create_dir_all(&music).unwrap();
+        let file = tagged(&from, "sine.flac", "One", 1);
+        let folders = [inbox.clone(), music.clone()];
+        let plan = plan_moves(&[file], &folders, PATTERN, Some(&music));
+        apply_moves(&plan, &folders).unwrap();
+        assert!(music.join("Metallica/Load/01 One.flac").is_file());
+        assert!(!from.exists());
+        assert!(inbox.exists(), "the inbox itself stays");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn a_file_already_there_stops_the_folder() {
         let root = folder("taken");
         let from = root.join("old");

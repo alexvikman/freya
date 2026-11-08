@@ -176,6 +176,8 @@ macro_rules! with_server_control {
             fn plan_moves(folder: &::std::path::Path, pattern: &str) -> Vec<$crate::PlannedMove>;
             /// Moves the files of `folders` to where `pattern` says, in the background.
             fn move_folders(folders: &[::std::path::PathBuf], pattern: &str) -> ();
+            /// Saves `folders` from the inbox and moves them into the library, in the background.
+            fn accept_folders(folders: &[::std::path::PathBuf]) -> ();
             /// Takes away what waits to be gone through.
             fn stop_organizing() -> ();
             fn organize_status() -> $crate::OrganizeStatus;

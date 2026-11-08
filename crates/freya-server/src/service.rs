@@ -22,7 +22,9 @@ use freya_protocol::{
 
 use freya_library::library::organize::names::album_folder;
 use freya_library::library::organize::{SavedFile, naming};
-use freya_protocol::{FolderProposal, FolderState, OrganizeStatus, PlannedMove, ProposalState};
+use freya_protocol::{
+    FolderProposal, FolderState, OrganizeStatus, PlannedMove, ProposalState, SUGGESTED_PATTERN,
+};
 
 use crate::folder_watch::FolderWatch;
 use crate::playlists::Playlists;
@@ -119,14 +121,17 @@ enum FolderJob {
     Save(PathBuf),
     /// Moves the files of the folder to where the pattern says.
     Move(PathBuf, String),
+    /// Saves a folder of the inbox and moves it into the library.
+    Accept(PathBuf),
 }
 
 impl FolderJob {
     fn folder(&self) -> &Path {
         match self {
-            FolderJob::Identify(folder) | FolderJob::Save(folder) | FolderJob::Move(folder, _) => {
-                folder
-            }
+            FolderJob::Identify(folder)
+            | FolderJob::Save(folder)
+            | FolderJob::Accept(folder)
+            | FolderJob::Move(folder, _) => folder,
         }
     }
 }
@@ -206,6 +211,7 @@ impl Service {
             let done = match &job {
                 FolderJob::Identify(folder) => Self::identify_folder(&shared, folder),
                 FolderJob::Save(folder) => Self::save_folder(&shared, folder),
+                FolderJob::Accept(folder) => Self::accept_folder(&shared, folder),
                 FolderJob::Move(folder, pattern) => {
                     Self::move_folder(&shared, folder, pattern, None)
                 }
@@ -309,6 +315,27 @@ impl Service {
         Ok(())
     }
 
+    fn accept_folder(shared: &Shared, folder: &Path) -> ApiResult<()> {
+        let (root, pattern) = {
+            let state = lock(&shared.state);
+            let settings = &state.config.settings;
+            let inbox = settings.inbox_folder.clone();
+            let root = settings
+                .library_folders
+                .iter()
+                .find(|f| inbox.as_ref().is_none_or(|inbox| !f.starts_with(inbox)))
+                .cloned();
+            let pattern = match settings.naming_pattern.as_str() {
+                "" => SUGGESTED_PATTERN.to_owned(),
+                pattern => pattern.to_owned(),
+            };
+            (root, pattern)
+        };
+        let root = root.ok_or_else(|| ApiError("no music folder to move it into".into()))?;
+        Self::save_folder(shared, folder)?;
+        Self::move_folder(shared, folder, &pattern, Some(&root))
+    }
+
     /// Has the saved playlists follow files that moved.
     fn follow_in_playlists(shared: &Shared, files: &[SavedFile]) {
         let moved: std::collections::HashMap<PathBuf, PathBuf> = files
@@ -353,6 +380,14 @@ impl Service {
             });
         }
         Ok(outcome)
+    }
+
+    fn library_inbox(&self) -> Option<PathBuf> {
+        lock(&self.shared.state)
+            .config
+            .settings
+            .inbox_folder
+            .clone()
     }
 
     /// The folders the library is made from.
@@ -448,6 +483,14 @@ impl Service {
             shared,
             ticker: None,
         };
+        let inbox = service.library_inbox();
+        if let Err(e) = service
+            .shared
+            .api
+            .with_db(|db| db.set_inbox(inbox.as_deref()))
+        {
+            log::warn!("could not read the inbox: {e}");
+        }
         service.with(State::begin);
         let shared = Arc::clone(&service.shared);
         service.ticker = Some(
@@ -509,6 +552,20 @@ impl ServerControl for Service {
     }
 
     fn set_settings(&self, settings: &ServerSettings) -> ApiResult<()> {
+        let mut settings = settings.clone();
+        // The inbox's music is read as the library's is, so its folder is one of them.
+        if let Some(inbox) = &settings.inbox_folder
+            && !settings
+                .library_folders
+                .iter()
+                .any(|f| inbox.starts_with(f))
+        {
+            settings.library_folders.push(inbox.clone());
+        }
+        let settings = &settings;
+        self.shared
+            .api
+            .with_db(|db| db.set_inbox(settings.inbox_folder.as_deref()))?;
         self.with(|state| state.set_settings(settings.clone()))?;
         self.shared
             .radio
@@ -612,6 +669,11 @@ impl ServerControl for Service {
                 .map(|folder| FolderJob::Move(folder.clone(), pattern.to_owned()))
                 .collect(),
         );
+        Ok(())
+    }
+
+    fn accept_folders(&self, folders: &[PathBuf]) -> ApiResult<()> {
+        self.start_jobs(folders.iter().cloned().map(FolderJob::Accept).collect());
         Ok(())
     }
 
@@ -1553,6 +1615,155 @@ mod tests {
             }
         }
         panic!("the scan did not end: {seen:?}");
+    }
+
+    /// Waits for the folders asked to be gone through, and for the scan they start.
+    fn until_organized(service: &Service) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline {
+            let status = service.organize_status().unwrap();
+            if status.waiting == 0 && status.current.is_none() {
+                assert_eq!(status.error, None);
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("the folders were not gone through");
+    }
+
+    /// Until the library's tracks are as `done` says, as scans run.
+    fn until_tracks(service: &Service, done: impl Fn(&[freya_protocol::Track]) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline {
+            let tracks = service.shared.api.all_tracks().unwrap();
+            if done(&tracks) && !service.is_scanning().unwrap() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!(
+            "the tracks did not become so: {:?}",
+            service.shared.api.all_tracks().unwrap()
+        );
+    }
+
+    #[test]
+    fn a_folder_is_saved_moved_undone_and_let_in_from_the_inbox() {
+        use freya_protocol::{TagField, TagMap};
+
+        let dir = temp_dir("organize");
+        let music = dir.join("music");
+        let inbox = dir.join("inbox");
+        std::fs::create_dir_all(&inbox).unwrap();
+        let config = ServiceConfig {
+            settings: ServerSettings {
+                library_folders: vec![music.clone(), inbox.clone()],
+                inbox_folder: Some(inbox.clone()),
+                watch_folders: false,
+                ..ServerSettings::default()
+            },
+            scans_allowed: true,
+            ..ServiceConfig::default()
+        };
+        let service = Service::start(dir.join("library.db"), None, config).unwrap();
+        let events = service.events().unwrap();
+        until_ended(&events);
+        let path = music.join("sine.flac");
+        let album = |value: &str| {
+            [TagDraft {
+                path: path.clone(),
+                changes: TagMap::from([
+                    (TagField::Album, value.to_owned()),
+                    (TagField::AlbumArtist, "Metallica".to_owned()),
+                    (TagField::Title, "Battery".to_owned()),
+                    (TagField::Track, "1".to_owned()),
+                ]),
+            }]
+        };
+
+        // Saved: the library reads what the file now says.
+        service.shared.api.set_tag_drafts(&album("Load")).unwrap();
+        let saved = service
+            .save_tag_drafts(std::slice::from_ref(&path))
+            .unwrap();
+        assert_eq!(saved.saved, 1, "{:?}", saved.failed);
+        until_tracks(&service, |t| {
+            t.len() == 1 && t[0].album.as_deref() == Some("Load")
+        });
+
+        // Moved: the same track, somewhere else.
+        service.record_play(&path, None, SystemTime::now()).unwrap();
+        service.save().unwrap();
+        let pattern = "{album_artist}/{album}/{track} {title}";
+        let plan = service.plan_moves(&music, pattern).unwrap();
+        assert_eq!(plan.len(), 1, "{plan:?}");
+        service
+            .move_folders(std::slice::from_ref(&music), pattern)
+            .unwrap();
+        until_organized(&service);
+        let moved = music.join("Metallica").join("Load").join("01 Battery.flac");
+        assert!(moved.is_file());
+        until_tracks(&service, |t| t.len() == 1 && t[0].path == moved);
+        let played = service.shared.api.most_played(10).unwrap();
+        assert_eq!(
+            (played.len(), played[0].plays),
+            (1, 1),
+            "the play went along"
+        );
+
+        // Undone: it is back where it was.
+        let last = service.shared.api.tag_saves(1).unwrap()[0].id;
+        let undone = service.undo_tag_save(last).unwrap();
+        assert!(undone.failed.is_empty(), "{:?}", undone.failed);
+        assert!(path.is_file());
+        assert!(!music.join("Metallica").exists());
+        until_tracks(&service, |t| t.len() == 1 && t[0].path == path);
+
+        // Waiting in the inbox it is not the library's; let in, it is.
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../freya-decode/tests/fixtures/sine.mp3");
+        let folder = inbox.join("New stuff");
+        std::fs::create_dir_all(&folder).unwrap();
+        let new = folder.join("sine.mp3");
+        std::fs::copy(fixture, &new).unwrap();
+        service.scan_only(std::slice::from_ref(&inbox)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let folders = service.shared.api.organize_folders().unwrap();
+            if folders.iter().any(|f| f.path == folder && f.inbox) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "{folders:?}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(service.shared.api.all_tracks().unwrap().len(), 1);
+        service
+            .shared
+            .api
+            .set_tag_drafts(&[TagDraft {
+                path: new.clone(),
+                changes: TagMap::from([
+                    (TagField::Album, "Reload".to_owned()),
+                    (TagField::AlbumArtist, "Metallica".to_owned()),
+                    (TagField::Title, "Fuel".to_owned()),
+                    (TagField::Track, "1".to_owned()),
+                    (TagField::Date, "1997".to_owned()),
+                ]),
+            }])
+            .unwrap();
+        service
+            .accept_folders(std::slice::from_ref(&folder))
+            .unwrap();
+        until_organized(&service);
+        assert!(!folder.exists(), "the folder emptied goes");
+        let at = music
+            .join("Metallica")
+            .join("(1997) Reload")
+            .join("01 Fuel.mp3");
+        assert!(at.is_file());
+        until_tracks(&service, |t| t.len() == 2 && t.iter().any(|t| t.path == at));
+        drop(service);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

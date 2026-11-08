@@ -11519,6 +11519,7 @@ component OrganizeView inherits Rectangle {
                 { key: "review", name: "To review" },
                 { key: "ready", name: "Ready to save" },
                 { key: "identified", name: "Identified" },
+                { key: "inbox", name: "Inbox" },
             ]: FilterChip {
                 text: choice.name;
                 selected: Organize.filter == choice.key;
@@ -11615,6 +11616,15 @@ component OrganizeView inherits Rectangle {
                                 text: "Undo last save";
                                 clicked => { Organize.act("undo", ""); }
                             }
+                            if Organize.in-inbox: TextButton {
+                                text: "Move into library";
+                                primary: !Organize.can-save;
+                                clicked => { Organize.act("accept", ""); }
+                            }
+                            if Organize.filter == "inbox": TextButton {
+                                text: "Move all ready";
+                                clicked => { Organize.act("accept-all", ""); }
+                            }
                         }
                         if Organize.message != "": Text {
                             text: Organize.message;
@@ -11668,6 +11678,17 @@ component OrganizeView inherits Rectangle {
                             }
                         }
                         Text {
+                            text: "Files";
+                            font-size: 15px;
+                            font-weight: 700;
+                            color: Theme.text;
+                        }
+                        VerticalLayout {
+                            for item in Organize.files: OrganizeFileRow {
+                                item: item;
+                            }
+                        }
+                        Text {
                             text: "File names";
                             font-size: 15px;
                             font-weight: 700;
@@ -11699,6 +11720,18 @@ component OrganizeView inherits Rectangle {
                             }
                         }
                         Text {
+                            text: "Inbox";
+                            font-size: 15px;
+                            font-weight: 700;
+                            color: Theme.text;
+                        }
+                        OrganizeSettingField {
+                            name: "Inbox folder";
+                            value: Organize.inbox;
+                            action: "set-inbox";
+                            placeholder: "A folder on the server new music waits in";
+                        }
+                        Text {
                             text: "Recognizing by sound";
                             font-size: 15px;
                             font-weight: 700;
@@ -11715,17 +11748,6 @@ component OrganizeView inherits Rectangle {
                             font-size: 13px;
                             color: Theme.text-secondary;
                             wrap: word-wrap;
-                        }
-                        Text {
-                            text: "Files";
-                            font-size: 15px;
-                            font-weight: 700;
-                            color: Theme.text;
-                        }
-                        VerticalLayout {
-                            for item in Organize.files: OrganizeFileRow {
-                                item: item;
-                            }
                         }
                     }
                 }

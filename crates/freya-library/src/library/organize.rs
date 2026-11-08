@@ -175,6 +175,12 @@ impl Library {
             folder.drafts += u32::from(drafted.contains(&path));
             *folder.albums.entry(album.unwrap_or_default()).or_default() += 1;
         }
+        let inbox: Option<PathBuf> = self
+            .db
+            .prepare_cached("SELECT folder FROM inbox")?
+            .query_row([], |row| row.get::<_, String>(0))
+            .optional()?
+            .map(PathBuf::from);
         let mut list: Vec<OrganizeFolder> = folders
             .into_iter()
             .map(|(path, folder)| {
@@ -191,6 +197,7 @@ impl Library {
                     FolderState::Unidentified
                 };
                 OrganizeFolder {
+                    inbox: inbox.as_ref().is_some_and(|inbox| path.starts_with(inbox)),
                     parsed: names::parse_folder_name(&name),
                     path,
                     group,

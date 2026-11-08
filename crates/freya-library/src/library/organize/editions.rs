@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use freya_protocol::{AlbumEdition, plain_name};
-use rusqlite::{Transaction, params};
+use rusqlite::{OptionalExtension, Transaction, params};
 
 use super::carry_album;
 use super::names::{album_folder, comparable, parse_folder_name, split_edition};
@@ -17,6 +17,11 @@ use crate::library::Result;
 pub(in crate::library) const SCHEMA: &str = "
     -- The tracks shown as the library's own: of an album's editions, only the chosen one's.
     CREATE VIEW IF NOT EXISTS listed_tracks AS SELECT * FROM tracks WHERE alternate = 0;
+    -- The folder new music waits in, kept out of the library's lists until it is let in.
+    CREATE TABLE IF NOT EXISTS inbox (
+        only INTEGER NOT NULL PRIMARY KEY CHECK (only = 1),
+        folder TEXT NOT NULL
+    );
     -- Which of an album's editions the user chose, by the folder it is in.
     CREATE TABLE IF NOT EXISTS preferred_editions (
         album_artist TEXT NOT NULL,
@@ -97,8 +102,20 @@ impl Joined {
     }
 }
 
-/// The album each folder holds, once for each album it has.
-fn read_copies(tx: &Transaction<'_>) -> Result<Vec<Copy>> {
+/// What marks a track as waiting in the inbox.
+const IN_INBOX: i64 = 2;
+
+fn inbox_of(tx: &Transaction<'_>) -> Result<Option<PathBuf>> {
+    Ok(tx
+        .prepare_cached("SELECT folder FROM inbox")?
+        .query_row([], |row| row.get::<_, String>(0))
+        .optional()?
+        .map(PathBuf::from))
+}
+
+/// The album each folder holds, once for each album it has; the inbox's are not yet the
+/// library's.
+fn read_copies(tx: &Transaction<'_>, inbox: Option<&Path>) -> Result<Vec<Copy>> {
     let mut statement = tx.prepare_cached(
         "SELECT id, path, album_artist, album, title, disc, track, edition, release_group_id,
                 release_year
@@ -108,6 +125,9 @@ fn read_copies(tx: &Transaction<'_>) -> Result<Vec<Copy>> {
     let mut copies: BTreeMap<(PathBuf, String, String), Copy> = BTreeMap::new();
     while let Some(row) = rows.next()? {
         let path: String = row.get(1)?;
+        if inbox.is_some_and(|inbox| Path::new(&path).starts_with(inbox)) {
+            continue;
+        }
         let artist: String = row.get(2)?;
         let album: String = row.get(3)?;
         let folder = album_folder(Path::new(&path));
@@ -201,7 +221,8 @@ impl Library {
     /// a name. Run after the tracks changed.
     pub fn assign_editions(&mut self) -> Result<()> {
         let tx = self.db.transaction()?;
-        let copies = read_copies(&tx)?;
+        let inbox = inbox_of(&tx)?;
+        let copies = read_copies(&tx, inbox.as_deref())?;
         let albums = find_albums(&copies);
         let mut listed: HashMap<i64, (bool, Option<String>, String)> = HashMap::new();
         for album in &albums {
@@ -249,13 +270,20 @@ impl Library {
             }
         }
         // Only what differs, so an unchanged library is not written to on every scan.
-        let current: Vec<(i64, bool)> = tx
-            .prepare_cached("SELECT id, alternate FROM tracks WHERE alternate != 0")?
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        let tracks: Vec<(i64, String, i64)> = tx
+            .prepare_cached("SELECT id, path, alternate FROM tracks")?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
             .collect::<Result<_>>()?;
-        for (id, _) in current {
-            if !listed.contains_key(&id) {
-                tx.execute("UPDATE tracks SET alternate = 0 WHERE id = ?1", [id])?;
+        for (id, path, alternate) in tracks {
+            let waiting = inbox
+                .as_deref()
+                .is_some_and(|inbox| Path::new(&path).starts_with(inbox));
+            let should = if waiting { IN_INBOX } else { 0 };
+            if alternate != should && !listed.contains_key(&id) {
+                tx.execute(
+                    "UPDATE tracks SET alternate = ?2 WHERE id = ?1",
+                    params![id, should],
+                )?;
             }
         }
         for (id, (alternate, edition, name)) in listed {
@@ -268,6 +296,18 @@ impl Library {
         tx.commit()
     }
 
+    /// Has new music wait in `folder`, kept out of the library's lists until it is let in.
+    pub fn set_inbox(&mut self, folder: Option<&Path>) -> Result<()> {
+        self.db.execute("DELETE FROM inbox", [])?;
+        if let Some(folder) = folder {
+            self.db.execute(
+                "INSERT INTO inbox (only, folder) VALUES (1, ?1)",
+                [folder.to_string_lossy()],
+            )?;
+        }
+        self.assign_editions()
+    }
+
     /// The editions of the album, when it has several.
     pub fn album_editions(
         &self,
@@ -276,7 +316,7 @@ impl Library {
     ) -> Result<Vec<AlbumEdition>> {
         let mut statement = self.db.prepare_cached(
             "SELECT path, edition, alternate, release_year FROM tracks
-             WHERE album_artist IS ?1 AND album IS ?2",
+             WHERE album_artist IS ?1 AND album IS ?2 AND alternate != 2",
         )?;
         let rows = statement.query_map(params![artist, album], |row| {
             Ok((

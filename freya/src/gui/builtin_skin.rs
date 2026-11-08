@@ -1320,6 +1320,8 @@ skin_api! {
         Organize."status" => set_status, get_status;
         Organize."pattern" => set_pattern, get_pattern;
         Organize."acoustid-key" => set_acoustid_key, get_acoustid_key;
+        Organize."inbox" => set_inbox, get_inbox;
+        Organize."in-inbox" => set_in_inbox, get_in_inbox;
         Organize."moves" => set_moves, get_moves;
         Organize."candidates" => set_candidates, get_candidates;
         Organize."files" => set_files, get_files;

@@ -235,3 +235,72 @@ fn copies_nothing_calls_editions_stay_as_they_were() {
         4
     );
 }
+
+#[test]
+fn music_in_the_inbox_is_not_the_librarys_yet() {
+    let mut library = Library::open_in_memory().unwrap();
+    album(&library, "/m/Inbox/New", "New Album", &["One"], None);
+    album(&library, "/m/Metallica/Load", "Load", &["Two"], None);
+    library.set_inbox(Some(Path::new("/m/Inbox"))).unwrap();
+    assert_eq!(names(&library), ["Load"]);
+    assert!(
+        library
+            .all_tracks()
+            .unwrap()
+            .iter()
+            .all(|t| t.title.as_deref() == Some("Two"))
+    );
+
+    let folders = library.organize_folders().unwrap();
+    assert!(folders.iter().any(|f| f.name == "New" && f.inbox));
+    assert!(folders.iter().any(|f| f.name == "Load" && !f.inbox));
+
+    library.set_inbox(None).unwrap();
+    assert_eq!(names(&library).len(), 2);
+}
+
+#[test]
+fn music_let_in_from_the_inbox_is_listed() {
+    use std::time::SystemTime;
+
+    use freya_protocol::TagMap;
+
+    use crate::library::organize::SavedFile;
+
+    let mut library = Library::open_in_memory().unwrap();
+    album(&library, "/m/Inbox/New", "New Album", &["One"], None);
+    library.set_inbox(Some(Path::new("/m/Inbox"))).unwrap();
+    assert!(names(&library).is_empty());
+    let moved = SavedFile {
+        path: "/m/Inbox/New/01.flac".into(),
+        path_after: "/m/Metallica/New/01.flac".into(),
+        before: TagMap::new(),
+        after: TagMap::new(),
+    };
+    library
+        .note_tag_save(Path::new("/m/Metallica/New"), &[moved], SystemTime::now())
+        .unwrap();
+    library.assign_editions().unwrap();
+    assert_eq!(names(&library), ["New Album"]);
+}
+
+#[test]
+fn an_inbox_copy_is_no_edition_of_what_is_in_the_library() {
+    let mut library = Library::open_in_memory().unwrap();
+    album(&library, "/m/Inbox/Load (Deluxe)", "Load", &["One"], None);
+    album(&library, "/m/Metallica/Load", "Load", &["One"], None);
+    library.set_inbox(Some(Path::new("/m/Inbox"))).unwrap();
+    assert!(
+        library
+            .album_editions(Some("Metallica"), Some("Load"))
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        library
+            .album_tracks(Some("Metallica"), Some("Load"))
+            .unwrap()
+            .len(),
+        1
+    );
+}

@@ -196,6 +196,8 @@ pub struct OrganizeFolder {
     pub state: FolderState,
     /// Whether its files are of different albums, not one album's.
     pub mixed: bool,
+    /// Whether it waits in the inbox, not yet the library's.
+    pub inbox: bool,
 }
 
 /// A file of a folder, as its tags are on disk.
