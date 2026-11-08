@@ -11201,15 +11201,19 @@ component OrganizeRowView inherits Rectangle {
     }
 }
 
-/// The pattern files are named by.
-component OrganizePatternField inherits HorizontalLayout {
-    property <string> kept: Organize.pattern;
-    changed kept => { input.text = root.kept; }
-    init => { input.text = root.kept; }
+/// A setting of Organize, kept when the keyboard leaves it.
+component OrganizeSettingField inherits HorizontalLayout {
+    in property <string> value;
+    in property <string> action;
+    in property <string> placeholder;
+    in property <string> name;
+    in property <bool> suggest;
+    changed value => { input.text = root.value; }
+    init => { input.text = root.value; }
 
     function commit() {
-        if (input.text != Organize.pattern) {
-            Organize.act("set-pattern", input.text);
+        if (input.text != root.value) {
+            Organize.act(root.action, input.text);
         }
     }
 
@@ -11226,7 +11230,7 @@ component OrganizePatternField inherits HorizontalLayout {
         if input.text == "": Text {
             x: 10px;
             width: parent.width - 20px;
-            text: "Files stay where they are";
+            text: root.placeholder;
             color: Theme.text-secondary;
             vertical-alignment: center;
             overflow: elide;
@@ -11241,7 +11245,7 @@ component OrganizePatternField inherits HorizontalLayout {
             selection-foreground-color: Theme.text;
             vertical-alignment: center;
             accessible-role: text-input;
-            accessible-label: "File name pattern";
+            accessible-label: root.name;
             accepted => { root.commit(); }
             changed has-focus => {
                 if (!self.has-focus) {
@@ -11250,7 +11254,7 @@ component OrganizePatternField inherits HorizontalLayout {
             }
         }
     }
-    if Organize.pattern == "": TextButton {
+    if root.suggest && root.value == "": TextButton {
         text: "Use suggested";
         clicked => { Organize.act("suggest-pattern", ""); }
     }
@@ -11669,7 +11673,13 @@ component OrganizeView inherits Rectangle {
                             font-weight: 700;
                             color: Theme.text;
                         }
-                        OrganizePatternField { }
+                        OrganizeSettingField {
+                            name: "File name pattern";
+                            value: Organize.pattern;
+                            action: "set-pattern";
+                            placeholder: "Files stay where they are";
+                            suggest: true;
+                        }
                         if Organize.pattern != "" && Organize.moves.length > 0: HorizontalLayout {
                             spacing: 8px;
                             alignment: start;
@@ -11687,6 +11697,24 @@ component OrganizeView inherits Rectangle {
                             for shown in Organize.moves: OrganizeCandidateRow {
                                 entry: shown;
                             }
+                        }
+                        Text {
+                            text: "Recognizing by sound";
+                            font-size: 15px;
+                            font-weight: 700;
+                            color: Theme.text;
+                        }
+                        OrganizeSettingField {
+                            name: "AcoustID application key";
+                            value: Organize.acoustid-key;
+                            action: "set-acoustid-key";
+                            placeholder: "AcoustID application key";
+                        }
+                        Text {
+                            text: "With a key from acoustid.org, folders their tags do not find are recognized by their sound: a fingerprint of each file is sent to AcoustID.";
+                            font-size: 13px;
+                            color: Theme.text-secondary;
+                            wrap: word-wrap;
                         }
                         Text {
                             text: "Files";

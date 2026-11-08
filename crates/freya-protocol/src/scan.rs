@@ -127,6 +127,10 @@ pub struct ServerSettings {
     /// Whether the radio directory's stations come from Radio Browser, which is asked for them
     /// about once a week, and told which are played.
     pub radio_directory_online: bool,
+    /// The user's AcoustID application key, to know files their tags do not find by their
+    /// sound.
+    #[serde(default)]
+    pub acoustid_key: Option<String>,
     /// Where a file belongs by its tags, as a pattern; empty to leave files where they are.
     #[serde(default)]
     pub naming_pattern: String,
@@ -154,6 +158,7 @@ impl Default for ServerSettings {
             album_kinds_online: true,
             radio_directory_online: true,
             fanart_key: None,
+            acoustid_key: None,
             naming_pattern: String::new(),
             network: true,
             name: String::new(),

@@ -110,6 +110,7 @@ struct Shared {
     /// What waits to be gone through among the music's folders.
     organizing: Mutex<Organizing>,
     musicbrainz: crate::organize::MusicBrainz,
+    acoustid: crate::fingerprint::AcoustId,
 }
 
 /// A folder of music to be gone through.
@@ -229,9 +230,17 @@ impl Service {
 
     fn identify_folder(shared: &Shared, folder: &Path) -> ApiResult<()> {
         let files = Self::files_of(shared, folder)?;
-        let matching = crate::organize::folder_to_match(folder, &files);
-        let identified =
+        let mut matching = crate::organize::folder_to_match(folder, &files);
+        let mut identified =
             freya_library::identify::identify(&matching, &shared.musicbrainz).map_err(ApiError)?;
+        let key = lock(&shared.state).config.settings.acoustid_key.clone();
+        if let Some(key) = key.filter(|_| identified.state == ProposalState::None) {
+            matching.heard_on = Self::heard_on(shared, &key, &matching);
+            if !matching.heard_on.is_empty() {
+                identified = freya_library::identify::identify(&matching, &shared.musicbrainz)
+                    .map_err(ApiError)?;
+            }
+        }
         let api = &shared.api;
         api.with_db(|db| db.set_tag_drafts(&identified.drafts))?;
         let proposal = FolderProposal {
@@ -241,6 +250,26 @@ impl Service {
             candidates: identified.candidates,
         };
         api.with_db(|db| db.set_folder_proposal(&proposal))
+    }
+
+    /// The releases the files of a folder sound like they are on, the likeliest first.
+    fn heard_on(
+        shared: &Shared,
+        key: &str,
+        matching: &freya_library::identify::FolderToMatch,
+    ) -> Vec<String> {
+        let found: Vec<Vec<String>> = matching
+            .files
+            .iter()
+            .filter_map(|file| {
+                let heard = shared
+                    .acoustid
+                    .releases(key, &file.path, file.duration?)
+                    .inspect_err(|e| log::warn!("{}: {e}", file.path.display()));
+                heard.ok()
+            })
+            .collect();
+        crate::fingerprint::most_shared(found)
     }
 
     fn save_folder(shared: &Shared, folder: &Path) -> ApiResult<()> {
@@ -413,6 +442,7 @@ impl Service {
             users: Mutex::new(None),
             organizing: Mutex::default(),
             musicbrainz: Default::default(),
+            acoustid: Default::default(),
         });
         let mut service = Self {
             shared,

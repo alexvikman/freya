@@ -48,6 +48,7 @@ enum Answer {
     Proposal(PathBuf, Option<FolderProposal>),
     Status(OrganizeStatus),
     Pattern(String),
+    Key(String),
     Moves(PathBuf, Result<Vec<PlannedMove>, String>),
     Saved(Result<SaveOutcome, String>, &'static str),
     Failed(String),
@@ -79,6 +80,8 @@ pub struct OrganizeState {
     status: OrganizeStatus,
     /// Where files belong by their tags, once the server said.
     pattern: Option<String>,
+    /// The AcoustID key, once the server said.
+    acoustid_key: String,
     moves: Vec<PlannedMove>,
     message: String,
     /// Things asked of the server that have not been answered.
@@ -101,6 +104,7 @@ impl Default for OrganizeState {
             proposal: None,
             status: OrganizeStatus::default(),
             pattern: None,
+            acoustid_key: String::new(),
             moves: Vec::new(),
             message: String::new(),
             waiting: 0,
@@ -171,10 +175,18 @@ impl OrganizeState {
             && let Some(asking) = remote.clone()
         {
             self.waiting += 1;
+            let answers = Arc::clone(&self.answers);
             errand(&self.answers, move || match asking.settings() {
-                Ok(settings) => Answer::Pattern(settings.naming_pattern),
+                Ok(settings) => {
+                    answers
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .push(Answer::Key(settings.acoustid_key.unwrap_or_default()));
+                    Answer::Pattern(settings.naming_pattern)
+                }
                 Err(e) => Answer::Failed(e.to_string()),
             });
+            self.waiting += 1;
         }
         if self.asked.is_none_or(|at| at.elapsed() >= ASK_EVERY) {
             self.asked = Some(Instant::now());
@@ -210,6 +222,7 @@ impl OrganizeState {
                 self.pattern = Some(pattern);
                 self.ask_moves(remote);
             }
+            Answer::Key(key) => self.acoustid_key = key,
             Answer::Moves(folder, moves) => {
                 if self.selected.as_deref() == Some(folder.as_path()) {
                     match moves {
@@ -352,6 +365,15 @@ impl OrganizeState {
             "identify-all" => self.command(&remote, |r| r.identify_folders(&[])),
             "save-ready" => self.command(&remote, |r| r.save_ready_folders()),
             "stop" => self.command(&remote, |r| r.stop_organizing()),
+            "set-acoustid-key" => {
+                let key = value.trim().to_owned();
+                self.acoustid_key = key.clone();
+                self.command(&remote, move |r| {
+                    let mut settings = r.settings()?;
+                    settings.acoustid_key = Some(key).filter(|key| !key.is_empty());
+                    r.set_settings(&settings)
+                });
+            }
             "set-pattern" => self.set_pattern(&remote, value),
             "suggest-pattern" => self.set_pattern(&remote, SUGGESTED_PATTERN),
             "move" => {
@@ -754,6 +776,7 @@ impl OrganizeState {
                 "pattern",
                 skin_state::string(self.pattern.clone().unwrap_or_default()),
             ),
+            ("acoustid-key", skin_state::string(&self.acoustid_key)),
         ];
         Shown {
             rows: self.rows(),

@@ -6,6 +6,7 @@ mod answers;
 pub mod autostart;
 pub mod backup;
 pub mod discovery;
+mod fingerprint;
 mod folder_watch;
 mod folders;
 #[cfg(test)]

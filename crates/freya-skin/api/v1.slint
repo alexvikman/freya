@@ -1213,6 +1213,8 @@ export global Organize {
     in property <string> status;
     /// Where files belong by their tags; empty leaves them where they are.
     in property <string> pattern;
+    /// The AcoustID key, for finding files by their sound; empty means they are not.
+    in property <string> acoustid-key;
     /// Where the files of the folder chosen would go by `pattern`, as rows of kind "move":
     /// `state` says why one cannot.
     in property <[OrganizeRow]> moves;
@@ -1224,7 +1226,7 @@ export global Organize {
     in property <string> scope;
     /// "filter", "search", "select" a folder or "select-file" by their keys, "" for all its
     /// files; "play-file", "save", "discard" or "undo"; "identify" the folder chosen,
-    /// "identify-all", "choose" a candidate by its key, "save-ready" or "stop"; "set-pattern",
+    /// "identify-all", "choose" a candidate by its key, "save-ready" or "stop"; "set-pattern", "set-acoustid-key",
     /// "suggest-pattern", "move" the folder chosen or "move-all".
     callback act(string, string);
     /// Has a field of what is chosen become a value.

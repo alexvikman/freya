@@ -202,6 +202,28 @@ impl Decoding {
     }
 }
 
+/// The first `most` of the file at `path` as 16-bit samples, interleaved, with its rate and
+/// channels: what a fingerprint of it is made from.
+pub fn samples_of(
+    path: &std::path::Path,
+    most: std::time::Duration,
+) -> Result<(Vec<i16>, u32, u32), Error> {
+    let file = File::open(path).map_err(|e| Error(e.to_string()))?;
+    let extension = path.extension().and_then(|e| e.to_str());
+    let mut decoding = Decoding::open(file, extension)?;
+    let wanted = (most.as_secs_f64() * f64::from(decoding.rate)) as usize * decoding.channels;
+    let mut samples = Vec::new();
+    let mut part = Vec::new();
+    while samples.len() < wanted && decoding.next(&mut part)? {
+        samples.extend(
+            part.iter()
+                .map(|sample| (sample.clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16),
+        );
+    }
+    samples.truncate(wanted);
+    Ok((samples, decoding.rate, decoding.channels as u32))
+}
+
 /// A file to be made smaller: how, and how long it will be.
 pub struct Plan {
     decoding: Decoding,

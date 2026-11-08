@@ -1319,6 +1319,7 @@ skin_api! {
         Organize."can-undo" => set_can_undo, get_can_undo;
         Organize."status" => set_status, get_status;
         Organize."pattern" => set_pattern, get_pattern;
+        Organize."acoustid-key" => set_acoustid_key, get_acoustid_key;
         Organize."moves" => set_moves, get_moves;
         Organize."candidates" => set_candidates, get_candidates;
         Organize."files" => set_files, get_files;

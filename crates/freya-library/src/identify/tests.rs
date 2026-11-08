@@ -50,6 +50,7 @@ fn puppets() -> FolderToMatch {
         album: Some("Master Of Puppets".to_owned()),
         edition: Some("2016 Remastered".to_owned()),
         release_id: None,
+        heard_on: Vec::new(),
         files: vec![file(1, "Battery", 312), file(2, "Master Of Puppets", 515)],
     }
 }
@@ -284,5 +285,19 @@ fn takes_the_album_from_its_tags_or_its_folder() {
     assert_eq!(
         album_and_edition(None, &folder).0.as_deref(),
         Some("From Folder")
+    );
+}
+
+#[test]
+fn a_release_it_was_recognized_on_is_looked_at_without_a_title() {
+    let mut fake = Fake::with(vec![]);
+    fake.releases
+        .insert("heard".to_owned(), release("heard", "2016", "", tracks()));
+    let mut folder = puppets();
+    folder.album = None;
+    folder.heard_on = vec!["heard".to_owned()];
+    assert_eq!(
+        identify(&folder, &fake).unwrap().chosen.as_deref(),
+        Some("heard")
     );
 }

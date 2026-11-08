@@ -42,6 +42,8 @@ pub struct FolderToMatch {
     pub edition: Option<String>,
     /// The release its files say they are, if any.
     pub release_id: Option<String>,
+    /// Releases its sound was recognized as on, the likeliest first.
+    pub heard_on: Vec<String>,
     pub files: Vec<FileToMatch>,
 }
 
@@ -434,7 +436,12 @@ type Scored = (Release, Vec<(usize, usize)>, f64);
 
 /// Finds which release `folder` is, and what its files' tags should say for that.
 pub fn identify(folder: &FolderToMatch, source: &dyn Source) -> Result<Identified, String> {
-    let mut ids: Vec<String> = folder.release_id.iter().cloned().collect();
+    let mut ids: Vec<String> = folder
+        .release_id
+        .iter()
+        .chain(&folder.heard_on)
+        .cloned()
+        .collect();
     if let Some(query) = search_query(folder) {
         let mut found = source.search(&query)?;
         // The same number of tracks first; among those as the search ranks them.

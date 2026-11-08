@@ -176,6 +176,7 @@ pub fn folder_to_match(folder: &Path, files: &[OrganizeFile]) -> FolderToMatch {
         album,
         edition,
         release_id: most_said(TagField::ReleaseId),
+        heard_on: Vec::new(),
         files: taggable
             .iter()
             .map(|file| FileToMatch {
