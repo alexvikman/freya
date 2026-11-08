@@ -128,6 +128,20 @@ macro_rules! with_library_data {
             /// When each of a playlist's tracks was added to it.
             fn playlist_added(playlist: &str) -> Vec<($crate::PlaylistTrack, ::std::time::SystemTime)>;
             fn note_playlist_added(playlist: &str, tracks: &[$crate::PlaylistTrack], at: ::std::time::SystemTime) -> ();
+            /// The editions of the album, when it has several.
+            fn album_editions(artist: Option<&str>, album: Option<&str>) -> Vec<$crate::AlbumEdition>;
+            /// Makes the edition in `folder` the one the album shows.
+            fn set_preferred_edition(artist: &str, album: &str, folder: &::std::path::Path) -> ();
+            /// The releases the album's folder `folder` may be, when it was asked.
+            fn folder_proposal(folder: &::std::path::Path) -> Option<$crate::FolderProposal>;
+            /// The library's folders of music.
+            fn organize_folders() -> Vec<$crate::OrganizeFolder>;
+            /// What is to be changed in the files at `paths`, those that have a draft.
+            fn tag_drafts(paths: &[::std::path::PathBuf]) -> Vec<$crate::TagDraft>;
+            /// Keeps `drafts`, in place of what those files had; one that changes nothing goes.
+            fn set_tag_drafts(drafts: &[$crate::TagDraft]) -> ();
+            /// The last `limit` saves, the latest first.
+            fn tag_saves(limit: usize) -> Vec<$crate::TagSave>;
         }
     };
 }
@@ -149,6 +163,28 @@ macro_rules! with_server_control {
             /// Looks through `folders`, within the library's, only.
             fn scan_only(folders: &[::std::path::PathBuf]) -> ();
             fn stop_scan() -> ();
+            /// The files of the album's folder `folder`, as their tags are on disk now.
+            fn organize_files(folder: &::std::path::Path) -> Vec<$crate::OrganizeFile>;
+            /// Asks which release each of `folders` is, in the background; those not yet
+            /// identified when none are named.
+            fn identify_folders(folders: &[::std::path::PathBuf]) -> ();
+            /// Has `folder` be the release `release`, as the user chose.
+            fn choose_release(folder: &::std::path::Path, release: &str) -> ();
+            /// Saves every folder ready to save, in the background.
+            fn save_ready_folders() -> ();
+            /// Where the files of the album's folder `folder` would go by `pattern`.
+            fn plan_moves(folder: &::std::path::Path, pattern: &str) -> Vec<$crate::PlannedMove>;
+            /// Moves the files of `folders` to where `pattern` says, in the background.
+            fn move_folders(folders: &[::std::path::PathBuf], pattern: &str) -> ();
+            /// Saves `folders` from the inbox and moves them into the library, in the background.
+            fn accept_folders(folders: &[::std::path::PathBuf]) -> ();
+            /// Takes away what waits to be gone through.
+            fn stop_organizing() -> ();
+            fn organize_status() -> $crate::OrganizeStatus;
+            /// Writes the drafts of the files at `paths` to them, and scans them.
+            fn save_tag_drafts(paths: &[::std::path::PathBuf]) -> $crate::SaveOutcome;
+            /// Puts the files of the save `save` back as they were.
+            fn undo_tag_save(save: i64) -> $crate::SaveOutcome;
             /// Asks the internet what `artists` lack, every artist when none, once no scan runs.
             fn fetch(artists: Option<&[String]>) -> ();
             /// Notes that the track at `path` was played at `at`; whether it is in the library
@@ -303,6 +339,7 @@ with_server_control!(calls {
 /// server's settings, which hold the admin's own keys. A call not named here is the admin's alone, so one added
 /// later is too until it is named.
 pub const LISTENER_CALLS: &[&str] = &[
+    "album_editions",
     "stats",
     "artists",
     "artists_by",
@@ -363,6 +400,11 @@ pub const OWNER_CALLS: &[&str] = &[
 /// kept, and a client's own call of it may have changed the library; so one added later is
 /// read anew each time until it is named.
 pub const CACHED_CALLS: &[&str] = &[
+    "album_editions",
+    "folder_proposal",
+    "organize_folders",
+    "tag_drafts",
+    "tag_saves",
     "stats",
     "artists",
     "artists_by",
@@ -430,6 +472,7 @@ macro_rules! copied_args {
 
 copied_args!(
     usize,
+    i64,
     u32,
     bool,
     Option<[u8; 3]>,
@@ -486,6 +529,13 @@ impl<'a> WireArg<'a> for Option<&'a Path> {
 impl<'a> WireArg<'a> for &'a Path {
     type Owned = std::path::PathBuf;
     fn lend(owned: &'a std::path::PathBuf) -> Self {
+        owned
+    }
+}
+
+impl<'a> WireArg<'a> for &'a [crate::TagDraft] {
+    type Owned = Vec<crate::TagDraft>;
+    fn lend(owned: &'a Vec<crate::TagDraft>) -> Self {
         owned
     }
 }

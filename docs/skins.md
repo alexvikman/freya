@@ -259,6 +259,27 @@ What was played and added lately, as a feed by day, apart from the library's sec
 | `toggle(index)` | Unfolds or folds a row's songs |
 | `open(index)` | Opens a row's album or playlist, or plays its station |
 
+### `Organize`
+
+Going through the music's folders and changing what their files say, for an admin (`Server.admin`). Optional. Freya fills it while `App.view` is "organize".
+
+| Property | Type | |
+|---|---|---|
+| `rows` | `[OrganizeRow]` | The folders, with headings: `kind` ("group" or "folder"), `title`, `detail`, `state` ("unidentified", "review", "ready" or "identified"), `key`, `selected` |
+| `filter` | string | "all", "unidentified", "review", "ready", "identified" or "inbox" |
+| `summary`, `status`, `message` | string | How many folders; what the server goes through; what the last thing done came to |
+| `title`, `detail`, `scope` | string | The folder chosen, its path, and what `fields` is of |
+| `busy`, `can-save`, `can-undo`, `in-inbox` | bool | |
+| `fields` | `[OrganizeField]` | The tags of what is chosen: `field`, `label`, `current`, `draft`, `changed`, `several` |
+| `files` | `[OrganizeFile]` | The folder's files: `key`, `number`, `title`, `new-title`, `file`, `length`, `changed`, `selected`, `note` |
+| `candidates`, `moves` | `[OrganizeRow]` | The releases it may be; where its files would go |
+| `pattern`, `inbox`, `acoustid-key` | string | The settings of organizing |
+
+| Callback | |
+|---|---|
+| `act(action, value)` | "filter", "search", "select", "select-file", "play-file", "save", "discard", "undo", "identify", "identify-all", "choose", "save-ready", "stop", "set-pattern", "suggest-pattern", "set-acoustid-key", "set-inbox", "move", "move-all", "accept" or "accept-all" |
+| `edit-field(field, value)` | Has a field of what is chosen become a value |
+
 ### `Radio`
 
 Internet radio. The stations the server keeps for its users, none at first: its admins (`Server.admin`) add and remove them; its listeners play them.

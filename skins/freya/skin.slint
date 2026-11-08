@@ -4,11 +4,11 @@
 // contrast against the background it is drawn on (WCAG AA), light and dark mode follow the
 // system.
 
-import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, Recents, RecentRow, App, Updates, LastFm, Server, ServerDevice, ServerUser, FoundServer, PlaybackState, Shortcuts, TrackRow, LibraryRow, AlbumPage, ArtistPage, ArtistDraft, PictureChoice, MatchChoice, AlbumMatchDraft, AlbumMatchChoice, ArtistMatchDraft, PlaylistRow, PlaylistPage, PlaylistEntryRow, SearchSection, StationRow, DirectoryStationRow, RadioTagRow, RadioTagGroup, NativeSpectrum, NativeOscilloscope, NativeHologram } from "@freya/v1.slint";
+import { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, Recents, RecentRow, App, Updates, LastFm, Server, ServerDevice, ServerUser, FoundServer, PlaybackState, Shortcuts, TrackRow, LibraryRow, AlbumPage, ArtistPage, ArtistDraft, PictureChoice, MatchChoice, AlbumMatchDraft, AlbumMatchChoice, ArtistMatchDraft, PlaylistRow, PlaylistPage, PlaylistEntryRow, SearchSection, StationRow, DirectoryStationRow, RadioTagRow, RadioTagGroup, NativeSpectrum, NativeOscilloscope, NativeHologram, Organize, OrganizeRow, OrganizeFile, OrganizeField, AlbumEditionRow } from "@freya/v1.slint";
 import { AboutSlint, ListView, Palette, ScrollView } from "std-widgets.slint";
 
 // Every skin re-exports the API globals so the app can reach them.
-export { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, Recents, App, Updates, LastFm, Server } from "@freya/v1.slint";
+export { Player, Playlist, Playlists, Equalizer, Visualizer, Library, Radio, Recents, App, Updates, LastFm, Server, Organize } from "@freya/v1.slint";
 
 /// Whether the visualizer fills the screen: everything else is hidden, and the skin turns dark,
 /// as fits a TV.
@@ -2929,6 +2929,11 @@ component AlbumPageHead inherits Rectangle {
                     tooltip: root.page.favorite ? "Remove from Favorites" : "Add to Favorites";
                     clicked => { Library.toggle-album-favorite(); }
                 }
+                if Library.album-editions.length > 1: editions-button := TextButton {
+                    y: (parent.height - self.height) / 2;
+                    text: Library.album-editions.length + " editions";
+                    clicked => { editions-menu.show(); }
+                }
                 album-more := IconButton {
                     y: (parent.height - self.height) / 2;
                     icon: Icons.more;
@@ -2936,6 +2941,27 @@ component AlbumPageHead inherits Rectangle {
                     label: "More for " + root.page.title;
                     tooltip: "More";
                     clicked => { album-menu.show(); }
+                }
+            }
+        }
+        editions-menu := PopupWindow {
+            x: album-more.absolute-position.x - root.absolute-position.x - 240px;
+            y: album-more.absolute-position.y - root.absolute-position.y + album-more.height;
+            width: 320px;
+
+            MenuSurface {
+                VerticalLayout {
+                    padding: 6px;
+
+                    MenuHeading { text: "Editions"; }
+                    for edition in Library.album-editions: MenuRow {
+                        text: (edition.selected ? "✓ " : "") + edition.title + " · " + edition.detail;
+                        activated => {
+                            if (Server.admin) {
+                                Library.choose-edition(edition.key);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -9157,6 +9183,12 @@ component Sidebar inherits Rectangle {
                     selected: (root.view == "library" && Library.section == "playlists") || root.view == "playlist";
                     clicked => { root.show-section("playlists"); }
                 }
+                if Server.admin: SidebarItem {
+                    icon: Icons.folder;
+                    text: "Organize";
+                    selected: root.view == "organize";
+                    clicked => { root.selected("organize"); }
+                }
                 SidebarHeading { text: "Radio"; }
                 SidebarItem {
                     icon: Icons.radio;
@@ -11105,6 +11137,625 @@ component RecentsView inherits Rectangle {
     }
 }
 
+/// Where the list of folders was scrolled to, kept while the view is away.
+global OrganizeMemory {
+    in-out property <length> rows-y;
+}
+
+/// A heading or a folder in Organize's list.
+component OrganizeRowView inherits Rectangle {
+    in property <OrganizeRow> entry;
+
+    height: 44px;
+    border-radius: 6px;
+    background: root.entry.selected ? Theme.selection : touch.has-hover && root.entry.kind == "folder" ? Theme.hover : transparent;
+
+    if root.entry.kind == "group": Text {
+        x: 8px;
+        width: parent.width - 16px;
+        y: 16px;
+        text: root.entry.title;
+        font-size: 13px;
+        font-weight: 700;
+        color: Theme.text-secondary;
+        overflow: elide;
+    }
+    if root.entry.kind == "folder": HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 8px;
+        spacing: 10px;
+
+        Rectangle {
+            width: 9px;
+            height: 9px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 5px;
+            border-width: root.entry.state == "unidentified" ? 1px : 0;
+            border-color: Theme.text-secondary;
+            background: root.entry.state == "identified" ? Theme.text-secondary
+                : root.entry.state == "ready" ? Theme.accent
+                : root.entry.state == "review" ? Theme.danger : transparent;
+        }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+
+            Text {
+                text: root.entry.title;
+                font-size: 14px;
+                color: Theme.text;
+                overflow: elide;
+            }
+            Text {
+                text: root.entry.detail;
+                font-size: 12px;
+                color: Theme.text-secondary;
+                overflow: elide;
+            }
+        }
+    }
+    touch := TouchArea {
+        enabled: root.entry.kind == "folder";
+        mouse-cursor: pointer;
+        clicked => { Organize.act("select", root.entry.key); }
+    }
+}
+
+/// A setting of Organize, kept when the keyboard leaves it.
+component OrganizeSettingField inherits HorizontalLayout {
+    in property <string> value;
+    in property <string> action;
+    in property <string> placeholder;
+    in property <string> name;
+    in property <bool> suggest;
+    changed value => { input.text = root.value; }
+    init => { input.text = root.value; }
+
+    function commit() {
+        if (input.text != root.value) {
+            Organize.act(root.action, input.text);
+        }
+    }
+
+    spacing: 8px;
+    height: 34px;
+
+    Rectangle {
+        horizontal-stretch: 1;
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: input.has-focus ? Theme.accent : Theme.divider;
+        background: Theme.background;
+
+        if input.text == "": Text {
+            x: 10px;
+            width: parent.width - 20px;
+            text: root.placeholder;
+            color: Theme.text-secondary;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        input := TextInput {
+            x: 10px;
+            width: parent.width - 20px;
+            single-line: true;
+            font-size: 14px;
+            color: Theme.text;
+            selection-background-color: Theme.selection;
+            selection-foreground-color: Theme.text;
+            vertical-alignment: center;
+            accessible-role: text-input;
+            accessible-label: root.name;
+            accepted => { root.commit(); }
+            changed has-focus => {
+                if (!self.has-focus) {
+                    root.commit();
+                }
+            }
+        }
+    }
+    if root.suggest && root.value == "": TextButton {
+        text: "Use suggested";
+        clicked => { Organize.act("suggest-pattern", ""); }
+    }
+}
+
+/// A release the folder may be, which a click makes the one its drafts are of.
+component OrganizeCandidateRow inherits Rectangle {
+    in property <OrganizeRow> entry;
+
+    height: 48px;
+    border-radius: 6px;
+    background: root.entry.selected ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        enabled: root.entry.kind == "candidate";
+        clicked => { Organize.act("choose", root.entry.key); }
+    }
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 10px;
+
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+
+            Text {
+                text: root.entry.title;
+                font-size: 14px;
+                font-weight: root.entry.selected ? 600 : 400;
+                color: Theme.text;
+                overflow: elide;
+            }
+            Text {
+                text: root.entry.detail;
+                font-size: 12px;
+                color: Theme.text-secondary;
+                overflow: elide;
+            }
+        }
+        Text {
+            width: root.entry.kind == "candidate" ? 44px : 180px;
+            text: root.entry.state;
+            overflow: elide;
+            font-size: 14px;
+            color: Theme.text-secondary;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+        }
+    }
+}
+
+/// A field of the tags: what it says now, and what it is to become.
+component OrganizeFieldRow inherits HorizontalLayout {
+    in property <OrganizeField> item;
+    property <string> draft: root.item.draft;
+    changed draft => { input.text = root.draft; }
+    init => { input.text = root.draft; }
+
+    function commit() {
+        if (input.text != root.item.draft) {
+            Organize.edit-field(root.item.field, input.text);
+        }
+    }
+
+    spacing: 12px;
+    height: 34px;
+
+    Text {
+        width: 110px;
+        text: root.item.label;
+        font-size: 14px;
+        color: Theme.text-secondary;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    Text {
+        horizontal-stretch: 1;
+        min-width: 0px;
+        preferred-width: 0px;
+        text: root.item.several ? "Several values" : root.item.current;
+        font-size: 14px;
+        font-italic: root.item.several;
+        color: Theme.text-secondary;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    Rectangle {
+        horizontal-stretch: 1;
+        min-width: 0px;
+        preferred-width: 0px;
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: input.has-focus ? Theme.accent : root.item.changed ? Theme.accent : Theme.divider;
+        background: Theme.background;
+
+        if input.text == "" && root.item.several: Text {
+            x: 10px;
+            width: parent.width - 20px;
+            text: "Leave as they are";
+            color: Theme.text-secondary;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        input := TextInput {
+            x: 10px;
+            width: parent.width - 20px;
+            single-line: true;
+            font-size: 14px;
+            color: Theme.text;
+            selection-background-color: Theme.selection;
+            selection-foreground-color: Theme.text;
+            vertical-alignment: center;
+            accessible-role: text-input;
+            accessible-label: root.item.label;
+            accepted => { root.commit(); }
+            changed has-focus => {
+                if (!self.has-focus) {
+                    root.commit();
+                }
+            }
+        }
+    }
+}
+
+/// A file of the folder chosen.
+component OrganizeFileRow inherits Rectangle {
+    in property <OrganizeFile> item;
+
+    height: 36px;
+    border-radius: 6px;
+    background: root.item.selected ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { Organize.act("select-file", root.item.selected ? "" : root.item.key); }
+        double-clicked => { Organize.act("play-file", root.item.key); }
+    }
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 10px;
+
+        Text {
+            width: 40px;
+            text: root.item.number;
+            font-size: 14px;
+            color: Theme.text-secondary;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+        }
+        Text {
+            horizontal-stretch: 2;
+            min-width: 0px;
+        preferred-width: 0px;
+            text: root.item.new-title != root.item.title ? root.item.new-title : root.item.title;
+            font-size: 14px;
+            font-weight: root.item.changed ? 600 : 400;
+            color: root.item.changed ? Theme.accent-text : Theme.text;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            horizontal-stretch: 2;
+            min-width: 0px;
+        preferred-width: 0px;
+            text: root.item.note != "" ? root.item.note : root.item.file;
+            font-size: 13px;
+            color: Theme.text-secondary;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            width: 44px;
+            text: root.item.length;
+            font-size: 14px;
+            color: Theme.text-secondary;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+        }
+    }
+}
+
+/// Going through the music's folders and changing what their files say.
+component OrganizeView inherits Rectangle {
+    VerticalLayout {
+        padding-top: 28px;
+        padding-bottom: 20px;
+        padding-left: 28px;
+        padding-right: 28px;
+        spacing: 12px;
+
+        HorizontalLayout {
+            spacing: 16px;
+            alignment: stretch;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+
+                Text {
+                    text: "Organize";
+                    font-size: 32px;
+                    font-weight: 800;
+                    color: Theme.text;
+                }
+                Text {
+                    text: Organize.status != "" ? Organize.status : Organize.summary;
+                    font-size: 14px;
+                    color: Theme.text-secondary;
+                }
+            }
+            Rectangle {
+                width: 240px;
+                height: 34px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: search.has-focus ? Theme.accent : Theme.divider;
+                background: Theme.surface;
+
+                if search.text == "": Text {
+                    x: 10px;
+                    width: parent.width - 20px;
+                    text: "Search folders";
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+                search := TextInput {
+                    x: 10px;
+                    width: parent.width - 20px;
+                    single-line: true;
+                    color: Theme.text;
+                    selection-background-color: Theme.selection;
+                    selection-foreground-color: Theme.text;
+                    vertical-alignment: center;
+                    accessible-role: text-input;
+                    accessible-label: "Search folders";
+                    edited => { Organize.act("search", self.text); }
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+
+            TextButton {
+                text: "Identify all";
+                clicked => { Organize.act("identify-all", ""); }
+            }
+            TextButton {
+                text: "Save all ready";
+                clicked => { Organize.act("save-ready", ""); }
+            }
+            if Organize.status != "": TextButton {
+                text: "Stop";
+                clicked => { Organize.act("stop", ""); }
+            }
+            for choice in [
+                { key: "all", name: "All" },
+                { key: "unidentified", name: "Not identified" },
+                { key: "review", name: "To review" },
+                { key: "ready", name: "Ready to save" },
+                { key: "identified", name: "Identified" },
+                { key: "inbox", name: "Inbox" },
+            ]: FilterChip {
+                text: choice.name;
+                selected: Organize.filter == choice.key;
+                clicked => { Organize.act("filter", choice.key); }
+            }
+        }
+        HorizontalLayout {
+            spacing: 20px;
+            vertical-stretch: 1;
+
+            Rectangle {
+                width: 340px;
+                background: Theme.surface;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: Theme.divider;
+                clip: true;
+
+                folders := ListView {
+                    width: 100%;
+                    height: 100%;
+                    init => { self.content-y = OrganizeMemory.rows-y; }
+                    changed content-y => { OrganizeMemory.rows-y = self.content-y; }
+                    for shown in Organize.rows: OrganizeRowView {
+                        entry: shown;
+                    }
+                }
+                if Organize.rows.length == 0: Text {
+                    x: 16px;
+                    y: 16px;
+                    width: parent.width - 32px;
+                    text: "No folders here.";
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+                background: Theme.surface;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: Theme.divider;
+                clip: true;
+
+                if Organize.title == "": Text {
+                    x: 20px;
+                    y: 20px;
+                    text: "Choose a folder.";
+                    color: Theme.text-secondary;
+                }
+                if Organize.title != "": ScrollView {
+                    width: 100%;
+                    height: 100%;
+
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 12px;
+
+                        Text {
+                            text: Organize.title;
+                            font-size: 20px;
+                            font-weight: 700;
+                            color: Theme.text;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: Organize.detail;
+                            font-size: 13px;
+                            color: Theme.text-secondary;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+
+                            TextButton {
+                                text: "Identify";
+                                clicked => { Organize.act("identify", ""); }
+                            }
+                            TextButton {
+                                text: "Save";
+                                primary: Organize.can-save;
+                                clicked => {
+                                    if (Organize.can-save) {
+                                        Organize.act("save", "");
+                                    }
+                                }
+                            }
+                            if Organize.can-save: TextButton {
+                                text: "Discard";
+                                clicked => { Organize.act("discard", ""); }
+                            }
+                            if Organize.can-undo: TextButton {
+                                text: "Undo last save";
+                                clicked => { Organize.act("undo", ""); }
+                            }
+                            if Organize.in-inbox: TextButton {
+                                text: "Move into library";
+                                primary: !Organize.can-save;
+                                clicked => { Organize.act("accept", ""); }
+                            }
+                            if Organize.filter == "inbox": TextButton {
+                                text: "Move all ready";
+                                clicked => { Organize.act("accept-all", ""); }
+                            }
+                        }
+                        if Organize.message != "": Text {
+                            text: Organize.message;
+                            font-size: 14px;
+                            color: Theme.text-secondary;
+                            wrap: word-wrap;
+                        }
+                        if Organize.candidates.length > 0: Text {
+                            text: "Releases";
+                            font-size: 15px;
+                            font-weight: 700;
+                            color: Theme.text;
+                        }
+                        VerticalLayout {
+                            for candidate in Organize.candidates: OrganizeCandidateRow {
+                                entry: candidate;
+                            }
+                        }
+                        Text {
+                            text: Organize.scope;
+                            font-size: 15px;
+                            font-weight: 700;
+                            color: Theme.text;
+                        }
+                        VerticalLayout {
+                            spacing: 6px;
+
+                            HorizontalLayout {
+                                spacing: 12px;
+
+                                Rectangle { width: 110px; }
+                                Text {
+                                    horizontal-stretch: 1;
+                                    min-width: 0px;
+                                    preferred-width: 0px;
+                                    text: "Now";
+                                    font-size: 13px;
+                                    color: Theme.text-secondary;
+                                }
+                                Text {
+                                    horizontal-stretch: 1;
+                                    min-width: 0px;
+                                    preferred-width: 0px;
+                                    text: "New";
+                                    font-size: 13px;
+                                    color: Theme.text-secondary;
+                                }
+                            }
+                            for item in Organize.fields: OrganizeFieldRow {
+                                item: item;
+                            }
+                        }
+                        Text {
+                            text: "Files";
+                            font-size: 15px;
+                            font-weight: 700;
+                            color: Theme.text;
+                        }
+                        VerticalLayout {
+                            for item in Organize.files: OrganizeFileRow {
+                                item: item;
+                            }
+                        }
+                        Text {
+                            text: "File names";
+                            font-size: 15px;
+                            font-weight: 700;
+                            color: Theme.text;
+                        }
+                        OrganizeSettingField {
+                            name: "File name pattern";
+                            value: Organize.pattern;
+                            action: "set-pattern";
+                            placeholder: "Files stay where they are";
+                            suggest: true;
+                        }
+                        if Organize.pattern != "" && Organize.moves.length > 0: HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+
+                            TextButton {
+                                text: "Move these files";
+                                clicked => { Organize.act("move", ""); }
+                            }
+                            TextButton {
+                                text: "Move all identified";
+                                clicked => { Organize.act("move-all", ""); }
+                            }
+                        }
+                        VerticalLayout {
+                            for shown in Organize.moves: OrganizeCandidateRow {
+                                entry: shown;
+                            }
+                        }
+                        Text {
+                            text: "Inbox";
+                            font-size: 15px;
+                            font-weight: 700;
+                            color: Theme.text;
+                        }
+                        OrganizeSettingField {
+                            name: "Inbox folder";
+                            value: Organize.inbox;
+                            action: "set-inbox";
+                            placeholder: "A folder on the server new music waits in";
+                        }
+                        Text {
+                            text: "Recognizing by sound";
+                            font-size: 15px;
+                            font-weight: 700;
+                            color: Theme.text;
+                        }
+                        OrganizeSettingField {
+                            name: "AcoustID application key";
+                            value: Organize.acoustid-key;
+                            action: "set-acoustid-key";
+                            placeholder: "AcoustID application key";
+                        }
+                        Text {
+                            text: "With a key from acoustid.org, folders their tags do not find are recognized by their sound: a fingerprint of each file is sent to AcoustID.";
+                            font-size: 13px;
+                            color: Theme.text-secondary;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// About Freya: its icon and version, updates, links to its pages, and the credits.
 /// What Freya does in the background, and what it logged: in this run and earlier ones.
 component ActivityView inherits Rectangle {
@@ -12185,7 +12836,7 @@ export component FreyaSkin inherits Window {
                 Library.rescan();
             }
         } else if (name == "settings" || name == "queue" || name == "library" || name == "radio"
-            || name == "visualizer" || name == "equalizer" || name == "activity" || name == "recents" || name == "about") {
+            || name == "visualizer" || name == "equalizer" || name == "activity" || name == "organize" || name == "recents" || name == "about") {
             root.show(name);
         } else if (name == "navigation") {
             root.sidebar-shown = !root.sidebar-shown;
@@ -12397,6 +13048,10 @@ export component FreyaSkin inherits Window {
                                 }
                             }
                             if root.view == "activity": ActivityView {
+                                width: 100%;
+                                height: 100%;
+                            }
+                            if root.view == "organize": OrganizeView {
                                 width: 100%;
                                 height: 100%;
                             }

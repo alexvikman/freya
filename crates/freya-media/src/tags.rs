@@ -21,6 +21,9 @@ pub fn read_tags(path: &Path) -> Option<TagInfo> {
     let text = |s: Option<std::borrow::Cow<'_, str>>| {
         s.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
     };
+    let item = |key: ItemKey| tag.and_then(|t| text(t.get_string(key).map(Into::into)));
+    let release_year = tag.and_then(|t| t.date()).map(|d| u32::from(d.year));
+    let original_year = item(ItemKey::OriginalReleaseDate).and_then(|date| year_of(&date));
     Some(TagInfo {
         title: tag.and_then(|t| text(t.title())),
         artist: tag.and_then(|t| text(t.artist())),
@@ -35,12 +38,23 @@ pub fn read_tags(path: &Path) -> Option<TagInfo> {
             .find_map(|key| t.get_string(*key).and_then(mbid))
         }),
         genre: tag.and_then(|t| text(t.genre())),
-        year: tag.and_then(|t| t.date()).map(|d| u32::from(d.year)),
+        // When the music first came out, so a reissue sorts where the album belongs.
+        year: original_year.or(release_year),
         track: tag.and_then(|t| t.track()),
         disc: tag.and_then(|t| t.disk()),
         duration,
         album_kind: tag.and_then(album_kind),
+        release_year,
+        edition: item(ItemKey::SetSubtitle),
+        recording_id: item(ItemKey::MusicBrainzRecordingId),
+        release_id: item(ItemKey::MusicBrainzReleaseId),
+        release_group_id: item(ItemKey::MusicBrainzReleaseGroupId),
     })
+}
+
+/// The year a date starts with: "1986-03-03" or "1986".
+fn year_of(date: &str) -> Option<u32> {
+    date.get(..4)?.parse().ok()
 }
 
 /// The kind of release the tags say the album is: MusicBrainz's release type as Picard writes

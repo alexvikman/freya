@@ -6,6 +6,7 @@ mod answers;
 pub mod autostart;
 pub mod backup;
 pub mod discovery;
+mod fingerprint;
 mod folder_watch;
 mod folders;
 #[cfg(test)]
@@ -15,6 +16,7 @@ mod lastfm;
 mod log_lines;
 #[cfg(any(target_os = "macos", windows))]
 pub mod menu;
+mod organize;
 mod pages;
 mod playlists;
 mod radio;

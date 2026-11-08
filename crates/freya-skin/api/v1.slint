@@ -313,6 +313,18 @@ export struct AlbumPage {
     picture-full: image,
 }
 
+/// One of the editions of the album shown: see `Library.album-editions`.
+export struct AlbumEditionRow {
+    /// What `Library.choose-edition` chooses it by.
+    key: string,
+    /// "2016 Remastered".
+    title: string,
+    /// "2016 · 8 tracks".
+    detail: string,
+    /// Whether it is the one the album shows.
+    selected: bool,
+}
+
 /// A section of the search page: rows `first` to `first + count` of `Library.rows`, of the
 /// kind "songs", "artists", "albums", "playlists" or "genres", titled "Songs" and so on.
 export struct SearchSection {
@@ -539,6 +551,10 @@ export global Library {
     /// `pick-genre-picture` asks for a file and `clear-genre-picture` takes one away, "picture"
     /// or "backdrop"; `save-genre` keeps the description given with the pictures chosen,
     /// `cancel-genre` none of it.
+    /// The editions of the album shown, when it has several; `choose-edition` has the album
+    /// show another.
+    in property <[AlbumEditionRow]> album-editions;
+    callback choose-edition(string);
     in property <GenreDraft> genre-draft;
     callback edit-genre();
     callback pick-genre-picture(string);
@@ -1133,6 +1149,93 @@ export component NativeSpectrum inherits Rectangle {
         commands: Visualizer.peaks-path(self.width / 1px, self.height / 1px, Visualizer.peaks, root.peak-thickness / 1px);
         fill: root.peak-color;
     }
+}
+
+/// A row of `Organize.rows`: a heading, or a folder of music.
+export struct OrganizeRow {
+    /// "group" for a heading, "folder" for a folder.
+    kind: string,
+    title: string,
+    detail: string,
+    /// A folder's: "unidentified", "review", "ready" or "identified".
+    state: string,
+    /// What `Organize.act("select", key)` chooses it by.
+    key: string,
+    selected: bool,
+}
+
+/// A file of the folder chosen: see `Organize.files`.
+export struct OrganizeFile {
+    key: string,
+    number: string,
+    title: string,
+    /// What its title is to become; the same as `title` when it stays.
+    new-title: string,
+    /// The file's name.
+    file: string,
+    length: string,
+    /// Whether changes wait to be saved in it.
+    changed: bool,
+    selected: bool,
+    /// Why it cannot be tagged; empty when it can.
+    note: string,
+}
+
+/// A field of the tags of what is chosen: see `Organize.fields`.
+export struct OrganizeField {
+    field: string,
+    label: string,
+    /// What the files say now; empty for nothing, `several` when they differ.
+    current: string,
+    /// What it is to become.
+    draft: string,
+    changed: bool,
+    several: bool,
+}
+
+/// Organizing the music's files, for an admin. Optional.
+export global Organize {
+    /// Headings and folders, as `filter` and the search leave them.
+    in property <[OrganizeRow]> rows;
+    /// "all", "unidentified", "review", "ready", "identified" or "inbox".
+    in property <string> filter: "all";
+    /// "412 folders · 38 not identified".
+    in property <string> summary;
+    /// The folder chosen; empty when none is.
+    in property <string> title;
+    in property <string> detail;
+    /// What the last thing done came to.
+    in property <string> message;
+    in property <bool> busy;
+    in property <bool> can-save;
+    in property <bool> can-undo;
+    /// What the server is going through: "Identifying 12 of 40 folders"; empty when nothing.
+    in property <string> status;
+    /// Where files belong by their tags; empty leaves them where they are.
+    in property <string> pattern;
+    /// The folder new music waits in; empty when there is none.
+    in property <string> inbox;
+    /// Whether the folder chosen waits in the inbox.
+    in property <bool> in-inbox;
+    /// The AcoustID key, for finding files by their sound; empty means they are not.
+    in property <string> acoustid-key;
+    /// Where the files of the folder chosen would go by `pattern`, as rows of kind "move":
+    /// `state` says why one cannot.
+    in property <[OrganizeRow]> moves;
+    /// The releases the folder chosen may be, as rows of kind "candidate".
+    in property <[OrganizeRow]> candidates;
+    in property <[OrganizeFile]> files;
+    in property <[OrganizeField]> fields;
+    /// What `fields` is of: "All 8 files", or a file's name.
+    in property <string> scope;
+    /// "filter", "search", "select" a folder or "select-file" by their keys, "" for all its
+    /// files; "play-file", "save", "discard" or "undo"; "identify" the folder chosen,
+    /// "identify-all", "choose" a candidate by its key, "save-ready" or "stop"; "set-pattern", "set-acoustid-key", "set-inbox",
+    /// "accept" the folder chosen from the inbox or "accept-all",
+    /// "suggest-pattern", "move" the folder chosen or "move-all".
+    callback act(string, string);
+    /// Has a field of what is chosen become a value.
+    callback edit-field(string, string);
 }
 
 /// The application. Optional.

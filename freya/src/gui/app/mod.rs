@@ -128,6 +128,12 @@ pub struct View {
     playlist_list_rows: ModelRows,
     playlist_track_rows: ModelRows,
     activity_rows: ModelRows,
+    organize_rows: ModelRows,
+    organize_candidates: ModelRows,
+    organize_moves: ModelRows,
+    organize_files: ModelRows,
+    organize_fields: ModelRows,
+    organize_out: GlobalWriter,
     /// What was logged, as last given to the skin: the entries, at which level, and how many
     /// had been logged then.
     log_rows: ModelRows,
@@ -175,6 +181,12 @@ impl View {
             playlist_list_rows: ModelRows::new(),
             playlist_track_rows: ModelRows::new(),
             activity_rows: ModelRows::new(),
+            organize_rows: ModelRows::new(),
+            organize_candidates: ModelRows::new(),
+            organize_moves: ModelRows::new(),
+            organize_files: ModelRows::new(),
+            organize_fields: ModelRows::new(),
+            organize_out: GlobalWriter::new(&ui, "Organize"),
             log_rows: ModelRows::new(),
             log_shown: None,
             stream_cache_shown: None,
@@ -220,6 +232,19 @@ impl View {
                 "tracks",
                 view.playlist_track_rows.model_value(),
             );
+        }
+        if view.organize_out.available {
+            for (name, rows) in [
+                ("rows", &view.organize_rows),
+                ("candidates", &view.organize_candidates),
+                ("moves", &view.organize_moves),
+                ("files", &view.organize_files),
+                ("fields", &view.organize_fields),
+            ] {
+                let _ = view
+                    .ui
+                    .set_global_property("Organize", name, rows.model_value());
+            }
         }
         if view.app_out.available {
             let _ =
@@ -310,6 +335,7 @@ pub struct App {
     log_from_server: bool,
     pub recents: recents::Recents,
     server_log: super::server_log::ServerLog,
+    pub(crate) organize: super::organize::OrganizeState,
     window_events: WindowEvents,
     /// Whether the skin window is hidden (covered, minimized) and whether it has focus, as
     /// far as the system says.
@@ -455,6 +481,7 @@ impl App {
             log_from_server: false,
             recents: Default::default(),
             server_log: Default::default(),
+            organize: Default::default(),
             window_events,
             window_hidden: false,
             window_closed: false,

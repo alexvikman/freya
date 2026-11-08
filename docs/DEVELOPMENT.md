@@ -48,7 +48,7 @@ Installers of Freya and of Freya Server for macOS (`.dmg`), Windows (`.msi`) and
 | `crates/freya-client/` | The client's side of the library: a Freya server's library, called over HTTP |
 | `crates/freya-http/` | A small HTTP/1.1 server, over TLS or not: Freya Server's, and Freya's login proxy |
 | `crates/freya-lastfm/` | Last.fm's web service: what it says of artists and genres, signing in and scrobbles |
-| `crates/freya-library/` | Freya Server's media library: the tracks, albums, artists, plays and playlists in SQLite, the scans, and what is fetched online for it |
+| `crates/freya-library/` | Freya Server's media library: the tracks, albums, artists, plays and playlists in SQLite, the scans, what is fetched online for it, and organizing the music's files: writing their tags and identifying their releases |
 | `crates/freya-media/` | Music files, for both: finding them, tags, CUE sheets, playlist entries and M3U/PLS files, covers, pictures of artists |
 | `crates/freya-protocol/` | What client and server say to each other: the library's tracks, artists, albums, genres and playlists, and how scans go |
 | `crates/freya-server/` | `freya-server`: the library as a service over HTTP, with the scans that keep it in line with the music's folders, the folders' watch and the schedule; backups and exports |

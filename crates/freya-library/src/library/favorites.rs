@@ -151,7 +151,7 @@ impl Library {
         };
         let mut query = self.db.prepare_cached(&format!(
             "SELECT t.album_artist, t.album, min(t.year), count(*), min(t.path)
-             FROM tracks t
+             FROM listed_tracks t
              LEFT JOIN album_favorites f
                  ON f.album_artist = ifnull(t.album_artist, '') AND f.album = ifnull(t.album, '')
              LEFT JOIN (SELECT path, max(played) AS last FROM plays GROUP BY path) p
