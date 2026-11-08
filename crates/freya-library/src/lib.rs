@@ -3,6 +3,7 @@
 //! fetched online for it. Freya, the player, has none of it: it asks the server.
 
 pub mod library;
+pub mod tagging;
 pub mod wikipedia;
 
 // What the library is made from, by the paths its modules know them by.

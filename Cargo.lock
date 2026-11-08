@@ -1732,6 +1732,7 @@ dependencies = [
 name = "freya-library"
 version = "0.4.1"
 dependencies = [
+ "freya-decode",
  "freya-media",
  "freya-protocol",
  "image",
@@ -1740,6 +1741,7 @@ dependencies = [
  "ring",
  "rusqlite",
  "serde_json",
+ "symphonia",
  "ureq",
 ]
 

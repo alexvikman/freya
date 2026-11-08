@@ -18,3 +18,7 @@ ring = "0.17.14"
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde_json = "1.0.152"
 ureq = "3"
+
+[dev-dependencies]
+freya-decode = { path = "../freya-decode" }
+symphonia = { version = "0.6.1", features = ["all-codecs", "all-formats"] }

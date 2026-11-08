@@ -14,6 +14,7 @@ mod genres;
 mod kinds;
 mod matches;
 mod online;
+pub mod organize;
 mod playlists;
 mod scan;
 mod scan_log;
@@ -291,6 +292,7 @@ impl Library {
         db.execute_batch(playlists::SCHEMA)?;
         db.execute_batch(genres::SCHEMA)?;
         db.execute_batch(favorites::SCHEMA)?;
+        db.execute_batch(organize::SCHEMA)?;
         users::migrate(&db, &[HISTORY, playlists::SCHEMA, favorites::SCHEMA])?;
         Ok(Self { db })
     }

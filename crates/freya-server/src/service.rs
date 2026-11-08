@@ -15,8 +15,8 @@ use freya_media::pictures::Pictures;
 use freya_protocol::{
     ApiError, ApiResult, BackupStatus, FolderListing, ImportSummary, LastFmStatus, LastFmTrack,
     LibraryApi, LibraryData, LibraryPictures, LogLine, Part, PlaylistEntry, RadioDirectoryStatus,
-    RadioQuery, RadioResults, RadioShelf, RadioStation, RadioTag, SavedPlaylist, ScanEvent,
-    Scrobble, ServerControl, ServerEvents, ServerSettings, ServiceEvent,
+    RadioQuery, RadioResults, RadioShelf, RadioStation, RadioTag, SaveOutcome, SavedPlaylist,
+    ScanEvent, Scrobble, ServerControl, ServerEvents, ServerSettings, ServiceEvent, TagDraft,
 };
 
 use crate::folder_watch::FolderWatch;
@@ -126,6 +126,15 @@ impl Service {
             .as_ref()
             .map(|users| users())
             .unwrap_or_default()
+    }
+
+    /// The folders the library is made from.
+    fn library_folders(&self) -> Vec<PathBuf> {
+        lock(&self.shared.state)
+            .config
+            .settings
+            .library_folders
+            .clone()
     }
 
     /// The server's folder, for backups and restores.
@@ -290,6 +299,52 @@ impl ServerControl for Service {
     fn scan_only(&self, folders: &[PathBuf]) -> ApiResult<()> {
         self.with(|state| state.scan(folders.to_vec(), false));
         Ok(())
+    }
+
+    fn save_tag_drafts(&self, paths: &[PathBuf]) -> ApiResult<SaveOutcome> {
+        let api = &self.shared.api;
+        let drafts = api.with_db(|db| db.tag_drafts(paths))?;
+        let folders = self.library_folders();
+        let written = crate::organize::write_drafts(&drafts, &folders);
+        let unchanged: Vec<TagDraft> = written
+            .unchanged
+            .iter()
+            .map(|path| TagDraft {
+                path: path.clone(),
+                changes: Default::default(),
+            })
+            .collect();
+        api.with_db(|db| db.set_tag_drafts(&unchanged))?;
+        let mut outcome = SaveOutcome {
+            save: None,
+            saved: written.saved.len() as u32,
+            failed: written.failed,
+        };
+        if let Some(first) = written.saved.first() {
+            let folder = first.path.parent().unwrap_or(&first.path).to_path_buf();
+            let at = SystemTime::now();
+            outcome.save = Some(api.with_db(|db| db.note_tag_save(&folder, &written.saved, at))?);
+            self.with(|state| state.scan_changed(crate::organize::parents(&written.saved)));
+        }
+        Ok(outcome)
+    }
+
+    fn undo_tag_save(&self, save: i64) -> ApiResult<SaveOutcome> {
+        let api = &self.shared.api;
+        let files = api.with_db(|db| db.tag_save_files(save))?;
+        let written = crate::organize::undo_files(&files, &self.library_folders());
+        // Noted only when all went back: else the save stays there to be undone again.
+        if written.failed.is_empty() && !written.saved.is_empty() {
+            api.with_db(|db| db.note_tag_undo(save, &written.saved))?;
+        }
+        if !written.saved.is_empty() {
+            self.with(|state| state.scan_changed(crate::organize::parents(&written.saved)));
+        }
+        Ok(SaveOutcome {
+            save: Some(save),
+            saved: written.saved.len() as u32,
+            failed: written.failed,
+        })
     }
 
     /// Stops the scan running, and what was to follow it; what it did so far is kept.

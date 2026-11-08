@@ -15,6 +15,7 @@ mod lastfm;
 mod log_lines;
 #[cfg(any(target_os = "macos", windows))]
 pub mod menu;
+mod organize;
 mod pages;
 mod playlists;
 mod radio;
