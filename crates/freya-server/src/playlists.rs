@@ -1,6 +1,7 @@
 //! The user's playlists, as the server keeps them: an M3U file each in its folder, named after
 //! the playlist, so the files are also easy to find and share.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use freya_media::Entry;
@@ -55,6 +56,26 @@ impl Playlists {
         std::fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
         let entries: Vec<Entry> = entries.iter().map(from_wire).collect();
         playlist_file::save(&file, &entries).map_err(|e| e.to_string())
+    }
+
+    /// Has every playlist follow the files that moved, by where they were.
+    pub fn follow_moves(&self, moved: &HashMap<PathBuf, PathBuf>) {
+        for playlist in self.all() {
+            if !playlist.entries.iter().any(|e| moved.contains_key(&e.path)) {
+                continue;
+            }
+            let entries: Vec<PlaylistEntry> = playlist
+                .entries
+                .iter()
+                .map(|entry| PlaylistEntry {
+                    path: moved.get(&entry.path).unwrap_or(&entry.path).clone(),
+                    ..entry.clone()
+                })
+                .collect();
+            if let Err(e) = self.save(&playlist.name, &entries) {
+                log::warn!("could not update the playlist {}: {e}", playlist.name);
+            }
+        }
     }
 
     pub fn rename(&self, from: &str, to: &str) -> Result<(), String> {

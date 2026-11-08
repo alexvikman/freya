@@ -130,6 +130,7 @@ pub struct View {
     activity_rows: ModelRows,
     organize_rows: ModelRows,
     organize_candidates: ModelRows,
+    organize_moves: ModelRows,
     organize_files: ModelRows,
     organize_fields: ModelRows,
     organize_out: GlobalWriter,
@@ -182,6 +183,7 @@ impl View {
             activity_rows: ModelRows::new(),
             organize_rows: ModelRows::new(),
             organize_candidates: ModelRows::new(),
+            organize_moves: ModelRows::new(),
             organize_files: ModelRows::new(),
             organize_fields: ModelRows::new(),
             organize_out: GlobalWriter::new(&ui, "Organize"),
@@ -235,6 +237,7 @@ impl View {
             for (name, rows) in [
                 ("rows", &view.organize_rows),
                 ("candidates", &view.organize_candidates),
+                ("moves", &view.organize_moves),
                 ("files", &view.organize_files),
                 ("fields", &view.organize_fields),
             ] {

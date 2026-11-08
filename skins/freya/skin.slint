@@ -11201,6 +11201,61 @@ component OrganizeRowView inherits Rectangle {
     }
 }
 
+/// The pattern files are named by.
+component OrganizePatternField inherits HorizontalLayout {
+    property <string> kept: Organize.pattern;
+    changed kept => { input.text = root.kept; }
+    init => { input.text = root.kept; }
+
+    function commit() {
+        if (input.text != Organize.pattern) {
+            Organize.act("set-pattern", input.text);
+        }
+    }
+
+    spacing: 8px;
+    height: 34px;
+
+    Rectangle {
+        horizontal-stretch: 1;
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: input.has-focus ? Theme.accent : Theme.divider;
+        background: Theme.background;
+
+        if input.text == "": Text {
+            x: 10px;
+            width: parent.width - 20px;
+            text: "Files stay where they are";
+            color: Theme.text-secondary;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        input := TextInput {
+            x: 10px;
+            width: parent.width - 20px;
+            single-line: true;
+            font-size: 14px;
+            color: Theme.text;
+            selection-background-color: Theme.selection;
+            selection-foreground-color: Theme.text;
+            vertical-alignment: center;
+            accessible-role: text-input;
+            accessible-label: "File name pattern";
+            accepted => { root.commit(); }
+            changed has-focus => {
+                if (!self.has-focus) {
+                    root.commit();
+                }
+            }
+        }
+    }
+    if Organize.pattern == "": TextButton {
+        text: "Use suggested";
+        clicked => { Organize.act("suggest-pattern", ""); }
+    }
+}
+
 /// A release the folder may be, which a click makes the one its drafts are of.
 component OrganizeCandidateRow inherits Rectangle {
     in property <OrganizeRow> entry;
@@ -11211,6 +11266,7 @@ component OrganizeCandidateRow inherits Rectangle {
 
     touch := TouchArea {
         mouse-cursor: pointer;
+        enabled: root.entry.kind == "candidate";
         clicked => { Organize.act("choose", root.entry.key); }
     }
     HorizontalLayout {
@@ -11237,8 +11293,9 @@ component OrganizeCandidateRow inherits Rectangle {
             }
         }
         Text {
-            width: 44px;
+            width: root.entry.kind == "candidate" ? 44px : 180px;
             text: root.entry.state;
+            overflow: elide;
             font-size: 14px;
             color: Theme.text-secondary;
             vertical-alignment: center;
@@ -11604,6 +11661,31 @@ component OrganizeView inherits Rectangle {
                             }
                             for item in Organize.fields: OrganizeFieldRow {
                                 item: item;
+                            }
+                        }
+                        Text {
+                            text: "File names";
+                            font-size: 15px;
+                            font-weight: 700;
+                            color: Theme.text;
+                        }
+                        OrganizePatternField { }
+                        if Organize.pattern != "" && Organize.moves.length > 0: HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+
+                            TextButton {
+                                text: "Move these files";
+                                clicked => { Organize.act("move", ""); }
+                            }
+                            TextButton {
+                                text: "Move all identified";
+                                clicked => { Organize.act("move-all", ""); }
+                            }
+                        }
+                        VerticalLayout {
+                            for shown in Organize.moves: OrganizeCandidateRow {
+                                entry: shown;
                             }
                         }
                         Text {

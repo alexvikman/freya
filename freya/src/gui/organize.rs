@@ -8,8 +8,9 @@ use std::time::{Duration, Instant};
 
 use freya_client::Http;
 use freya_protocol::{
-    FolderProposal, FolderState, LibraryData, OrganizeFile, OrganizeFolder, OrganizeStatus, Remote,
-    SaveOutcome, ServerControl, TagDraft, TagField, TagMap, TagSave, Track,
+    FolderProposal, FolderState, LibraryData, OrganizeFile, OrganizeFolder, OrganizeStatus,
+    PlannedMove, Remote, SUGGESTED_PATTERN, SaveOutcome, ServerControl, TagDraft, TagField, TagMap,
+    TagSave, Track,
 };
 use slint_interpreter::{Struct, Value};
 
@@ -46,6 +47,8 @@ enum Answer {
     Saves(Vec<TagSave>),
     Proposal(PathBuf, Option<FolderProposal>),
     Status(OrganizeStatus),
+    Pattern(String),
+    Moves(PathBuf, Result<Vec<PlannedMove>, String>),
     Saved(Result<SaveOutcome, String>, &'static str),
     Failed(String),
 }
@@ -56,6 +59,7 @@ type Answers = Arc<Mutex<Vec<Answer>>>;
 pub struct Shown {
     pub rows: Vec<Value>,
     pub candidates: Vec<Value>,
+    pub moves: Vec<Value>,
     pub files: Vec<Value>,
     pub fields: Vec<Value>,
     pub values: Vec<(&'static str, Value)>,
@@ -73,6 +77,9 @@ pub struct OrganizeState {
     saves: Vec<TagSave>,
     proposal: Option<FolderProposal>,
     status: OrganizeStatus,
+    /// Where files belong by their tags, once the server said.
+    pattern: Option<String>,
+    moves: Vec<PlannedMove>,
     message: String,
     /// Things asked of the server that have not been answered.
     waiting: u32,
@@ -93,6 +100,8 @@ impl Default for OrganizeState {
             saves: Vec::new(),
             proposal: None,
             status: OrganizeStatus::default(),
+            pattern: None,
+            moves: Vec::new(),
             message: String::new(),
             waiting: 0,
             asked: None,
@@ -157,6 +166,16 @@ impl OrganizeState {
             self.waiting = self.waiting.saturating_sub(1);
             self.take(answer, &remote);
         }
+        if self.pattern.is_none()
+            && self.asked.is_none()
+            && let Some(asking) = remote.clone()
+        {
+            self.waiting += 1;
+            errand(&self.answers, move || match asking.settings() {
+                Ok(settings) => Answer::Pattern(settings.naming_pattern),
+                Err(e) => Answer::Failed(e.to_string()),
+            });
+        }
         if self.asked.is_none_or(|at| at.elapsed() >= ASK_EVERY) {
             self.asked = Some(Instant::now());
             self.ask_folders(&remote);
@@ -187,6 +206,21 @@ impl OrganizeState {
                     self.proposal = proposal;
                 }
             }
+            Answer::Pattern(pattern) => {
+                self.pattern = Some(pattern);
+                self.ask_moves(remote);
+            }
+            Answer::Moves(folder, moves) => {
+                if self.selected.as_deref() == Some(folder.as_path()) {
+                    match moves {
+                        Ok(moves) => self.moves = moves,
+                        Err(e) => {
+                            self.moves.clear();
+                            self.message = e;
+                        }
+                    }
+                }
+            }
             Answer::Status(status) => {
                 // When it comes to an end, or moves on, what is shown may have changed.
                 let moved = status.done != self.status.done;
@@ -203,6 +237,40 @@ impl OrganizeState {
         }
     }
 
+    /// Asks where the files of the folder chosen would go.
+    fn ask_moves(&mut self, remote: &Remoted) {
+        let pattern = self.pattern.clone().unwrap_or_default();
+        let (Some(folder), Some(remote), false) =
+            (self.selected.clone(), remote.clone(), pattern.is_empty())
+        else {
+            self.moves.clear();
+            return;
+        };
+        self.waiting += 1;
+        errand(&self.answers, move || {
+            let moves = remote.plan_moves(&folder, &pattern);
+            Answer::Moves(folder, moves.map_err(|e| e.to_string()))
+        });
+    }
+
+    fn set_pattern(&mut self, remote: &Remoted, pattern: &str) {
+        let pattern = pattern.trim().to_owned();
+        self.pattern = Some(pattern.clone());
+        self.ask_moves(remote);
+        let Some(remote) = remote.clone() else { return };
+        self.waiting += 1;
+        errand(&self.answers, move || {
+            let kept = remote.settings().and_then(|mut settings| {
+                settings.naming_pattern = pattern.clone();
+                remote.set_settings(&settings)
+            });
+            match kept {
+                Ok(()) => Answer::Pattern(pattern),
+                Err(e) => Answer::Failed(e.to_string()),
+            }
+        });
+    }
+
     fn ask_folders(&mut self, remote: &Remoted) {
         let Some(remote) = remote.clone() else { return };
         self.waiting += 1;
@@ -214,6 +282,7 @@ impl OrganizeState {
     /// Asks again for the folder chosen, its files and the saves that can be undone.
     fn reload(&mut self, remote: &Remoted) {
         self.ask_folders(remote);
+        self.ask_moves(remote);
         let Some(remote) = remote.clone() else { return };
         if let Some(folder) = self.selected.clone() {
             let of = Arc::clone(&remote);
@@ -283,6 +352,24 @@ impl OrganizeState {
             "identify-all" => self.command(&remote, |r| r.identify_folders(&[])),
             "save-ready" => self.command(&remote, |r| r.save_ready_folders()),
             "stop" => self.command(&remote, |r| r.stop_organizing()),
+            "set-pattern" => self.set_pattern(&remote, value),
+            "suggest-pattern" => self.set_pattern(&remote, SUGGESTED_PATTERN),
+            "move" => {
+                let pattern = self.pattern.clone().unwrap_or_default();
+                if let Some(folder) = self.selected.clone() {
+                    self.command(&remote, move |r| r.move_folders(&[folder], &pattern));
+                }
+            }
+            "move-all" => {
+                let pattern = self.pattern.clone().unwrap_or_default();
+                let folders: Vec<PathBuf> = self
+                    .folders
+                    .iter()
+                    .filter(|f| f.state == FolderState::Identified && !f.mixed)
+                    .map(|f| f.path.clone())
+                    .collect();
+                self.command(&remote, move |r| r.move_folders(&folders, &pattern));
+            }
             "choose" => {
                 if let Some(folder) = self.selected.clone() {
                     let release = value.to_owned();
@@ -461,6 +548,32 @@ impl OrganizeState {
         rows
     }
 
+    fn move_rows(&self) -> Vec<Value> {
+        self.moves
+            .iter()
+            .map(|one| {
+                let from = file_name(&one.from);
+                let to = one
+                    .to
+                    .components()
+                    .rev()
+                    .take(3)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<PathBuf>();
+                row(
+                    "move",
+                    &to.to_string_lossy(),
+                    &from,
+                    one.conflict.as_deref().unwrap_or(""),
+                    "",
+                    false,
+                )
+            })
+            .collect()
+    }
+
     fn candidate_rows(&self) -> Vec<Value> {
         let Some(proposal) = &self.proposal else {
             return Vec::new();
@@ -637,10 +750,15 @@ impl OrganizeState {
             ("can-undo", Value::Bool(self.undoable().is_some())),
             ("scope", skin_state::string(scope)),
             ("status", skin_state::string(self.status_text())),
+            (
+                "pattern",
+                skin_state::string(self.pattern.clone().unwrap_or_default()),
+            ),
         ];
         Shown {
             rows: self.rows(),
             candidates: self.candidate_rows(),
+            moves: self.move_rows(),
             files: self.file_rows(),
             fields: self.field_rows(),
             values,

@@ -50,6 +50,7 @@ pub(super) const SCHEMA: &str = "
 
 pub mod editions;
 pub mod names;
+pub mod naming;
 
 /// A file a save changed.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -517,6 +518,18 @@ fn carry_places(tx: &Transaction<'_>, files: &[SavedFile]) -> Result<()> {
                 &format!("UPDATE OR REPLACE {table} SET {column} = ?1 WHERE {column} = ?2"),
                 params![to, from],
             )?;
+        }
+        let (old, new) = (
+            names::album_folder(&file.path),
+            names::album_folder(&file.path_after),
+        );
+        if old != new {
+            for table in ["folder_proposals", "preferred_editions"] {
+                tx.execute(
+                    &format!("UPDATE OR REPLACE {table} SET folder = ?1 WHERE folder = ?2"),
+                    params![text(&new), text(&old)],
+                )?;
+            }
         }
     }
     Ok(())

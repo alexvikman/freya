@@ -1,6 +1,6 @@
 //! Writing what was decided about the music's files to them, and putting them back.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -10,11 +10,13 @@ use freya_library::identify::{
 };
 use freya_library::library::organize::SavedFile;
 use freya_library::library::organize::names::{album_folder, parse_folder_name};
+use freya_library::library::organize::naming;
 use freya_library::tagging;
 use freya_media::artist_image::{
     MUSICBRAINZ_INTERVAL, cover_art, musicbrainz_release, musicbrainz_release_search,
 };
-use freya_protocol::{OrganizeFile, SaveFailure, TagDraft, TagField, TagMap};
+use freya_media::files::AUDIO_EXTENSIONS;
+use freya_protocol::{OrganizeFile, PlannedMove, SaveFailure, TagDraft, TagField, TagMap};
 
 use crate::folders::music_file;
 
@@ -93,6 +95,10 @@ fn undo_file(file: &SavedFile, folders: &[PathBuf]) -> Result<SavedFile, String>
     let path = library_file(&file.path_after, folders)?;
     if !file.before.is_empty() {
         tagging::write_fields(&path, &file.before).map_err(|e| e.to_string())?;
+    }
+    if file.path != file.path_after {
+        move_file(&file.path_after, &file.path, folders)?;
+        remove_emptied(std::iter::once(file.path_after.as_path()), folders);
     }
     Ok(SavedFile {
         path: file.path_after.clone(),
@@ -181,6 +187,220 @@ pub fn folder_to_match(folder: &Path, files: &[OrganizeFile]) -> FolderToMatch {
             })
             .collect(),
     }
+}
+
+/// Where the files of a folder go by `pattern`, under the music folder each is in, or under
+/// `root` when given. What lies beside the music goes along, when all the music beside it does.
+pub fn plan_moves(
+    files: &[OrganizeFile],
+    folders: &[PathBuf],
+    pattern: &str,
+    root: Option<&Path>,
+) -> Vec<PlannedMove> {
+    let mut plan = Vec::new();
+    let mut stays: HashSet<PathBuf> = HashSet::new();
+    for file in files {
+        let parent = file.path.parent().unwrap_or(&file.path).to_path_buf();
+        if file.not_taggable.is_some() {
+            stays.insert(parent);
+            continue;
+        }
+        let mut fields = file.fields.clone();
+        for (field, value) in &file.draft {
+            fields.insert(*field, value.clone());
+        }
+        let under = root
+            .map(Path::to_path_buf)
+            .or_else(|| folders.iter().find(|f| file.path.starts_with(f)).cloned());
+        let (to, conflict) = match (&under, naming::relative_path(pattern, &fields)) {
+            (Some(under), Ok(parts)) => (with_extension(under, &parts, &file.path), None),
+            (None, _) => (
+                file.path.clone(),
+                Some("it is in no music folder".to_owned()),
+            ),
+            (_, Err(why)) => (file.path.clone(), Some(why)),
+        };
+        if to == file.path && conflict.is_none() {
+            stays.insert(parent);
+            continue;
+        }
+        plan.push(PlannedMove {
+            from: file.path.clone(),
+            to,
+            conflict,
+            companion: false,
+        });
+    }
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    for one in &mut plan {
+        if one.conflict.is_none() {
+            if !seen.insert(one.to.clone()) {
+                one.conflict = Some("another file goes to the same place".to_owned());
+            } else if taken(&one.from, &one.to) {
+                one.conflict = Some("a file is already there".to_owned());
+            }
+        }
+    }
+    plan.extend(companions(&plan, &stays));
+    plan
+}
+
+fn with_extension(under: &Path, parts: &[String], from: &Path) -> PathBuf {
+    let mut to = under.to_path_buf();
+    for part in parts {
+        to.push(part);
+    }
+    match from.extension() {
+        Some(extension) => {
+            let mut name = to.into_os_string();
+            name.push(".");
+            name.push(extension);
+            PathBuf::from(name)
+        }
+        None => to,
+    }
+}
+
+/// Whether something other than `from` is at `to`; the same file by another case of its name
+/// is free to take it.
+fn taken(from: &Path, to: &Path) -> bool {
+    match (std::fs::canonicalize(from), std::fs::canonicalize(to)) {
+        (Ok(from), Ok(to)) => from != to,
+        (_, Err(_)) => false,
+        (Err(_), Ok(_)) => true,
+    }
+}
+
+/// The files beside the music in `plan` that go along with it.
+fn companions(plan: &[PlannedMove], stays: &HashSet<PathBuf>) -> Vec<PlannedMove> {
+    let mut places: BTreeMap<PathBuf, HashSet<PathBuf>> = BTreeMap::new();
+    for one in plan.iter().filter(|one| one.conflict.is_none()) {
+        if let (Some(from), Some(to)) = (one.from.parent(), one.to.parent()) {
+            places
+                .entry(from.to_path_buf())
+                .or_default()
+                .insert(to.to_path_buf());
+        }
+    }
+    let mut moved = Vec::new();
+    for (from, to) in places {
+        if stays.contains(&from) || to.len() != 1 {
+            continue;
+        }
+        let Some(to) = to.into_iter().next().filter(|to| *to != from) else {
+            continue;
+        };
+        let Ok(entries) = std::fs::read_dir(&from) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            let hidden = name.to_string_lossy().starts_with('.');
+            let is_file = entry.file_type().is_ok_and(|kind| kind.is_file());
+            if !is_file || hidden || is_audio(&path) {
+                continue;
+            }
+            let target = to.join(&name);
+            if !target.exists() {
+                moved.push(PlannedMove {
+                    from: path,
+                    to: target,
+                    conflict: None,
+                    companion: true,
+                });
+            }
+        }
+    }
+    moved
+}
+
+fn is_audio(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| AUDIO_EXTENSIONS.contains(&extension.to_lowercase().as_str()))
+}
+
+/// Moves the files of `plan`, all of them or, when one cannot go, none; `folders` are where it
+/// stops taking away the folders emptied.
+pub fn apply_moves(plan: &[PlannedMove], folders: &[PathBuf]) -> Result<Vec<SavedFile>, String> {
+    if let Some(blocked) = plan.iter().find(|one| one.conflict.is_some()) {
+        return Err(format!(
+            "{}: {}",
+            blocked.from.display(),
+            blocked.conflict.as_deref().unwrap_or("")
+        ));
+    }
+    let mut done: Vec<&PlannedMove> = Vec::new();
+    for one in plan {
+        if let Err(why) = move_file(&one.from, &one.to, folders) {
+            for moved in done.iter().rev() {
+                let _ = std::fs::rename(&moved.to, &moved.from);
+            }
+            return Err(format!("{}: {why}", one.from.display()));
+        }
+        done.push(one);
+    }
+    remove_emptied(plan.iter().map(|one| one.from.as_path()), folders);
+    Ok(plan
+        .iter()
+        .map(|one| SavedFile {
+            path: one.from.clone(),
+            path_after: one.to.clone(),
+            before: TagMap::new(),
+            after: TagMap::new(),
+        })
+        .collect())
+}
+
+fn move_file(from: &Path, to: &Path, folders: &[PathBuf]) -> Result<(), String> {
+    if !folders.iter().any(|folder| to.starts_with(folder)) {
+        return Err("that is not in the library's folders".to_owned());
+    }
+    let parent = to.parent().ok_or("it has no folder to go to")?;
+    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    if taken(from, to) {
+        return Err("a file is already there".to_owned());
+    }
+    std::fs::rename(from, to).map_err(|e| e.to_string())
+}
+
+/// Takes away the folders moved out of that nothing is left in, up to the music folders.
+fn remove_emptied<'a>(moved: impl Iterator<Item = &'a Path>, folders: &[PathBuf]) {
+    let mut parents: Vec<PathBuf> = moved
+        .filter_map(|p| p.parent().map(Path::to_path_buf))
+        .collect();
+    parents.sort();
+    parents.dedup();
+    for parent in parents {
+        let mut at = Some(parent.as_path());
+        while let Some(folder) = at {
+            let within = folders.iter().any(|f| folder.starts_with(f) && folder != f);
+            if !within || !remove_if_empty(folder) {
+                break;
+            }
+            at = folder.parent();
+        }
+    }
+}
+
+/// Takes away the folder when it holds nothing but what systems leave in folders.
+fn remove_if_empty(folder: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return false;
+    };
+    let entries: Vec<_> = entries.flatten().collect();
+    let litter = |entry: &std::fs::DirEntry| {
+        let name = entry.file_name();
+        name == ".DS_Store" || name == "Thumbs.db" || name == "desktop.ini"
+    };
+    if !entries.iter().all(litter) {
+        return false;
+    }
+    for entry in &entries {
+        let _ = std::fs::remove_file(entry.path());
+    }
+    std::fs::remove_dir(folder).is_ok()
 }
 
 /// Adds the release group's cover beside the music of `saved`, when they became a release and
@@ -329,6 +549,142 @@ mod tests {
         assert_eq!(found.drafts.len(), 8);
         assert_eq!(found.drafts[0].changes[&TagField::AlbumArtist], "Metallica");
         assert!(found.drafts[0].changes.contains_key(&TagField::RecordingId));
+    }
+
+    const PATTERN: &str = "{album_artist}/{album}/{track} {title}";
+
+    /// A file of the fixtures in `dir`, with tags that say where it belongs.
+    fn tagged(dir: &Path, name: &str, title: &str, track: u32) -> OrganizeFile {
+        let path = fixture(dir, name);
+        OrganizeFile {
+            fields: TagMap::from([
+                (TagField::AlbumArtist, "Metallica".to_owned()),
+                (TagField::Album, "Load".to_owned()),
+                (TagField::Title, title.to_owned()),
+                (TagField::Track, track.to_string()),
+            ]),
+            path,
+            draft: TagMap::new(),
+            duration: None,
+            not_taggable: None,
+        }
+    }
+
+    #[test]
+    fn music_moves_with_what_lies_beside_it_and_back() {
+        let root = folder("moves");
+        let from = root.join("old").join("place");
+        fs::create_dir_all(&from).unwrap();
+        fs::write(from.join("cover.jpg"), b"picture").unwrap();
+        fs::write(from.join(".DS_Store"), b"litter").unwrap();
+        let files = [
+            tagged(&from, "sine.flac", "One", 1),
+            tagged(&from, "sine.mp3", "Two", 2),
+        ];
+        let folders = [root.clone()];
+        let plan = plan_moves(&files, &folders, PATTERN, None);
+        assert_eq!(plan.len(), 3, "{plan:?}");
+        assert!(plan.iter().all(|one| one.conflict.is_none()));
+
+        let moved = apply_moves(&plan, &folders).unwrap();
+        let album = root.join("Metallica").join("Load");
+        assert!(album.join("01 One.flac").is_file());
+        assert!(album.join("02 Two.mp3").is_file());
+        assert!(album.join("cover.jpg").is_file());
+        assert!(!root.join("old").exists(), "the emptied folders go");
+
+        let undone = undo_files(&moved, &folders);
+        assert!(undone.failed.is_empty(), "{:?}", undone.failed);
+        assert!(from.join("sine.flac").is_file());
+        assert!(from.join("cover.jpg").is_file());
+        assert!(!root.join("Metallica").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_file_already_there_stops_the_folder() {
+        let root = folder("taken");
+        let from = root.join("old");
+        fs::create_dir_all(&from).unwrap();
+        let files = [tagged(&from, "sine.flac", "One", 1)];
+        let album = root.join("Metallica").join("Load");
+        fs::create_dir_all(&album).unwrap();
+        fs::write(album.join("01 One.flac"), b"someone else's").unwrap();
+        let folders = [root.clone()];
+        let plan = plan_moves(&files, &folders, PATTERN, None);
+        assert!(plan[0].conflict.is_some());
+        assert!(apply_moves(&plan, &folders).is_err());
+        assert!(from.join("sine.flac").is_file(), "it stays");
+        assert_eq!(
+            fs::read(album.join("01 One.flac")).unwrap(),
+            b"someone else's"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn two_files_for_one_place_stop_the_folder() {
+        let root = folder("same-place");
+        let from = root.join("old");
+        fs::create_dir_all(&from).unwrap();
+        let mut files = vec![
+            tagged(&from, "sine.flac", "One", 1),
+            tagged(&from, "sine.ape", "One", 1),
+        ];
+        files[1].path = files[1].path.with_extension("flac");
+        let plan = plan_moves(&files, std::slice::from_ref(&root), PATTERN, None);
+        assert!(plan.iter().any(|one| one.conflict.is_some()), "{plan:?}");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_file_already_in_place_stays() {
+        let root = folder("in-place");
+        let album = root.join("Metallica").join("Load");
+        fs::create_dir_all(&album).unwrap();
+        let mut file = tagged(&album, "sine.flac", "One", 1);
+        let there = album.join("01 One.flac");
+        fs::rename(&file.path, &there).unwrap();
+        file.path = there;
+        assert!(plan_moves(&[file], std::slice::from_ref(&root), PATTERN, None).is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_cue_sheets_folder_stays_put() {
+        let root = folder("cue");
+        let from = root.join("old");
+        fs::create_dir_all(&from).unwrap();
+        fs::write(from.join("album.cue"), b"sheet").unwrap();
+        let mut cue = tagged(&from, "sine.flac", "One", 1);
+        cue.not_taggable = Some("its tracks are in a CUE sheet".to_owned());
+        assert!(plan_moves(&[cue], std::slice::from_ref(&root), PATTERN, None).is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_failed_move_puts_back_what_went() {
+        let root = folder("rollback");
+        let from = root.join("old");
+        fs::create_dir_all(&from).unwrap();
+        let first = fixture(&from, "sine.flac");
+        let plan = vec![
+            PlannedMove {
+                from: first.clone(),
+                to: root.join("new").join("a.flac"),
+                conflict: None,
+                companion: false,
+            },
+            PlannedMove {
+                from: from.join("not-there.flac"),
+                to: root.join("new").join("b.flac"),
+                conflict: None,
+                companion: false,
+            },
+        ];
+        assert!(apply_moves(&plan, std::slice::from_ref(&root)).is_err());
+        assert!(first.is_file());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

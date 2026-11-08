@@ -172,6 +172,10 @@ macro_rules! with_server_control {
             fn choose_release(folder: &::std::path::Path, release: &str) -> ();
             /// Saves every folder ready to save, in the background.
             fn save_ready_folders() -> ();
+            /// Where the files of the album's folder `folder` would go by `pattern`.
+            fn plan_moves(folder: &::std::path::Path, pattern: &str) -> Vec<$crate::PlannedMove>;
+            /// Moves the files of `folders` to where `pattern` says, in the background.
+            fn move_folders(folders: &[::std::path::PathBuf], pattern: &str) -> ();
             /// Takes away what waits to be gone through.
             fn stop_organizing() -> ();
             fn organize_status() -> $crate::OrganizeStatus;

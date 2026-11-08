@@ -275,3 +275,19 @@ pub struct OrganizeStatus {
     /// What it could not do most lately.
     pub error: Option<String>,
 }
+
+/// The file name pattern suggested: an artist's folder, with albums by the year they first
+/// came out.
+pub const SUGGESTED_PATTERN: &str =
+    "{album_artist}/({original_year}) {album}[ ({edition})]/[{disc}-]{track} {title}";
+
+/// A file to go somewhere else, by a file name pattern.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct PlannedMove {
+    pub from: PathBuf,
+    pub to: PathBuf,
+    /// Why it cannot go there; a folder with one of these is left as it is.
+    pub conflict: Option<String>,
+    /// Whether it goes along with the music: a cover, a log, a CUE sheet.
+    pub companion: bool,
+}

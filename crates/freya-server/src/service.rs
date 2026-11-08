@@ -20,7 +20,9 @@ use freya_protocol::{
     ServiceEvent, TagDraft,
 };
 
-use freya_protocol::{FolderProposal, FolderState, OrganizeStatus, ProposalState};
+use freya_library::library::organize::names::album_folder;
+use freya_library::library::organize::{SavedFile, naming};
+use freya_protocol::{FolderProposal, FolderState, OrganizeStatus, PlannedMove, ProposalState};
 
 use crate::folder_watch::FolderWatch;
 use crate::playlists::Playlists;
@@ -114,12 +116,16 @@ struct Shared {
 enum FolderJob {
     Identify(PathBuf),
     Save(PathBuf),
+    /// Moves the files of the folder to where the pattern says.
+    Move(PathBuf, String),
 }
 
 impl FolderJob {
     fn folder(&self) -> &Path {
         match self {
-            FolderJob::Identify(folder) | FolderJob::Save(folder) => folder,
+            FolderJob::Identify(folder) | FolderJob::Save(folder) | FolderJob::Move(folder, _) => {
+                folder
+            }
         }
     }
 }
@@ -199,6 +205,9 @@ impl Service {
             let done = match &job {
                 FolderJob::Identify(folder) => Self::identify_folder(&shared, folder),
                 FolderJob::Save(folder) => Self::save_folder(&shared, folder),
+                FolderJob::Move(folder, pattern) => {
+                    Self::move_folder(&shared, folder, pattern, None)
+                }
             };
             let mut organizing = lock(&shared.organizing);
             organizing.status.waiting = organizing.status.waiting.saturating_sub(1);
@@ -241,6 +250,45 @@ impl Service {
         match outcome.failed.first() {
             Some(first) => Err(ApiError(format!("{}: {}", first.path.display(), first.why))),
             None => Ok(()),
+        }
+    }
+
+    fn move_folder(
+        shared: &Shared,
+        folder: &Path,
+        pattern: &str,
+        root: Option<&Path>,
+    ) -> ApiResult<()> {
+        if let Some(problem) = naming::pattern_problem(pattern) {
+            return Err(ApiError(problem));
+        }
+        let files = Self::files_of(shared, folder)?;
+        let folders = lock(&shared.state).config.settings.library_folders.clone();
+        let plan = crate::organize::plan_moves(&files, &folders, pattern, root);
+        if plan.is_empty() {
+            return Ok(());
+        }
+        let moved = crate::organize::apply_moves(&plan, &folders).map_err(ApiError)?;
+        let at = SystemTime::now();
+        shared
+            .api
+            .with_db(|db| db.note_tag_save(&album_folder(&moved[0].path_after), &moved, at))?;
+        Self::follow_in_playlists(shared, &moved);
+        Self::run(shared, |state| {
+            state.scan_changed(crate::organize::parents(&moved))
+        });
+        Ok(())
+    }
+
+    /// Has the saved playlists follow files that moved.
+    fn follow_in_playlists(shared: &Shared, files: &[SavedFile]) {
+        let moved: std::collections::HashMap<PathBuf, PathBuf> = files
+            .iter()
+            .filter(|file| file.path != file.path_after)
+            .map(|file| (file.path.clone(), file.path_after.clone()))
+            .collect();
+        if let (Some(playlists), false) = (&shared.playlists, moved.is_empty()) {
+            playlists.follow_moves(&moved);
         }
     }
 
@@ -511,6 +559,32 @@ impl ServerControl for Service {
         Ok(())
     }
 
+    fn plan_moves(&self, folder: &Path, pattern: &str) -> ApiResult<Vec<PlannedMove>> {
+        if let Some(problem) = naming::pattern_problem(pattern) {
+            return Err(ApiError(problem));
+        }
+        let files = self.organize_files(folder)?;
+        Ok(crate::organize::plan_moves(
+            &files,
+            &self.library_folders(),
+            pattern,
+            None,
+        ))
+    }
+
+    fn move_folders(&self, folders: &[PathBuf], pattern: &str) -> ApiResult<()> {
+        if let Some(problem) = naming::pattern_problem(pattern) {
+            return Err(ApiError(problem));
+        }
+        self.start_jobs(
+            folders
+                .iter()
+                .map(|folder| FolderJob::Move(folder.clone(), pattern.to_owned()))
+                .collect(),
+        );
+        Ok(())
+    }
+
     fn stop_organizing(&self) -> ApiResult<()> {
         let mut organizing = lock(&self.shared.organizing);
         organizing.jobs.clear();
@@ -538,6 +612,7 @@ impl ServerControl for Service {
         // Noted only when all went back: else the save stays there to be undone again.
         if written.failed.is_empty() && !written.saved.is_empty() {
             api.with_db(|db| db.note_tag_undo(save, &written.saved))?;
+            Self::follow_in_playlists(&self.shared, &written.saved);
         }
         if !written.saved.is_empty() {
             self.with(|state| state.scan_changed(crate::organize::parents(&written.saved)));
