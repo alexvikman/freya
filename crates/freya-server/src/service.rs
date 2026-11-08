@@ -14,9 +14,10 @@ use freya_library::library::{LastFm, Online, ScanOptions, Scanner};
 use freya_media::pictures::Pictures;
 use freya_protocol::{
     ApiError, ApiResult, BackupStatus, FolderListing, ImportSummary, LastFmStatus, LastFmTrack,
-    LibraryApi, LibraryData, LibraryPictures, LogLine, Part, PlaylistEntry, RadioDirectoryStatus,
-    RadioQuery, RadioResults, RadioShelf, RadioStation, RadioTag, SaveOutcome, SavedPlaylist,
-    ScanEvent, Scrobble, ServerControl, ServerEvents, ServerSettings, ServiceEvent, TagDraft,
+    LibraryApi, LibraryData, LibraryPictures, LogLine, OrganizeFile, Part, PlaylistEntry,
+    RadioDirectoryStatus, RadioQuery, RadioResults, RadioShelf, RadioStation, RadioTag,
+    SaveOutcome, SavedPlaylist, ScanEvent, Scrobble, ServerControl, ServerEvents, ServerSettings,
+    ServiceEvent, TagDraft,
 };
 
 use crate::folder_watch::FolderWatch;
@@ -299,6 +300,17 @@ impl ServerControl for Service {
     fn scan_only(&self, folders: &[PathBuf]) -> ApiResult<()> {
         self.with(|state| state.scan(folders.to_vec(), false));
         Ok(())
+    }
+
+    fn organize_files(&self, folder: &Path) -> ApiResult<Vec<OrganizeFile>> {
+        let api = &self.shared.api;
+        if !self.library_folders().iter().any(|f| folder.starts_with(f)) {
+            return Err(ApiError("it is not in the library's folders".into()));
+        }
+        let listed = api.with_db(|db| db.files_under(folder))?;
+        let paths: Vec<PathBuf> = listed.iter().map(|file| file.0.clone()).collect();
+        let drafts = api.with_db(|db| db.tag_drafts(&paths))?;
+        Ok(crate::organize::files_as_they_are(listed, drafts))
     }
 
     fn save_tag_drafts(&self, paths: &[PathBuf]) -> ApiResult<SaveOutcome> {

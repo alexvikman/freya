@@ -1135,6 +1135,75 @@ export component NativeSpectrum inherits Rectangle {
     }
 }
 
+/// A row of `Organize.rows`: a heading, or a folder of music.
+export struct OrganizeRow {
+    /// "group" for a heading, "folder" for a folder.
+    kind: string,
+    title: string,
+    detail: string,
+    /// A folder's: "unidentified", "review", "ready" or "identified".
+    state: string,
+    /// What `Organize.act("select", key)` chooses it by.
+    key: string,
+    selected: bool,
+}
+
+/// A file of the folder chosen: see `Organize.files`.
+export struct OrganizeFile {
+    key: string,
+    number: string,
+    title: string,
+    /// What its title is to become; the same as `title` when it stays.
+    new-title: string,
+    /// The file's name.
+    file: string,
+    length: string,
+    /// Whether changes wait to be saved in it.
+    changed: bool,
+    selected: bool,
+    /// Why it cannot be tagged; empty when it can.
+    note: string,
+}
+
+/// A field of the tags of what is chosen: see `Organize.fields`.
+export struct OrganizeField {
+    field: string,
+    label: string,
+    /// What the files say now; empty for nothing, `several` when they differ.
+    current: string,
+    /// What it is to become.
+    draft: string,
+    changed: bool,
+    several: bool,
+}
+
+/// Organizing the music's files, for an admin. Optional.
+export global Organize {
+    /// Headings and folders, as `filter` and the search leave them.
+    in property <[OrganizeRow]> rows;
+    /// "all", "unidentified", "review", "ready" or "identified".
+    in property <string> filter: "all";
+    /// "412 folders · 38 not identified".
+    in property <string> summary;
+    /// The folder chosen; empty when none is.
+    in property <string> title;
+    in property <string> detail;
+    /// What the last thing done came to.
+    in property <string> message;
+    in property <bool> busy;
+    in property <bool> can-save;
+    in property <bool> can-undo;
+    in property <[OrganizeFile]> files;
+    in property <[OrganizeField]> fields;
+    /// What `fields` is of: "All 8 files", or a file's name.
+    in property <string> scope;
+    /// "filter", "search", "select" a folder or "select-file" by their keys, "" for all its
+    /// files; "play-file", "save", "discard" or "undo".
+    callback act(string, string);
+    /// Has a field of what is chosen become a value.
+    callback edit-field(string, string);
+}
+
 /// The application. Optional.
 /// Something Freya does in the background: see `App.activities`.
 export struct Activity {

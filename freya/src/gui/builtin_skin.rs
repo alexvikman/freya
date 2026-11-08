@@ -518,6 +518,52 @@ impl Convert for LibraryRow {
     }
 }
 
+/// A skin struct made only of plain values, read and written field by field.
+macro_rules! plain_struct {
+    ($name:ident { $( $field:ident : $text:literal ),* $(,)? }) => {
+        impl Convert for $name {
+            fn from_value(value: Value) -> Option<Self> {
+                let Value::Struct(s) = value else { return None };
+                Some(Self { $( $field: field(&s, $text), )* })
+            }
+
+            fn to_value(self) -> Value {
+                structure(vec![$( ($text, self.$field.to_value()), )*])
+            }
+        }
+    };
+}
+
+plain_struct!(OrganizeRow {
+    kind: "kind",
+    title: "title",
+    detail: "detail",
+    state: "state",
+    key: "key",
+    selected: "selected",
+});
+
+plain_struct!(OrganizeFile {
+    key: "key",
+    number: "number",
+    title: "title",
+    new_title: "new-title",
+    file: "file",
+    length: "length",
+    changed: "changed",
+    selected: "selected",
+    note: "note",
+});
+
+plain_struct!(OrganizeField {
+    field: "field",
+    label: "label",
+    current: "current",
+    draft: "draft",
+    changed: "changed",
+    several: "several",
+});
+
 impl Convert for Activity {
     fn from_value(value: Value) -> Option<Self> {
         let Value::Struct(s) = value else { return None };
@@ -1086,7 +1132,7 @@ macro_rules! skin_api {
     };
 }
 
-const GLOBALS: [&str; 12] = [
+const GLOBALS: [&str; 13] = [
     "Player",
     "Playlist",
     "Playlists",
@@ -1099,6 +1145,7 @@ const GLOBALS: [&str; 12] = [
     "Updates",
     "LastFm",
     "Server",
+    "Organize",
 ];
 
 skin_api! {
@@ -1253,6 +1300,18 @@ skin_api! {
         App."autoscroll-x" => set_autoscroll_x, get_autoscroll_x;
         App."autoscroll-y" => set_autoscroll_y, get_autoscroll_y;
         App."activities" => set_activities, get_activities;
+        Organize."rows" => set_rows, get_rows;
+        Organize."filter" => set_filter, get_filter;
+        Organize."summary" => set_summary, get_summary;
+        Organize."title" => set_title, get_title;
+        Organize."detail" => set_detail, get_detail;
+        Organize."message" => set_message, get_message;
+        Organize."busy" => set_busy, get_busy;
+        Organize."can-save" => set_can_save, get_can_save;
+        Organize."can-undo" => set_can_undo, get_can_undo;
+        Organize."files" => set_files, get_files;
+        Organize."fields" => set_fields, get_fields;
+        Organize."scope" => set_scope, get_scope;
         App."log" => set_log, get_log;
         App."log-level" => set_log_level, get_log_level;
         App."log-source" => set_log_source, get_log_source;
@@ -1495,6 +1554,8 @@ skin_api! {
         App."set-log-level" => on_set_log_level, invoke_set_log_level(level: SharedString);
         App."set-log-source" => on_set_log_source, invoke_set_log_source(source: SharedString);
         App."cancel-activity" => on_cancel_activity, invoke_cancel_activity(id: SharedString);
+        Organize."act" => on_act, invoke_act(action: SharedString, value: SharedString);
+        Organize."edit-field" => on_edit_field, invoke_edit_field(field: SharedString, value: SharedString);
         App."show-skins" => on_show_skins, invoke_show_skins();
         App."set-theme" => on_set_theme, invoke_set_theme(theme: SharedString);
         App."set-close-minimizes" => on_set_close_minimizes, invoke_set_close_minimizes(minimizes: bool);

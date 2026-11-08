@@ -142,10 +142,11 @@ pub fn write_fields(path: &Path, changes: &TagMap) -> Result<(), WriteError> {
     if let Some(why) = why_not_taggable(path) {
         return Err(WriteError::NotTaggable(why));
     }
+    let real = fs::canonicalize(path)?;
     let copy = Copy::of(path)?;
     write_in_place(copy.path(), changes)?;
     verify(path, copy.path(), changes)?;
-    copy.take_place_of(path)
+    copy.take_place_of(path, &real)
 }
 
 /// A copy of a file, hidden beside it so scans pass it by and it is on the same disk, gone
@@ -155,17 +156,34 @@ struct Copy {
     kept: bool,
 }
 
+/// A name nobody can guess, for someone who can write in a shared music folder not to have
+/// put something there by that name first.
+fn random_name() -> io::Result<String> {
+    use ring::rand::{SecureRandom, SystemRandom};
+    let mut bytes = [0u8; 16];
+    SystemRandom::new()
+        .fill(&mut bytes)
+        .map_err(|_| io::Error::other("no random numbers"))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
 impl Copy {
     fn of(path: &Path) -> io::Result<Self> {
         // With the file's extension still last: that is how its format is told.
-        let name = path.file_name().unwrap_or_default().to_string_lossy();
         let extension = path.extension().unwrap_or_default().to_string_lossy();
-        let copy = path.with_file_name(format!(".{name}.freya-{}.{extension}", std::process::id()));
+        let name = format!(".freya-{}.{extension}", random_name()?);
         let this = Self {
-            path: copy,
+            path: path.with_file_name(name),
             kept: false,
         };
-        fs::copy(path, &this.path)?;
+        // Made anew: never through a link or over a file already there.
+        let mut to = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&this.path)?;
+        let mut from = File::open(path)?;
+        io::copy(&mut from, &mut to)?;
+        to.set_permissions(from.metadata()?.permissions())?;
         Ok(this)
     }
 
@@ -173,8 +191,13 @@ impl Copy {
         &self.path
     }
 
-    fn take_place_of(mut self, path: &Path) -> Result<(), WriteError> {
+    /// Takes the place of `path`, which must still be the regular file at `real`, the place
+    /// it was found at: a folder or the file swapped for a link meanwhile stops it.
+    fn take_place_of(mut self, path: &Path, real: &Path) -> Result<(), WriteError> {
         File::open(&self.path)?.sync_all()?;
+        if !fs::symlink_metadata(path)?.is_file() || fs::canonicalize(path)? != real {
+            return Err(WriteError::Mismatch("it was replaced meanwhile".into()));
+        }
         fs::rename(&self.path, path)?;
         self.kept = true;
         Ok(())

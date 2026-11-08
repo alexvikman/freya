@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
@@ -55,6 +55,34 @@ impl TagField {
         TagField::ArtistId,
         TagField::AlbumArtistId,
     ];
+
+    /// The field's name as a skin knows it.
+    pub fn name(self) -> &'static str {
+        match self {
+            TagField::Title => "title",
+            TagField::Artist => "artist",
+            TagField::Album => "album",
+            TagField::AlbumArtist => "album_artist",
+            TagField::Genre => "genre",
+            TagField::Date => "date",
+            TagField::OriginalDate => "original_date",
+            TagField::Track => "track",
+            TagField::TrackTotal => "track_total",
+            TagField::Disc => "disc",
+            TagField::DiscTotal => "disc_total",
+            TagField::Edition => "edition",
+            TagField::RecordingId => "recording_id",
+            TagField::ReleaseTrackId => "release_track_id",
+            TagField::ReleaseId => "release_id",
+            TagField::ReleaseGroupId => "release_group_id",
+            TagField::ArtistId => "artist_id",
+            TagField::AlbumArtistId => "album_artist_id",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|field| field.name() == name)
+    }
 
     /// The field's name, as the user reads it.
     pub fn label(self) -> &'static str {
@@ -131,4 +159,53 @@ pub struct SaveOutcome {
     pub save: Option<i64>,
     pub saved: u32,
     pub failed: Vec<SaveFailure>,
+}
+
+/// How far a folder of music has come.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum FolderState {
+    /// Nothing is known of which release it is.
+    Unidentified,
+    /// A release was suggested that the user should look at.
+    Review,
+    /// Changes wait to be saved.
+    Ready,
+    /// Its files say which release they are.
+    Identified,
+}
+
+/// What a folder's name says.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct FolderName {
+    pub year: Option<u32>,
+    pub title: String,
+    pub edition: Option<String>,
+}
+
+/// A folder of music, the unit that is organized: an album's folder, with its discs' folders.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct OrganizeFolder {
+    pub path: PathBuf,
+    /// The folder it is in, by name: most often the artist's.
+    pub group: String,
+    /// The folder's own name.
+    pub name: String,
+    pub parsed: FolderName,
+    pub files: u32,
+    pub state: FolderState,
+    /// Whether its files are of different albums, not one album's.
+    pub mixed: bool,
+}
+
+/// A file of a folder, as its tags are on disk.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct OrganizeFile {
+    pub path: PathBuf,
+    pub fields: TagMap,
+    /// What is to be changed in it.
+    pub draft: TagMap,
+    pub duration: Option<Duration>,
+    /// Why tags cannot be written in it, if so.
+    pub not_taggable: Option<String>,
 }

@@ -191,3 +191,52 @@ fn plays_follow_a_moved_file() {
         1
     );
 }
+
+fn album_track(library: &Library, path: &str, album: &str, release: Option<&str>) {
+    library
+        .db
+        .execute(
+            "INSERT INTO tracks (path, source, size, modified, album_artist, album, added,
+                                 release_id)
+             VALUES (?1, ?1, 1, 1, 'Metallica', ?2, 1, ?3)",
+            params![path, album, release],
+        )
+        .unwrap();
+}
+
+#[test]
+fn folders_are_the_albums_with_their_discs() {
+    use freya_protocol::FolderState;
+
+    let mut library = Library::open_in_memory().unwrap();
+    let album = "/m/Metallica/(1999) S&M";
+    album_track(&library, &format!("{album}/CD1/01.flac"), "S&M", Some("r"));
+    album_track(&library, &format!("{album}/CD2/01.flac"), "S&M", Some("r"));
+    album_track(&library, "/m/Metallica/(1996) Load/01.flac", "Load", None);
+    album_track(
+        &library,
+        "/m/Metallica/(1997) Reload/01.flac",
+        "Reload",
+        None,
+    );
+    album_track(&library, "/m/Loose/a.mp3", "One", None);
+    album_track(&library, "/m/Loose/b.mp3", "Two", None);
+    library
+        .set_tag_drafts(&[TagDraft {
+            path: "/m/Metallica/(1996) Load/01.flac".into(),
+            changes: TagMap::from([(TagField::Album, "Load".to_owned())]),
+        }])
+        .unwrap();
+
+    let folders = library.organize_folders().unwrap();
+    let find = |name: &str| folders.iter().find(|f| f.name == name).unwrap();
+    assert_eq!(folders.len(), 4);
+    let sm = find("(1999) S&M");
+    assert_eq!((sm.files, sm.state), (2, FolderState::Identified));
+    assert_eq!(sm.group, "Metallica");
+    assert_eq!(sm.parsed.year, Some(1999));
+    assert_eq!(find("(1996) Load").state, FolderState::Ready);
+    assert_eq!(find("(1997) Reload").state, FolderState::Unidentified);
+    assert!(find("Loose").mixed);
+    assert!(!sm.mixed);
+}

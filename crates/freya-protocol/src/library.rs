@@ -96,6 +96,19 @@ pub struct TagInfo {
     /// compilation flag.
     #[serde(default)]
     pub album_kind: Option<AlbumKind>,
+    /// The year this release came out, when `year` is when the music first did.
+    #[serde(default)]
+    pub release_year: Option<u32>,
+    /// What tells this edition of the album from its others.
+    #[serde(default)]
+    pub edition: Option<String>,
+    /// MusicBrainz's ids of the recording, the release and the release group.
+    #[serde(default)]
+    pub recording_id: Option<String>,
+    #[serde(default)]
+    pub release_id: Option<String>,
+    #[serde(default)]
+    pub release_group_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -134,6 +147,7 @@ impl Track {
             disc: self.disc,
             duration: self.duration,
             album_kind: None,
+            ..TagInfo::default()
         }
     }
 }

@@ -1,10 +1,12 @@
 //! Writing what was decided about the music's files to them, and putting them back.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use freya_library::library::organize::SavedFile;
 use freya_library::tagging;
-use freya_protocol::{SaveFailure, TagDraft, TagField, TagMap};
+use freya_protocol::{OrganizeFile, SaveFailure, TagDraft, TagField, TagMap};
 
 use crate::folders::music_file;
 
@@ -90,6 +92,35 @@ fn undo_file(file: &SavedFile, folders: &[PathBuf]) -> Result<SavedFile, String>
         before: TagMap::new(),
         after: file.before.clone(),
     })
+}
+
+/// The files listed, as their tags are on disk, with `drafts`: a CUE sheet's audio file has
+/// its tracks in the sheet, so it cannot be tagged as a file.
+pub fn files_as_they_are(
+    listed: Vec<(PathBuf, Option<Duration>, bool)>,
+    drafts: Vec<TagDraft>,
+) -> Vec<OrganizeFile> {
+    let mut drafts: HashMap<PathBuf, TagMap> = drafts
+        .into_iter()
+        .map(|draft| (draft.path, draft.changes))
+        .collect();
+    listed
+        .into_iter()
+        .map(|(path, duration, parts)| {
+            let not_taggable = if parts {
+                Some("its tracks are in a CUE sheet".to_owned())
+            } else {
+                tagging::why_not_taggable(&path)
+            };
+            OrganizeFile {
+                fields: tagging::read_fields(&path).unwrap_or_default(),
+                draft: drafts.remove(&path).unwrap_or_default(),
+                path,
+                duration,
+                not_taggable,
+            }
+        })
+        .collect()
 }
 
 /// The file at `path`, when it is music within `folders`: a client names it.

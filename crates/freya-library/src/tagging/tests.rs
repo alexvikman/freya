@@ -402,3 +402,23 @@ fn says_when_a_file_cannot_be_tagged() {
     assert!(why_not_taggable(&path).is_some());
     assert_eq!(why_not_taggable(&folder.copy("sine.flac")), None);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_file_swapped_for_a_link_is_not_replaced() {
+    let folder = Folder::new("swapped");
+    let path = folder.copy("sine.flac");
+    let real = fs::canonicalize(&path).unwrap();
+    let copy = Copy::of(&path).unwrap();
+    let elsewhere = folder.0.join("elsewhere.flac");
+    fs::rename(&path, &elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+    assert!(copy.take_place_of(&path, &real).is_err());
+    assert!(
+        fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(folder.names(), ["elsewhere.flac", "sine.flac"]);
+}

@@ -51,7 +51,7 @@ pub use scan::{ScanEvent, ScanOptions, ScanSummary, Scanner, scan, scan_with};
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Bumped whenever the tracks' tables change; they are then rebuilt.
-const SCHEMA_VERSION: i32 = 7;
+const SCHEMA_VERSION: i32 = 8;
 /// The most tracks [`Library::tracks_under`] gives, for a folder dropped on Freya.
 pub const MOST_TRACKS_UNDER: usize = 100_000;
 
@@ -92,6 +92,14 @@ const SCHEMA: &str = "
         -- The kind of release the tags say the album is: 'album', 'single', 'ep' or
         -- 'compilation'; NULL when they do not say.
         album_kind TEXT,
+        -- The year this release came out, when `year` is when the music first did.
+        release_year INTEGER,
+        -- What tells this edition from the album's others, as the tags say.
+        edition TEXT,
+        -- MusicBrainz's ids, as the tags say.
+        recording_id TEXT,
+        release_id TEXT,
+        release_group_id TEXT,
         genre TEXT,
         year INTEGER,
         track INTEGER,
@@ -258,6 +266,27 @@ impl Library {
                  UPDATE tracks SET modified = -1;",
             )?;
             version = 7;
+            db.pragma_update(None, "user_version", version)?;
+        }
+        if version == 7 {
+            log::info!("reading more of the music's tags into the library");
+            for column in [
+                "release_year INTEGER",
+                "edition TEXT",
+                "recording_id TEXT",
+                "release_id TEXT",
+                "release_group_id TEXT",
+            ] {
+                let name = column.split(' ').next().unwrap_or(column);
+                if db
+                    .prepare(&format!("SELECT {name} FROM tracks LIMIT 0"))
+                    .is_err()
+                {
+                    db.execute_batch(&format!("ALTER TABLE tracks ADD COLUMN {column};"))?;
+                }
+            }
+            db.execute_batch("UPDATE tracks SET modified = -1;")?;
+            version = 8;
             db.pragma_update(None, "user_version", version)?;
         }
         if version != SCHEMA_VERSION {
@@ -924,9 +953,10 @@ fn put(
         .prepare_cached(
             "INSERT INTO tracks (path, start_ms, end_ms, source, size, modified, title, artist,
                                  album, album_artist, artist_mbid, genre, year, track, disc,
-                                 duration_ms, added, fingerprint, album_kind)
+                                 duration_ms, added, fingerprint, album_kind, release_year,
+                                 edition, recording_id, release_id, release_group_id)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-                     ?18, ?19)
+                     ?18, ?19, ?20, ?21, ?22, ?23, ?24)
              RETURNING id",
         )?
         .query_row(
@@ -950,6 +980,11 @@ fn put(
                 added,
                 track.fingerprint,
                 tags.album_kind.map(AlbumKind::name),
+                tags.release_year,
+                tags.edition,
+                tags.recording_id,
+                tags.release_id,
+                tags.release_group_id,
             ],
             |row| row.get(0),
         )?;

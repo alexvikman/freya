@@ -2,11 +2,13 @@
 //! was written so it can be undone, and what the users made with the library following the
 //! names and places that changed.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
-use freya_protocol::{TagDraft, TagField, TagMap, TagSave, plain_name};
+use freya_protocol::{
+    FolderState, OrganizeFolder, TagDraft, TagField, TagMap, TagSave, plain_name,
+};
 use rusqlite::{OptionalExtension, Transaction, params};
 
 use super::{Library, Result, epoch_millis, from_epoch_millis};
@@ -36,6 +38,8 @@ pub(super) const SCHEMA: &str = "
     );
 ";
 
+pub mod names;
+
 /// A file a save changed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SavedFile {
@@ -45,6 +49,12 @@ pub struct SavedFile {
     pub before: TagMap,
     /// What they are now.
     pub after: TagMap,
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
 fn text(path: &Path) -> String {
@@ -99,6 +109,80 @@ impl Library {
             }
         }
         tx.commit()
+    }
+
+    /// The library's folders of music, by what they are in and their names.
+    pub fn organize_folders(&self) -> Result<Vec<OrganizeFolder>> {
+        #[derive(Default)]
+        struct Folder {
+            files: u32,
+            identified: u32,
+            drafts: u32,
+            albums: HashMap<String, u32>,
+        }
+        let drafted: HashSet<String> = self
+            .db
+            .prepare_cached("SELECT path FROM tag_drafts")?
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<_>>()?;
+        let mut statement = self
+            .db
+            .prepare_cached("SELECT path, album, max(release_id) FROM tracks GROUP BY path")?;
+        let mut rows = statement.query([])?;
+        let mut folders: BTreeMap<PathBuf, Folder> = BTreeMap::new();
+        while let Some(row) = rows.next()? {
+            let path: String = row.get(0)?;
+            let album: Option<String> = row.get(1)?;
+            let release: Option<String> = row.get(2)?;
+            let folder = folders
+                .entry(names::album_folder(Path::new(&path)))
+                .or_default();
+            folder.files += 1;
+            folder.identified += u32::from(release.is_some());
+            folder.drafts += u32::from(drafted.contains(&path));
+            *folder.albums.entry(album.unwrap_or_default()).or_default() += 1;
+        }
+        let mut list: Vec<OrganizeFolder> = folders
+            .into_iter()
+            .map(|(path, folder)| {
+                let name = file_name(&path);
+                let group = path.parent().map(file_name).unwrap_or_default();
+                let most = folder.albums.values().copied().max().unwrap_or(0);
+                let state = if folder.drafts > 0 {
+                    FolderState::Ready
+                } else if folder.identified == folder.files {
+                    FolderState::Identified
+                } else {
+                    FolderState::Unidentified
+                };
+                OrganizeFolder {
+                    parsed: names::parse_folder_name(&name),
+                    path,
+                    group,
+                    name,
+                    files: folder.files,
+                    state,
+                    // Most of them on one album is an album with a stray track or two.
+                    mixed: folder.albums.len() > 1 && most * 5 < folder.files * 4,
+                }
+            })
+            .collect();
+        list.sort_by_cached_key(|folder| (folder.group.to_lowercase(), folder.name.to_lowercase()));
+        Ok(list)
+    }
+
+    /// The paths of the library's files under `folder`, each once, in order.
+    pub fn files_under(&self, folder: &Path) -> Result<Vec<(PathBuf, Option<Duration>, bool)>> {
+        let tracks = self.tracks_under(&[folder.to_path_buf()])?;
+        let mut files: Vec<(PathBuf, Option<Duration>, bool)> = Vec::new();
+        for track in tracks {
+            match files.last_mut() {
+                // A CUE sheet's tracks are one file, known as parts of it.
+                Some(last) if last.0 == track.path => last.2 = true,
+                _ => files.push((track.path, track.duration, track.part.is_some())),
+            }
+        }
+        Ok(files)
     }
 
     /// The last `limit` saves, the latest first.

@@ -128,6 +128,8 @@ macro_rules! with_library_data {
             /// When each of a playlist's tracks was added to it.
             fn playlist_added(playlist: &str) -> Vec<($crate::PlaylistTrack, ::std::time::SystemTime)>;
             fn note_playlist_added(playlist: &str, tracks: &[$crate::PlaylistTrack], at: ::std::time::SystemTime) -> ();
+            /// The library's folders of music.
+            fn organize_folders() -> Vec<$crate::OrganizeFolder>;
             /// What is to be changed in the files at `paths`, those that have a draft.
             fn tag_drafts(paths: &[::std::path::PathBuf]) -> Vec<$crate::TagDraft>;
             /// Keeps `drafts`, in place of what those files had; one that changes nothing goes.
@@ -155,6 +157,8 @@ macro_rules! with_server_control {
             /// Looks through `folders`, within the library's, only.
             fn scan_only(folders: &[::std::path::PathBuf]) -> ();
             fn stop_scan() -> ();
+            /// The files of the album's folder `folder`, as their tags are on disk now.
+            fn organize_files(folder: &::std::path::Path) -> Vec<$crate::OrganizeFile>;
             /// Writes the drafts of the files at `paths` to them, and scans them.
             fn save_tag_drafts(paths: &[::std::path::PathBuf]) -> $crate::SaveOutcome;
             /// Puts the files of the save `save` back as they were.
@@ -373,6 +377,7 @@ pub const OWNER_CALLS: &[&str] = &[
 /// kept, and a client's own call of it may have changed the library; so one added later is
 /// read anew each time until it is named.
 pub const CACHED_CALLS: &[&str] = &[
+    "organize_folders",
     "tag_drafts",
     "tag_saves",
     "stats",
