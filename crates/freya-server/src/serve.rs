@@ -17,23 +17,24 @@
 //!   its certificate's fingerprint, as it answers those looking for it.
 //! - `GET /certificate`: the server's TLS certificate, in DER, for a client to pin the first
 //!   time it connects.
-//! - `POST /quit`: the server stops; only from this computer.
-//! - `POST /pair`: `{"nonce", "proof", "device"}`, the HMAC with the pairing key a client on
-//!   this computer read over its nonce and its name (see [`crate::accounts`]): tokens for the
-//!   device, as `/token` gives them. Only from this computer.
 //! - `POST /token`: tokens for a device, `{"access_token", "refresh_token", "token_type",
 //!   "expires_in"}` (see [`crate::accounts`]), for `{"grant_type": "authorization_code",
 //!   "code", "code_verifier", "redirect_uri", "device"}`, the code the login page gave (see
 //!   [`crate::pages`]), or for `{"grant_type": "refresh_token", "refresh_token"}`.
 //! - `POST /enroll`: `{"nonce"}`, hex: `{"proof"}`, the HMAC with which the server proves it
 //!   knows the connection code its computer shows (see [`crate::accounts`]). No token.
+//! - `POST /claim`: `{"nonce", "proof"}`, hex, with which a device proves it knows a code too:
+//!   a ticket for the page that adopts the server or joins it. No token.
+//! - `POST /account/users/invite`, `/invite-again` and `/remove`, and `GET /account/users`: the
+//!   server's users, an admin's to keep; an admin among them only the owner's.
 //! - `POST /account/connection-code`: a new connection code, `{"code", "lasts"}` (seconds);
 //!   only an admin's.
 //! - `GET /account`: the caller's account and devices; `POST /account/password-page`: a
 //!   ticket for the page the password is changed on, `{"ticket"}`; `POST /account/revoke`:
 //!   `{"device"}`; `POST /account/log-out`: the caller's own token taken back.
 //!
-//! Every request but `/version`, `/pair`, `/token` and `/enroll` carries a device's access token, as
+//! Every request but `/version`, `/certificate`, `/token`, `/enroll` and `/claim` carries a
+//! device's access token, as
 //! `Authorization: Bearer ...`, or is refused. A listener's device is refused what changes the
 //! server: every call but those [`freya_protocol::LISTENER_CALLS`] names, and keeping
 //! pictures. The pages a browser opens, under
