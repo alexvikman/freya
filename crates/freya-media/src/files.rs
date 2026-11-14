@@ -44,6 +44,7 @@ pub fn collect(paths: &[PathBuf]) -> Vec<PathBuf> {
         files: is_audio,
         images: false,
         stamps: false,
+        given: true,
     };
     collect_matching(paths, &want, &AtomicBool::new(false), &mut |_| {}).files
 }
@@ -61,6 +62,7 @@ pub fn collect_with_sheets_until(paths: &[PathBuf], cancel: &AtomicBool) -> Vec<
         files: is_audio_or_sheet,
         images: false,
         stamps: false,
+        given: true,
     };
     collect_matching(paths, &want, cancel, &mut |_| {}).files
 }
@@ -90,6 +92,7 @@ pub fn walk_library(
         files: is_audio_or_sheet,
         images: true,
         stamps: true,
+        given: false,
     };
     collect_within(paths, library, &want, cancel, entering)
 }
@@ -105,6 +108,11 @@ struct Want {
     images: bool,
     /// The size and time of what it finds.
     stamps: bool,
+    /// Whether what is given that is no folder is kept as given: a file the user names, as
+    /// for the command line's player. Not for a scan, which is given folders: what is no
+    /// folder when it is walked, as one taken away meanwhile or a link put in its place, is
+    /// not read as a file.
+    given: bool,
 }
 
 fn collect_matching(
@@ -151,7 +159,7 @@ fn collect_within(
             );
             files.sort();
             walked.files.extend(files);
-        } else {
+        } else if want.given {
             walked.files.push(path.clone());
         }
     }
@@ -423,6 +431,10 @@ mod tests {
             .files
         };
         assert!(walk("linked").is_empty(), "a link out, scanned by itself");
+        assert!(
+            walk("a/5.ogg").is_empty(),
+            "nor is a link to a file read for being what a scan was given"
+        );
         assert_eq!(walk("b"), [music.join("b/deep/2.flac")]);
         let _ = std::fs::remove_dir_all(&dir);
     }
