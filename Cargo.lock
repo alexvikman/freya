@@ -1605,7 +1605,7 @@ dependencies = [
 
 [[package]]
 name = "freya"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "block2 0.6.2",
@@ -1657,7 +1657,7 @@ dependencies = [
 
 [[package]]
 name = "freya-audio"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "cpal",
  "crossbeam-channel",
@@ -1672,7 +1672,7 @@ dependencies = [
 
 [[package]]
 name = "freya-client"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "base64",
  "freya-audio",
@@ -1693,7 +1693,7 @@ dependencies = [
 
 [[package]]
 name = "freya-decode"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "log",
  "rubato",
@@ -1703,7 +1703,7 @@ dependencies = [
 
 [[package]]
 name = "freya-dirs"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
@@ -1711,7 +1711,7 @@ dependencies = [
 
 [[package]]
 name = "freya-http"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "httparse",
  "log",
@@ -1721,7 +1721,7 @@ dependencies = [
 
 [[package]]
 name = "freya-lastfm"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "freya-protocol",
  "serde_json",
@@ -1730,7 +1730,7 @@ dependencies = [
 
 [[package]]
 name = "freya-library"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "freya-media",
  "freya-protocol",
@@ -1745,7 +1745,7 @@ dependencies = [
 
 [[package]]
 name = "freya-media"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "freya-protocol",
  "image",
@@ -1759,7 +1759,7 @@ dependencies = [
 
 [[package]]
 name = "freya-protocol"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "ring",
  "serde",
@@ -1769,7 +1769,7 @@ dependencies = [
 
 [[package]]
 name = "freya-server"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "base64",
  "ctrlc",
@@ -1804,7 +1804,7 @@ dependencies = [
 
 [[package]]
 name = "freya-skin"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "freya-dirs",
  "image",
@@ -1819,7 +1819,7 @@ dependencies = [
 
 [[package]]
 name = "freya-transcode"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "freya-decode",
  "log",
@@ -1829,7 +1829,7 @@ dependencies = [
 
 [[package]]
 name = "freya-update"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "base64",
