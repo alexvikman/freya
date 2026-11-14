@@ -102,7 +102,9 @@ impl Target {
         remove(&old)?;
         std::fs::write(&archive, zip)
             .with_context(|| format!("could not write next to {}", app.display()))?;
-        let unpacked = run(Command::new("ditto")
+        // The system's own tools, from where macOS keeps them, not whichever are first on
+        // the path.
+        let unpacked = run(Command::new("/usr/bin/ditto")
             .arg("-x")
             .arg("-k")
             .arg(&archive)
@@ -113,7 +115,7 @@ impl Target {
         // The bundle in the release, "Freya.app" or "Freya Server.app".
         let new = staging.join(format!("{}.app", self.product.name()));
         // The signature seals the whole bundle: anything changed or missing shows here.
-        run(Command::new("codesign")
+        run(Command::new("/usr/bin/codesign")
             .args(["--verify", "--deep", "--strict"])
             .arg(&new))
         .context("the new app's signature does not hold")?;

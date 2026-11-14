@@ -56,6 +56,20 @@ impl Pictures {
             .collect()
     }
 
+    /// Keeps `bytes` as they came, when they are a picture Freya shows, within the bounds
+    /// pictures are decoded in: what a service on the internet or an export gave, which every
+    /// device is then given as a picture. Anything else is refused, so nothing but a picture
+    /// is kept and handed out as one.
+    pub fn put_picture(&self, bytes: &[u8]) -> std::io::Result<String> {
+        crate::picture_dimensions(bytes).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("not a picture: {e}"),
+            )
+        })?;
+        self.put(bytes)
+    }
+
     /// Keeps `bytes`, unless they are kept already, and returns their name. Written under
     /// another name first and then renamed, so a half-written picture is never read.
     pub fn put(&self, bytes: &[u8]) -> std::io::Result<String> {

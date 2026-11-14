@@ -233,10 +233,13 @@ pub fn import(
         })
         .collect();
 
-    // The pictures the export names, each checked to be what its name says.
+    // The pictures the export names, each checked to be what its name says, and a picture:
+    // what an export holds is handed to every device as one.
     if let Some(store) = into.pictures {
         for (checksum, bytes) in &pictures {
-            if Pictures::checksum(bytes) == *checksum {
+            if Pictures::checksum(bytes) == *checksum
+                && freya_media::picture_dimensions(bytes).is_ok()
+            {
                 store.put(bytes).map_err(|e| e.to_string())?;
             }
         }

@@ -80,8 +80,9 @@ pub fn run(actions: Actions) -> Option<()> {
 fn open(what: &std::ffi::OsStr) {
     #[cfg(windows)]
     let opened = shell_open(what);
+    // Where macOS keeps it, not whichever `open` is first on the path.
     #[cfg(not(windows))]
-    let opened = std::process::Command::new("open")
+    let opened = std::process::Command::new("/usr/bin/open")
         .arg(what)
         .spawn()
         .map(drop);
