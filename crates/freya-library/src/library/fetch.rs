@@ -688,7 +688,7 @@ fn ask(job: &Job, online: &Online, pictures: &Pictures, paces: &Paces) -> Found 
             None if online.deezer => {
                 paces.deezer.wait();
                 match artist_image::deezer(name) {
-                    Ok(Answer::Picture(bytes)) => match pictures.put(&bytes) {
+                    Ok(Answer::Picture(bytes)) => match pictures.put_picture(&bytes) {
                         Ok(picture) => Some(("deezer", Some(picture))),
                         Err(e) => {
                             log::warn!("could not keep a picture of {name}: {e}");
@@ -743,7 +743,7 @@ fn ask(job: &Job, online: &Online, pictures: &Pictures, paces: &Paces) -> Found 
 /// Downloads the picture at `url` into Freya's pictures: its checksum.
 fn keep(url: &str, pictures: &Pictures, name: &str) -> Option<String> {
     let kept = artist_image::download(url)
-        .and_then(|bytes| pictures.put(&bytes).map_err(|e| e.to_string()));
+        .and_then(|bytes| pictures.put_picture(&bytes).map_err(|e| e.to_string()));
     match kept {
         Ok(checksum) => Some(checksum),
         Err(e) => {

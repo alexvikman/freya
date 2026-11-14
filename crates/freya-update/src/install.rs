@@ -100,9 +100,11 @@ impl Target {
         let archive = self.beside("update.zip")?;
         remove(&staging)?;
         remove(&old)?;
-        std::fs::write(&archive, zip)
+        write_new(&archive, zip, 0o600)
             .with_context(|| format!("could not write next to {}", app.display()))?;
-        let unpacked = run(Command::new("ditto")
+        // The system's own tools, from where macOS keeps them, not whichever are first on
+        // the path.
+        let unpacked = run(Command::new("/usr/bin/ditto")
             .arg("-x")
             .arg("-k")
             .arg(&archive)
@@ -113,7 +115,7 @@ impl Target {
         // The bundle in the release, "Freya.app" or "Freya Server.app".
         let new = staging.join(format!("{}.app", self.product.name()));
         // The signature seals the whole bundle: anything changed or missing shows here.
-        run(Command::new("codesign")
+        run(Command::new("/usr/bin/codesign")
             .args(["--verify", "--deep", "--strict"])
             .arg(&new))
         .context("the new app's signature does not hold")?;
@@ -129,13 +131,8 @@ impl Target {
 
     fn install_image(&self, image: &Path, bytes: &[u8]) -> Result<()> {
         let staging = self.beside("update")?;
-        std::fs::write(&staging, bytes)
+        write_new(&staging, bytes, 0o755)
             .with_context(|| format!("could not write next to {}", image.display()))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755))?;
-        }
         // A rename over the running image is atomic; the running Freya keeps its open copy.
         std::fs::rename(&staging, image).context("could not move the new AppImage into place")
     }
@@ -189,6 +186,35 @@ fn remove(path: &Path) -> Result<()> {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
         _ => Ok(()),
     }
+}
+
+/// Writes `bytes` to a new file at `path`, with `mode` where the system has modes: what an
+/// earlier try left there goes first, and the file is made anew, never written through a link
+/// nor into a file someone else put there, in a folder others may write to as well.
+fn write_new(path: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
+    use std::io::Write;
+    match std::fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(mode);
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
+    let mut file = options.open(path)?;
+    file.write_all(bytes)?;
+    #[cfg(unix)]
+    {
+        // As asked, whatever the process's mask left of it.
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(mode))?;
+    }
+    file.sync_all()
 }
 
 fn run(command: &mut Command) -> Result<()> {

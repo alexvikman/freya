@@ -98,7 +98,7 @@ pub fn album_art_from(bytes: &[u8]) -> Option<(Vec<u8>, [u8; 3])> {
 
 /// The front cover from the file's tags, or else any picture in them.
 fn embedded_cover(track: &Path) -> Option<Vec<u8>> {
-    let file = lofty::read_from_path(track).ok()?;
+    let file = crate::tags::probe(track)?.read().ok()?;
     let pictures: Vec<_> = file.tags().iter().flat_map(|t| t.pictures()).collect();
     pictures
         .iter()
@@ -156,10 +156,10 @@ fn image_in(dir: &Path, within: &Path) -> Option<Vec<u8>> {
         _ => return None,
     };
     let real = chosen.canonicalize().ok()?;
-    if !real.starts_with(within) || !std::fs::metadata(&real).ok()?.is_file() {
+    if !real.starts_with(within) {
         return None;
     }
-    std::fs::read(real).ok()
+    crate::files::read_at_most(&real, crate::files::LARGEST_PICTURE_FILE).ok()
 }
 
 /// A color for an album's page, from its cover's pixels (RGB, 3 bytes each): its most

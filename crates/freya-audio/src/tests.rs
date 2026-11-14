@@ -734,6 +734,7 @@ fn a_file_read_from_a_server_plays_as_the_file_itself() {
                 bearer: None,
                 agent: None,
                 duration: None,
+                server: None,
             }),
             ..local.clone()
         };
@@ -786,6 +787,7 @@ fn the_next_track_from_a_server_is_opened_before_it_plays() {
             bearer: None,
             agent: None,
             duration: None,
+            server: None,
         }),
         ..Media::from(fixture("sine.flac"))
     };
@@ -823,6 +825,7 @@ fn a_dropped_request_is_made_again() {
             bearer: None,
             agent: None,
             duration: None,
+            server: None,
         }),
         ..local.clone()
     };
@@ -848,6 +851,7 @@ fn a_server_that_never_answers_is_given_up_on() {
             bearer: None,
             agent: None,
             duration: None,
+            server: None,
         }),
         ..Media::from(fixture("sine.flac"))
     };
@@ -962,6 +966,7 @@ fn remote_media(file: &Path, url: &str) -> Media {
             bearer: None,
             agent: None,
             duration: None,
+            server: None,
         }),
         ..Media::from(file)
     }

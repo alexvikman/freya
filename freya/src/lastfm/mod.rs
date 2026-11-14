@@ -59,7 +59,9 @@ impl LastFm {
             return;
         };
         match server.lastfm_connect() {
-            Ok(page) if is_auth_page(&page) => crate::update::open_page(&page),
+            // Its address holds the token Last.fm ties to the account: through a file, so it
+            // is in no command line other users of the computer could read.
+            Ok(page) if is_auth_page(&page) => crate::update::open_page_privately(&page),
             Ok(page) => {
                 log::warn!("the server gave a page that is not Last.fm's: {page}");
                 self.status.error = "The server gave a page that is not Last.fm's.".into();

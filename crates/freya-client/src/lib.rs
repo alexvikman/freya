@@ -197,15 +197,10 @@ pub fn token_key_by_address(pin: &Pin) -> String {
 /// folder of the client's.
 pub fn connect_pinned(pin: Pin, store: TokenStore, cache: Option<PathBuf>) -> Arc<Remote<Http>> {
     let key = token_key(&pin);
-    let refresh = store.get(&key).or_else(|| {
-        // Kept by the address, as before: kept by the certificate from now on.
-        let before = token_key_by_address(&pin);
-        let refresh = store.get(&before)?;
-        store.set(&key, &refresh);
-        store.remove(&before);
-        Some(refresh)
-    });
-    let refresh = refresh.unwrap_or_default();
+    // One kept by the address, as before 0.4, is whatever server's had that address then:
+    // not given to this one, which may be another, and taken away.
+    store.remove(&token_key_by_address(&pin));
+    let refresh = store.get(&key).unwrap_or_default();
     let server = hex(ring::digest::digest(&ring::digest::SHA256, &pin.certificate).as_ref());
     let mut http = Http::pinned(pin).with_session(refresh, None, Some((store, key)));
     if let Some(cache) = cache {

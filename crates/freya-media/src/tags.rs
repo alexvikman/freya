@@ -11,15 +11,14 @@ use lofty::tag::ItemKey;
 pub fn read_tags(path: &Path) -> Option<TagInfo> {
     // Without the pictures, which can be megabytes per file and are read for covers alone.
     let options = lofty::config::ParseOptions::new().read_cover_art(false);
-    let file = lofty::probe::Probe::open(path)
-        .ok()?
-        .options(options)
-        .read()
-        .ok()?;
+    let file = probe(path)?.options(options).read().ok()?;
     let duration = Some(file.properties().duration()).filter(|d| !d.is_zero());
     let tag = file.primary_tag().or_else(|| file.first_tag());
+    // A title is a line, not a megabyte: what a file says beyond is left out, so it is
+    // neither kept, sent to every client nor laid out as text.
     let text = |s: Option<std::borrow::Cow<'_, str>>| {
-        s.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
+        s.map(|s| s.trim().chars().take(LONGEST_TAG).collect::<String>())
+            .filter(|s| !s.is_empty())
     };
     Some(TagInfo {
         title: tag.and_then(|t| text(t.title())),
@@ -40,6 +39,20 @@ pub fn read_tags(path: &Path) -> Option<TagInfo> {
         disc: tag.and_then(|t| t.disk()),
         duration,
         album_kind: tag.and_then(album_kind),
+    })
+}
+
+/// The most characters taken of a tag's text.
+const LONGEST_TAG: usize = 1024;
+
+/// The file at `path`, opened for its tags to be read, its kind told by its name, as
+/// `Probe::open` tells it: a regular file only, opened without waiting.
+pub(crate) fn probe(path: &Path) -> Option<lofty::probe::Probe<std::io::BufReader<std::fs::File>>> {
+    let file = crate::files::open_regular(path).ok()?;
+    let probe = lofty::probe::Probe::new(std::io::BufReader::new(file));
+    Some(match lofty::file::FileType::from_path(path) {
+        Some(kind) => probe.set_file_type(kind),
+        None => probe,
     })
 }
 

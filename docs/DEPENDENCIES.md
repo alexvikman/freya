@@ -25,6 +25,11 @@ replaced, only yanked, so a pinned version stays the code it was.
   uses under its royalty-free license (Slint is credited in the About window);
 - a dependency has no version (`*`).
 
+The advisories are also checked once a day by a workflow of their own
+([`advisories.yml`](../.github/workflows/advisories.yml)), which fails, and so tells the
+repository's owner, when one is published between pushes: on 2026-11-14 two had been, and two
+versions yanked, six days after the last push, and nothing said so.
+
 Some abandoned crates are deep in other crates' dependencies, with no known flaw and nothing
 Freya can replace them with. They are listed under `ignore` in `deny.toml`, each with the
 reason and what would remove it. Look at them again when updating.

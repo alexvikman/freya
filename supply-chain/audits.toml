@@ -31,6 +31,12 @@ criteria = "safe-to-deploy"
 delta = "1.8.0 -> 2.5.0"
 notes = "Moves to event-listener-strategy and pin-project-lite, adds force_send, closed() and same_channel, optional portable-atomic, no_std. Keeps #![forbid(unsafe_code)]; only process::abort on refcount overflow, as before."
 
+[[audits.async-executor]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "1.14.0 -> 1.14.1"
+notes = "1.14.0 was yanked for a use-after-free: its wakers borrowed the executor's state, and one firing while the executor was dropped touched it freed. 1.14.1 gives each waker and task a clone of the state's Arc again (state_as_arc: Arc::from_raw, clone, forget, on the pointer Arc::into_raw made, which the executor keeps until it is dropped), so the schedule function is 'static, as its own check now asserts; leak() goes through the same pointer. No build script, no file, environment or network access."
+
 [[audits.bitflags]]
 who = "Freya maintainers (AI-assisted review by Claude)"
 criteria = "safe-to-deploy"
@@ -54,6 +60,12 @@ who = "Freya maintainers (AI-assisted review by Claude)"
 criteria = "safe-to-deploy"
 delta = "1.9.3 -> 1.12.1"
 notes = "Proc-macro, syn 2 to 3. NoUninit for packed/transparent generics and enums with fields, guarded by per-variant compile-time size asserts and field bounds, sound for repr(C) and repr(int); padding check as an equivalent const assert; TransparentWrapper forwards where-clauses with the ZST check unchanged. No filesystem, environment or network access."
+
+[[audits.clipboard-win]]
+who = "Freya maintainers (AI-assisted review by Claude)"
+criteria = "safe-to-deploy"
+delta = "5.4.1 -> 5.4.3"
+notes = "5.4.1 was yanked for an out-of-bounds read: get_html copied a fragment with ptr::copy_nonoverlapping after checking only its size against the data's, not its start, so a clipboard written by another program could make it read past the buffer. 5.4.3 takes the fragment with a checked slice instead, removing that unsafe block, and adds a test with such a clipboard. Otherwise Sleep(5) instead of Sleep(0) between tries at opening the clipboard, and documentation. No build script, no new unsafe, no file, environment or network access."
 
 [[audits.core-graphics]]
 who = "Freya maintainers (AI-assisted review by Claude)"

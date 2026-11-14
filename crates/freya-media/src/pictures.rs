@@ -22,7 +22,8 @@ pub struct Pictures {
 impl Pictures {
     /// The picture in `file`, at most `largest` wide or high, kept among these: its checksum.
     pub fn take_file(&self, file: &Path, largest: u32) -> Result<String, String> {
-        let bytes = std::fs::read(file).map_err(|e| e.to_string())?;
+        let bytes = crate::files::read_at_most(file, crate::files::LARGEST_PICTURE_FILE)
+            .map_err(|e| e.to_string())?;
         self.take_bytes(&bytes, largest)
     }
 
@@ -53,6 +54,20 @@ impl Pictures {
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect()
+    }
+
+    /// Keeps `bytes` as they came, when they are a picture Freya shows, within the bounds
+    /// pictures are decoded in: what a service on the internet or an export gave, which every
+    /// device is then given as a picture. Anything else is refused, so nothing but a picture
+    /// is kept and handed out as one.
+    pub fn put_picture(&self, bytes: &[u8]) -> std::io::Result<String> {
+        crate::picture_dimensions(bytes).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("not a picture: {e}"),
+            )
+        })?;
+        self.put(bytes)
     }
 
     /// Keeps `bytes`, unless they are kept already, and returns their name. Written under
@@ -91,6 +106,9 @@ impl Pictures {
 
     /// The picture `checksum`, when it is kept and still holds what its name says.
     pub fn read(&self, checksum: &str) -> Option<Vec<u8>> {
+        if !freya_protocol::is_checksum(checksum) {
+            return None;
+        }
         let bytes = std::fs::read(self.path(checksum)).ok()?;
         (Self::checksum(&bytes) == checksum).then_some(bytes)
     }
@@ -149,6 +167,10 @@ impl Pictures {
     /// is asked for and kept beside the pictures, for clients to show in a grid without
     /// fetching the picture whole. None when the picture is not kept.
     pub fn small(&self, checksum: &str, size: u32) -> Option<Vec<u8>> {
+        // Only a picture's name is looked up: no other leads out of the pictures' folder.
+        if !freya_protocol::is_checksum(checksum) {
+            return None;
+        }
         let file = self.small_dir().join(format!("{checksum}-{size}.jpg"));
         if let Ok(bytes) = std::fs::read(&file) {
             return Some(bytes);

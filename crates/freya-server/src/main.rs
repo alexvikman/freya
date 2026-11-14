@@ -152,6 +152,8 @@ fn exit_code() -> i32 {
 }
 
 fn run(address: &str, data: &Path) -> Result<(), String> {
+    // What a backup or a restore cut short left behind goes.
+    freya_server::backup::forget_unfinished(data);
     // A backup to restore takes the place of what was, before anything here is opened.
     match freya_server::backup::apply_pending(data) {
         Ok(Some(before)) => log::info!(
@@ -430,10 +432,17 @@ fn forget_owner_password(address: &str, data: &Path) -> i32 {
         return 1;
     }
     match Accounts::forget_owner_password(&data.join("accounts.json")) {
-        Ok(name) => {
+        Ok((name, admins)) => {
             println!(
                 "The password of {name} is forgotten. Set a new one in Freya's settings, under Account."
             );
+            if !admins.is_empty() {
+                // Whoever learned the password could invite an admin, who stays.
+                println!(
+                    "The server's other admins keep their accounts: {}. Remove any you did not invite, under Users.",
+                    admins.join(", ")
+                );
+            }
             0
         }
         Err(e) => {
@@ -541,5 +550,17 @@ fn start_log(file: &Path) {
         }
         Err(e) => eprintln!("freya-server: could not log to {}: {e}", file.display()),
     }
+    // As env_logger writes an entry, but with the message as the log's reader takes it: one
+    // entry, whatever a name in it holds (see `log_lines`).
+    builder.format(|out, record| {
+        use std::io::Write;
+        let entry = freya_server::log_entry(
+            out.timestamp(),
+            record.level(),
+            record.target(),
+            &record.args().to_string(),
+        );
+        writeln!(out, "{entry}")
+    });
     builder.init();
 }

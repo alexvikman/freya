@@ -57,11 +57,13 @@ pub fn is_backup_name(path: &Path) -> bool {
 
 /// Whether `relative`, a file in the server's folder, is left out of a backup.
 fn left_out(relative: &Path) -> bool {
-    let name = relative.to_string_lossy();
+    let name = relative.to_string_lossy().to_lowercase();
+    // As a file system that tells no case apart takes it, as macOS's and Windows' do:
+    // "Restore-Pending" is the folder a restore waits in there.
     let first = relative
         .components()
         .next()
-        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
         .unwrap_or_default();
     matches!(
         first.as_str(),
@@ -142,14 +144,19 @@ pub fn make(
     if out.exists() {
         return Err(format!("{} is there already.", out.display()));
     }
-    // Named so no one can have put a file or a link there beforehand.
+    // Named so no one can have put a file or a link there beforehand. The copy of the
+    // database, and what a sealed backup holds before it is sealed, are made in the server's
+    // own folder, which only its user reads: the folder the backup goes to may be shared, or
+    // sent elsewhere as it changes, and is given nothing but the backup itself.
     let random = random_name()?;
     let partials = Partials(vec![
-        folder.join(format!(".freya-backup-{random}.database.partial")),
-        folder.join(format!(".freya-backup-{random}.zip.partial")),
+        data.join(format!(".freya-backup-{random}.database.partial")),
+        data.join(format!(".freya-backup-{random}.zip.partial")),
         folder.join(format!(".freya-backup-{random}.{extension}.partial")),
     ]);
     let [database, zipped, sealed] = [&partials.0[0], &partials.0[1], &partials.0[2]];
+    // Made first, for its user alone and never through a link; the copy is written into it.
+    drop(new_file(database).map_err(|e| io_error(database, &e))?);
     db.snapshot(database)
         .map_err(|e| format!("The database could not be copied: {e}"))?;
     let files = files(data);
@@ -320,6 +327,24 @@ pub fn apply_pending(data: &Path) -> Result<Option<PathBuf>, String> {
     Ok(Some(before))
 }
 
+/// At the server's start: takes away what a backup or a restore that was cut short, as by the
+/// server being stopped, left in the server's folder `data`. A backup's is a copy of what the
+/// server keeps, and stays its user's alone there, but takes room.
+pub fn forget_unfinished(data: &Path) {
+    let Ok(entries) = std::fs::read_dir(data) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if (name.starts_with(".freya-backup-") || name.starts_with(".restore-"))
+            && name.ends_with(".partial")
+        {
+            drop(Partials(vec![entry.path()]));
+        }
+    }
+}
+
 /// Files removed when dropped: what a backup or a restore that did not finish left.
 struct Partials(Vec<PathBuf>);
 
@@ -369,11 +394,23 @@ fn safe_relative(name: &str) -> Option<PathBuf> {
         match part {
             "" | "." | ".." => return None,
             _ if part.contains([':', '\0']) => return None,
+            // What Windows takes for another name, or for a device: a server keeps no file
+            // named so, and one restored would be another file there, or none.
+            _ if part.ends_with(['.', ' ']) || is_device_name(part) => return None,
             _ => path.push(part),
         }
     }
     (path.components().count() > 0 && path.components().all(|c| matches!(c, Component::Normal(_))))
         .then_some(path)
+}
+
+/// Whether Windows takes `name` for a device, whatever extension it has: `NUL`, `con.txt`.
+fn is_device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name).to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.ends_with(|c: char| c.is_ascii_digit() && c != '0'))
 }
 
 /// Whether `file` is sealed under a password.
@@ -551,6 +588,9 @@ mod tests {
         let kept = temp(&format!("{name}-kept"));
         let db = server(&data);
         let mut seen = 0;
+        // What the folder the backup goes to is given while it is made: the backup itself
+        // alone, never the copy of the database nor what a sealed one holds before it is sealed.
+        let mut given = std::collections::BTreeSet::new();
         let file = make(
             &data,
             &db,
@@ -560,14 +600,38 @@ mod tests {
             &mut |done, total| {
                 assert!(done <= total);
                 seen = done;
+                given.extend(
+                    std::fs::read_dir(&kept)
+                        .unwrap()
+                        .flatten()
+                        .map(|entry| entry.file_name().to_string_lossy().into_owned()),
+                );
             },
         )
         .unwrap();
         assert!(seen > 3 * CHUNK as u64);
+        // (A backup without a password is itself a zip.)
+        let unsealed = |name: &String| password.is_some() && name.contains(".zip.partial");
+        assert!(
+            given
+                .iter()
+                .all(|name| !name.contains("database") && !unsealed(name)),
+            "{given:?}"
+        );
         assert_eq!(
             std::fs::read_dir(&kept).unwrap().count(),
             1,
             "no partials left"
+        );
+        let left: Vec<_> = std::fs::read_dir(&data)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".partial"))
+            .collect();
+        assert!(
+            left.is_empty(),
+            "none in the server's folder either: {left:?}"
         );
         drop(db);
 
@@ -689,6 +753,34 @@ mod tests {
                 .unwrap_err()
                 .contains("what no backup does")
         );
+        assert!(!data.join(PENDING).exists());
+        // Named as a file system that tells no case apart takes for the same folder, or as
+        // Windows takes for another file or a device.
+        for name in ["Restore-Pending/x", "SERVER.LOG", "before-RESTORE-1/x"] {
+            zip_of(
+                &backup,
+                &[(DATABASE, b""), ("accounts.json", b"{}"), (name, b"")],
+            );
+            assert!(
+                prepare_restore(&backup, None, &data)
+                    .unwrap_err()
+                    .contains("what no backup does"),
+                "{name}"
+            );
+        }
+        for name in ["restore-pending./x", "pictures/NUL", "com1.txt", "notes "] {
+            zip_of(
+                &backup,
+                &[(DATABASE, b""), ("accounts.json", b"{}"), (name, b"")],
+            );
+            assert!(
+                prepare_restore(&backup, None, &data)
+                    .unwrap_err()
+                    .contains("a file outside it"),
+                "{name}"
+            );
+        }
+        assert!(!is_device_name("comet.jpg") && !is_device_name("com0") && !is_device_name("null"));
         assert!(!data.join(PENDING).exists());
         // Not a server's: no accounts.
         zip_of(&backup, &[(DATABASE, b"")]);

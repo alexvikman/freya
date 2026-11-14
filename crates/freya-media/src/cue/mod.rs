@@ -125,27 +125,42 @@ pub fn apply_sheets(found: Vec<PathBuf>) -> Vec<Found> {
 /// Reads a CUE sheet and finds its audio files. `None` if it cannot be read or cuts no file
 /// into tracks.
 pub fn read_disc(sheet: &Path) -> Option<Disc> {
-    let bytes = std::fs::read(sheet).ok()?;
+    let bytes = files::read_at_most(sheet, files::LARGEST_TEXT_FILE).ok()?;
     let mut parsed = Sheet::parse(&encoding::decode(&bytes));
     if parsed.disc.is_none() {
         parsed.disc = disc_in_name(sheet, parsed.title.as_deref());
     }
     let folder = sheet.parent()?;
+    // The audio files beside the sheet: files, or links to files in the same folder. A link
+    // to a file elsewhere, which the walk through the music's folders leaves out when it
+    // leads out of them, is not brought in by a sheet naming it.
+    let here = folder.canonicalize().ok()?;
     let audio: Vec<PathBuf> = std::fs::read_dir(folder)
         .ok()?
         .flatten()
+        .filter(|entry| match entry.file_type() {
+            Ok(kind) if kind.is_symlink() => entry
+                .path()
+                .canonicalize()
+                .is_ok_and(|real| real.parent() == Some(here.as_path()) && real.is_file()),
+            Ok(kind) => kind.is_file(),
+            Err(_) => false,
+        })
         .map(|entry| entry.path())
         .filter(|path| files::is_audio(path))
         .collect();
 
+    // Each file's tracks, found in one pass through them all: a sheet of many files and
+    // tracks is not looked through once for each file.
+    let mut cues_of: Vec<Vec<&SheetTrack>> = vec![Vec::new(); parsed.files.len()];
+    for track in parsed.tracks.iter().filter(|t| t.start.is_some()) {
+        if let Some(cues) = cues_of.get_mut(track.file) {
+            cues.push(track);
+        }
+    }
     let mut files = Vec::new();
     let mut tracks = Vec::new();
-    for (index, name) in parsed.files.iter().enumerate() {
-        let mut cues: Vec<&SheetTrack> = parsed
-            .tracks
-            .iter()
-            .filter(|t| t.file == index && t.start.is_some())
-            .collect();
+    for (name, mut cues) in parsed.files.iter().zip(cues_of) {
         cues.sort_by_key(|t| t.start);
         // One track from the very start is the whole file, which is better listed as itself,
         // with its own tags: some sheets list a folder of files that are tracks already.

@@ -494,6 +494,19 @@ fn lists_albums_by_when_they_came_and_tracks_by_plays() {
         names(library.artists_by(ArtistOrder::RecentlyAdded).unwrap()),
         ["B", "C", "A"]
     );
+    // A favourite counts as coming when it was made one, but not for a listener, who is
+    // answered by when the music came alone.
+    library
+        .set_artist_favorite("A", true, at(1_000_000))
+        .unwrap();
+    assert_eq!(
+        names(library.artists_by(ArtistOrder::RecentlyAdded).unwrap()),
+        ["A", "B", "C"]
+    );
+    assert_eq!(
+        names(library.artists_by(ArtistOrder::Came).unwrap()),
+        ["B", "C", "A"]
+    );
 }
 
 #[test]

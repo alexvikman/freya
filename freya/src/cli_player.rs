@@ -162,6 +162,12 @@ fn print_track(track: &TrackInfo) {
 }
 
 fn print_line(text: &str) {
+    // A title is a file's to say, and may hold anything: without control characters, which
+    // a terminal would take as its own.
+    let text: String = text
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
     let mut out = stdout();
     let _ = write!(out, "{CLEAR_LINE}{text}\r\n");
 }

@@ -529,7 +529,13 @@ impl ServerPanel {
             return;
         };
         if !update.can_install {
-            crate::update::open_page(&update.page);
+            // The release's page, where Freya's releases are: a server names no other.
+            let releases = format!("https://github.com/{}/", freya_update::REPOSITORY);
+            if update.page.starts_with(&releases) {
+                crate::update::open_page(&update.page);
+            } else {
+                log::warn!("the server named a page that is not a release of Freya's");
+            }
             return;
         }
         let Some(remote) = remote else {

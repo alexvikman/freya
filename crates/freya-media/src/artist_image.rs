@@ -131,10 +131,15 @@ fn call_patiently(
     call()
 }
 
+/// Asks only over HTTPS, wherever an answer or a redirect points: an address a service names
+/// for a picture is not asked in the clear, nor of what answers without a certificate, as
+/// what is on this computer and its network does.
 fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(DOWNLOAD_TIMEOUT))
         .user_agent(USER_AGENT)
+        .https_only(true)
+        .max_redirects(5)
         .build()
         .into()
 }
@@ -192,8 +197,11 @@ pub fn cover_art(group: &str) -> Result<Option<Vec<u8>>, String> {
     }
 }
 
-/// Downloads a picture at `url`.
+/// Downloads a picture at `url`, an HTTPS address.
 pub fn download(url: &str) -> Result<Vec<u8>, String> {
+    if !url.starts_with("https://") {
+        return Err("a picture is downloaded over HTTPS only".into());
+    }
     agent()
         .get(url)
         .call()

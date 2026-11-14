@@ -43,6 +43,9 @@ pub const HEAD_TIME: Duration = Duration::from_secs(10);
 pub const HEAD_TIME: Duration = Duration::from_secs(1);
 const BODY_RATE: usize = 32 * 1024;
 const WRITE_TIME: Duration = Duration::from_secs(30);
+/// How long what a client still sends after a request that was refused is read and dropped,
+/// in all, before its connection is closed.
+const LINGER: Duration = Duration::from_secs(2);
 /// The most connections of strangers served at once, and from one address; and of all.
 const MAX_CONNECTIONS: usize = 128;
 const MAX_FROM_ONE: usize = 16;
@@ -258,10 +261,11 @@ struct Admitted {
 }
 
 impl Admitted {
-    /// The connection sent a request of a device the server knows.
-    fn know(&self) {
+    /// Whether the connection's last request was a device's the server knows: one whose token
+    /// no longer holds counts among strangers' again.
+    fn known(&self, known: bool) {
         if let Some(served) = self.live.connections().get_mut(&self.id) {
-            served.known = true;
+            served.known = known;
         }
     }
 }
@@ -449,8 +453,8 @@ struct Connection {
     /// Whether a request was read on it yet: the first, after TLS's handshake, is waited for
     /// as long as a request's head.
     served: bool,
-    /// Whether a request with a valid token came on it: a known device's, whose connection is
-    /// kept open longer between requests.
+    /// Whether its last request came with a valid token: a known device's, whose connection is
+    /// kept open longer between requests. A device logged out since is a stranger again.
     known: bool,
 }
 
@@ -626,9 +630,9 @@ impl Connection {
         }
         let length = content_length(&request).map_err(Ok)?;
         let admission = admit(&request);
-        if admission.known {
-            admitted.know();
-            self.known = true;
+        if admission.known != self.known {
+            admitted.known(admission.known);
+            self.known = admission.known;
         }
         if length > admission.body.min(MAX_BODY) {
             return Err(Ok(Refused(413, "the request is too large")));
@@ -653,14 +657,19 @@ impl Connection {
     }
 
     /// Closes the connection gently after a request that was not read whole: what the client
-    /// still sends is read and dropped for a moment, so its answer is not lost to a reset.
+    /// still sends is read and dropped for a moment, so its answer is not lost to a reset. For
+    /// [`LINGER`] in all, however it sends: a byte now and then holds the connection no longer.
     fn linger(&mut self) {
         let _ = self.stream.flush();
         let _ = self.tcp.shutdown(std::net::Shutdown::Write);
-        let _ = self.tcp.set_read_timeout(Some(Duration::from_secs(1)));
+        let until = Instant::now() + LINGER;
         let mut dropped = [0; 4096];
         let mut left = MAX_HEAD * 4;
         while left > 0 {
+            let wait = until.saturating_duration_since(Instant::now());
+            if wait.is_zero() || self.tcp.set_read_timeout(Some(wait)).is_err() {
+                break;
+            }
             match (&*self.tcp).read(&mut dropped) {
                 Ok(0) | Err(_) => break,
                 Ok(read) => left = left.saturating_sub(read),
@@ -1011,7 +1020,7 @@ mod tests {
             .map(|_| live.admit(&accept()).unwrap())
             .collect();
         assert!(live.admit(&accept()).is_none(), "strangers are full");
-        held[0].know();
+        held[0].known(true);
         assert!(
             live.admit(&accept()).is_some(),
             "a known one does not count"
@@ -1021,7 +1030,7 @@ mod tests {
         let mut known: Vec<Admitted> = (0..MAX_KNOWN_FROM_ONE)
             .map(|_| {
                 let admitted = live.admit(&accept()).unwrap();
-                admitted.know();
+                admitted.known(true);
                 admitted
             })
             .collect();
@@ -1029,5 +1038,62 @@ mod tests {
         known.pop();
         assert!(live.admit(&accept()).is_some(), "with room again");
         known.clear();
+    }
+
+    /// What `stream` answers a request without a body: read to the end of its head.
+    fn head_of(stream: &mut TcpStream) -> String {
+        let mut answer = Vec::new();
+        let mut byte = [0];
+        while !answer.ends_with(b"\r\n\r\n") {
+            assert_eq!(stream.read(&mut byte).unwrap(), 1, "the answer ended early");
+            answer.push(byte[0]);
+        }
+        String::from_utf8(answer).unwrap()
+    }
+
+    #[test]
+    fn a_connection_is_known_only_while_its_requests_are() {
+        let server = Server::serve(
+            "127.0.0.1:0",
+            Arc::new(|_| Response::bytes(200, "text/plain", Vec::new())),
+            None,
+            Arc::new(|request: &Request| Admission {
+                body: 0,
+                known: request.path == "/known",
+            }),
+        )
+        .unwrap();
+        let known = || server.live.connections().values().any(|c| c.known);
+        let mut stream = TcpStream::connect(server.address()).unwrap();
+        stream.write_all(b"GET /known HTTP/1.1\r\n\r\n").unwrap();
+        head_of(&mut stream);
+        assert!(known(), "a request with a valid token makes it known");
+        // Its device logged out: the next request is a stranger's, and so is the connection.
+        stream.write_all(b"GET /stranger HTTP/1.1\r\n\r\n").unwrap();
+        head_of(&mut stream);
+        assert!(!known(), "a known connection stays so only by its requests");
+        stream.write_all(b"GET /known HTTP/1.1\r\n\r\n").unwrap();
+        head_of(&mut stream);
+        assert!(known());
+    }
+
+    #[test]
+    fn a_refused_client_sending_on_is_let_go() {
+        let server = echo();
+        let mut stream = TcpStream::connect(server.address()).unwrap();
+        stream.write_all(b"NOT HTTP\r\n\r\n").unwrap();
+        assert!(head_of(&mut stream).starts_with("HTTP/1.1 400"));
+        // A byte now and then, each well within a second of the last: for hours, were each
+        // waited for on its own.
+        let started = Instant::now();
+        while !server.live.connections().is_empty() {
+            assert!(
+                started.elapsed() < LINGER + Duration::from_secs(2),
+                "still held after {:?}",
+                started.elapsed()
+            );
+            let _ = stream.write_all(b"x");
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
 }
