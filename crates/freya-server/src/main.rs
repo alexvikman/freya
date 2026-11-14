@@ -430,10 +430,17 @@ fn forget_owner_password(address: &str, data: &Path) -> i32 {
         return 1;
     }
     match Accounts::forget_owner_password(&data.join("accounts.json")) {
-        Ok(name) => {
+        Ok((name, admins)) => {
             println!(
                 "The password of {name} is forgotten. Set a new one in Freya's settings, under Account."
             );
+            if !admins.is_empty() {
+                // Whoever learned the password could invite an admin, who stays.
+                println!(
+                    "The server's other admins keep their accounts: {}. Remove any you did not invite, under Users.",
+                    admins.join(", ")
+                );
+            }
             0
         }
         Err(e) => {

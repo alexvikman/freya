@@ -83,6 +83,8 @@ const TICKET_LASTS: Duration = Duration::from_secs(15 * 60);
 const INVITE_LASTS: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 /// The longest name a user is given.
 const LONGEST_USER_NAME: usize = 64;
+/// The most devices a user is logged in on at once.
+const MAX_DEVICES: usize = 64;
 /// The fewest characters a password has.
 pub const SHORTEST_PASSWORD: usize = 8;
 
@@ -165,8 +167,10 @@ struct User {
 }
 
 impl User {
-    fn set_password(&mut self, password: &str) {
-        self.password = Some(Password::new(password));
+    /// Hashed by the caller before the accounts are held: every call waits for them, and
+    /// hashing takes a good part of a second.
+    fn set_password(&mut self, password: Password) {
+        self.password = Some(password);
         self.changed += 1;
     }
 }
@@ -314,7 +318,23 @@ impl Refused {
 /// Tries of passwords, by what they were tried for: a user's name from an address, a name, or
 /// an address; each with the wrong ones it takes before waiting.
 #[derive(Default)]
-struct Tries(HashMap<String, Tried>, Option<Instant>);
+struct Tries(HashMap<TriedOf, Tried>, Option<Instant>);
+
+/// What tries are counted for. Each kind is a key of its own, never text put together: a name
+/// typed as `kim@192.168.1.20` is that name, not Kim's tries from that address.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum TriedOf {
+    /// A name as typed, from anywhere.
+    Name(String),
+    /// A network, whatever the name.
+    Network(String),
+    /// A name from a network.
+    NameFromNetwork(String, String),
+    /// A name from one address, where its user logged in before.
+    NameFromAddress(String, IpAddr),
+    /// Proofs of a code, asked from a network.
+    Proofs(String),
+}
 
 /// How often the tries forgotten are swept out of the table.
 const SWEEP_EVERY: Duration = Duration::from_secs(60);
@@ -325,7 +345,7 @@ struct Tried {
     last: Instant,
 }
 
-type TriedFor = (String, u32);
+type TriedFor = (TriedOf, u32);
 
 impl Tries {
     /// How long `keys` wait before another try, at most.
@@ -353,13 +373,13 @@ impl Tries {
             self.1 = Some(now);
         }
         if self.0.len() >= MAX_TRIED {
-            let mut idle: Vec<(Instant, String)> = self
+            let mut idle: Vec<(Instant, TriedOf)> = self
                 .0
                 .iter()
                 .filter(|(_, tried)| tried.until <= now)
                 .map(|(key, tried)| (tried.last, key.clone()))
                 .collect();
-            idle.sort();
+            idle.sort_by_key(|(last, _)| *last);
             let excess = self.0.len() - MAX_TRIED / 2;
             for (_, key) in idle.into_iter().take(excess) {
                 self.0.remove(&key);
@@ -394,10 +414,15 @@ impl Tries {
     /// else's wrong ones from it still count.
     fn right(&mut self, keys: &[TriedFor]) {
         for (key, _) in keys {
-            if key.starts_with("user:") {
-                self.0.remove(key);
-            } else if let Some(tried) = self.0.get_mut(key) {
-                tried.wrong = tried.wrong.saturating_sub(1);
+            match key {
+                TriedOf::Name(_) | TriedOf::NameFromNetwork(..) | TriedOf::NameFromAddress(..) => {
+                    self.0.remove(key);
+                }
+                TriedOf::Network(_) | TriedOf::Proofs(_) => {
+                    if let Some(tried) = self.0.get_mut(key) {
+                        tried.wrong = tried.wrong.saturating_sub(1);
+                    }
+                }
             }
         }
     }
@@ -540,7 +565,7 @@ impl Accounts {
         let typed: String = name.trim().to_lowercase().chars().take(MAX_NAME).collect();
         let (id, hashed, changed) = {
             let kept = self.kept();
-            let user = kept.users.iter().find(|u| u.name.to_lowercase() == typed);
+            let user = kept.users.iter().find(|u| same_name(&u.name, &typed));
             (
                 user.map(|u| u.id),
                 user.and_then(|u| u.password.clone()),
@@ -554,31 +579,10 @@ impl Accounts {
                 .unwrap_or_else(|e| e.into_inner())
                 .contains(&(id, network.clone()))
         };
-        let named = format!("user:{typed}");
         let at_home = id
             .zip(network.as_ref())
             .is_some_and(|(id, network)| known(id, network));
-        let keys: Vec<TriedFor> = if at_home {
-            // Where the user logged in before, only the tries for their name there count: from
-            // this very address, and from its network, more of them, so a guesser elsewhere
-            // never holds them up, one beside them only after many, and one moving from
-            // address to address within the network gains nothing.
-            let mut keys: Vec<TriedFor> = from
-                .iter()
-                .map(|ip| (format!("{named}@{ip}"), FREE_TRIES))
-                .collect();
-            if let Some(network) = &network {
-                keys.push((format!("{named}@{network}"), FREE_TRIES_FOR_A_NAME));
-            }
-            keys
-        } else {
-            let mut keys = vec![(named.clone(), FREE_TRIES_FOR_A_NAME)];
-            if let Some(network) = &network {
-                keys.push((format!("from:{network}"), FREE_TRIES));
-                keys.push((format!("{named}@{network}"), FREE_TRIES));
-            }
-            keys
-        };
+        let keys = tried_for(&typed, from, at_home);
         {
             let mut tries = self.tries.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(wait) = tries.wait(&keys) {
@@ -638,8 +642,9 @@ impl Accounts {
     /// Forgets the password of the user the server started with, in the accounts kept in
     /// `file`, while no server holds them: their name. The server is adopted again, by whoever
     /// proves they know the code it shows. The devices that logged in with it are logged out:
-    /// one of them may be whoever learned it.
-    pub fn forget_owner_password(file: &Path) -> Result<String, String> {
+    /// one of them may be whoever learned it. With the owner's name, the other admins', who
+    /// keep their accounts: whoever learned the password may have invited one.
+    pub fn forget_owner_password(file: &Path) -> Result<(String, Vec<String>), String> {
         let text = std::fs::read_to_string(file).map_err(|e| e.to_string())?;
         let mut kept: Kept = serde_json::from_str(&text).map_err(|e| e.to_string())?;
         let owner = kept
@@ -650,9 +655,15 @@ impl Accounts {
         owner.password = None;
         let name = owner.name.clone();
         kept.devices.retain(|d| d.user != OWNER);
+        let admins = kept
+            .users
+            .iter()
+            .filter(|u| u.id != OWNER && u.role == Role::Admin)
+            .map(|u| u.name.clone())
+            .collect();
         let json = serde_json::to_vec_pretty(&kept).map_err(|e| e.to_string())?;
         write_private(file, &json).map_err(|e| e.to_string())?;
-        Ok(name)
+        Ok((name, admins))
     }
 
     /// A user named `name` with the role `role`, and the password they start with: their id.
@@ -664,15 +675,16 @@ impl Accounts {
                 "A password needs at least {SHORTEST_PASSWORD} characters."
             ));
         }
+        let password = Password::new(password);
         let mut kept = self.kept();
-        if name.is_empty() || kept.users.iter().any(|u| u.name.eq_ignore_ascii_case(name)) {
+        if name.is_empty() || kept.users.iter().any(|u| same_name(&u.name, name)) {
             return Err(format!("There is a user named {name} already."));
         }
         let id = kept.new_user_id();
         kept.users.push(User {
             id,
             name: name.to_owned(),
-            password: Some(Password::new(password)),
+            password: Some(password),
             role,
             changed: 0,
         });
@@ -982,6 +994,7 @@ impl Accounts {
             let used = claims.swap_remove(at);
             (used.claimed, used.invite)
         };
+        let password = Password::new(password);
         let mut kept = self.kept();
         // Checked again under the lock it is written under: adopted meanwhile, or the
         // invitation replaced or taken back, the claim is out of date.
@@ -1002,7 +1015,7 @@ impl Accounts {
                 let taken = kept
                     .users
                     .iter()
-                    .any(|u| u.id != OWNER && u.name.eq_ignore_ascii_case(&name));
+                    .any(|u| u.id != OWNER && same_name(&u.name, &name));
                 if taken {
                     return Err(format!("There is a user named {name} already."));
                 }
@@ -1062,23 +1075,24 @@ impl Accounts {
         Ok(code)
     }
 
-    /// Invites a user named `name` with `role`: the code they join with, from their own
-    /// device, for a server with `certificate`; how long it lasts. They choose their password
-    /// when they join.
+    /// Invites a user named `name` with `role`, for `caller`: the code they join with, from
+    /// their own device, for a server with `certificate`; how long it lasts. They choose their
+    /// password when they join. An admin is invited only by the owner, as one is invited again
+    /// or taken away: an admin's password, learned by another, makes no admin that outlasts it.
     pub fn invite_user(
         &self,
+        caller: &Caller,
         name: &str,
         role: Role,
         certificate: &[u8],
     ) -> Result<(String, Duration), String> {
+        if role == Role::Admin && caller.user != OWNER {
+            return Err("Only the server's owner invites an admin.".into());
+        }
         let name = user_name(name)?;
         let id = {
             let mut kept = self.kept();
-            if kept
-                .users
-                .iter()
-                .any(|u| u.name.eq_ignore_ascii_case(&name))
-            {
+            if kept.users.iter().any(|u| same_name(&u.name, &name)) {
                 return Err(format!("There is a user named {name} already."));
             }
             let id = kept.new_user_id();
@@ -1116,7 +1130,7 @@ impl Accounts {
         let user = kept
             .users
             .iter()
-            .find(|u| u.name.eq_ignore_ascii_case(name.trim()))
+            .find(|u| same_name(&u.name, name.trim()))
             .ok_or("There is no such user.")?;
         if user.id == OWNER {
             return Err(
@@ -1219,7 +1233,7 @@ impl Accounts {
         // Counted apart from logins, by address (an IPv6 one by its /64, which one computer
         // may change at will within), so asking for proofs fills nothing logins need, nor holds
         // up another on another network.
-        let key = [(format!("proof:{}", network(from)), PROOFS_FREE)];
+        let key = [(TriedOf::Proofs(network(from)), PROOFS_FREE)];
         let mut tries = self.proofs.lock().unwrap_or_else(|e| e.into_inner());
         if tries.wait(&key).is_some() {
             return false;
@@ -1325,6 +1339,7 @@ impl Accounts {
     /// Sets the password of `user` while it is the one it was when it had been set `changed`
     /// times.
     fn set_password(&self, user: u32, password: &str, changed: u64) -> Result<(), String> {
+        let password = Password::new(password);
         let mut kept = self.kept();
         let user = kept
             .users
@@ -1399,6 +1414,22 @@ impl Accounts {
             return None;
         }
         log::info!("a device was connected: {}", device.name);
+        // A user keeps so many devices: past that, the one unused the longest is logged out,
+        // so logging in over and over does not grow the accounts without end.
+        while kept.devices.iter().filter(|d| d.user == user).count() >= MAX_DEVICES {
+            let Some(oldest) = kept
+                .devices
+                .iter()
+                .enumerate()
+                .filter(|(_, d)| d.user == user)
+                .min_by_key(|(_, d)| d.used)
+                .map(|(at, _)| at)
+            else {
+                break;
+            };
+            let gone = kept.devices.remove(oldest);
+            log::info!("a device unused the longest was logged out: {}", gone.name);
+        }
         kept.devices.push(device);
         let at = kept.devices.len() - 1;
         let granted = issue(&mut kept, at);
@@ -1480,6 +1511,37 @@ fn signing_key(kept: &Kept) -> Option<ring::hmac::Key> {
     ))
 }
 
+/// What a try of the name `typed` from `from` is counted for, and the wrong ones each takes
+/// before waiting.
+fn tried_for(typed: &str, from: Option<IpAddr>, at_home: bool) -> Vec<TriedFor> {
+    let name = || typed.to_owned();
+    let network = from.map(network);
+    if at_home {
+        // Where the user logged in before, only the tries for their name there count: from
+        // this very address, and from its network, more of them, so a guesser elsewhere
+        // never holds them up, one beside them only after many, and one moving from
+        // address to address within the network gains nothing.
+        let mut keys: Vec<TriedFor> = from
+            .iter()
+            .map(|ip| (TriedOf::NameFromAddress(name(), *ip), FREE_TRIES))
+            .collect();
+        if let Some(network) = network {
+            keys.push((
+                TriedOf::NameFromNetwork(name(), network),
+                FREE_TRIES_FOR_A_NAME,
+            ));
+        }
+        keys
+    } else {
+        let mut keys = vec![(TriedOf::Name(name()), FREE_TRIES_FOR_A_NAME)];
+        if let Some(network) = network {
+            keys.push((TriedOf::Network(network.clone()), FREE_TRIES));
+            keys.push((TriedOf::NameFromNetwork(name(), network), FREE_TRIES));
+        }
+        keys
+    }
+}
+
 /// The network an address is in, as tries are counted: an IPv6 address by its /64, which one
 /// computer may change at will within.
 fn network(ip: IpAddr) -> String {
@@ -1508,6 +1570,12 @@ fn no_password() -> &'static Password {
 fn lasts(kept: &Kept, key: &str) -> bool {
     let now = now();
     kept.invites.iter().any(|i| i.key == key && i.until > now)
+}
+
+/// Whether two names are one user's: compared the same way wherever names are, as a login
+/// compares them, so no two users have names a login takes for each other.
+fn same_name(a: &str, b: &str) -> bool {
+    a.to_lowercase() == b.to_lowercase()
 }
 
 /// A user's name as given: trimmed, without control characters, at most
@@ -1677,7 +1745,7 @@ mod tests {
         let redirect = "http://127.0.0.1:47477/callback";
         let owner = caller(OWNER, Role::Admin);
         let (code, _) = accounts
-            .invite_user("Bo", Role::Admin, certificate)
+            .invite_user(&owner, "Bo", Role::Admin, certificate)
             .unwrap();
         let (ticket, _) = claim_with(&accounts, &code, certificate).unwrap();
         accounts
@@ -1692,10 +1760,17 @@ mod tests {
             .id;
         let bo = caller(bo_id, Role::Admin);
         accounts
-            .invite_user("Kim", Role::Listener, certificate)
+            .invite_user(&bo, "Kim", Role::Listener, certificate)
             .unwrap();
+        // An admin invites listeners, not admins: one whose password was learned makes no
+        // admin that stays when the password changes.
+        assert!(
+            accounts
+                .invite_user(&bo, "Eva", Role::Admin, certificate)
+                .is_err()
+        );
         accounts
-            .invite_user("Eva", Role::Admin, certificate)
+            .invite_user(&owner, "Eva", Role::Admin, certificate)
             .unwrap();
         let owner_name = accounts.users()[0].name.clone();
 
@@ -1798,7 +1873,12 @@ mod tests {
             .id;
         accounts.remove_user(&owner, "Kim").unwrap();
         accounts
-            .invite_user("Kim", Role::Listener, certificate)
+            .invite_user(
+                &caller(OWNER, Role::Admin),
+                "Kim",
+                Role::Listener,
+                certificate,
+            )
             .unwrap();
         let after = accounts
             .kept()
@@ -1942,11 +2022,15 @@ mod tests {
         let here = Some(IpAddr::from([192, 168, 1, 20]));
         let elsewhere = Some(IpAddr::from([192, 168, 1, 21]));
         let _ = kim;
+        let kim_named = || TriedOf::Name("kim".into());
         let at = |ip: &str| {
             [
-                ("user:kim".to_owned(), FREE_TRIES_FOR_A_NAME),
-                (format!("from:{ip}"), FREE_TRIES),
-                (format!("user:kim@{ip}"), FREE_TRIES),
+                (kim_named(), FREE_TRIES_FOR_A_NAME),
+                (TriedOf::Network(ip.into()), FREE_TRIES),
+                (
+                    TriedOf::NameFromNetwork("kim".into(), ip.into()),
+                    FREE_TRIES,
+                ),
             ]
         };
         let mut tries = accounts.tries.lock().unwrap();
@@ -1989,7 +2073,14 @@ mod tests {
             accounts.check("nobody", "x", elsewhere),
             Err(Refused::Wrong)
         );
-        assert!(accounts.tries.lock().unwrap().0.contains_key("user:nobody"));
+        assert!(
+            accounts
+                .tries
+                .lock()
+                .unwrap()
+                .0
+                .contains_key(&TriedOf::Name("nobody".into()))
+        );
         // IPv6 addresses count by their /64.
         assert_eq!(
             network("2001:db8:1:2:aaaa::1".parse().unwrap()),
@@ -2020,13 +2111,16 @@ mod tests {
                 .lock()
                 .unwrap()
                 .0
-                .contains_key("user:kim@192.168.1.21")
+                .contains_key(&TriedOf::NameFromNetwork(
+                    "kim".into(),
+                    "192.168.1.21".into()
+                ))
         );
         // Where the user logged in before, a guesser elsewhere does not hold them up.
         {
             let mut tries = accounts.tries.lock().unwrap();
             for _ in 0..FREE_TRIES_FOR_A_NAME + 1 {
-                tries.count(&[("user:kim".to_owned(), FREE_TRIES_FOR_A_NAME)]);
+                tries.count(&[(kim_named(), FREE_TRIES_FOR_A_NAME)]);
             }
         }
         assert_eq!(accounts.check("Kim", "correct horse", elsewhere), Ok(kim));
@@ -2034,6 +2128,75 @@ mod tests {
             accounts.check("Kim", "correct horse", Some(IpAddr::from([10, 0, 0, 9]))),
             Err(Refused::Wait(_))
         ));
+    }
+
+    #[test]
+    fn a_name_made_to_look_like_another_kind_of_try_holds_nobody_up() {
+        let accounts = Accounts::open(None);
+        accounts
+            .add_user("Kim", Role::Listener, "correct horse")
+            .unwrap();
+        let home = Some(IpAddr::from([192, 168, 1, 20]));
+        // Kim logged in from home before.
+        accounts.check("Kim", "correct horse", home).unwrap();
+        // Guessers elsewhere, each from its own address, type names that read as Kim's tries
+        // from home: far more than hold a name up.
+        {
+            let mut tries = accounts.tries.lock().unwrap();
+            for guesser in 0..FREE_TRIES_FOR_A_NAME + 5 {
+                let from = Some(IpAddr::from([10, 0, 0, guesser as u8]));
+                for name in ["kim@192.168.1.20", "user:kim@192.168.1.20"] {
+                    tries.count(&tried_for(name, from, false));
+                }
+            }
+        }
+        assert!(
+            accounts.check("Kim", "correct horse", home).is_ok(),
+            "Kim logs in at home all the same"
+        );
+        // At home, five wrong ones are free, each counted once, though an IPv4 address is its
+        // own network.
+        let keys = tried_for("kim", home, true);
+        let mut tries = accounts.tries.lock().unwrap();
+        for tried in 1..FREE_TRIES {
+            tries.count(&keys);
+            assert_eq!(tries.wait(&keys), None, "wrong try {tried} is free");
+        }
+        tries.count(&keys);
+        assert!(tries.wait(&keys).is_some(), "the fifth waits");
+    }
+
+    #[test]
+    fn a_user_keeps_so_many_devices() {
+        let accounts = Accounts::open(None);
+        let kim = accounts
+            .add_user("Kim", Role::Listener, "correct horse")
+            .unwrap();
+        let device = |name: &str| {
+            accounts
+                .add_device(kim, name, Joined::LoggedIn, None)
+                .unwrap()
+        };
+        let first = device("the first");
+        for at in 1..MAX_DEVICES {
+            device(&format!("device {at}"));
+        }
+        assert!(accounts.caller(&first.access).is_some());
+        // One more: the one unused the longest is logged out, and no more are kept.
+        accounts
+            .kept()
+            .devices
+            .iter_mut()
+            .filter(|d| d.name == "the first")
+            .for_each(|d| d.used = 1);
+        let last = device("one more");
+        assert!(accounts.caller(&last.access).is_some());
+        assert_eq!(accounts.caller(&first.access), None);
+        let kept = accounts.kept();
+        assert_eq!(
+            kept.devices.iter().filter(|d| d.user == kim).count(),
+            MAX_DEVICES
+        );
     }
 
     #[test]
@@ -2057,7 +2220,8 @@ mod tests {
     #[test]
     fn a_full_table_keeps_its_waits() {
         let mut tries = Tries::default();
-        let key = |i: usize| [(format!("user:{i}"), 0)];
+        let named = |i: usize| TriedOf::Name(i.to_string());
+        let key = |i: usize| [(named(i), 0)];
         // Full of waits: none is dropped, and no new try is taken.
         for i in 0..MAX_TRIED {
             assert!(tries.count(&key(i)));
@@ -2065,31 +2229,29 @@ mod tests {
         assert!(!tries.count(&key(MAX_TRIED)));
         assert!(tries.wait(&key(0)).is_some(), "the oldest wait is kept");
         // One there already is still counted.
-        let before = tries.0[&format!("user:{}", MAX_TRIED - 1)].wrong;
+        let before = tries.0[&named(MAX_TRIED - 1)].wrong;
         assert!(tries.count(&key(MAX_TRIED - 1)));
-        assert_eq!(
-            tries.0[&format!("user:{}", MAX_TRIED - 1)].wrong,
-            before + 1
-        );
+        assert_eq!(tries.0[&named(MAX_TRIED - 1)].wrong, before + 1);
         // Tries not waiting make room.
         let mut idle = Tries::default();
         for i in 0..MAX_TRIED {
-            assert!(idle.count(&[(format!("user:{i}"), FREE_TRIES)]));
+            assert!(idle.count(&[(named(i), FREE_TRIES)]));
         }
         assert!(idle.count(&key(MAX_TRIED)));
         assert!(idle.0.len() <= MAX_TRIED / 2 + 1);
         // Wrong ones a day ago are forgotten, the table swept or not.
         let mut old = Tries::default();
-        let keys = [("user:kim".to_owned(), FREE_TRIES)];
+        let kim = TriedOf::Name("kim".into());
+        let keys = [(kim.clone(), FREE_TRIES)];
         for _ in 0..FREE_TRIES + 3 {
             old.count(&keys);
         }
         // A computer up for less than a day has no instant a day ago: nothing to try there.
-        let last = old.0["user:kim"].last;
+        let last = old.0[&kim].last;
         if let Some(day_ago) = last.checked_sub(TRIES_FORGOTTEN) {
-            old.0.get_mut("user:kim").unwrap().last = day_ago;
+            old.0.get_mut(&kim).unwrap().last = day_ago;
             old.count(&keys);
-            assert_eq!(old.0["user:kim"].wrong, 1);
+            assert_eq!(old.0[&kim].wrong, 1);
         }
     }
 
