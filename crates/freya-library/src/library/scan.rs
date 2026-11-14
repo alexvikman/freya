@@ -116,7 +116,7 @@ pub fn scan_with(
     let walked = if partial { &options.only[..] } else { folders };
     let within = |path: &Path| !partial || walked.iter().any(|f| path.starts_with(f));
     let mut laps = Laps::new();
-    let (found, images, stamps) = find(walked, cancel, &mut progress, &mut laps);
+    let (found, images, stamps) = find(walked, folders, cancel, &mut progress, &mut laps);
     let known = library.sources()?;
     // Tracks found from now on came into the library now, except on the library's first scan:
     // everything comes in at once then, and the files' own dates say more.
@@ -565,13 +565,14 @@ impl<'a> ImageStamps<'a> {
     }
 }
 
-/// What there is to read under `folders`: audio files, and the discs of CUE sheets in place of
-/// the files they cut, each with the stamp of what it is read from. Each is listed once, even
-/// when folders overlap. With the pictures in the folders, which covers may be, and the stamps
-/// of all of them.
+/// What there is to read under `folders`, where they are within `library`, the music's folders:
+/// audio files, and the discs of CUE sheets in place of the files they cut, each with the
+/// stamp of what it is read from. Each is listed once, even when folders overlap. With the
+/// pictures in the folders, which covers may be, and the stamps of all of them.
 #[allow(clippy::type_complexity)]
 fn find(
     folders: &[PathBuf],
+    library: &[PathBuf],
     cancel: &AtomicBool,
     progress: &mut impl FnMut(ScanEvent),
     laps: &mut Laps,
@@ -589,7 +590,7 @@ fn find(
             progress(ScanEvent::Looking(dir.to_owned()));
         }
     };
-    let walked = files::walk_library(folders, cancel, &mut entering);
+    let walked = files::walk_library(folders, library, cancel, &mut entering);
     laps.lap("walk");
     for item in cue::apply_sheets(walked.files) {
         if cancel.load(Ordering::Relaxed) {

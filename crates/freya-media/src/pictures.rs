@@ -22,7 +22,8 @@ pub struct Pictures {
 impl Pictures {
     /// The picture in `file`, at most `largest` wide or high, kept among these: its checksum.
     pub fn take_file(&self, file: &Path, largest: u32) -> Result<String, String> {
-        let bytes = std::fs::read(file).map_err(|e| e.to_string())?;
+        let bytes = crate::files::read_at_most(file, crate::files::LARGEST_PICTURE_FILE)
+            .map_err(|e| e.to_string())?;
         self.take_bytes(&bytes, largest)
     }
 

@@ -77,9 +77,12 @@ pub struct Walked {
 
 /// Like [`collect_with_sheets_until`], with the pictures in the folders and the stamps of
 /// what was found too, telling `entering` of each folder as it is walked: the one walk a scan
-/// makes through them.
+/// makes through them. `paths` are walked, each only when it is within `library`, the music's
+/// folders, after links: a scan of one folder of the library's, which may itself be a link
+/// someone put there, leaves the library no more than a scan of it all does.
 pub fn walk_library(
     paths: &[PathBuf],
+    library: &[PathBuf],
     cancel: &AtomicBool,
     entering: &mut dyn FnMut(&Path),
 ) -> Walked {
@@ -88,7 +91,7 @@ pub fn walk_library(
         images: true,
         stamps: true,
     };
-    collect_matching(paths, &want, cancel, entering)
+    collect_within(paths, library, &want, cancel, entering)
 }
 
 fn is_audio_or_sheet(path: &Path) -> bool {
@@ -110,10 +113,30 @@ fn collect_matching(
     cancel: &AtomicBool,
     entering: &mut dyn FnMut(&Path),
 ) -> Walked {
+    collect_within(paths, paths, want, cancel, entering)
+}
+
+/// What `want` asks for in `paths`, each walked only where it is within `within` after links.
+fn collect_within(
+    paths: &[PathBuf],
+    within: &[PathBuf],
+    want: &Want,
+    cancel: &AtomicBool,
+    entering: &mut dyn FnMut(&Path),
+) -> Walked {
     let mut walked = Walked::default();
     // Links are followed only within what is walked: one out of the music, put in a folder
-    // others can write to, does not bring the rest of the computer into the library.
-    let roots: Vec<PathBuf> = paths.iter().filter_map(|p| p.canonicalize().ok()).collect();
+    // others can write to, does not bring the rest of the computer into the library. Nor is
+    // what is walked itself anywhere but within `within`, wherever a link among it leads.
+    let within: Vec<PathBuf> = within
+        .iter()
+        .filter_map(|p| p.canonicalize().ok())
+        .collect();
+    let roots: Vec<PathBuf> = paths
+        .iter()
+        .filter_map(|p| p.canonicalize().ok())
+        .filter(|real| within.iter().any(|within| real.starts_with(within)))
+        .collect();
     for path in paths {
         if path.is_dir() {
             let mut files = Vec::new();
@@ -165,6 +188,10 @@ fn walk(
     let Ok(real) = root.canonicalize() else {
         return;
     };
+    // Where the walk starts is itself within what it may read, after links.
+    if !roots.iter().any(|within| real.starts_with(within)) {
+        return;
+    }
     // The folders already walked, so links that lead back up the tree end.
     let mut visited = HashSet::from([real.clone()]);
     let mut level = vec![Folder {
@@ -251,6 +278,11 @@ fn read_folder(folder: &Folder, want: &Want, roots: &[PathBuf]) -> Read {
         }
         let file = (want.files)(&path);
         if !file && !(want.images && is_image(&path)) {
+            continue;
+        }
+        // A file, or a link to one: not a FIFO or a device named as a song, which reading
+        // would wait on for ever.
+        if !(kind.is_file() || (linked && path.is_file())) {
             continue;
         }
         if want.stamps {
@@ -360,6 +392,7 @@ mod tests {
         let mut entered = 0;
         let walked = walk_library(
             std::slice::from_ref(&music),
+            std::slice::from_ref(&music),
             &AtomicBool::new(false),
             &mut |_| entered += 1,
         );
@@ -376,6 +409,46 @@ mod tests {
         assert_eq!(entered, 4, "music, a, b, deep; not up again, nor out");
         assert_eq!(walked.stamps.len(), 4);
         assert_eq!(walked.stamps[&music.join("b/deep/2.flac")].size, 3);
+
+        // One folder of the music's scanned alone, as when something changed in it: a link
+        // out of the music is not walked for being where the scan starts.
+        let library = std::slice::from_ref(&music);
+        let walk = |folder: &str| {
+            walk_library(
+                &[music.join(folder)],
+                library,
+                &AtomicBool::new(false),
+                &mut |_| {},
+            )
+            .files
+        };
+        assert!(walk("linked").is_empty(), "a link out, scanned by itself");
+        assert_eq!(walk("b"), [music.join("b/deep/2.flac")]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_files_are_found_and_read() {
+        let dir = std::env::temp_dir().join(format!("freya-walk-fifo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("song.mp3"), b"one").unwrap();
+        let fifo = dir.join("pipe.mp3");
+        let name = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        #[allow(unsafe_code, reason = "makes a FIFO for the test, as mkfifo(1) would")]
+        // SAFETY: `name` is a NUL-terminated path, which mkfifo only reads.
+        let made = unsafe { libc::mkfifo(name.as_ptr(), 0o600) };
+        assert_eq!(made, 0);
+        // A FIFO named as a song is no song: opening it would wait for ever for a writer.
+        assert_eq!(collect(std::slice::from_ref(&dir)), [dir.join("song.mp3")]);
+        assert!(open_regular(&fifo).is_err());
+        assert!(fingerprint(&fifo).is_err());
+        assert!(read_at_most(&fifo, 10).is_err());
+        assert!(open_regular(&dir).is_err(), "nor is a folder");
+        // A file is read whole when it is no larger than asked, and not at all otherwise.
+        assert_eq!(read_at_most(&dir.join("song.mp3"), 3).unwrap(), b"one");
+        assert!(read_at_most(&dir.join("song.mp3"), 2).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -393,13 +466,59 @@ mod tests {
 /// How much of each end of a file its fingerprint reads.
 const FINGERPRINT_CHUNK: u64 = 64 * 1024;
 
+/// The regular file at `path`, opened for reading without waiting. What a music folder others
+/// can write to holds may be anything: a FIFO named as a song or a picture, which opening
+/// would wait on for ever, is refused, as is anything else that is not a file.
+pub fn open_regular(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ));
+    }
+    Ok(file)
+}
+
+/// The largest picture file read from a folder: as large as the largest a server takes.
+pub const LARGEST_PICTURE_FILE: u64 = 64 * 1024 * 1024;
+/// The largest CUE sheet or playlist file read: text, of a few kilobytes as a rule.
+pub const LARGEST_TEXT_FILE: u64 = 1024 * 1024;
+
+/// All of the regular file at `path`, when it holds at most `most` bytes: an error for a
+/// larger one, before any of it is read, so a file as large as the memory takes none of it.
+pub fn read_at_most(path: &Path, most: u64) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+
+    let too_large =
+        || std::io::Error::new(std::io::ErrorKind::InvalidData, "the file is too large");
+    let file = open_regular(path)?;
+    if file.metadata()?.len() > most {
+        return Err(too_large());
+    }
+    let mut bytes = Vec::new();
+    // Grown since it was measured, it is still read no further.
+    file.take(most + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > most {
+        return Err(too_large());
+    }
+    Ok(bytes)
+}
+
 /// A fingerprint of the file at `path` that stays the same when the file is moved or renamed:
 /// its size and the sum of its first and last 64 KiB as 64-bit words, in 16 hex digits. Quick
 /// to take, as only those are read.
 pub fn fingerprint(path: &Path) -> std::io::Result<String> {
     use std::io::{Read, Seek, SeekFrom};
 
-    let mut file = std::fs::File::open(path)?;
+    let mut file = open_regular(path)?;
     let size = file.metadata()?.len();
     let mut sum = size;
     let mut add = |file: &mut std::fs::File, length: u64| -> std::io::Result<()> {
