@@ -257,11 +257,18 @@ fn make(key: String, plan: Plan, making: &Making, shown: &str) {
     }
     let started = std::time::Instant::now();
     let quality = plan.quality();
+    // A file may be anything, and a decoder that gives up on one by panicking would leave its
+    // turn taken for good: after two, no file would ever be made smaller again.
     let made = File::options()
         .write(true)
         .open(&making.path)
         .map_err(freya_transcode::Error::from)
-        .and_then(|file| plan.encode(Writing { file, making }));
+        .and_then(|file| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                plan.encode(Writing { file, making })
+            }))
+            .unwrap_or_else(|_| Err(std::io::Error::other("the decoder gave up on it").into()))
+        });
     let done_mark = making.path.with_extension("done");
     let made = made.and_then(|()| File::create(&done_mark).map(drop).map_err(Into::into));
     let (mut state, turn) = smaller();

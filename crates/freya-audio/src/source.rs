@@ -280,7 +280,7 @@ impl Source {
         let time_base = track.time_base;
         let sample_rate = params.sample_rate.unwrap_or(0);
         let channel_count = params.channels.as_ref().map_or(0, |c| c.count());
-        if !valid_rate(sample_rate) || channel_count == 0 {
+        if !freya_decode::decodes(sample_rate, channel_count) {
             return Err(open_err(format!(
                 "unplayable format ({sample_rate} Hz, {channel_count} channels)"
             )));
@@ -520,9 +520,9 @@ impl Source {
             };
 
             let channels = decoded.spec().channels().count().max(1);
-            if !valid_rate(decoded.spec().rate()) {
+            if !freya_decode::decodes(decoded.spec().rate(), channels) {
                 return Err(Error::Decode(format!(
-                    "unplayable sample rate {} Hz",
+                    "unplayable format ({} Hz, {channels} channels)",
                     decoded.spec().rate()
                 )));
             }
@@ -596,14 +596,6 @@ impl Source {
         self.position = self.frame_at(required);
         Ok(required.saturating_sub(self.info.start))
     }
-}
-
-/// The highest sample rate played. Files claiming more (or none) are damaged or not audio,
-/// and would only make the rate converter fail.
-const MAX_SAMPLE_RATE: u32 = 768_000;
-
-fn valid_rate(rate: u32) -> bool {
-    (1..=MAX_SAMPLE_RATE).contains(&rate)
 }
 
 fn time_to_duration(time: Time) -> Duration {

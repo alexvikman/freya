@@ -56,8 +56,11 @@ impl Controls {
                     &requests,
                     |event| {
                         let event = event.downcast_ref::<MPChangePlaybackPositionCommandEvent>()?;
+                        // Whatever the system says, a time: one beyond any, or none at all,
+                        // would end Freya here.
                         let seconds = event.positionTime().max(0.0);
-                        Some(MediaRequest::SetPosition(Duration::from_secs_f64(seconds)))
+                        let position = Duration::try_from_secs_f64(seconds).ok()?;
+                        Some(MediaRequest::SetPosition(position))
                     },
                 ),
             ]

@@ -107,8 +107,13 @@ mod platform {
         // size, until it is freed below.
         unsafe {
             let c = &*credential;
-            let blob = std::slice::from_raw_parts(c.CredentialBlob, c.CredentialBlobSize as usize);
-            let key = String::from_utf8(blob.to_vec()).ok();
+            // An empty blob has no address, and a slice needs one.
+            let blob = if c.CredentialBlob.is_null() {
+                Vec::new()
+            } else {
+                std::slice::from_raw_parts(c.CredentialBlob, c.CredentialBlobSize as usize).to_vec()
+            };
+            let key = String::from_utf8(blob).ok();
             CredFree(credential.cast());
             Ok(key)
         }
