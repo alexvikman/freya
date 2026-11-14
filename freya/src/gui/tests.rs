@@ -71,6 +71,13 @@ fn text(s: &str) -> Value {
     skin_state::string(s)
 }
 
+/// Copies a fixture as a file made now. On macOS a copy keeps the date its file was made,
+/// which a library's first scan takes for when the file came: what a test finds among what
+/// was added in the last month would depend on how long ago this checkout was made.
+fn copy_new(from: &Path, to: &Path) {
+    std::fs::write(to, std::fs::read(from).unwrap()).unwrap();
+}
+
 fn temp_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("freya-gui-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -400,7 +407,7 @@ export component W inherits Window { Text { text: Player.title; } }
     assert_eq!(global(&ui, "Library", "title"), text("Artists"));
     let music = temp_dir("music");
     for name in ["sine.mp3", "sine.flac", "mono-22k.wav"] {
-        std::fs::copy(fixture(name), music.join(name)).unwrap();
+        copy_new(&fixture(name), &music.join(name));
     }
     // In place of the folder Up Next was added from.
     call(&ui, "Library", "edit-folders", &[]);
@@ -714,7 +721,7 @@ fn scanned(app: &Rc<RefCell<App>>, files: &[(&str, &str)]) -> PathBuf {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).unwrap();
         }
-        std::fs::copy(fixture(fixture_name), path).unwrap();
+        copy_new(&fixture(fixture_name), &path);
     }
     app.borrow_mut().edit_folders();
     app.borrow_mut().add_draft_folder(music.clone());

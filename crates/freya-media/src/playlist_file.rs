@@ -9,11 +9,14 @@ use crate::cue::Part;
 
 /// Playlists downloaded from radio directories are small; anything bigger is not one.
 const MAX_DOWNLOAD: u64 = 1024 * 1024;
-const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long a playlist may take to download: for the agent [`fetch`] is given.
+pub const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15);
+/// The largest playlist file read: tens of thousands of tracks fit many times over.
+const LARGEST_FILE: u64 = 64 * 1024 * 1024;
 
 /// Loads a playlist file. The format is chosen by extension (`.pls`, otherwise M3U).
 pub fn load(path: &Path) -> io::Result<Vec<Entry>> {
-    let bytes = std::fs::read(path)?;
+    let bytes = crate::files::read_at_most(path, LARGEST_FILE)?;
     let text = decode_text(&bytes);
     let base = path.parent().unwrap_or(Path::new(""));
     Ok(if has_extension(path, "pls") || is_pls(&text) {
@@ -30,13 +33,11 @@ pub fn is_playlist_url(url: &str) -> bool {
     is_playlist(Path::new(path))
 }
 
-/// Downloads a playlist, as radio directories offer them, and reads its entries. Blocks
-/// until done, so call it off the UI thread.
-pub fn fetch(url: &str) -> Result<Vec<Entry>, String> {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(DOWNLOAD_TIMEOUT))
-        .build()
-        .into();
+/// Downloads a playlist, as radio directories offer them, and reads its entries, asking with
+/// `agent`: the one streams are asked with, so a playlist a server elsewhere names is asked
+/// only of where a stream it names would be, not of this computer or its network. Blocks until
+/// done, so call it off the UI thread.
+pub fn fetch(agent: &ureq::Agent, url: &str) -> Result<Vec<Entry>, String> {
     let mut response = agent.get(url).call().map_err(|e| e.to_string())?;
     let bytes = response
         .body_mut()

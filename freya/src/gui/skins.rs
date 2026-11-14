@@ -208,7 +208,7 @@ fn open_folder(dir: &Path) {
         return;
     }
     let opener = if cfg!(target_os = "macos") {
-        "open"
+        "/usr/bin/open"
     } else if cfg!(windows) {
         "explorer"
     } else {

@@ -53,6 +53,11 @@ pub struct RemoteSource {
     /// How long the whole file plays, as the library knows it: for choosing how large to
     /// fetch it (see [`crate::StreamQuality`]).
     pub duration: Option<Duration>,
+    /// Which server it is, as its certificate's fingerprint, when it has one: what is kept of
+    /// the file on disk is kept for that server alone. Every server pinned has the same name
+    /// in its address, so the address does not tell them apart, and a file one server sent
+    /// is not played as another's of the same path.
+    pub server: Option<String>,
 }
 
 /// What the player asks for the access token to read a track with: the one now with `None`,

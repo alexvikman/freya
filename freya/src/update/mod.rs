@@ -162,8 +162,9 @@ fn open_with_system(what: &std::ffi::OsStr) {
     let opened = shell_open(what);
     #[cfg(not(windows))]
     let opened = {
+        // On macOS from where the system keeps it, not whichever is first on the path.
         let opener = if cfg!(target_os = "macos") {
-            "open"
+            "/usr/bin/open"
         } else {
             "xdg-open"
         };

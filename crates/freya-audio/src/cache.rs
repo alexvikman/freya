@@ -468,6 +468,13 @@ impl Kept {
     fn open(url: &str) -> Option<(Self, Index)> {
         let dir = cache().config.clone()?.dir;
         std::fs::create_dir_all(&dir).ok()?;
+        // The user's alone, as far as the system has that: the files are their music, and
+        // the indexes say where a server keeps it.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+        }
         let key = key_of(url);
         let data = dir.join(format!("{key}.audio"));
         let on_disk = std::fs::metadata(&data).map_or(0, |m| m.len());
@@ -476,13 +483,15 @@ impl Kept {
             .ok()
             .and_then(|text| Index::parse(&text))
             .filter(|index| index.url == url && index.ranges.end() <= on_disk);
-        let file = OpenOptions::new()
+        let mut options = OpenOptions::new();
+        options
             .read(true)
             .write(true)
             .create(true)
-            .truncate(index.is_none())
-            .open(data)
-            .ok()?;
+            .truncate(index.is_none());
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let file = options.open(data).ok()?;
         *cache().open.entry(key.clone()).or_default() += 1;
         let index = index.unwrap_or(Index {
             url: url.to_owned(),
