@@ -386,4 +386,5 @@ Nobody can wear it out before logging in:
 - New advisories against the dependencies are looked for each day (see
   [DEPENDENCIES.md](DEPENDENCIES.md)).
 
-Found something? Write to the maintainers privately, not in a public issue.
+Found something? Report it privately, not in a public issue: "Report a vulnerability" under
+the repository's [Security tab](https://github.com/alexvikman/freya/security/advisories/new).

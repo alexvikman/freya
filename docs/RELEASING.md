@@ -59,6 +59,14 @@ the repository token, and only the release job may write.
   to a full commit SHA, workflow permissions read-only, and approval required for workflows
   from all outside contributors.
 - **Ruleset "Protect main"** (Settings, Rules): `main` cannot be deleted or force-pushed.
+- **Ruleset "Protect release tags"** (Settings, Rules): a `v*` tag cannot be moved or deleted,
+  by anyone. A release that fails before it is published is not made again under its tag: the
+  fix gets the next version.
+- **Immutable releases** (Settings, General): a published release's files and tag cannot be
+  changed afterwards. The workflow attaches every file before it publishes.
+- **Private vulnerability reporting** and **CodeQL** with its default setup (Settings, Advanced
+  Security): where [SECURITY.md](SECURITY.md) sends whoever found something, and a scan of the
+  code and the workflows on each push to `main` and once a week.
 
 ### Checking a release by hand
 
