@@ -1193,7 +1193,7 @@ export struct OrganizeField {
     several: bool,
 }
 
-/// Organizing the music's files, for an admin. Optional.
+/// Organizing the music's files, for the server's owner (`Server.owner`). Optional.
 export global Organize {
     /// Headings and folders, as `filter` and the search leave them.
     in property <[OrganizeRow]> rows;

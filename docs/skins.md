@@ -261,7 +261,7 @@ What was played and added lately, as a feed by day, apart from the library's sec
 
 ### `Organize`
 
-Going through the music's folders and changing what their files say, for an admin (`Server.admin`). Optional. Freya fills it while `App.view` is "organize".
+Going through the music's folders and changing what their files say, for the server's owner (`Server.owner`), who alone may write to them and move them. Optional. Freya fills it while `App.view` is "organize".
 
 | Property | Type | |
 |---|---|---|

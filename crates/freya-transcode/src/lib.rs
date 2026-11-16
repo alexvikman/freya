@@ -202,26 +202,34 @@ impl Decoding {
     }
 }
 
-/// The first `most` of the file at `path` as 16-bit samples, interleaved, with its rate and
-/// channels: what a fingerprint of it is made from.
+/// The highest sample rate a file's samples are taken at; a file that says it has more is
+/// refused rather than read into as much memory as it says.
+const HIGHEST_SAMPLE_RATE: u32 = 192_000;
+
+/// The first `most` of `file`, of `extension`, as 16-bit samples of one channel, with its
+/// rate: what a fingerprint of it is made from. Its channels are mixed into one, so the
+/// samples kept are at most `most` at [`HIGHEST_SAMPLE_RATE`], whatever the file says.
 pub fn samples_of(
-    path: &std::path::Path,
+    file: File,
+    extension: Option<&str>,
     most: std::time::Duration,
-) -> Result<(Vec<i16>, u32, u32), Error> {
-    let file = File::open(path).map_err(|e| Error(e.to_string()))?;
-    let extension = path.extension().and_then(|e| e.to_str());
+) -> Result<(Vec<i16>, u32), Error> {
     let mut decoding = Decoding::open(file, extension)?;
-    let wanted = (most.as_secs_f64() * f64::from(decoding.rate)) as usize * decoding.channels;
-    let mut samples = Vec::new();
+    let (rate, channels) = (decoding.rate, decoding.channels);
+    if rate == 0 || rate > HIGHEST_SAMPLE_RATE || channels == 0 {
+        return Err(Error(format!("{rate} Hz in {channels} channels")));
+    }
+    let wanted = (most.as_secs_f64() * f64::from(rate)) as usize;
+    let mut samples = Vec::with_capacity(wanted.min(1 << 20));
     let mut part = Vec::new();
     while samples.len() < wanted && decoding.next(&mut part)? {
-        samples.extend(
-            part.iter()
-                .map(|sample| (sample.clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16),
-        );
+        samples.extend(part.chunks(channels).map(|frame| {
+            let mixed = frame.iter().sum::<f32>() / frame.len() as f32;
+            (mixed.clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16
+        }));
     }
     samples.truncate(wanted);
-    Ok((samples, decoding.rate, decoding.channels as u32))
+    Ok((samples, rate))
 }
 
 /// A file to be made smaller: how, and how long it will be.

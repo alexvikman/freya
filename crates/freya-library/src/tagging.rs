@@ -14,7 +14,11 @@ use lofty::config::{ParseOptions, WriteOptions};
 use lofty::file::{AudioFile, FileType, TaggedFileExt};
 use lofty::prelude::ItemKey;
 use lofty::probe::Probe;
-use lofty::tag::{MergeTag, SplitTag, Tag};
+use lofty::tag::{ItemValue, MergeTag, SplitTag, Tag, TagItem};
+
+/// What stands between the values of a field that has several, as [`read_all_fields`] gives
+/// them and [`write_fields`] takes them: a character no tag's text is given.
+pub const VALUES_APART: char = '\0';
 
 /// How far a file's length may be from what it was, after only its tags changed.
 const LENGTH_TOLERANCE: Duration = Duration::from_millis(100);
@@ -86,27 +90,51 @@ fn key_of(field: TagField) -> ItemKey {
     }
 }
 
-/// Every field the file's tags have, or none when it cannot be read.
+/// Every field the file's tags have, the first value of one that has several; or none when
+/// the file cannot be read.
 pub fn read_fields(path: &Path) -> Option<TagMap> {
+    fields_of(path, |tag, key| {
+        tag.get_string(key).map(str::trim).unwrap_or("").to_owned()
+    })
+}
+
+/// Every field the file's tags have, with all the values of one that has several, apart by
+/// [`VALUES_APART`]: what puts the field back as it was.
+pub fn read_all_fields(path: &Path) -> Option<TagMap> {
+    fields_of(path, |tag, key| {
+        let values: Vec<&str> = tag
+            .get_strings(key)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .collect();
+        values.join(&VALUES_APART.to_string())
+    })
+}
+
+fn fields_of(path: &Path, value: impl Fn(&Tag, ItemKey) -> String) -> Option<TagMap> {
     let options = ParseOptions::new().read_cover_art(false);
-    let file = Probe::open(path).ok()?.options(options).read().ok()?;
+    let file = probe(path)?.options(options).read().ok()?;
     let mut fields = TagMap::new();
     let Some(tag) = file.primary_tag().or_else(|| file.first_tag()) else {
         return Some(fields);
     };
     for field in TagField::ALL {
-        let value = tag.get_string(key_of(field)).map(str::trim).unwrap_or("");
+        let value = value(tag, key_of(field));
         if !value.is_empty() {
-            fields.insert(field, value.to_owned());
+            fields.insert(field, value);
         }
     }
     Some(fields)
 }
 
+/// The file at `path`, to be read: a regular file only, opened without waiting.
+fn probe(path: &Path) -> Option<Probe<io::BufReader<File>>> {
+    freya_media::tags::probe(path)
+}
+
 /// Why tags cannot be written in the file at `path`, if so. Asked without reading all of it.
 pub fn why_not_taggable(path: &Path) -> Option<String> {
-    let kind = Probe::open(path)
-        .ok()
+    let kind = probe(path)
         .and_then(|probe| probe.guess_file_type().ok())
         .and_then(|probe| probe.file_type());
     match kind {
@@ -181,7 +209,7 @@ impl Copy {
             .write(true)
             .create_new(true)
             .open(&this.path)?;
-        let mut from = File::open(path)?;
+        let mut from = freya_media::files::open_regular(path)?;
         io::copy(&mut from, &mut to)?;
         to.set_permissions(from.metadata()?.permissions())?;
         Ok(this)
@@ -231,11 +259,18 @@ fn apply(tag: &mut Tag, changes: &TagMap) {
     for (field, value) in changes {
         let key = key_of(*field);
         tag.remove_key(key);
-        let value = value.trim();
-        if !value.is_empty() {
-            tag.insert_text(key, value.to_owned());
+        for value in values(value) {
+            tag.push(TagItem::new(key, ItemValue::Text(value.to_owned())));
         }
     }
+}
+
+/// The values of a field as [`read_all_fields`] gives it, none blank.
+fn values(value: &str) -> impl Iterator<Item = &str> {
+    value
+        .split(VALUES_APART)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 fn write_in_place(path: &Path, changes: &TagMap) -> Result<(), WriteError> {
@@ -324,7 +359,9 @@ fn write_in_place(path: &Path, changes: &TagMap) -> Result<(), WriteError> {
 fn verify(original: &Path, written: &Path, changes: &TagMap) -> Result<(), WriteError> {
     let read = |path: &Path| -> Result<_, WriteError> {
         let options = ParseOptions::new().read_cover_art(false);
-        Ok(Probe::open(path)?.options(options).read()?)
+        let probe =
+            probe(path).ok_or_else(|| WriteError::Mismatch("it could not be read".into()))?;
+        Ok(probe.options(options).read()?)
     };
     let before = read(original)?;
     let after = read(written)?;
@@ -337,7 +374,7 @@ fn verify(original: &Path, written: &Path, changes: &TagMap) -> Result<(), Write
     if before.duration().abs_diff(after.duration()) > LENGTH_TOLERANCE {
         return Err(WriteError::Mismatch("its length changed".into()));
     }
-    let fields = read_fields(written)
+    let fields = read_all_fields(written)
         .ok_or_else(|| WriteError::Mismatch("its tags could not be read".into()))?;
     for (field, value) in changes {
         let wanted = value.trim();
@@ -352,16 +389,25 @@ fn verify(original: &Path, written: &Path, changes: &TagMap) -> Result<(), Write
     Ok(())
 }
 
-/// Whether what was read of a field is what was written. Formats keep numbers as numbers, so
-/// "03" reads back as "3".
+/// Whether what was read of a field is what was written, each of its values. Formats keep
+/// numbers as numbers, so "03" reads back as "3".
 fn same_value(field: TagField, wanted: &str, got: &str) -> bool {
     let numeric = matches!(
         field,
         TagField::Track | TagField::TrackTotal | TagField::Disc | TagField::DiscTotal
     );
-    match (numeric, wanted.parse::<u32>(), got.parse::<u32>()) {
+    let same = |wanted: &str, got: &str| match (numeric, wanted.parse::<u32>(), got.parse::<u32>())
+    {
         (true, Ok(wanted), Ok(got)) => wanted == got,
         _ => wanted == got,
+    };
+    let (mut wanted, mut got) = (values(wanted), values(got));
+    loop {
+        match (wanted.next(), got.next()) {
+            (None, None) => return true,
+            (Some(wanted), Some(got)) if same(wanted, got) => {}
+            _ => return false,
+        }
     }
 }
 

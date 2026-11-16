@@ -9183,7 +9183,7 @@ component Sidebar inherits Rectangle {
                     selected: (root.view == "library" && Library.section == "playlists") || root.view == "playlist";
                     clicked => { root.show-section("playlists"); }
                 }
-                if Server.admin: SidebarItem {
+                if Server.owner: SidebarItem {
                     icon: Icons.folder;
                     text: "Organize";
                     selected: root.view == "organize";

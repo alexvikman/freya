@@ -1,7 +1,7 @@
 //! Writing what was decided about the music's files to them, and putting them back.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -58,9 +58,11 @@ fn write_draft(draft: &TagDraft, folders: &[PathBuf]) -> Result<Option<SavedFile
     if after.is_empty() {
         return Ok(None);
     }
+    // Every value of a field that has several, for an undo to put them all back.
+    let all = tagging::read_all_fields(&path).ok_or("its tags could not be read")?;
     let before = after
         .keys()
-        .map(|field| (*field, now.get(field).cloned().unwrap_or_default()))
+        .map(|field| (*field, all.get(field).cloned().unwrap_or_default()))
         .collect();
     tagging::write_fields(&path, &after).map_err(|e| e.to_string())?;
     Ok(Some(SavedFile {
@@ -336,7 +338,7 @@ pub fn apply_moves(plan: &[PlannedMove], folders: &[PathBuf]) -> Result<Vec<Save
     for one in plan {
         if let Err(why) = move_file(&one.from, &one.to, folders) {
             for moved in done.iter().rev() {
-                let _ = std::fs::rename(&moved.to, &moved.from);
+                let _ = rename_new(&moved.to, &moved.from);
             }
             return Err(format!("{}: {why}", one.from.display()));
         }
@@ -354,16 +356,162 @@ pub fn apply_moves(plan: &[PlannedMove], folders: &[PathBuf]) -> Result<Vec<Save
         .collect())
 }
 
+/// Moves the file `from` to `to`, both within `folders`. The folders on the way are made, never
+/// through a link, so a link in the music cannot lead the file out of it; and nothing already
+/// at `to` is replaced.
 fn move_file(from: &Path, to: &Path, folders: &[PathBuf]) -> Result<(), String> {
-    if !folders.iter().any(|folder| to.starts_with(folder)) {
-        return Err("that is not in the library's folders".to_owned());
+    let not_within = || "that is not in the library's folders".to_owned();
+    let root = folders
+        .iter()
+        .find(|folder| to.starts_with(folder))
+        .ok_or_else(not_within)?;
+    let within = to.strip_prefix(root).map_err(|_| not_within())?;
+    if !within
+        .components()
+        .all(|part| matches!(part, Component::Normal(_)))
+    {
+        return Err(not_within());
     }
-    let parent = to.parent().ok_or("it has no folder to go to")?;
-    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    if taken(from, to) {
-        return Err("a file is already there".to_owned());
+    let name = within.file_name().ok_or("it has no name")?;
+    if !folders.iter().any(|folder| from.starts_with(folder)) {
+        return Err(not_within());
     }
-    std::fs::rename(from, to).map_err(|e| e.to_string())
+    // The file itself, not a link to one somewhere else.
+    if !std::fs::symlink_metadata(from).is_ok_and(|kind| kind.is_file()) {
+        return Err("it is not a file".to_owned());
+    }
+    let mut folder = root.clone();
+    for part in within.parent().into_iter().flat_map(Path::components) {
+        folder.push(part);
+        make_folder(&folder)?;
+    }
+    let to = folder.join(name);
+    let moved = if std::fs::symlink_metadata(&to).is_ok() && !taken(from, &to) {
+        // The same file, its name in another case.
+        std::fs::rename(from, &to)
+    } else {
+        rename_new(from, &to)
+    };
+    moved.map_err(|e| match e.kind() {
+        std::io::ErrorKind::AlreadyExists => "a file is already there".to_owned(),
+        _ => e.to_string(),
+    })
+}
+
+/// Makes the folder `folder` in its parent, or finds it there: a folder, not a link to one.
+fn make_folder(folder: &Path) -> Result<(), String> {
+    match std::fs::create_dir(folder) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            match std::fs::symlink_metadata(folder) {
+                Ok(kind) if kind.is_dir() => Ok(()),
+                _ => Err(format!("{} is not a folder", folder.display())),
+            }
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Renames `from` to `to` unless something is at `to`, in one step where the system can. A
+/// file system that cannot, as some network shares, is looked at first, which leaves a moment
+/// in which a file made at `to` would be replaced.
+fn rename_new(from: &Path, to: &Path) -> std::io::Result<()> {
+    match rename_exclusive(from, to) {
+        Err(e) if cannot_exclusive(&e) => {
+            if std::fs::symlink_metadata(to).is_ok() {
+                return Err(std::io::ErrorKind::AlreadyExists.into());
+            }
+            std::fs::rename(from, to)
+        }
+        done => done,
+    }
+}
+
+#[cfg(unix)]
+fn c_path(path: &Path) -> std::io::Result<std::ffi::CString> {
+    use std::os::unix::ffi::OsStrExt;
+    std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| std::io::ErrorKind::InvalidInput.into())
+}
+
+#[cfg(target_os = "macos")]
+#[allow(
+    unsafe_code,
+    reason = "renames a file without replacing one, which std cannot"
+)]
+fn rename_exclusive(from: &Path, to: &Path) -> std::io::Result<()> {
+    let (from, to) = (c_path(from)?, c_path(to)?);
+    // SAFETY: both are paths ending in NUL, alive for the call.
+    match unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) } {
+        0 => Ok(()),
+        _ => Err(std::io::Error::last_os_error()),
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[allow(
+    unsafe_code,
+    reason = "renames a file without replacing one, which std cannot"
+)]
+fn rename_exclusive(from: &Path, to: &Path) -> std::io::Result<()> {
+    let (from, to) = (c_path(from)?, c_path(to)?);
+    // SAFETY: both are paths ending in NUL, alive for the call.
+    let renamed = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            from.as_ptr(),
+            libc::AT_FDCWD,
+            to.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    match renamed {
+        0 => Ok(()),
+        _ => Err(std::io::Error::last_os_error()),
+    }
+}
+
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "renames a file without replacing one, which std cannot"
+)]
+fn rename_exclusive(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    let wide = |path: &Path| -> Vec<u16> {
+        path.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    };
+    let (from, to) = (wide(from), wide(to));
+    // Without MOVEFILE_REPLACE_EXISTING, a file at `to` stops it.
+    // SAFETY: both are paths ending in NUL, alive for the call.
+    match unsafe {
+        windows_sys::Win32::Storage::FileSystem::MoveFileExW(from.as_ptr(), to.as_ptr(), 0)
+    } {
+        0 => Err(std::io::Error::last_os_error()),
+        _ => Ok(()),
+    }
+}
+
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "android",
+    windows
+)))]
+fn rename_exclusive(_: &Path, _: &Path) -> std::io::Result<()> {
+    Err(std::io::ErrorKind::Unsupported.into())
+}
+
+/// Whether renaming without replacing failed only as the file system does not do it.
+fn cannot_exclusive(e: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    if let Some(code) = e.raw_os_error() {
+        return [libc::EINVAL, libc::ENOTSUP, libc::EOPNOTSUPP, libc::ENOSYS].contains(&code);
+    }
+    e.kind() == std::io::ErrorKind::Unsupported
 }
 
 /// Takes away the folders moved out of that nothing is left in, up to the music folders.
@@ -387,6 +535,10 @@ fn remove_emptied<'a>(moved: impl Iterator<Item = &'a Path>, folders: &[PathBuf]
 
 /// Takes away the folder when it holds nothing but what systems leave in folders.
 fn remove_if_empty(folder: &Path) -> bool {
+    // A folder, not a link to one, whose litter is not someone else's.
+    if !std::fs::symlink_metadata(folder).is_ok_and(|kind| kind.is_dir()) {
+        return false;
+    }
     let Ok(entries) = std::fs::read_dir(folder) else {
         return false;
     };
@@ -405,12 +557,21 @@ fn remove_if_empty(folder: &Path) -> bool {
 }
 
 /// Adds the release group's cover beside the music of `saved`, when they became a release and
-/// their folder has no picture. The cover written, if one was.
-pub fn add_cover(saved: &[SavedFile]) -> Option<PathBuf> {
+/// their folder, within `folders`, has no picture. The cover written, if one was.
+pub fn add_cover(saved: &[SavedFile], folders: &[PathBuf]) -> Option<PathBuf> {
     let group = saved
         .iter()
         .find_map(|file| file.after.get(&TagField::ReleaseGroupId))?;
     let folder = album_folder(&saved.first()?.path_after);
+    // The album's folder in the music, not a link leading out of it.
+    let within = folders.iter().any(|f| folder.starts_with(f))
+        && folder
+            .components()
+            .all(|part| !matches!(part, Component::ParentDir))
+        && std::fs::symlink_metadata(&folder).is_ok_and(|kind| kind.is_dir());
+    if !within {
+        return None;
+    }
     let has_picture = std::fs::read_dir(&folder).ok()?.flatten().any(|entry| {
         let name = entry.file_name().to_string_lossy().to_lowercase();
         name.ends_with(".jpg") || name.ends_with(".jpeg") || name.ends_with(".png")
@@ -425,13 +586,27 @@ pub fn add_cover(saved: &[SavedFile]) -> Option<PathBuf> {
             return None;
         }
     };
-    let path = folder.join("cover.jpg");
+    // Only a picture: what the archive sent is written as what it is, or not at all.
+    let name = if picture.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        "cover.jpg"
+    } else if picture.starts_with(b"\x89PNG\r\n\x1a\n") {
+        "cover.png"
+    } else {
+        log::info!("the cover for {} is not a picture", folder.display());
+        return None;
+    };
+    let path = folder.join(name);
+    // Made anew: never through a link, nor over a file there.
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&path)
         .ok()?;
-    std::io::Write::write_all(&mut file, &picture).ok()?;
+    if std::io::Write::write_all(&mut file, &picture).is_err() {
+        drop(file);
+        let _ = std::fs::remove_file(&path);
+        return None;
+    }
     Some(path)
 }
 
@@ -779,5 +954,139 @@ mod tests {
         );
         assert_eq!((written.saved.len(), written.failed.len()), (1, 1));
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_undo_puts_back_every_value_of_a_field() {
+        let dir = folder("values");
+        let path = fixture(&dir, "sine.flac");
+        let both = format!("Hetfield{}Ulrich", tagging::VALUES_APART);
+        tagging::write_fields(&path, &TagMap::from([(TagField::Artist, both.clone())])).unwrap();
+        let folders = [dir.clone()];
+        let mut library = Library::open_in_memory().unwrap();
+        let drafts = [TagDraft {
+            path: path.clone(),
+            changes: TagMap::from([(TagField::Artist, "Metallica".to_owned())]),
+        }];
+        library.set_tag_drafts(&drafts).unwrap();
+
+        let written = write_drafts(&drafts, &folders);
+        assert_eq!(written.saved.len(), 1, "{:?}", written.failed);
+        let save = library
+            .note_tag_save(&dir, &written.saved, SystemTime::now())
+            .unwrap();
+        assert_eq!(
+            tagging::read_all_fields(&path).unwrap()[&TagField::Artist],
+            "Metallica"
+        );
+        let undone = undo_files(&library.tag_save_files(save).unwrap(), &folders);
+        assert!(undone.failed.is_empty(), "{:?}", undone.failed);
+        assert_eq!(
+            tagging::read_all_fields(&path).unwrap()[&TagField::Artist],
+            both
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_move_replaces_no_file_that_came_after_the_plan() {
+        let root = folder("came-after");
+        let from = root.join("old");
+        fs::create_dir_all(&from).unwrap();
+        let music = fixture(&from, "sine.flac");
+        let to = root.join("new").join("a.flac");
+        let plan = vec![PlannedMove {
+            from: music.clone(),
+            to: to.clone(),
+            conflict: None,
+            companion: false,
+        }];
+        fs::create_dir_all(to.parent().unwrap()).unwrap();
+        fs::write(&to, b"someone else's").unwrap();
+
+        let refused = apply_moves(&plan, std::slice::from_ref(&root)).unwrap_err();
+        assert!(refused.contains("a file is already there"), "{refused}");
+        assert_eq!(fs::read(&to).unwrap(), b"someone else's");
+        assert!(music.is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_move_goes_nowhere_outside_the_music() {
+        let root = folder("outside");
+        let music = root.join("music");
+        fs::create_dir_all(music.join("old")).unwrap();
+        let file = fixture(&music.join("old"), "sine.flac");
+        let folders = [music.clone()];
+        for to in [
+            music.join("..").join("away.flac"),
+            root.join("away.flac"),
+            music.join("new").join("..").join("..").join("away.flac"),
+        ] {
+            let plan = [PlannedMove {
+                from: file.clone(),
+                to,
+                conflict: None,
+                companion: false,
+            }];
+            assert!(apply_moves(&plan, &folders).is_err());
+        }
+        assert!(file.is_file());
+        assert!(!root.join("away.flac").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_move_follows_no_link_out_of_the_music() {
+        let root = folder("link");
+        let (music, elsewhere) = (root.join("music"), root.join("elsewhere"));
+        fs::create_dir_all(music.join("old")).unwrap();
+        fs::create_dir_all(&elsewhere).unwrap();
+        let file = fixture(&music.join("old"), "sine.flac");
+        std::os::unix::fs::symlink(&elsewhere, music.join("Metallica")).unwrap();
+        let plan = [PlannedMove {
+            from: file.clone(),
+            to: music.join("Metallica").join("Load").join("a.flac"),
+            conflict: None,
+            companion: false,
+        }];
+
+        let refused = apply_moves(&plan, std::slice::from_ref(&music)).unwrap_err();
+        assert!(refused.contains("is not a folder"), "{refused}");
+        assert!(file.is_file());
+        assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_to_a_file_is_not_moved() {
+        let root = folder("linked-file");
+        let music = root.join("music");
+        fs::create_dir_all(&music).unwrap();
+        let real = fixture(&root, "sine.flac");
+        let link = music.join("sine.flac");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let plan = [PlannedMove {
+            from: link.clone(),
+            to: music.join("new").join("a.flac"),
+            conflict: None,
+            companion: false,
+        }];
+        assert!(apply_moves(&plan, std::slice::from_ref(&music)).is_err());
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_cover_is_asked_for_by_a_release_group_id_only() {
+        assert!(cover_art("../../release/x").is_err());
+        assert!(cover_art("").is_err());
     }
 }

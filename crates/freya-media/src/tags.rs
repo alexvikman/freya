@@ -61,7 +61,7 @@ const LONGEST_TAG: usize = 1024;
 
 /// The file at `path`, opened for its tags to be read, its kind told by its name, as
 /// `Probe::open` tells it: a regular file only, opened without waiting.
-pub(crate) fn probe(path: &Path) -> Option<lofty::probe::Probe<std::io::BufReader<std::fs::File>>> {
+pub fn probe(path: &Path) -> Option<lofty::probe::Probe<std::io::BufReader<std::fs::File>>> {
     let file = crate::files::open_regular(path).ok()?;
     let probe = lofty::probe::Probe::new(std::io::BufReader::new(file));
     Some(match lofty::file::FileType::from_path(path) {

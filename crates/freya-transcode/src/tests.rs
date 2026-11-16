@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use symphonia::core::codecs::audio::AudioDecoderOptions;
 use symphonia::core::formats::probe::Hint;
@@ -164,4 +165,56 @@ fn qualities_are_named_as_asked_for() {
     assert_eq!(Quality::from_name("original"), None);
     assert_eq!(Quality::High.bytes_per_second(), 20_000);
     assert_eq!(Quality::Normal.bytes_per_second(), 12_000);
+}
+
+/// A WAV file of `seconds` of silence at `rate`, in `channels`.
+fn silence(rate: u32, channels: u16, seconds: u32) -> PathBuf {
+    let data = rate * u32::from(channels) * 2 * seconds;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&(36 + data).to_le_bytes());
+    bytes.extend_from_slice(b"WAVEfmt ");
+    bytes.extend_from_slice(&16u32.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&channels.to_le_bytes());
+    bytes.extend_from_slice(&rate.to_le_bytes());
+    bytes.extend_from_slice(&(rate * u32::from(channels) * 2).to_le_bytes());
+    bytes.extend_from_slice(&(channels * 2).to_le_bytes());
+    bytes.extend_from_slice(&16u16.to_le_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&data.to_le_bytes());
+    bytes.resize(bytes.len() + data as usize, 0);
+    let path = std::env::temp_dir().join(format!(
+        "freya-transcode-{rate}-{channels}-{}.wav",
+        std::process::id()
+    ));
+    std::fs::write(&path, bytes).unwrap();
+    path
+}
+
+#[test]
+fn samples_for_a_fingerprint_are_of_one_channel() {
+    let path = silence(44_100, 2, 2);
+    let (samples, rate) = samples_of(
+        File::open(&path).unwrap(),
+        Some("wav"),
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    assert_eq!((samples.len(), rate), (44_100, 44_100));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn a_file_of_too_high_a_rate_gives_no_samples() {
+    let path = silence(384_000, 1, 1);
+    assert!(
+        samples_of(
+            File::open(&path).unwrap(),
+            Some("wav"),
+            Duration::from_secs(1)
+        )
+        .is_err()
+    );
+    std::fs::remove_file(path).unwrap();
 }

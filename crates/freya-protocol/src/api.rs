@@ -49,6 +49,11 @@ macro_rules! with_library_data {
             /// a file's, and every track under a folder, by path. What is not the library's is
             /// left out.
             fn tracks_under(paths: &[::std::path::PathBuf]) -> Vec<$crate::Track>;
+            /// As `track_at`, `knows_file` and `tracks_under`, leaving out what waits in the
+            /// inbox: what a listener is answered when asking those.
+            fn shared_track_at(path: &::std::path::Path, start: ::std::time::Duration) -> Option<$crate::Track>;
+            fn knows_shared_file(path: &::std::path::Path) -> bool;
+            fn shared_tracks_under(paths: &[::std::path::PathBuf]) -> Vec<$crate::Track>;
             fn genres() -> Vec<$crate::Genre>;
             fn genre_albums(genre: Option<&str>) -> Vec<$crate::Album>;
             fn genre_tracks(genre: Option<&str>) -> Vec<$crate::Track>;
@@ -383,7 +388,8 @@ pub const LISTENER_CALLS: &[&str] = &[
 
 /// The calls only the server's owner may make: a backup holds every user's password hash and the
 /// server's key, and restoring one replaces the users, an admin among them could make themself
-/// the owner by it.
+/// the owner by it. Writing to the music's files and moving them is the owner's too: it is done
+/// as the server's user, in any folder an admin added to the library.
 pub const OWNER_CALLS: &[&str] = &[
     "backup_size",
     "start_backup",
@@ -392,6 +398,11 @@ pub const OWNER_CALLS: &[&str] = &[
     "restore_backup",
     "export_data",
     "import_data",
+    "save_tag_drafts",
+    "undo_tag_save",
+    "save_ready_folders",
+    "move_folders",
+    "accept_folders",
 ];
 
 /// The calls that only read what the library's database holds, and answer every caller the
@@ -401,6 +412,9 @@ pub const OWNER_CALLS: &[&str] = &[
 /// read anew each time until it is named.
 pub const CACHED_CALLS: &[&str] = &[
     "album_editions",
+    "shared_track_at",
+    "knows_shared_file",
+    "shared_tracks_under",
     "folder_proposal",
     "organize_folders",
     "tag_drafts",

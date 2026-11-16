@@ -1,4 +1,4 @@
-//! Organize: an admin's view of the music's folders, asked of the server on the errands'
+//! Organize: the server owner's view of the music's folders, asked of the server on the errands'
 //! thread, the window not waiting for it.
 
 use std::collections::BTreeMap;

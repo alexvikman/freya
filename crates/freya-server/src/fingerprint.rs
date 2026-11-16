@@ -21,12 +21,13 @@ const SURE: f64 = 0.7;
 
 /// A file's fingerprint as AcoustID reads it.
 pub fn fingerprint(path: &Path) -> Result<String, String> {
-    let (samples, rate, channels) = samples_of(path, HEARD).map_err(|e| e.to_string())?;
+    // A regular file only, opened without waiting: a FIFO named as a song is refused.
+    let file = freya_media::files::open_regular(path).map_err(|e| e.to_string())?;
+    let extension = path.extension().and_then(|e| e.to_str());
+    let (samples, rate) = samples_of(file, extension, HEARD).map_err(|e| e.to_string())?;
     let config = Configuration::preset_test2();
     let mut printer = Fingerprinter::new(&config);
-    printer
-        .start(rate, channels)
-        .map_err(|e| format!("{e:?}"))?;
+    printer.start(rate, 1).map_err(|e| format!("{e:?}"))?;
     printer.consume(&samples);
     printer.finish();
     let compressed = FingerprintCompressor::from(&config).compress(printer.fingerprint());

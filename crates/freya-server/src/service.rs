@@ -208,14 +208,17 @@ impl Service {
                 job
             };
             let Some(job) = job else { return };
-            let done = match &job {
+            // A job that panics fails alone: the thread goes on with the others, and is not
+            // left marked as running with none to run them.
+            let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match &job {
                 FolderJob::Identify(folder) => Self::identify_folder(&shared, folder),
                 FolderJob::Save(folder) => Self::save_folder(&shared, folder),
                 FolderJob::Accept(folder) => Self::accept_folder(&shared, folder),
                 FolderJob::Move(folder, pattern) => {
                     Self::move_folder(&shared, folder, pattern, None)
                 }
-            };
+            }))
+            .unwrap_or_else(|_| Err(ApiError("it failed unexpectedly".into())));
             let mut organizing = lock(&shared.organizing);
             organizing.status.waiting = organizing.status.waiting.saturating_sub(1);
             organizing.status.done += 1;
@@ -372,7 +375,7 @@ impl Service {
             let at = SystemTime::now();
             let save = api.with_db(|db| db.note_tag_save(&folder, &written.saved, at))?;
             outcome.save = Some(save);
-            if let Some(cover) = crate::organize::add_cover(&written.saved) {
+            if let Some(cover) = crate::organize::add_cover(&written.saved, &folders) {
                 api.with_db(|db| db.note_save_cover(save, &cover))?;
             }
             Self::run(shared, |state| {

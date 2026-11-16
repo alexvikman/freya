@@ -185,6 +185,9 @@ pub fn deezer_picture_urls(name: &str) -> Result<Vec<String>, String> {
 /// The front cover of the release group `group` from the Cover Art Archive, as large as it
 /// keeps it up to 1200 pixels; none when it has none.
 pub fn cover_art(group: &str) -> Result<Option<Vec<u8>>, String> {
+    if !is_mbid(group) {
+        return Err(format!("{group:?} is not a MusicBrainz id"));
+    }
     let url = format!("https://coverartarchive.org/release-group/{group}/front-1200");
     match agent().get(&url).call() {
         Ok(mut answer) => answer

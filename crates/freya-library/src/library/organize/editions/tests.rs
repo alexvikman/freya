@@ -260,6 +260,44 @@ fn music_in_the_inbox_is_not_the_librarys_yet() {
 }
 
 #[test]
+fn what_everyone_shares_leaves_out_the_inbox() {
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    let mut library = Library::open_in_memory().unwrap();
+    album(&library, "/m/Inbox/New", "New Album", &["One"], None);
+    album(&library, "/m/Metallica/Load", "Load", &["Two"], None);
+    library.set_inbox(Some(Path::new("/m/Inbox"))).unwrap();
+    let (waiting, listed) = (
+        Path::new("/m/Inbox/New/01.flac"),
+        Path::new("/m/Metallica/Load/01.flac"),
+    );
+
+    // The owner may play what waits; everyone else hears only what was let in.
+    assert!(library.track_at(waiting, Duration::ZERO).unwrap().is_some());
+    assert!(
+        library
+            .shared_track_at(waiting, Duration::ZERO)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        library
+            .shared_track_at(listed, Duration::ZERO)
+            .unwrap()
+            .is_some()
+    );
+    assert!(library.knows_file(waiting).unwrap());
+    assert!(!library.knows_shared_file(waiting).unwrap());
+    assert!(library.knows_shared_file(listed).unwrap());
+    let everything = [PathBuf::from("/m")];
+    assert_eq!(library.tracks_under(&everything).unwrap().len(), 2);
+    let shared = library.shared_tracks_under(&everything).unwrap();
+    assert_eq!(shared.len(), 1);
+    assert_eq!(shared[0].title.as_deref(), Some("Two"));
+}
+
+#[test]
 fn music_let_in_from_the_inbox_is_listed() {
     use std::time::SystemTime;
 

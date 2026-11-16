@@ -44,6 +44,7 @@ pub use genres::{GenreArticle, GenreInfo};
 pub use kinds::{AlbumKind, Untyped};
 pub use matches::{AlbumMatch, plain_name, split_artist};
 pub use online::{ASK_AGAIN_AFTER, ArtistText, Asked, CHOSEN, FOLDER, PictureKind, PictureRow};
+use organize::editions::IN_INBOX;
 pub use playlists::{PlaylistInfo, PlaylistTrack};
 pub use rusqlite::Error;
 pub use scan::{ScanEvent, ScanOptions, ScanSummary, Scanner, scan, scan_with};
@@ -411,15 +412,28 @@ impl Library {
 
     /// The track in the file `path` that starts at `start` (zero for a whole file).
     pub fn track_at(&self, path: &Path, start: Duration) -> Result<Option<Track>> {
+        self.track_in(path, start, true)
+    }
+
+    /// As [`Self::track_at`], none for a track that waits in the inbox: what everyone shares.
+    pub fn shared_track_at(&self, path: &Path, start: Duration) -> Result<Option<Track>> {
+        self.track_in(path, start, false)
+    }
+
+    fn track_in(&self, path: &Path, start: Duration, inbox: bool) -> Result<Option<Track>> {
         let Some(path) = path.to_str() else {
             return Ok(None);
         };
         self.db
             .prepare_cached(&format!(
                 "SELECT {TRACK_COLUMNS} FROM tracks
-                 WHERE path = ?1 AND ifnull(start_ms, 0) = ?2 LIMIT 1"
+                 WHERE path = ?1 AND ifnull(start_ms, 0) = ?2 AND (?3 OR alternate != {IN_INBOX})
+                 LIMIT 1"
             ))?
-            .query_row(params![path, start.as_millis() as i64], track_from_row)
+            .query_row(
+                params![path, start.as_millis() as i64, inbox],
+                track_from_row,
+            )
             .optional()
     }
 
@@ -438,19 +452,38 @@ impl Library {
     /// Every track filed under `artist`, album by album.
     /// Whether the file at `path` is one of the library's tracks.
     pub fn knows_file(&self, path: &Path) -> Result<bool> {
-        let mut query = self
-            .db
-            .prepare_cached("SELECT EXISTS (SELECT 1 FROM tracks WHERE path = ?1)")?;
-        query.query_row([path.to_string_lossy()], |row| row.get(0))
+        self.knows_file_in(path, true)
+    }
+
+    /// As [`Self::knows_file`], false for a file that waits in the inbox.
+    pub fn knows_shared_file(&self, path: &Path) -> Result<bool> {
+        self.knows_file_in(path, false)
+    }
+
+    fn knows_file_in(&self, path: &Path, inbox: bool) -> Result<bool> {
+        let mut query = self.db.prepare_cached(&format!(
+            "SELECT EXISTS (SELECT 1 FROM tracks
+                            WHERE path = ?1 AND (?2 OR alternate != {IN_INBOX}))"
+        ))?;
+        query.query_row(params![path.to_string_lossy(), inbox], |row| row.get(0))
     }
 
     /// The tracks of the files and folders at `paths`: a file's tracks (a CUE sheet's parts
     /// too), and every track under a folder, in the order of their paths. Paths the library does
     /// not have are left out. At most [`MOST_TRACKS_UNDER`].
     pub fn tracks_under(&self, paths: &[PathBuf]) -> Result<Vec<Track>> {
+        self.tracks_under_in(paths, true)
+    }
+
+    /// As [`Self::tracks_under`], leaving out what waits in the inbox.
+    pub fn shared_tracks_under(&self, paths: &[PathBuf]) -> Result<Vec<Track>> {
+        self.tracks_under_in(paths, false)
+    }
+
+    fn tracks_under_in(&self, paths: &[PathBuf], inbox: bool) -> Result<Vec<Track>> {
         let mut query = self.db.prepare_cached(&format!(
             "SELECT {TRACK_COLUMNS} FROM tracks
-             WHERE path = ?1 OR (path >= ?2 AND path < ?3)
+             WHERE (path = ?1 OR (path >= ?2 AND path < ?3)) AND (?5 OR alternate != {IN_INBOX})
              ORDER BY path, ifnull(start_ms, 0)
              LIMIT ?4"
         ))?;
@@ -473,7 +506,7 @@ impl Library {
                 let left = MOST_TRACKS_UNDER.saturating_sub(tracks.len() + found.len());
                 found.extend(
                     query
-                        .query_map(params![path, from, to, left as i64], track_from_row)?
+                        .query_map(params![path, from, to, left as i64, inbox], track_from_row)?
                         .collect::<Result<Vec<_>>>()?,
                 );
             }

@@ -422,3 +422,43 @@ fn a_file_swapped_for_a_link_is_not_replaced() {
     );
     assert_eq!(folder.names(), ["elsewhere.flac", "sine.flac"]);
 }
+
+#[test]
+fn every_value_of_a_field_is_written_and_read() {
+    let folder = Folder::new("values");
+    for name in [
+        "sine.flac",
+        "sine.ogg",
+        "sine.opus",
+        "sine-alac.m4a",
+        "sine.ape",
+    ] {
+        let path = folder.copy(name);
+        let both = format!("Hetfield{VALUES_APART}Ulrich");
+        write_fields(&path, &TagMap::from([(TagField::Artist, both.clone())])).unwrap();
+        assert_eq!(
+            read_all_fields(&path).unwrap()[&TagField::Artist],
+            both,
+            "{name}"
+        );
+        assert_eq!(
+            read_fields(&path).unwrap()[&TagField::Artist],
+            "Hetfield",
+            "{name}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_fifo_named_as_music_is_not_waited_on() {
+    let folder = Folder::new("fifo");
+    let path = folder.0.join("song.flac");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&path)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    assert_eq!(read_fields(&path), None);
+    assert!(write_fields(&path, &TagMap::new()).is_err());
+}

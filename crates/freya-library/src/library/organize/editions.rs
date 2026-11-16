@@ -103,7 +103,7 @@ impl Joined {
 }
 
 /// What marks a track as waiting in the inbox.
-const IN_INBOX: i64 = 2;
+pub(crate) const IN_INBOX: i64 = 2;
 
 fn inbox_of(tx: &Transaction<'_>) -> Result<Option<PathBuf>> {
     Ok(tx
