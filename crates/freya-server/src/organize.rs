@@ -338,7 +338,7 @@ pub fn apply_moves(plan: &[PlannedMove], folders: &[PathBuf]) -> Result<Vec<Save
     for one in plan {
         if let Err(why) = move_file(&one.from, &one.to, folders) {
             for moved in done.iter().rev() {
-                let _ = rename_new(&moved.to, &moved.from);
+                let _ = move_file(&moved.to, &moved.from, folders);
             }
             return Err(format!("{}: {why}", one.from.display()));
         }
@@ -356,162 +356,24 @@ pub fn apply_moves(plan: &[PlannedMove], folders: &[PathBuf]) -> Result<Vec<Save
         .collect())
 }
 
-/// Moves the file `from` to `to`, both within `folders`. The folders on the way are made, never
-/// through a link, so a link in the music cannot lead the file out of it; and nothing already
-/// at `to` is replaced.
+/// Moves the file `from` to `to`, both within `folders`: never through a link, so one in the
+/// music cannot lead the file out of it, and never over a file already at `to`.
 fn move_file(from: &Path, to: &Path, folders: &[PathBuf]) -> Result<(), String> {
     let not_within = || "that is not in the library's folders".to_owned();
-    let root = folders
-        .iter()
-        .find(|folder| to.starts_with(folder))
-        .ok_or_else(not_within)?;
-    let within = to.strip_prefix(root).map_err(|_| not_within())?;
-    if !within
-        .components()
-        .all(|part| matches!(part, Component::Normal(_)))
-    {
-        return Err(not_within());
-    }
-    let name = within.file_name().ok_or("it has no name")?;
-    if !folders.iter().any(|folder| from.starts_with(folder)) {
-        return Err(not_within());
-    }
-    // The file itself, not a link to one somewhere else.
-    if !std::fs::symlink_metadata(from).is_ok_and(|kind| kind.is_file()) {
-        return Err("it is not a file".to_owned());
-    }
-    let mut folder = root.clone();
-    for part in within.parent().into_iter().flat_map(Path::components) {
-        folder.push(part);
-        make_folder(&folder)?;
-    }
-    let to = folder.join(name);
-    let moved = if std::fs::symlink_metadata(&to).is_ok() && !taken(from, &to) {
-        // The same file, its name in another case.
-        std::fs::rename(from, &to)
-    } else {
-        rename_new(from, &to)
-    };
-    moved.map_err(|e| match e.kind() {
+    let (from_root, from_rest) = within(from, folders).ok_or_else(not_within)?;
+    let (to_root, to_rest) = within(to, folders).ok_or_else(not_within)?;
+    crate::moving::move_within(from_root, from_rest, to_root, to_rest).map_err(|e| match e.kind() {
         std::io::ErrorKind::AlreadyExists => "a file is already there".to_owned(),
         _ => e.to_string(),
     })
 }
 
-/// Makes the folder `folder` in its parent, or finds it there: a folder, not a link to one.
-fn make_folder(folder: &Path) -> Result<(), String> {
-    match std::fs::create_dir(folder) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            match std::fs::symlink_metadata(folder) {
-                Ok(kind) if kind.is_dir() => Ok(()),
-                _ => Err(format!("{} is not a folder", folder.display())),
-            }
-        }
-        Err(e) => Err(e.to_string()),
-    }
-}
-
-/// Renames `from` to `to` unless something is at `to`, in one step where the system can. A
-/// file system that cannot, as some network shares, is looked at first, which leaves a moment
-/// in which a file made at `to` would be replaced.
-fn rename_new(from: &Path, to: &Path) -> std::io::Result<()> {
-    match rename_exclusive(from, to) {
-        Err(e) if cannot_exclusive(&e) => {
-            if std::fs::symlink_metadata(to).is_ok() {
-                return Err(std::io::ErrorKind::AlreadyExists.into());
-            }
-            std::fs::rename(from, to)
-        }
-        done => done,
-    }
-}
-
-#[cfg(unix)]
-fn c_path(path: &Path) -> std::io::Result<std::ffi::CString> {
-    use std::os::unix::ffi::OsStrExt;
-    std::ffi::CString::new(path.as_os_str().as_bytes())
-        .map_err(|_| std::io::ErrorKind::InvalidInput.into())
-}
-
-#[cfg(target_os = "macos")]
-#[allow(
-    unsafe_code,
-    reason = "renames a file without replacing one, which std cannot"
-)]
-fn rename_exclusive(from: &Path, to: &Path) -> std::io::Result<()> {
-    let (from, to) = (c_path(from)?, c_path(to)?);
-    // SAFETY: both are paths ending in NUL, alive for the call.
-    match unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) } {
-        0 => Ok(()),
-        _ => Err(std::io::Error::last_os_error()),
-    }
-}
-
-#[cfg(any(target_os = "linux", target_os = "android"))]
-#[allow(
-    unsafe_code,
-    reason = "renames a file without replacing one, which std cannot"
-)]
-fn rename_exclusive(from: &Path, to: &Path) -> std::io::Result<()> {
-    let (from, to) = (c_path(from)?, c_path(to)?);
-    // SAFETY: both are paths ending in NUL, alive for the call.
-    let renamed = unsafe {
-        libc::renameat2(
-            libc::AT_FDCWD,
-            from.as_ptr(),
-            libc::AT_FDCWD,
-            to.as_ptr(),
-            libc::RENAME_NOREPLACE,
-        )
-    };
-    match renamed {
-        0 => Ok(()),
-        _ => Err(std::io::Error::last_os_error()),
-    }
-}
-
-#[cfg(windows)]
-#[allow(
-    unsafe_code,
-    reason = "renames a file without replacing one, which std cannot"
-)]
-fn rename_exclusive(from: &Path, to: &Path) -> std::io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    let wide = |path: &Path| -> Vec<u16> {
-        path.as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect()
-    };
-    let (from, to) = (wide(from), wide(to));
-    // Without MOVEFILE_REPLACE_EXISTING, a file at `to` stops it.
-    // SAFETY: both are paths ending in NUL, alive for the call.
-    match unsafe {
-        windows_sys::Win32::Storage::FileSystem::MoveFileExW(from.as_ptr(), to.as_ptr(), 0)
-    } {
-        0 => Err(std::io::Error::last_os_error()),
-        _ => Ok(()),
-    }
-}
-
-#[cfg(not(any(
-    target_os = "macos",
-    target_os = "linux",
-    target_os = "android",
-    windows
-)))]
-fn rename_exclusive(_: &Path, _: &Path) -> std::io::Result<()> {
-    Err(std::io::ErrorKind::Unsupported.into())
-}
-
-/// Whether renaming without replacing failed only as the file system does not do it.
-fn cannot_exclusive(e: &std::io::Error) -> bool {
-    #[cfg(unix)]
-    if let Some(code) = e.raw_os_error() {
-        return [libc::EINVAL, libc::ENOTSUP, libc::EOPNOTSUPP, libc::ENOSYS].contains(&code);
-    }
-    e.kind() == std::io::ErrorKind::Unsupported
+/// The music folder `path` is in, and where within it.
+fn within<'a>(path: &'a Path, folders: &'a [PathBuf]) -> Option<(&'a Path, &'a Path)> {
+    folders.iter().find_map(|folder| {
+        let rest = path.strip_prefix(folder).ok()?;
+        Some((folder.as_path(), rest))
+    })
 }
 
 /// Takes away the folders moved out of that nothing is left in, up to the music folders.
@@ -1081,6 +943,26 @@ mod tests {
                 .file_type()
                 .is_symlink()
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_file_is_renamed_in_another_case() {
+        let root = folder("case");
+        let music = fixture(&root, "sine.flac");
+        let to = root.join("SINE.flac");
+        let plan = [PlannedMove {
+            from: music,
+            to: to.clone(),
+            conflict: None,
+            companion: false,
+        }];
+        apply_moves(&plan, std::slice::from_ref(&root)).unwrap();
+        let names: Vec<String> = fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["SINE.flac"]);
         fs::remove_dir_all(root).unwrap();
     }
 

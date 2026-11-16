@@ -225,11 +225,14 @@ Nobody can wear it out before logging in:
   the owner sees the Organize view. Tags are written to a copy beside the file, made new under
   a name no one can guess, never through a link nor over a file there, read back, and renamed
   over the file only if that is still the regular file it was. A move goes only to a place
-  within the music's folders: the folders on its way are made one by one and never followed
-  through a link, a file linked to is not moved, and a file is renamed into place without
-  replacing one there (`renamex_np`, `renameat2`, `MoveFileExW`); a network share that cannot
-  rename so is looked at first, which leaves a moment in which a file made there meanwhile
-  would be replaced. A cover is asked of the Cover Art Archive only by a MusicBrainz id, and
+  within the music's folders, and a file linked to is not moved. On macOS and Linux each
+  folder on its way is made and opened from the one before it, never through a link
+  (`openat` with `O_NOFOLLOW`), and the file is renamed between those folders' handles
+  without replacing one there (`renameatx_np`, `renameat2`), so a folder swapped for a link
+  while it moves leads nowhere; a network share that cannot rename so is looked at first,
+  which leaves a moment in which a file made there meanwhile would be replaced. Windows looks
+  at each folder by its path just before the move (`MoveFileExW`, which replaces nothing),
+  which leaves a moment in which a folder swapped for a link would be followed. A cover is asked of the Cover Art Archive only by a MusicBrainz id, and
   written only into the album's own folder, as a new file, and only if it is a JPEG or a PNG.
   A fingerprint is made of at most two minutes of one channel at up to 192 kHz, whatever the
   file says it holds; the file is opened without waiting. What waits in the inbox is not yet
