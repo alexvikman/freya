@@ -371,6 +371,7 @@ impl Library {
             ArtistOrder::MostPlayed => "sum(coalesce(plays.n, 0)) DESC,",
             // A favourite is as recent as when it was made one.
             ArtistOrder::RecentlyAdded => "coalesce(favorite.at, max(tracks.added)) DESC,",
+            ArtistOrder::Came => "max(tracks.added) DESC,",
         };
         // By the name the user sorts them by, else the name shown.
         let mut query = self.db.prepare_cached(&format!(

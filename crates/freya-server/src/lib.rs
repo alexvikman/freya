@@ -33,6 +33,7 @@ pub mod transfer;
 pub mod updates;
 
 pub use lastfm::lastfm;
+pub use log_lines::entry as log_entry;
 pub use serve::{Served, Updating, admit, found, handler};
 pub use service::{LocalLibrary, Service, ServiceConfig};
 

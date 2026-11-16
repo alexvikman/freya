@@ -1,0 +1,25 @@
+# Looks each day for new advisories against the crates Freya is built from (see
+# docs/DEPENDENCIES.md). CI checks them when something is pushed; one published between pushes
+# would otherwise wait for the next, while the release it concerns is in use. A run that fails
+# is told to the repository's owner, as any workflow's is.
+name: Advisories
+
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  advisories:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: cargo install cargo-deny --locked --version 0.20.2
+      # Vulnerabilities, crates found to be malicious, yanked versions and crates given up:
+      # what the RustSec database knows today of what Cargo.lock names.
+      - run: cargo deny --locked check advisories

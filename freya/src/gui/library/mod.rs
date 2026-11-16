@@ -993,7 +993,7 @@ pub fn albums_order(name: &str) -> Option<AlbumOrder> {
 
 fn albums_order_name(order: AlbumOrder) -> &'static str {
     match order {
-        AlbumOrder::Added => "added",
+        AlbumOrder::Added | AlbumOrder::Came => "added",
         AlbumOrder::Played => "played",
         AlbumOrder::Name => "name",
         AlbumOrder::Artist => "artist",
@@ -1014,7 +1014,7 @@ fn artist_order_name(order: ArtistOrder) -> &'static str {
     match order {
         ArtistOrder::Name => "name",
         ArtistOrder::MostPlayed => "most-played",
-        ArtistOrder::RecentlyAdded => "recently-added",
+        ArtistOrder::RecentlyAdded | ArtistOrder::Came => "recently-added",
     }
 }
 

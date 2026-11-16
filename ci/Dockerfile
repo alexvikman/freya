@@ -32,6 +32,10 @@ RUN printf '#!/bin/sh\nexec x86_64-w64-mingw32-gcc "$@" -lssp\n' > /usr/local/bi
 ENV CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc \
     CXX_x86_64_pc_windows_gnu=x86_64-w64-mingw32-g++ \
     CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=mingw-link
+# The C code is built for Windows 10, the oldest Rust's own programs run on. Left to
+# themselves, MinGW's headers declare only what Windows Server 2003 had, and SQLite, from 3.54,
+# calls what came after it (GetTickCount64).
+ENV CFLAGS_x86_64_pc_windows_gnu="-D_WIN32_WINNT=0x0A00"
 
 # Secret scanning (ci/check.sh secrets).
 COPY install-gitleaks.sh /tmp/

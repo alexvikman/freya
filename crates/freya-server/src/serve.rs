@@ -17,23 +17,24 @@
 //!   its certificate's fingerprint, as it answers those looking for it.
 //! - `GET /certificate`: the server's TLS certificate, in DER, for a client to pin the first
 //!   time it connects.
-//! - `POST /quit`: the server stops; only from this computer.
-//! - `POST /pair`: `{"nonce", "proof", "device"}`, the HMAC with the pairing key a client on
-//!   this computer read over its nonce and its name (see [`crate::accounts`]): tokens for the
-//!   device, as `/token` gives them. Only from this computer.
 //! - `POST /token`: tokens for a device, `{"access_token", "refresh_token", "token_type",
 //!   "expires_in"}` (see [`crate::accounts`]), for `{"grant_type": "authorization_code",
 //!   "code", "code_verifier", "redirect_uri", "device"}`, the code the login page gave (see
 //!   [`crate::pages`]), or for `{"grant_type": "refresh_token", "refresh_token"}`.
 //! - `POST /enroll`: `{"nonce"}`, hex: `{"proof"}`, the HMAC with which the server proves it
 //!   knows the connection code its computer shows (see [`crate::accounts`]). No token.
+//! - `POST /claim`: `{"nonce", "proof"}`, hex, with which a device proves it knows a code too:
+//!   a ticket for the page that adopts the server or joins it. No token.
+//! - `POST /account/users/invite`, `/invite-again` and `/remove`, and `GET /account/users`: the
+//!   server's users, an admin's to keep; an admin among them only the owner's.
 //! - `POST /account/connection-code`: a new connection code, `{"code", "lasts"}` (seconds);
 //!   only an admin's.
 //! - `GET /account`: the caller's account and devices; `POST /account/password-page`: a
 //!   ticket for the page the password is changed on, `{"ticket"}`; `POST /account/revoke`:
 //!   `{"device"}`; `POST /account/log-out`: the caller's own token taken back.
 //!
-//! Every request but `/version`, `/pair`, `/token` and `/enroll` carries a device's access token, as
+//! Every request but `/version`, `/certificate`, `/token`, `/enroll` and `/claim` carries a
+//! device's access token, as
 //! `Authorization: Bearer ...`, or is refused. A listener's device is refused what changes the
 //! server: every call but those [`freya_protocol::LISTENER_CALLS`] names, and keeping
 //! pictures. The pages a browser opens, under
@@ -250,7 +251,13 @@ fn answer(served: &Served, answers: &Answers, request: Request) -> Response {
             let method = &path["/call/".len()..];
             let args = &request.body;
             if CACHED_CALLS.contains(&method) {
-                return kept(library, answers, &request, method);
+                let listener = caller.as_ref().is_some_and(|c| c.role == Role::Listener);
+                let args = if listener {
+                    listeners_args(method, args)
+                } else {
+                    Cow::Borrowed(args.as_slice())
+                };
+                return kept(library, answers, &request, method, &args);
             }
             let answered = dispatch_data(library, method, args).or_else(|| {
                 served
@@ -404,6 +411,29 @@ fn listener_may(request: &Request, path: &str) -> bool {
     }
 }
 
+/// The arguments a listener's call is answered with. Plays and favourites are the owner's,
+/// and an order that follows them shows what the owner plays and likes, and when: a listener
+/// asking for one is answered by when the music came, which follows the library alone.
+fn listeners_args<'a>(method: &str, args: &'a [u8]) -> Cow<'a, [u8]> {
+    use freya_protocol::{AlbumOrder, ArtistOrder};
+    let shared = match method {
+        "artists_by" => match serde_json::from_slice::<(ArtistOrder,)>(args) {
+            Ok((ArtistOrder::MostPlayed | ArtistOrder::RecentlyAdded,)) => {
+                serde_json::to_vec(&(ArtistOrder::Came,)).ok()
+            }
+            _ => None,
+        },
+        "albums_by" => match serde_json::from_slice::<(AlbumOrder,)>(args) {
+            Ok((AlbumOrder::Added | AlbumOrder::Played,)) => {
+                serde_json::to_vec(&(AlbumOrder::Came,)).ok()
+            }
+            _ => None,
+        },
+        _ => None,
+    };
+    shared.map_or(Cow::Borrowed(args), Cow::Owned)
+}
+
 /// Whether `path` is a regular file within the music's folders, after links; anything for a
 /// server without settings, as in tests.
 fn is_music_file(served: &Served, path: &std::path::Path) -> bool {
@@ -425,8 +455,9 @@ fn kept(
     answers: &Answers,
     request: &Request,
     method: &str,
+    args: &[u8],
 ) -> Response {
-    let answer = match kept_answer(library, answers, method, &request.body) {
+    let answer = match kept_answer(library, answers, method, args) {
         Ok(answer) => answer,
         Err((status, why)) => return Response::error(status, why),
     };
@@ -504,6 +535,13 @@ fn many(
             Err((404, format!("no such call to ask at once: {method}")))
         } else if listener && !LISTENER_CALLS.contains(&method.as_str()) {
             Err((403, "only the server's admin may do that".to_owned()))
+        } else if listener {
+            kept_answer(
+                library,
+                answers,
+                method,
+                &listeners_args(method, args.as_bytes()),
+            )
         } else {
             kept_answer(library, answers, method, args.as_bytes())
         };
@@ -978,7 +1016,7 @@ fn account(
         },
         ("POST", "/account/users/invite") => match (named(), certificate) {
             (Ok(named), Some(certificate)) => {
-                invited(accounts.invite_user(&named.name, named.role, certificate))
+                invited(accounts.invite_user(caller, &named.name, named.role, certificate))
             }
             (Err(e), _) => Response::error(400, e),
             (_, None) => Response::error(404, "this server takes no devices elsewhere"),
@@ -1068,6 +1106,27 @@ fn event_line(event: &ServiceEvent) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_listener_is_answered_no_order_that_follows_the_owners_plays() {
+        let answered = |method: &str, args: &str| {
+            String::from_utf8(listeners_args(method, args.as_bytes()).into_owned()).unwrap()
+        };
+        // What the owner played most, and made a favourite last: by when the music came.
+        assert_eq!(answered("artists_by", r#"["MostPlayed"]"#), r#"["Came"]"#);
+        assert_eq!(
+            answered("artists_by", r#"["RecentlyAdded"]"#),
+            r#"["Came"]"#
+        );
+        assert_eq!(answered("albums_by", r#"["Played"]"#), r#"["Came"]"#);
+        assert_eq!(answered("albums_by", r#"["Added"]"#), r#"["Came"]"#);
+        // What follows the library alone stays, as does any other call, and what cannot be
+        // read, which the call itself refuses.
+        assert_eq!(answered("artists_by", r#"["Name"]"#), r#"["Name"]"#);
+        assert_eq!(answered("albums_by", r#"["Artist"]"#), r#"["Artist"]"#);
+        assert_eq!(answered("genre_albums", r#"["Played"]"#), r#"["Played"]"#);
+        assert_eq!(answered("albums_by", "nonsense"), "nonsense");
+    }
 
     fn request(headers: &[(&str, &str)], body: &[u8]) -> Request {
         Request {

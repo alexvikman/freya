@@ -212,7 +212,7 @@ impl Library {
             }
             let Some(picture) = pictures
                 .read(&cover)
-                .and_then(|bytes| image::load_from_memory(&bytes).ok())
+                .and_then(|bytes| freya_media::decode_picture(&bytes).ok())
             else {
                 continue;
             };

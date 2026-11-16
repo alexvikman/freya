@@ -621,7 +621,12 @@ impl RemoteFile {
                 .map(|answer| answer.len)
                 .ok()
         });
-        let (store, ranges, known) = Store::open(&fetcher.url)?;
+        // Kept for its server, when the server is told apart by more than its address.
+        let kept_as = match &remote.server {
+            Some(server) => format!("{server} {}", fetcher.url),
+            None => fetcher.url.clone(),
+        };
+        let (store, ranges, known) = Store::open(&kept_as)?;
         let (len, tag) = known.map_or((0, None), |(len, tag)| (len, Some(tag)));
         let was_whole = len > 0 && ranges.whole(len);
         let fetching = Fetching::start();

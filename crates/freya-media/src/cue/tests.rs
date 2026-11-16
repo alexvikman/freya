@@ -268,3 +268,33 @@ fn finds_the_disc_number_in_the_sheets_name() {
     assert_eq!(disc("ABCD2.cue", ""), None);
     assert_eq!(disc("CDImage.cue", ""), None);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_sheet_brings_in_no_file_linked_from_elsewhere() {
+    let dir = temp_dir("linked");
+    let elsewhere = temp_dir("linked-elsewhere");
+    touch(&elsewhere, &["Private.flac"]);
+    // Beside the sheet, a link to a file somewhere else, which the walk through the music's
+    // folders leaves out: the sheet naming it does not bring it in either.
+    std::os::unix::fs::symlink(elsewhere.join("Private.flac"), dir.join("Album.flac")).unwrap();
+    let sheet = dir.join("Album.cue");
+    std::fs::write(&sheet, ALBUM).unwrap();
+    assert_eq!(read_disc(&sheet), None);
+    // A link to a file in the same folder is that file under another name.
+    std::fs::remove_file(dir.join("Album.flac")).unwrap();
+    touch(&dir, &["Real.flac"]);
+    std::os::unix::fs::symlink(dir.join("Real.flac"), dir.join("Album.flac")).unwrap();
+    assert_eq!(read_disc(&sheet).unwrap().files, [dir.join("Album.flac")]);
+}
+
+#[test]
+fn a_sheet_too_large_to_be_one_is_not_read() {
+    let dir = temp_dir("large");
+    touch(&dir, &["Album.flac"]);
+    let sheet = dir.join("Album.cue");
+    let mut text = ALBUM.to_owned();
+    text.push_str(&"REM padding\n".repeat(100_000));
+    std::fs::write(&sheet, text).unwrap();
+    assert_eq!(read_disc(&sheet), None);
+}

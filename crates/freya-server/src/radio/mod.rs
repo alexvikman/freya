@@ -32,6 +32,11 @@ const SHELF: u32 = 12;
 const FEWEST_ON_SHELF: usize = 3;
 /// A station's plays are told Radio Browser at most this often, whoever plays it.
 const PLAYS_EVERY: Duration = Duration::from_secs(3600);
+/// Plays are told one at a time, this long after each other, and at most so many wait to be:
+/// whatever is played, and however many stations a device says it played, Radio Browser is
+/// asked no more often, on one thread.
+const PLAYS_APART: Duration = Duration::from_secs(2);
+const PLAYS_WAITING: usize = 32;
 
 /// What tells clients the directory changed.
 pub type Tell = Arc<dyn Fn() + Send + Sync>;
@@ -58,6 +63,8 @@ struct Shared {
     server: Mutex<Option<String>>,
     /// When each station's play was told last.
     told: Mutex<HashMap<String, Instant>>,
+    /// The plays waiting to be told, each with the server to tell, once one was played.
+    plays: Mutex<Option<std::sync::mpsc::SyncSender<(String, String)>>>,
     tell: Tell,
 }
 
@@ -90,6 +97,7 @@ impl Directory {
             status: Mutex::new(status),
             server: Mutex::new(None),
             told: Mutex::new(HashMap::new()),
+            plays: Mutex::new(None),
             tell,
         });
         if shared.file.is_some() {
@@ -176,10 +184,35 @@ impl Directory {
         let Some(server) = lock(&shared.server).clone() else {
             return;
         };
-        let id = id.to_owned();
-        let _ = std::thread::Builder::new()
-            .name("freya-radio-play".into())
-            .spawn(move || browser::count_play(&server, &id));
+        if !self.tell_play(server, id.to_owned()) {
+            // Too many wait already: this one is told when the station is played again.
+            lock(&shared.told).remove(id);
+        }
+    }
+
+    /// Queues a play to be told `server`, on the one thread that tells them, started with the
+    /// first; whether it could be, as it cannot while [`PLAYS_WAITING`] wait.
+    fn tell_play(&self, server: String, id: String) -> bool {
+        let mut plays = lock(&self.shared.plays);
+        if plays.is_none() {
+            let (queue, waiting) = std::sync::mpsc::sync_channel::<(String, String)>(PLAYS_WAITING);
+            let started = std::thread::Builder::new()
+                .name("freya-radio-play".into())
+                .spawn(move || {
+                    // Until the directory, which holds the queue's other end, is gone.
+                    for (server, id) in waiting {
+                        browser::count_play(&server, &id);
+                        std::thread::sleep(PLAYS_APART);
+                    }
+                });
+            if started.is_err() {
+                return false;
+            }
+            *plays = Some(queue);
+        }
+        plays
+            .as_ref()
+            .is_some_and(|plays| plays.try_send((server, id)).is_ok())
     }
 }
 

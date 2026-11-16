@@ -133,7 +133,7 @@ impl Decoding {
         let decoder = CODECS.make_audio_decoder(params, &AudioDecoderOptions::default())?;
         let rate = params.sample_rate.unwrap_or(0);
         let channels = params.channels.as_ref().map_or(0, |c| c.count());
-        if !(1..=768_000).contains(&rate) || channels == 0 {
+        if !freya_decode::decodes(rate, channels) {
             return Err(Error(format!("{rate} Hz, {channels} channels")));
         }
         let frames = match (track.time_base, track.duration, track.num_frames) {

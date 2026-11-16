@@ -170,6 +170,9 @@ pub enum ArtistOrder {
     MostPlayed,
     /// The one whose music came last first.
     RecentlyAdded,
+    /// The one whose music came last first, whoever is a favourite: what a listener, who has
+    /// neither plays nor favourites, is answered in place of the two before.
+    Came,
 }
 
 /// An artist the library has albums by. `name` is `None` for untagged tracks.
@@ -273,6 +276,9 @@ pub enum AlbumOrder {
     Name,
     /// By artist, then year.
     Artist,
+    /// By when they came into the library, the latest first, whichever are favourites: what
+    /// a listener, who has neither plays nor favourites, is answered in place of the first two.
+    Came,
 }
 
 /// An album as its favourite is kept: its album artist and title.

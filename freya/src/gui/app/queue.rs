@@ -18,6 +18,8 @@ impl App {
     pub fn add_paths(&mut self, paths: &[PathBuf]) {
         let mut asked = Vec::new();
         let mut streams = Vec::new();
+        // What a playlist file names, not the user: asked of the library, never looked at here.
+        let mut listed = std::collections::HashSet::new();
         for path in paths {
             // Up Next is saved and restored, maybe from another folder: a path relative to
             // where Freya was started from would not find its file then.
@@ -29,6 +31,7 @@ impl App {
                             if entry.path.to_string_lossy().contains("://") {
                                 streams.push(entry);
                             } else {
+                                listed.insert(entry.path.clone());
                                 asked.push(entry.path);
                             }
                         }
@@ -64,7 +67,7 @@ impl App {
             .collect();
         let entries: Vec<Entry> = found.iter().map(library::entry).chain(streams).collect();
         if !missing.is_empty() {
-            self.left_out(&missing);
+            self.left_out(&missing, &listed);
         }
         self.edit(|p| {
             p.insert(None, entries);
@@ -72,9 +75,14 @@ impl App {
     }
 
     /// Says that `missing`, files and folders given to Freya, are not the library's; offers the
-    /// first folder among them as a music folder, where that can be.
-    fn left_out(&mut self, missing: &[&PathBuf]) {
-        let folder = missing.iter().find(|path| path.is_dir());
+    /// first folder among them as a music folder, where that can be. Only what the user gave is
+    /// looked at on this computer, not what is `listed` in a playlist file they gave: a path
+    /// in one may be anyone's, and on Windows looking at one on another computer's share
+    /// logs in to that computer.
+    fn left_out(&mut self, missing: &[&PathBuf], listed: &std::collections::HashSet<PathBuf>) {
+        let folder = missing
+            .iter()
+            .find(|path| !listed.contains(**path) && path.is_dir());
         if let Some(folder) = folder
             && self.server.is_admin()
             && self.server_here()
@@ -124,8 +132,13 @@ impl App {
         };
         if playlist_file::is_playlist_url(&url) {
             let results = self.station_lists.0.clone();
+            // Asked as a stream is: one a server elsewhere names, only from far away.
+            let agent = freya_audio::web_agent(
+                self.library.elsewhere(),
+                Some(playlist_file::DOWNLOAD_TIMEOUT),
+            );
             std::thread::spawn(move || {
-                let entries = playlist_file::fetch(&url).map_err(|e| format!("{url}: {e}"));
+                let entries = playlist_file::fetch(&agent, &url).map_err(|e| format!("{url}: {e}"));
                 let _ = results.send((url, entries));
             });
             return;

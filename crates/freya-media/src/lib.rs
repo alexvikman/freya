@@ -15,17 +15,25 @@ pub mod thumbnails;
 pub use entry::Entry;
 pub use tags::{TagInfo, TagLoader, read_tags};
 
-/// A picture in `bytes`, decoded within bounds: no wider or higher than 12,000 pixels, nor
-/// needing more than 256 MB. Pictures come from files others may have written, from servers and
-/// from the internet: one small as a file and huge decoded cannot take the memory. Only a few
-/// are decoded at once, whoever asks: many asked for together, each as large as the bounds
-/// allow, cannot take it either.
+/// A picture in `bytes`, a JPEG or a PNG, decoded within bounds: no wider or higher than
+/// 12,000 pixels, of at most 40 million in all, nor needing more than 256 MB for what it gives.
+/// Pictures come from files others may have written, from servers and from the internet: one
+/// small as a file and huge decoded cannot take the memory. Only a few are decoded at once,
+/// whoever asks: many asked for together, each as large as the bounds allow, cannot take it
+/// either.
 pub fn decode_picture(bytes: &[u8]) -> image::ImageResult<image::DynamicImage> {
+    // Its size from its head first, before anything is set aside for it.
+    picture_dimensions(bytes)?;
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
     reader.limits(picture_limits());
     let _decoding = DECODES.enter();
     reader.decode()
 }
+
+/// The most pixels a picture has: a cover scanned at 6,000 by 6,000 fits. The bound on what
+/// decoding gives does not count what a decoder sets aside for itself while it works, which
+/// for a JPEG is twice the picture again; this bounds both.
+const MOST_PIXELS: u64 = 40_000_000;
 
 /// How many pictures are decoded at once at most, in all: each may take 256 MB.
 const DECODES_AT_ONCE: usize = 6;
@@ -72,10 +80,28 @@ impl Drop for Through<'_> {
 /// bytes can be checked to be a picture before they are kept, without decoding them.
 pub fn picture_dimensions(bytes: &[u8]) -> image::ImageResult<(u32, u32)> {
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
+    // What a program built with other decoders too could read is still not a picture here:
+    // the bounds were made for these two.
+    if !matches!(
+        reader.format(),
+        Some(image::ImageFormat::Jpeg | image::ImageFormat::Png)
+    ) {
+        return Err(image::ImageError::Unsupported(
+            image::error::UnsupportedError::from_format_and_kind(
+                image::error::ImageFormatHint::Unknown,
+                image::error::UnsupportedErrorKind::Format(image::error::ImageFormatHint::Unknown),
+            ),
+        ));
+    }
     let limits = picture_limits();
     reader.limits(limits.clone());
     let (width, height) = reader.into_dimensions()?;
     limits.check_dimensions(width, height)?;
+    if u64::from(width) * u64::from(height) > MOST_PIXELS {
+        return Err(image::ImageError::Limits(
+            image::error::LimitError::from_kind(image::error::LimitErrorKind::DimensionError),
+        ));
+    }
     Ok((width, height))
 }
 
@@ -106,6 +132,16 @@ mod tests {
         // PNG's IHDR: width and height are the 4 bytes each at 16 and 20.
         huge[16..20].copy_from_slice(&30_000u32.to_be_bytes());
         assert!(picture_dimensions(&huge).is_err());
+        // Each side within bounds, but too many pixels in all: 10,000 by 10,000.
+        let mut large = png.clone();
+        large[16..20].copy_from_slice(&10_000u32.to_be_bytes());
+        large[20..24].copy_from_slice(&10_000u32.to_be_bytes());
+        assert!(picture_dimensions(&large).is_err());
+        assert!(decode_picture(&large).is_err());
+        assert!(decode_picture(&png).is_ok());
+        // A picture of another kind is none, whatever decoders the program was built with:
+        // a GIF's head.
+        assert!(picture_dimensions(b"GIF89a\x01\x00\x01\x00\x00\x00\x00;").is_err());
     }
 
     #[test]

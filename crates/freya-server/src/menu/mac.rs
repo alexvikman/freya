@@ -57,7 +57,10 @@ define_class!(
     impl MenuTarget {
         #[unsafe(method(openFreya:))]
         fn open_freya(&self, _sender: Option<&AnyObject>) {
-            if let Err(e) = std::process::Command::new("open").args(["-b", FREYA]).spawn() {
+            let opened = std::process::Command::new("/usr/bin/open")
+                .args(["-b", FREYA])
+                .spawn();
+            if let Err(e) = opened {
                 log::warn!("could not open Freya: {e}");
             }
         }

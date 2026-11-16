@@ -52,6 +52,14 @@ pub enum Event {
     Error(String),
 }
 
+/// What `decode` gives, or a decoding error should it panic. A file may hold anything, and a
+/// decoder that gives up on one by panicking ends that track, not the thread that plays them
+/// all, which would leave a player that does nothing until Freya is started again.
+fn guarded<T>(decode: impl FnOnce() -> Result<T, Error>) -> Result<T, Error> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(decode))
+        .unwrap_or_else(|_| Err(Error::Decode("the decoder gave up on the file".into())))
+}
+
 struct Current {
     source: Source,
     serial: u64,
@@ -483,7 +491,7 @@ impl Engine {
                 }
             }
         }
-        Source::open(media, &self.interrupt)
+        guarded(|| Source::open(media, &self.interrupt))
     }
 
     fn open(&mut self, media: &Media, serial: Option<u64>) -> Result<Current, Error> {
@@ -532,7 +540,7 @@ impl Engine {
         let Some(cur) = self.current.as_mut() else {
             return;
         };
-        match cur.source.next_chunk() {
+        match guarded(|| cur.source.next_chunk()) {
             Ok(Some(chunk)) => {
                 self.mapped.clear();
                 map_channels(

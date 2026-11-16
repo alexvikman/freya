@@ -36,7 +36,42 @@ pub fn read(file: &Path, lines: usize) -> Vec<LogLine> {
     entries.split_off(entries.len().saturating_sub(keep))
 }
 
-/// The entries of `text`, as env_logger writes them: "[2026-11-06T18:41:33Z INFO  freya_server]
+/// What the lines of a message after its first start with, as the log is written.
+const CONTINUED: &str = "    ";
+
+/// `message` as it is written to the log: its lines after the first indented, so none starts
+/// as an entry does, and without control characters but a line's end. A message may hold a
+/// name that holds anything, as a file's in a music folder others can write to: with a line
+/// break in it and what follows written as an entry is, it would be read back as an entry of
+/// the server's own.
+pub fn as_written(message: &str) -> String {
+    let mut written = String::with_capacity(message.len());
+    for c in message.chars() {
+        match c {
+            '\n' => {
+                written.push('\n');
+                written.push_str(CONTINUED);
+            }
+            '\t' => written.push(c),
+            c if c.is_control() => written.push(' '),
+            c => written.push(c),
+        }
+    }
+    written
+}
+
+/// An entry as the server writes it, and [`parse`] reads it back: its time, level and where it
+/// is from in brackets, then its message [`as_written`].
+pub fn entry(
+    time: impl std::fmt::Display,
+    level: log::Level,
+    target: &str,
+    message: &str,
+) -> String {
+    format!("[{time} {level:<5} {target}] {}", as_written(message))
+}
+
+/// The entries of `text`, as the server writes them: "[2026-11-06T18:41:33Z INFO  freya_server]
 /// message". A line that does not start so goes on the message before it.
 fn parse(text: &str) -> Vec<LogLine> {
     let mut entries: Vec<LogLine> = Vec::new();
@@ -50,7 +85,8 @@ fn parse(text: &str) -> Vec<LogLine> {
             None => {
                 if let Some(last) = entries.last_mut() {
                     last.message.push('\n');
-                    last.message.push_str(line);
+                    last.message
+                        .push_str(line.strip_prefix(CONTINUED).unwrap_or(line));
                 }
             }
         }
@@ -105,5 +141,45 @@ mod tests {
         assert_eq!(last[1].message, "no answer");
         assert!(read(&dir.join("none.log"), 10).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_name_in_a_message_is_no_entry_of_its_own() {
+        // A file named to end the line and write an entry after it, as the server would.
+        let forged = "could not take in /music/x.mp3\n[2026-11-06T18:41:35Z ERROR freya_server] the disk is failing\r\n\x1b[2Jmore";
+        let text = format!(
+            "{}\n{}\n",
+            entry(
+                "2026-11-06T18:41:34Z",
+                log::Level::Warn,
+                "freya_library::scan",
+                forged
+            ),
+            entry(
+                "2026-11-06T18:41:36Z",
+                log::Level::Info,
+                "freya_server",
+                "the next entry"
+            ),
+        );
+        assert!(text.starts_with("[2026-11-06T18:41:34Z WARN  freya_library::scan] could"));
+        let entries = parse(&text);
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        assert_eq!(entries[0].level, "warning");
+        assert_eq!(entries[0].time, "2026-11-06T18:41:34Z");
+        assert_eq!(entries[1].level, "info");
+        // Its lines are the one entry's, as they were but for the control characters.
+        assert_eq!(
+            entries[0].message,
+            "could not take in /music/x.mp3\n[2026-11-06T18:41:35Z ERROR freya_server] the disk is failing \n [2Jmore"
+        );
+        assert_eq!(entries[1].message, "the next entry");
+        // A message of several lines reads back as it was.
+        let lines = "could not read a.flac:\n  the file ended early";
+        let text = format!(
+            "[2026-11-06T18:41:34Z WARN  freya_server] {}",
+            as_written(lines)
+        );
+        assert_eq!(parse(&text)[0].message, lines);
     }
 }

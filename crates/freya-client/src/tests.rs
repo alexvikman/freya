@@ -561,6 +561,7 @@ fn a_track_plays_from_the_server() {
             bearer: None,
             agent: None,
             duration: None,
+            server: None,
         }),
         ..freya_audio::Media::from(&track.path)
     });
@@ -1096,6 +1097,7 @@ fn a_server_elsewhere_is_reached_over_tls_with_its_certificate_pinned() {
             bearer: None,
             agent: Some(Arc::new(agent)),
             duration: None,
+            server: None,
         }),
         ..freya_audio::Media::from(&track)
     });
@@ -1697,6 +1699,7 @@ fn measure_a_real_library() {
             bearer: None,
             agent: Some(Arc::clone(&agent)),
             duration: None,
+            server: None,
         }),
         ..freya_audio::Media::from(&track.path)
     };

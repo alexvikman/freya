@@ -68,8 +68,9 @@ files, and with them Freya's.
   0600): Freya on the server's own computer reads it there, with the server's certificate,
   so its user types no code; `freya-server --code` shows it on a server without a screen; the
   log says where it is, never what it is.
-- **Inviting** a user, which admins alone may do, gives a one-time code lasting a week, kept
-  by the server only as its key (PBKDF2, as a connection code's). Typed on the user's
+- **Inviting** a user, which admins alone may do, and an admin the owner alone, gives a
+  one-time code lasting a week, kept by the server only as its key (PBKDF2, as a connection
+  code's). Typed on the user's
   computer, it proves the server, and the device proving it knows it too is given a ticket for
   the page where the user chooses their password, under the name they were invited with,
   whatever is sent. Joining uses it up; inviting a user again replaces it, and lets one who
@@ -80,8 +81,10 @@ files, and with them Freya's.
   written, so two devices do not both adopt. Removing a user takes their devices, invitation and tickets away,
   and no id is given twice. The owner is neither invited again nor removed (their password is
   forgotten on the server's computer, `freya-server --forget-password`, which logs all their
-  devices out, and the server is adopted again), and only the owner invites another admin again or removes
-  one, so no admin takes the owner's or another admin's account.
+  devices out, and the server is adopted again), and only the owner invites an admin, invites one
+  again or removes one, so no admin takes the owner's or another admin's account, and an admin's
+  password, learned by someone else, makes no admin that stays when it is changed. The owner's
+  could: forgetting it names the admins who keep their accounts, to look through.
 - The server proves itself with each code it knows at once, so a device on the network learns
   how many invitations are pending, nothing more.
 
@@ -113,8 +116,11 @@ files, and with them Freya's.
   forgotten a day after. Where a user logged in before, only their own tries there count, from
   their address and their network (20), so a guesser elsewhere never holds them up. A name
   counts by its first 128 characters, and whether it exists does not show: a made-up one is
-  counted, waited for and checked against a hash of nothing, as long. The table of tries keeps
-  running waits, and with no room takes no new try, but a user's at home.
+  counted, waited for and checked against a hash of nothing, as long. A name is counted as it
+  was typed, and each kind of try under a key of its own kind: one typed to read as another
+  user's tries from an address counts as neither. The table of tries keeps running waits, and
+  with no room takes no new try, but a user's at home. A password is hashed before the
+  accounts are held, so changing one holds no other call up.
 - **The password** is changed on the server's page, opened as the pages above are. A
   password once set is asked for to change it; changing it logs the other devices out unless
   the user unticks it. One forgotten is forgotten on the server's computer with the server
@@ -128,7 +134,8 @@ files, and with them Freya's.
 
 - **Access tokens** last an hour: the device's id and when it ends, signed by the server
   (HMAC-SHA256 with a 256-bit secret in `accounts.json`). Nothing is kept of them, and a device
-  logged out or revoked is refused at once, as each call looks it up.
+  logged out or revoked is refused at once, as each call looks it up. A user is logged in on
+  at most 64 devices: one more logs out the one unused the longest.
 - **Refresh tokens** renew them, once: each renewal gives a new one. One used before, coming
   again, was copied, and the device is logged out. A renewal whose answer was lost may be asked
   again once, within a day, so a computer that slept through it is not logged out.
@@ -138,7 +145,7 @@ files, and with them Freya's.
   Keychain would ask for the user's password after every update. Each is kept under the
   server's certificate, not its address: it goes only to the server that gave it, which is
   the only one that completes TLS with that certificate, at whatever address it has now, and
-  never to another at the same address. Access tokens live in memory.
+  never to another at the same address; one kept by an address, as before 0.4, is taken away. Access tokens live in memory.
   Renewals are one at a time, ahead of the end by the clock, and again after a 401. A token's
   lifetime is taken as a day at most, whatever a server says. A token kept in the file when the
   keychain could not take it removes the keychain's old one.
@@ -152,21 +159,24 @@ too until named. Plays, favourites, playlists and Last.fm are the owner's until 
 their own, so a listener has none, and hears only how the shared library goes, not the folders
 a scan looks in. A listener does
 see the tracks' paths, which `/audio` is asked by, and with them where the music is. A
-listener is not told when the library changes, which the owner's plays would show. No device
-stops the server: its menu, its computer's user and the system do.
+listener is not told when the library changes, which the owner's plays would show, and one
+asking for artists or albums in an order that follows plays or favourites is answered by when
+the music came. No device stops the server: its menu, its computer's user and the system do.
 
 ## The server under load
 
 Nobody can wear it out before logging in:
 
 - at most 128 connections of strangers, 16 from one address (an IPv6 one by its /64), on each
-  of its two listeners: a connection that sent a request with a valid token is a known
-  device's, and strangers' do not crowd it out; a known device's address holds at most 64, so
+  of its two listeners: a connection whose last request came with a valid token is a known
+  device's, and strangers' do not crowd it out, only for as long as its requests do: a device
+  logged out since is a stranger again; a known device's address holds at most 64, so
   one device that opens more does not take every connection from the others; 512 in all;
 - the TLS handshake and a request's head within 10 seconds, its body at 32 KB a second at
   least, an answer taken within 30 seconds and a second more for each 32 KB, each in all,
   inside TLS too, and 15 seconds' wait for the next request, two minutes on a connection a
-  known device made;
+  known device made; what a client still sends after a request that was refused is read for two
+  seconds in all, however slowly it comes;
 - as many open files as the system allows, not the 256 macOS gives an agent;
 - bodies as large as the route and caller allow, decided before any of it is read: 16 KB
   without a valid token, 8 MB for a call, 64 MB for an admin's picture; read as they come;
@@ -176,8 +186,10 @@ Nobody can wear it out before logging in:
 - calls asked at once (`/calls`) only those that read the library, at most 256 and 32 MB
   of answers, each allowed to a listener or not on its own, as if asked alone; small
   pictures at most 64 at once, in one size only, made from pictures already kept;
-- a picture an admin keeps is kept only if its head says it is a picture Freya shows, within
-  the bounds pictures are decoded in, so nothing else is given to every device as one;
+- a picture is kept only if its head says it is a picture Freya shows, within the bounds
+  pictures are decoded in, so nothing else is given to every device as one: one an admin
+  keeps, one a service on the internet gave, and one an export holds; those of the internet
+  are downloaded over HTTPS only, wherever an answer or a redirect points;
 - proofs of a connection code, and tries at claiming the server with one, a few a minute
   from one network (an IPv6 one by its /64);
 - a search of the library reads at most 16 words of 64 characters; at most six pictures are
@@ -186,7 +198,11 @@ Nobody can wear it out before logging in:
 - tracks made smaller for a slow network (`/audio?quality=`) at most two at once and sixteen
   asked for, past which a client is told to ask again; each at most 12 hours of music, each
   part waited for at most a minute, all of them kept within 4 GB of the server's cache, the
-  least lately played going first; a file that cannot be made smaller is sent as it is;
+  least lately played going first; a file that cannot be made smaller is sent as it is, and
+  one a decoder gives up on, by panicking too, ends its own making only;
+- audio decoded only at 4 to 768 kHz and in at most 32 channels, as music is: what is set
+  aside to decode and convert a file follows what it claims, a gigabyte at a rate of a few
+  hertz;
 - events wait for a listener in a queue of 1,024, past which it is let go;
 - stopping the server, or turning the network off, ends every connection.
 
@@ -198,7 +214,12 @@ Nobody can wear it out before logging in:
   FIFO holds nothing up. A cover is read only for a track of the library, and its image only
   within the track's folder, after links.
 - A scan follows no link out of the folders it walks, so one put in a shared music folder does
-  not bring the rest of the computer into the library.
+  not bring the rest of the computer into the library: nor when it is the link's own folder
+  that is scanned, as when something changed in it, since what is walked is within the music's
+  folders after links, whatever the scan starts from. A CUE sheet cuts only files beside it,
+  and links to files in its own folder. Only regular files are found and opened, without
+  waiting, so a FIFO named as a song, a sheet or a picture holds no scan up; a picture file is
+  read up to 64 MB, a sheet up to 1 MB, and a tag's text up to 1,024 characters.
 - The server's folder, its own apart from Freya's (named after Freya Server among the user's
   application data), is made the user's alone (0700) each time the server starts, whatever
   each file in it is made with, and holds `accounts.json`, `adoption-code` while it is not
@@ -214,18 +235,23 @@ Nobody can wear it out before logging in:
   the file matches its line there.
 - Accounts, the certificate or the key that cannot be read stop the server rather than being
   made anew, which would lose the users or break every device's pin.
-- No secret is logged; names lose control characters before they are.
+- No secret is logged; names lose control characters before they are, and every message is
+  written without them but for its line breaks, each line after the first indented: a file's
+  name with a line break in it is not read back as an entry of the server's own.
   An admin reads the server's log in Freya's Activity page; listeners cannot.
 - The server runs no program found on the path: the computer's name and the user's id are
   asked of the system itself, and `launchctl` and `systemctl`, which register it to start at
-  login, are run from where the system keeps them. Freya asks the system for this computer's
-  name the same way.
+  login, and macOS's `open`, `ditto` and `codesign` are run from where the system keeps them.
+  Freya asks the system for this computer's name the same way, and runs `open` so too; on
+  Linux it finds `xdg-open` on the path, which has no one place.
 - A backup holds everything the server keeps, the accounts' password hashes and the server's
   private key too: only the server's owner, who adopted it, makes or restores one (not every
   admin: restoring one replaces the users, and an admin could make themself the owner by it),
   and only in a folder on the server's computer, never in its own folder; nothing of it goes
   to Freya. Its files are made new, under names no one can guess, never through a link nor
-  over a file there already. On macOS and Linux the file
+  over a file there already. The folder it goes to is given the backup alone: the copy of the
+  database, and what a sealed backup holds before it is sealed, are made in the server's own
+  folder, so a shared or synced folder never holds what sealing keeps from it. On macOS and Linux the file
   is its user's alone. Under a password it is sealed: AES-256-GCM over chunks of a megabyte,
   each with its own nonce (and a flag on the last, so one cannot be dropped, swapped or cut
   off), under a key from the password by PBKDF2-HMAC-SHA256 with 600,000 rounds and a random
@@ -234,12 +260,12 @@ Nobody can wear it out before logging in:
   changed of artists, albums and genres) and no account, password or key. Only the owner
   exports or imports, in a folder on the server's computer. Importing checks the zip's headers,
   takes at most 512 MB of data and 64 MB a picture, keeps only pictures whose SHA-256 is their
-  name, maps users by name (others' rows are left out), adds and never removes, and refuses an
+  name and which are pictures, maps users by name (others' rows are left out), adds and never removes, and refuses an
   export from a later Freya.
 - Restoring checks the backup first (its name; the password, asking only the key's rounds
   Freya makes; that the zip's local headers agree with its directory; that it names no file
-  outside it, and none of the server's own working folders; that it holds a library and
-  accounts; at most a million files, and at most a hundred times its size unpacked, counted as
+  outside it, and none of the server's own working folders, in any case, nor one Windows takes
+  for another name or a device; that it holds a library and accounts; at most a million files, and at most a hundred times its size unpacked, counted as
   written),
   unpacks it beside the server's files, and takes it in only as the server starts again,
   before anything is opened. What the server had is moved aside, not removed.
@@ -255,12 +281,16 @@ Nobody can wear it out before logging in:
   for on the client, where it could name a local file or a Windows share. Up Next restored
   keeps only the library's tracks. Up Next
   is restored only for the library it was saved from, and emptied when another is chosen.
-- A stream a server elsewhere names is asked only of addresses beyond this computer and its
-  network: each name is resolved and every near address dropped, a redirect's too, and no
-  proxy is used, which would resolve it itself.
+- A stream a server elsewhere names, and a station's playlist that lists streams, is asked
+  only of addresses beyond this computer and its network: each name is resolved and every near
+  address dropped, a redirect's too, and no proxy is used, which would resolve it itself.
+- A playlist file's paths are asked of the library, never looked at on this computer: on
+  Windows, one naming another computer's share would log in to it.
 - What a server sends is bounded: 1 MB for small answers, each event line and each small
   picture, 32 MB for a picture, 512 MB for the library's calls, read straight into their
-  types; every picture is decoded within 12,000 pixels a side and 256 MB. What a server says
+  types; every picture, a JPEG or a PNG only, is decoded within 12,000 pixels a side, 40
+  million in all, and 256 MB for what it gives (a JPEG's decoder sets aside twice that again
+  while it works). What a server says
   went wrong is shown without control characters, and at most 500 characters of it.
 - A login's tokens go only with the server that gave them, never to one chosen meanwhile.
 - What answers on this computer's address without the user's certificate is given nothing.
@@ -268,9 +298,12 @@ Nobody can wear it out before logging in:
   server makes small for a grid cannot be checked so: those of a server elsewhere are kept
   apart, for that server alone, decoded within the same bounds.
 - The library's large answers of a server elsewhere are kept on disk for that server alone,
-  readable by the user alone, and forgotten when the device logs out.
+  readable by the user alone, and forgotten when the device logs out. The music kept on disk
+  is kept for its server too, by its certificate, in files the user alone reads.
+- An update a server names is opened only as a release of Freya's, on its own page.
 - The fingerprint shown is the certificate's the client pinned.
-- Only HTTPS pages, and Freya's own, are opened, in plain URL characters.
+- Only HTTPS pages, and Freya's own, are opened, in plain URL characters; Last.fm's, whose
+  address holds the token it ties to the account, through a file, as the login's are.
 
 ## The radio directory
 
@@ -282,7 +315,9 @@ Nobody can wear it out before logging in:
   names lose control characters. Clients play the stations as any stream a server names (see
   below).
 - A play is told Radio Browser only for one of its stations, by its UUID, and at most once an
-  hour for each, whoever plays it, so a listener cannot make the server ask it over and over.
+  hour for each, whoever plays it; plays are told one at a time, two seconds apart, and at
+  most 32 wait to be, so a listener cannot make the server ask it over and over, of one station
+  or of them all.
 - A search reads at most 10 tags and 10 words, and gives at most 200 stations.
 - Freya fetches the stations' logos the directory names as it fetches streams: for a server
   elsewhere only from addresses beyond this computer and its network. A logo is at most 1 MB,
@@ -317,6 +352,20 @@ Nobody can wear it out before logging in:
 - **A new connection of a known device** is a stranger's until its first request: while
   strangers from eight addresses hold every stranger's place, it waits, though one open goes
   on.
+- **Another user of the same computer shares its address**, `127.0.0.1`, with Freya there:
+  sixteen connections held from it, or tries at codes and passwords made from it, keep the
+  owner's Freya on that computer from connecting, adopting or logging in for as long as they
+  are kept up. Nothing is learned or taken by it, and other computers are not held up.
+- **The pages' cookie goes to every port of `127.0.0.1`**, as browsers send cookies: a program
+  of another user listening on another port, which the user's browser is led to while a login,
+  joining or password page is open, is sent it, and can then open and send that page.
+- **A skin is a program.** One installed can call what Freya's own interface can, for an admin
+  their server's settings and users too, and read what Freya shows, without a click. Only a
+  skin whose maker is trusted should be installed.
+- **A device on the network reached by an address the internet has**, as a global IPv6 one,
+  is not near by its address: a server elsewhere naming a stream there is asked it.
+- **What a server makes Freya keep** of radio logos and small covers has no bound of its own
+  on disk.
 - **A server reached from the internet** has not been the goal so far: discovery and the
   connection code assume a home network, and the server's own certificate is not one browsers
   trust.
@@ -331,7 +380,11 @@ Nobody can wear it out before logging in:
 - Every commit and release is scanned for secrets with gitleaks; dependencies are checked with
   cargo-deny and cargo-vet (see [DEPENDENCIES.md](DEPENDENCIES.md)).
 - The milestones were each reviewed by an automatic security review of the commits, and the
-  whole twice by independent reviews: the server's HTTP and TLS, the login and tokens, and what
-  the client trusts.
+  whole three times by independent reviews: the server's HTTP and TLS, the login and tokens,
+  and what the client trusts; the third (2026-11-14) also the scanner, the decoders, the
+  server's files and requests, and the releases' workflows.
+- New advisories against the dependencies are looked for each day (see
+  [DEPENDENCIES.md](DEPENDENCIES.md)).
 
-Found something? Write to the maintainers privately, not in a public issue.
+Found something? Report it privately, not in a public issue: "Report a vulnerability" under
+the repository's [Security tab](https://github.com/alexvikman/freya/security/advisories/new).

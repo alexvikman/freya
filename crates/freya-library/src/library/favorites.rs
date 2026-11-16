@@ -148,6 +148,7 @@ impl Library {
                 "t.album_artist IS NULL, t.album_artist COLLATE NOCASE, min(t.year),
                  t.album COLLATE NOCASE"
             }
+            AlbumOrder::Came => "max(t.added) DESC, t.album COLLATE NOCASE",
         };
         let mut query = self.db.prepare_cached(&format!(
             "SELECT t.album_artist, t.album, min(t.year), count(*), min(t.path)
@@ -236,6 +237,11 @@ mod tests {
         assert_eq!(
             names(&library.albums_by(AlbumOrder::Name).unwrap()),
             ["Middle", "New", "Old"]
+        );
+        // As they came, whatever was made a favourite or played since: a listener's order.
+        assert_eq!(
+            names(&library.albums_by(AlbumOrder::Came).unwrap()),
+            ["New", "Middle", "Old"]
         );
 
         library
