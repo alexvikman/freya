@@ -252,10 +252,10 @@ fn answer(served: &Served, answers: &Answers, request: Request) -> Response {
             let args = &request.body;
             if CACHED_CALLS.contains(&method) {
                 let listener = caller.as_ref().is_some_and(|c| c.role == Role::Listener);
-                let args = if listener {
-                    listeners_args(method, args)
+                let (method, args) = if listener {
+                    (listeners_method(method), listeners_args(method, args))
                 } else {
-                    Cow::Borrowed(args.as_slice())
+                    (method, Cow::Borrowed(args.as_slice()))
                 };
                 return kept(library, answers, &request, method, &args);
             }
@@ -316,7 +316,7 @@ fn answer(served: &Served, answers: &Answers, request: Request) -> Response {
             };
             // Only a track of the library, before its path is touched at all, and a file within
             // the music's folders, after links, as for `/audio`.
-            if !library.knows_file(&asked.track).unwrap_or(false)
+            if !knows_file(library, &asked.track, is_listener(&caller))
                 || !is_music_file(served, &asked.track)
             {
                 return Response::error(404, "no cover");
@@ -327,7 +327,7 @@ fn answer(served: &Served, answers: &Answers, request: Request) -> Response {
                 Err(e) => Response::error(500, e),
             }
         }
-        ("GET", "/audio") => audio(served, &request),
+        ("GET", "/audio") => audio(served, &request, is_listener(&caller)),
         ("GET", "/events") => {
             let Some(server) = &served.server else {
                 return Response::error(404, "no events here");
@@ -409,6 +409,37 @@ fn listener_may(request: &Request, path: &str) -> bool {
         (_, server) if server.starts_with("/server/") => false,
         _ => true,
     }
+}
+
+/// The call a listener's call of `method` is answered by: what waits in the inbox is not yet
+/// the library everyone shares, so a listener is not told of it.
+fn listeners_method(method: &str) -> &str {
+    match method {
+        "track_at" => "shared_track_at",
+        "knows_file" => "knows_shared_file",
+        "tracks_under" => "shared_tracks_under",
+        other => other,
+    }
+}
+
+/// Whether the caller is a listener, not an admin; none is the server itself, as in tests.
+fn is_listener(caller: &Option<Caller>) -> bool {
+    caller.as_ref().is_some_and(|c| c.role == Role::Listener)
+}
+
+/// Whether the file at `path` is one of the library's tracks, for a listener one let in from the
+/// inbox.
+fn knows_file(
+    library: &dyn freya_protocol::LibraryApi,
+    path: &std::path::Path,
+    listener: bool,
+) -> bool {
+    let known = if listener {
+        library.knows_shared_file(path)
+    } else {
+        library.knows_file(path)
+    };
+    known.unwrap_or(false)
 }
 
 /// The arguments a listener's call is answered with. Plays and favourites are the owner's,
@@ -539,7 +570,7 @@ fn many(
             kept_answer(
                 library,
                 answers,
-                method,
+                listeners_method(method),
                 &listeners_args(method, args.as_bytes()),
             )
         } else {
@@ -629,7 +660,7 @@ fn takes_gzip(request: &Request) -> bool {
 /// library's, which carry no secret.
 const COMPRESSED_FROM: usize = 16 * 1024;
 
-fn audio(served: &Served, request: &Request) -> Response {
+fn audio(served: &Served, request: &Request, listener: bool) -> Response {
     let library = served.library.as_ref();
     let Some(path) = request
         .query_value("path")
@@ -638,7 +669,12 @@ fn audio(served: &Served, request: &Request) -> Response {
     else {
         return Response::error(400, "which file?");
     };
-    match library.knows_file(&path) {
+    let known = if listener {
+        library.knows_shared_file(&path)
+    } else {
+        library.knows_file(&path)
+    };
+    match known {
         Ok(true) => {}
         Ok(false) => return Response::error(404, "no such track"),
         Err(e) => return Response::error(500, e),
@@ -1126,6 +1162,35 @@ mod tests {
         assert_eq!(answered("albums_by", r#"["Artist"]"#), r#"["Artist"]"#);
         assert_eq!(answered("genre_albums", r#"["Played"]"#), r#"["Played"]"#);
         assert_eq!(answered("albums_by", "nonsense"), "nonsense");
+    }
+
+    #[test]
+    fn a_listener_is_answered_without_the_inbox() {
+        assert_eq!(listeners_method("track_at"), "shared_track_at");
+        assert_eq!(listeners_method("knows_file"), "knows_shared_file");
+        assert_eq!(listeners_method("tracks_under"), "shared_tracks_under");
+        assert_eq!(listeners_method("albums"), "albums");
+        for call in [
+            "shared_track_at",
+            "knows_shared_file",
+            "shared_tracks_under",
+        ] {
+            assert!(CACHED_CALLS.contains(&call), "{call}");
+        }
+    }
+
+    #[test]
+    fn only_the_owner_writes_to_the_musics_files() {
+        for call in [
+            "save_tag_drafts",
+            "undo_tag_save",
+            "save_ready_folders",
+            "move_folders",
+            "accept_folders",
+        ] {
+            assert!(freya_protocol::OWNER_CALLS.contains(&call), "{call}");
+            assert!(!LISTENER_CALLS.contains(&call), "{call}");
+        }
     }
 
     fn request(headers: &[(&str, &str)], body: &[u8]) -> Request {

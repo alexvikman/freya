@@ -900,6 +900,10 @@ version = "0.4.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rubato]]
+version = "0.16.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.rubato]]
 version = "5.0.1"
 criteria = "safe-to-deploy"
 
@@ -921,6 +925,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.rustls-webpki]]
 version = "0.103.15"
+criteria = "safe-to-deploy"
+
+[[exemptions.rusty-chromaprint]]
+version = "0.3.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.scoped-tls-hkt]]

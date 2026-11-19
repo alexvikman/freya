@@ -202,6 +202,36 @@ impl Decoding {
     }
 }
 
+/// The highest sample rate a file's samples are taken at; a file that says it has more is
+/// refused rather than read into as much memory as it says.
+const HIGHEST_SAMPLE_RATE: u32 = 192_000;
+
+/// The first `most` of `file`, of `extension`, as 16-bit samples of one channel, with its
+/// rate: what a fingerprint of it is made from. Its channels are mixed into one, so the
+/// samples kept are at most `most` at [`HIGHEST_SAMPLE_RATE`], whatever the file says.
+pub fn samples_of(
+    file: File,
+    extension: Option<&str>,
+    most: std::time::Duration,
+) -> Result<(Vec<i16>, u32), Error> {
+    let mut decoding = Decoding::open(file, extension)?;
+    let (rate, channels) = (decoding.rate, decoding.channels);
+    if rate == 0 || rate > HIGHEST_SAMPLE_RATE || channels == 0 {
+        return Err(Error(format!("{rate} Hz in {channels} channels")));
+    }
+    let wanted = (most.as_secs_f64() * f64::from(rate)) as usize;
+    let mut samples = Vec::with_capacity(wanted.min(1 << 20));
+    let mut part = Vec::new();
+    while samples.len() < wanted && decoding.next(&mut part)? {
+        samples.extend(part.chunks(channels).map(|frame| {
+            let mixed = frame.iter().sum::<f32>() / frame.len() as f32;
+            (mixed.clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16
+        }));
+    }
+    samples.truncate(wanted);
+    Ok((samples, rate))
+}
+
 /// A file to be made smaller: how, and how long it will be.
 pub struct Plan {
     decoding: Decoding,

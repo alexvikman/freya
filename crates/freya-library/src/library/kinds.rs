@@ -40,13 +40,13 @@ impl Library {
     pub fn album_kinds(&self, artist: Option<&str>) -> Result<Vec<(Option<String>, AlbumKind)>> {
         let mut query = self.db.prepare_cached(
             "SELECT a.album,
-                    (SELECT t.album_kind FROM tracks t
+                    (SELECT t.album_kind FROM listed_tracks t
                      WHERE t.album_artist IS ?1 AND t.album IS a.album
                            AND t.album_kind IS NOT NULL
                      GROUP BY t.album_kind ORDER BY count(*) DESC, t.album_kind LIMIT 1),
                     (SELECT k.kind FROM album_kinds k
                      WHERE k.album_artist IS ?1 AND k.album IS a.album)
-             FROM (SELECT DISTINCT album FROM tracks WHERE album_artist IS ?1) a",
+             FROM (SELECT DISTINCT album FROM listed_tracks WHERE album_artist IS ?1) a",
         )?;
         let rows = query.query_map([artist], |row| {
             let tagged: Option<String> = row.get(1)?;
@@ -70,7 +70,7 @@ impl Library {
                     (SELECT m.release_group FROM album_matches m
                      WHERE ifnull(m.artist_key, m.album_artist) = t.album_artist
                            AND m.album = t.album)
-             FROM tracks t
+             FROM listed_tracks t
              WHERE t.album_artist IS NOT NULL AND t.album IS NOT NULL
              GROUP BY t.album_artist, t.album
              HAVING count(t.album_kind) = 0

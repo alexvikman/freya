@@ -127,6 +127,7 @@ impl LibraryPanel {
                 Value::Bool(self.db.is_some() && self.read_for.as_ref() != Some(&self.place())),
             ),
             ("album-page", self.album_page_value()),
+            ("album-editions", self.album_editions_value()),
             ("artist-page", self.artist_page_value()),
             (
                 "artist-bios-online",

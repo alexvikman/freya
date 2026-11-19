@@ -84,6 +84,7 @@ toml = "1.1.8"
 ureq = "3"
 # Backups (see src/backup.rs), as Freya's skin packages are read.
 zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
+rusty-chromaprint = "0.3.0"
 
 [target.'cfg(windows)'.dependencies]
 # Last.fm's session in the Credential Manager (see src/scrobbler/session.rs), starting the

@@ -28,7 +28,7 @@ pub(super) const TRACK_GENRES: &str = "
         SELECT track, genre FROM track_genres
         UNION ALL
         SELECT t.id, j.value
-        FROM tracks t
+        FROM listed_tracks t
         JOIN album_online_genres g ON g.album_artist = t.album_artist AND g.album = t.album,
              json_each(g.genres) j
         WHERE t.id NOT IN (SELECT track FROM track_genres)
@@ -57,7 +57,7 @@ impl Library {
                                AND m.album = t.album),
                         (SELECT k.release_group FROM album_kinds k
                          WHERE k.album_artist = t.album_artist AND k.album = t.album))
-             FROM tracks t
+             FROM listed_tracks t
              WHERE t.album_artist IS NOT NULL AND t.album IS NOT NULL
              GROUP BY t.album_artist, t.album
              HAVING count(CASE WHEN t.id IN (SELECT track FROM track_genres) THEN 1 END) = 0

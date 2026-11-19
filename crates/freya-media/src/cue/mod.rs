@@ -354,6 +354,7 @@ impl Sheet {
             disc: self.disc,
             duration: part.duration(None),
             album_kind: None,
+            ..TagInfo::default()
         }
     }
 }

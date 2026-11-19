@@ -14,6 +14,7 @@ mod genres;
 mod kinds;
 mod matches;
 mod online;
+pub mod organize;
 mod playlists;
 mod scan;
 mod scan_log;
@@ -43,6 +44,7 @@ pub use genres::{GenreArticle, GenreInfo};
 pub use kinds::{AlbumKind, Untyped};
 pub use matches::{AlbumMatch, plain_name, split_artist};
 pub use online::{ASK_AGAIN_AFTER, ArtistText, Asked, CHOSEN, FOLDER, PictureKind, PictureRow};
+use organize::editions::IN_INBOX;
 pub use playlists::{PlaylistInfo, PlaylistTrack};
 pub use rusqlite::Error;
 pub use scan::{ScanEvent, ScanOptions, ScanSummary, Scanner, scan, scan_with};
@@ -50,7 +52,7 @@ pub use scan::{ScanEvent, ScanOptions, ScanSummary, Scanner, scan, scan_with};
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Bumped whenever the tracks' tables change; they are then rebuilt.
-const SCHEMA_VERSION: i32 = 7;
+const SCHEMA_VERSION: i32 = 8;
 /// The most tracks [`Library::tracks_under`] gives, for a folder dropped on Freya.
 pub const MOST_TRACKS_UNDER: usize = 100_000;
 
@@ -91,6 +93,16 @@ const SCHEMA: &str = "
         -- The kind of release the tags say the album is: 'album', 'single', 'ep' or
         -- 'compilation'; NULL when they do not say.
         album_kind TEXT,
+        -- The year this release came out, when `year` is when the music first did.
+        release_year INTEGER,
+        -- What tells this edition from the album's others, as the tags say.
+        edition TEXT,
+        -- MusicBrainz's ids, as the tags say.
+        recording_id TEXT,
+        release_id TEXT,
+        release_group_id TEXT,
+        -- Whether it is of an edition of an album other than the one listed.
+        alternate INTEGER NOT NULL DEFAULT 0,
         genre TEXT,
         year INTEGER,
         track INTEGER,
@@ -259,6 +271,28 @@ impl Library {
             version = 7;
             db.pragma_update(None, "user_version", version)?;
         }
+        if version == 7 {
+            log::info!("reading more of the music's tags into the library");
+            for column in [
+                "release_year INTEGER",
+                "edition TEXT",
+                "recording_id TEXT",
+                "release_id TEXT",
+                "release_group_id TEXT",
+                "alternate INTEGER NOT NULL DEFAULT 0",
+            ] {
+                let name = column.split(' ').next().unwrap_or(column);
+                if db
+                    .prepare(&format!("SELECT {name} FROM tracks LIMIT 0"))
+                    .is_err()
+                {
+                    db.execute_batch(&format!("ALTER TABLE tracks ADD COLUMN {column};"))?;
+                }
+            }
+            db.execute_batch("UPDATE tracks SET modified = -1;")?;
+            version = 8;
+            db.pragma_update(None, "user_version", version)?;
+        }
         if version != SCHEMA_VERSION {
             if version != 0 {
                 log::info!("rebuilding the library (layout {version} → {SCHEMA_VERSION})");
@@ -291,6 +325,8 @@ impl Library {
         db.execute_batch(playlists::SCHEMA)?;
         db.execute_batch(genres::SCHEMA)?;
         db.execute_batch(favorites::SCHEMA)?;
+        db.execute_batch(organize::SCHEMA)?;
+        db.execute_batch(organize::editions::SCHEMA)?;
         users::migrate(&db, &[HISTORY, playlists::SCHEMA, favorites::SCHEMA])?;
         Ok(Self { db })
     }
@@ -341,7 +377,7 @@ impl Library {
         // By the name the user sorts them by, else the name shown.
         let mut query = self.db.prepare_cached(&format!(
             "SELECT album_artist, count(DISTINCT album), count(*), edits.name
-             FROM tracks
+             FROM listed_tracks AS tracks
              LEFT JOIN (SELECT path, start_ms, count(*) AS n FROM plays GROUP BY path, start_ms)
                  AS plays ON plays.path = tracks.path AND plays.start_ms IS tracks.start_ms
              LEFT JOIN artist_edits AS edits ON edits.artist = tracks.album_artist
@@ -366,7 +402,7 @@ impl Library {
     pub fn albums(&self, artist: Option<&str>) -> Result<Vec<Album>> {
         let mut query = self.db.prepare_cached(
             "SELECT album_artist, album, min(year), count(*), min(path)
-             FROM tracks
+             FROM listed_tracks AS tracks
              WHERE album_artist IS ?1
              GROUP BY album
              ORDER BY album IS NULL, min(year) IS NULL, min(year), album COLLATE NOCASE",
@@ -376,22 +412,35 @@ impl Library {
 
     /// The track in the file `path` that starts at `start` (zero for a whole file).
     pub fn track_at(&self, path: &Path, start: Duration) -> Result<Option<Track>> {
+        self.track_in(path, start, true)
+    }
+
+    /// As [`Self::track_at`], none for a track that waits in the inbox: what everyone shares.
+    pub fn shared_track_at(&self, path: &Path, start: Duration) -> Result<Option<Track>> {
+        self.track_in(path, start, false)
+    }
+
+    fn track_in(&self, path: &Path, start: Duration, inbox: bool) -> Result<Option<Track>> {
         let Some(path) = path.to_str() else {
             return Ok(None);
         };
         self.db
             .prepare_cached(&format!(
                 "SELECT {TRACK_COLUMNS} FROM tracks
-                 WHERE path = ?1 AND ifnull(start_ms, 0) = ?2 LIMIT 1"
+                 WHERE path = ?1 AND ifnull(start_ms, 0) = ?2 AND (?3 OR alternate != {IN_INBOX})
+                 LIMIT 1"
             ))?
-            .query_row(params![path, start.as_millis() as i64], track_from_row)
+            .query_row(
+                params![path, start.as_millis() as i64, inbox],
+                track_from_row,
+            )
             .optional()
     }
 
     /// The tracks of one album, in album order.
     pub fn album_tracks(&self, artist: Option<&str>, album: Option<&str>) -> Result<Vec<Track>> {
         let mut query = self.db.prepare_cached(&format!(
-            "SELECT {TRACK_COLUMNS} FROM tracks
+            "SELECT {TRACK_COLUMNS} FROM listed_tracks AS tracks
              WHERE album_artist IS ?1 AND album IS ?2
              ORDER BY disc, track, path"
         ))?;
@@ -403,19 +452,38 @@ impl Library {
     /// Every track filed under `artist`, album by album.
     /// Whether the file at `path` is one of the library's tracks.
     pub fn knows_file(&self, path: &Path) -> Result<bool> {
-        let mut query = self
-            .db
-            .prepare_cached("SELECT EXISTS (SELECT 1 FROM tracks WHERE path = ?1)")?;
-        query.query_row([path.to_string_lossy()], |row| row.get(0))
+        self.knows_file_in(path, true)
+    }
+
+    /// As [`Self::knows_file`], false for a file that waits in the inbox.
+    pub fn knows_shared_file(&self, path: &Path) -> Result<bool> {
+        self.knows_file_in(path, false)
+    }
+
+    fn knows_file_in(&self, path: &Path, inbox: bool) -> Result<bool> {
+        let mut query = self.db.prepare_cached(&format!(
+            "SELECT EXISTS (SELECT 1 FROM tracks
+                            WHERE path = ?1 AND (?2 OR alternate != {IN_INBOX}))"
+        ))?;
+        query.query_row(params![path.to_string_lossy(), inbox], |row| row.get(0))
     }
 
     /// The tracks of the files and folders at `paths`: a file's tracks (a CUE sheet's parts
     /// too), and every track under a folder, in the order of their paths. Paths the library does
     /// not have are left out. At most [`MOST_TRACKS_UNDER`].
     pub fn tracks_under(&self, paths: &[PathBuf]) -> Result<Vec<Track>> {
+        self.tracks_under_in(paths, true)
+    }
+
+    /// As [`Self::tracks_under`], leaving out what waits in the inbox.
+    pub fn shared_tracks_under(&self, paths: &[PathBuf]) -> Result<Vec<Track>> {
+        self.tracks_under_in(paths, false)
+    }
+
+    fn tracks_under_in(&self, paths: &[PathBuf], inbox: bool) -> Result<Vec<Track>> {
         let mut query = self.db.prepare_cached(&format!(
             "SELECT {TRACK_COLUMNS} FROM tracks
-             WHERE path = ?1 OR (path >= ?2 AND path < ?3)
+             WHERE (path = ?1 OR (path >= ?2 AND path < ?3)) AND (?5 OR alternate != {IN_INBOX})
              ORDER BY path, ifnull(start_ms, 0)
              LIMIT ?4"
         ))?;
@@ -438,7 +506,7 @@ impl Library {
                 let left = MOST_TRACKS_UNDER.saturating_sub(tracks.len() + found.len());
                 found.extend(
                     query
-                        .query_map(params![path, from, to, left as i64], track_from_row)?
+                        .query_map(params![path, from, to, left as i64, inbox], track_from_row)?
                         .collect::<Result<Vec<_>>>()?,
                 );
             }
@@ -456,7 +524,7 @@ impl Library {
 
     pub fn artist_tracks(&self, artist: Option<&str>) -> Result<Vec<Track>> {
         let mut query = self.db.prepare_cached(&format!(
-            "SELECT {TRACK_COLUMNS} FROM tracks
+            "SELECT {TRACK_COLUMNS} FROM listed_tracks AS tracks
              WHERE album_artist IS ?1
              ORDER BY album IS NULL, year IS NULL, year, album COLLATE NOCASE, disc, track, path"
         ))?;
@@ -467,7 +535,7 @@ impl Library {
     pub fn all_albums(&self) -> Result<Vec<Album>> {
         let mut query = self.db.prepare_cached(
             "SELECT album_artist, album, min(year), count(*), min(path)
-             FROM tracks
+             FROM listed_tracks AS tracks
              GROUP BY album_artist, album
              ORDER BY album IS NULL, album COLLATE NOCASE, album_artist COLLATE NOCASE",
         )?;
@@ -484,7 +552,7 @@ impl Library {
                     count(DISTINCT ifnull(album_artist, '') || char(0) || ifnull(album, ''))
                         AS albums,
                     count(DISTINCT t.id) AS tracks
-             FROM track_genre g JOIN tracks t ON t.id = g.track
+             FROM track_genre g JOIN listed_tracks t ON t.id = g.track
              GROUP BY g.genre COLLATE NOCASE
              ORDER BY name COLLATE NOCASE"
         ))?;
@@ -504,7 +572,7 @@ impl Library {
         let mut query = self.db.prepare_cached(&format!(
             "WITH {TRACK_GENRES}
              SELECT album_artist, album, min(year), count(*), min(path)
-             FROM tracks
+             FROM listed_tracks AS tracks
              WHERE CASE WHEN ?1 IS NULL THEN id NOT IN (SELECT track FROM track_genre)
                    ELSE id IN (SELECT track FROM track_genre WHERE genre = ?1 COLLATE NOCASE) END
              GROUP BY album_artist, album
@@ -517,7 +585,7 @@ impl Library {
     pub fn genre_tracks(&self, genre: Option<&str>) -> Result<Vec<Track>> {
         let mut query = self.db.prepare_cached(&format!(
             "WITH {TRACK_GENRES}
-             SELECT {TRACK_COLUMNS} FROM tracks
+             SELECT {TRACK_COLUMNS} FROM listed_tracks AS tracks
              WHERE CASE WHEN ?1 IS NULL THEN id NOT IN (SELECT track FROM track_genre)
                    ELSE id IN (SELECT track FROM track_genre WHERE genre = ?1 COLLATE NOCASE) END
              ORDER BY {ALBUM_ORDER}"
@@ -528,7 +596,7 @@ impl Library {
     /// Every track, by title, then artist; tracks without a title last.
     pub fn all_tracks(&self) -> Result<Vec<Track>> {
         let mut query = self.db.prepare_cached(&format!(
-            "SELECT {TRACK_COLUMNS} FROM tracks
+            "SELECT {TRACK_COLUMNS} FROM listed_tracks AS tracks
              ORDER BY title IS NULL, title COLLATE NOCASE, artist COLLATE NOCASE, path"
         ))?;
         query.query_map([], track_from_row)?.collect()
@@ -538,7 +606,7 @@ impl Library {
     pub fn recently_added(&self, limit: usize) -> Result<Vec<Album>> {
         let mut query = self.db.prepare_cached(
             "SELECT album_artist, album, min(year), count(*), min(path)
-             FROM tracks
+             FROM listed_tracks AS tracks
              GROUP BY album_artist, album
              ORDER BY max(added) DESC, album COLLATE NOCASE
              LIMIT ?1",
@@ -558,7 +626,7 @@ impl Library {
     pub fn most_played_albums(&self, limit: usize) -> Result<Vec<AlbumPlayed>> {
         let mut query = self.db.prepare_cached(&format!(
             "SELECT tracks.album_artist, tracks.album, min(tracks.year),
-                    (SELECT count(*) FROM tracks AS t
+                    (SELECT count(*) FROM listed_tracks AS t
                      WHERE t.album_artist IS tracks.album_artist AND t.album IS tracks.album),
                     min(tracks.path), sum(plays.n), max(plays.last)
              FROM {PLAYED}
@@ -602,7 +670,7 @@ impl Library {
     pub fn artist_mbid(&self, artist: Option<&str>) -> Result<Option<String>> {
         self.db
             .prepare_cached(
-                "SELECT artist_mbid FROM tracks
+                "SELECT artist_mbid FROM listed_tracks AS tracks
                  WHERE album_artist IS ?1 AND artist_mbid IS NOT NULL
                  GROUP BY artist_mbid ORDER BY count(*) DESC LIMIT 1",
             )?
@@ -616,12 +684,12 @@ impl Library {
         let (albums, tracks, millis) = self.db.query_row(
             // Tracks without an album are one, "Unknown album", as the albums list them.
             "SELECT count(DISTINCT coalesce(album, char(0))), count(*), coalesce(sum(duration_ms), 0)
-             FROM tracks WHERE album_artist IS ?1",
+             FROM listed_tracks AS tracks WHERE album_artist IS ?1",
             [artist],
             |row| Ok((row.get(0)?, row.get(1)?, row.get::<_, i64>(2)?)),
         )?;
         let mut query = self.db.prepare_cached(
-            "SELECT g.genre FROM track_genres g JOIN tracks t ON t.id = g.track
+            "SELECT g.genre FROM track_genres g JOIN listed_tracks t ON t.id = g.track
              WHERE t.album_artist IS ?1
              GROUP BY g.genre COLLATE NOCASE ORDER BY count(*) DESC, g.genre COLLATE NOCASE
              LIMIT ?2",
@@ -684,7 +752,7 @@ impl Library {
         };
         let mut query = self.db.prepare_cached(&format!(
             "SELECT {TRACK_COLUMNS} FROM search
-             JOIN tracks ON tracks.id = search.rowid
+             JOIN listed_tracks AS tracks ON tracks.id = search.rowid
              WHERE search MATCH ?1
              ORDER BY {ALBUM_ORDER}
              LIMIT ?2"
@@ -802,7 +870,7 @@ impl Library {
     pub fn albums_added(&self, since: SystemTime, limit: usize) -> Result<Vec<AlbumAdded>> {
         let mut query = self.db.prepare_cached(
             "SELECT album_artist, album, min(year), count(*), min(path), max(added)
-             FROM tracks
+             FROM listed_tracks AS tracks
              GROUP BY album_artist, album
              HAVING max(added) >= ?1
              ORDER BY max(added) DESC, album COLLATE NOCASE
@@ -923,9 +991,10 @@ fn put(
         .prepare_cached(
             "INSERT INTO tracks (path, start_ms, end_ms, source, size, modified, title, artist,
                                  album, album_artist, artist_mbid, genre, year, track, disc,
-                                 duration_ms, added, fingerprint, album_kind)
+                                 duration_ms, added, fingerprint, album_kind, release_year,
+                                 edition, recording_id, release_id, release_group_id)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-                     ?18, ?19)
+                     ?18, ?19, ?20, ?21, ?22, ?23, ?24)
              RETURNING id",
         )?
         .query_row(
@@ -949,6 +1018,11 @@ fn put(
                 added,
                 track.fingerprint,
                 tags.album_kind.map(AlbumKind::name),
+                tags.release_year,
+                tags.edition,
+                tags.recording_id,
+                tags.release_id,
+                tags.release_group_id,
             ],
             |row| row.get(0),
         )?;

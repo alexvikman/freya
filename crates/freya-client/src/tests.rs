@@ -78,6 +78,31 @@ fn a_remote_library_answers_as_the_library_itself() {
 }
 
 #[test]
+fn what_is_to_be_changed_in_files_goes_over_the_network() {
+    use freya_protocol::{TagDraft, TagField, TagMap};
+
+    let (_server, remote, local, dir) = served("organize");
+    let track = local.all_tracks().unwrap()[0].path.clone();
+    let draft = TagDraft {
+        path: track.clone(),
+        changes: TagMap::from([(TagField::Album, "Load".to_owned())]),
+    };
+    remote.set_tag_drafts(std::slice::from_ref(&draft)).unwrap();
+    assert_eq!(
+        remote.tag_drafts(std::slice::from_ref(&track)).unwrap(),
+        [draft]
+    );
+    assert_eq!(
+        remote.organize_folders().unwrap(),
+        local.organize_folders().unwrap()
+    );
+    assert_eq!(remote.organize_folders().unwrap()[0].files, 2);
+    assert_eq!(remote.folder_proposal(&dir).unwrap(), None);
+    assert!(remote.album_editions(None, None).unwrap().is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn pictures_go_both_ways_and_only_the_librarys_music_is_read() {
     let (_server, remote, local, dir) = served("pictures");
     let mut png = Vec::new();

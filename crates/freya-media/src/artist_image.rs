@@ -38,6 +38,8 @@ const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10);
 /// A search answer is at most this large, and a picture this large, to keep a broken answer
 /// from filling memory.
 const MAX_ANSWER_BYTES: u64 = 256 * 1024;
+/// As much of a release as a box set of many discs can come to.
+const MAX_RELEASE_BYTES: u64 = 8 * 1024 * 1024;
 /// fanart.tv's wide pictures can be 3840 pixels wide.
 const MAX_PICTURE_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -183,6 +185,9 @@ pub fn deezer_picture_urls(name: &str) -> Result<Vec<String>, String> {
 /// The front cover of the release group `group` from the Cover Art Archive, as large as it
 /// keeps it up to 1200 pixels; none when it has none.
 pub fn cover_art(group: &str) -> Result<Option<Vec<u8>>, String> {
+    if !is_mbid(group) {
+        return Err(format!("{group:?} is not a MusicBrainz id"));
+    }
     let url = format!("https://coverartarchive.org/release-group/{group}/front-1200");
     match agent().get(&url).call() {
         Ok(mut answer) => answer
@@ -317,6 +322,38 @@ fn album_candidate(group: &serde_json::Value) -> Option<AlbumCandidate> {
 
 /// The JSON answer at `address` with the `query` given, asked again while the service is busy.
 pub fn get_json(address: &str, query: &[(&str, &str)]) -> Result<serde_json::Value, String> {
+    get_json_of(address, query, MAX_ANSWER_BYTES)
+}
+
+/// A release, with its media, recordings and credits, from MusicBrainz.
+pub fn musicbrainz_release(id: &str) -> Result<serde_json::Value, String> {
+    if !is_mbid(id) {
+        return Err(format!("not a MusicBrainz id: {id}"));
+    }
+    get_json_of(
+        &format!("{MUSICBRAINZ_RELEASES}/{id}"),
+        &[
+            ("inc", "recordings+artist-credits+release-groups+labels"),
+            ("fmt", "json"),
+        ],
+        MAX_RELEASE_BYTES,
+    )
+}
+
+/// The releases MusicBrainz finds for a search in its query syntax, the best first.
+pub fn musicbrainz_release_search(query: &str) -> Result<serde_json::Value, String> {
+    get_json_of(
+        MUSICBRAINZ_RELEASES,
+        &[("query", query), ("limit", "25"), ("fmt", "json")],
+        MAX_RELEASE_BYTES,
+    )
+}
+
+fn get_json_of(
+    address: &str,
+    query: &[(&str, &str)],
+    limit: u64,
+) -> Result<serde_json::Value, String> {
     let agent = agent();
     let text = call_patiently(|| {
         let mut request = agent.get(address);
@@ -328,7 +365,7 @@ pub fn get_json(address: &str, query: &[(&str, &str)]) -> Result<serde_json::Val
     .map_err(|e| e.to_string())?
     .body_mut()
     .with_config()
-    .limit(MAX_ANSWER_BYTES)
+    .limit(limit)
     .read_to_string()
     .map_err(|e| e.to_string())?;
     serde_json::from_str(&text).map_err(|e| e.to_string())

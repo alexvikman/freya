@@ -16,6 +16,7 @@ mod match_finder;
 mod native_oscilloscope;
 mod native_spectrum;
 mod one_freya;
+mod organize;
 mod page_proxy;
 mod picture_finder;
 mod playlists;

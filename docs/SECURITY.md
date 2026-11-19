@@ -220,6 +220,24 @@ Nobody can wear it out before logging in:
   and links to files in its own folder. Only regular files are found and opened, without
   waiting, so a FIFO named as a song, a sheet or a picture holds no scan up; a picture file is
   read up to 64 MB, a sheet up to 1 MB, and a tag's text up to 1,024 characters.
+- Organizing writes to the music's files and moves them, as the server's user, in any folder an
+  admin added to the library: so only the owner may (`freya_protocol::OWNER_CALLS`), and only
+  the owner sees the Organize view. Tags are written to a copy beside the file, made new under
+  a name no one can guess, never through a link nor over a file there, read back, and renamed
+  over the file only if that is still the regular file it was. A move goes only to a place
+  within the music's folders, and a file linked to is not moved. On macOS and Linux each
+  folder on its way is made and opened from the one before it, never through a link
+  (`openat` with `O_NOFOLLOW`), and the file is renamed between those folders' handles
+  without replacing one there (`renameatx_np`, `renameat2`), so a folder swapped for a link
+  while it moves leads nowhere; a network share that cannot rename so is looked at first,
+  which leaves a moment in which a file made there meanwhile would be replaced. Windows looks
+  at each folder by its path just before the move (`MoveFileExW`, which replaces nothing),
+  which leaves a moment in which a folder swapped for a link would be followed. A cover is asked of the Cover Art Archive only by a MusicBrainz id, and
+  written only into the album's own folder, as a new file, and only if it is a JPEG or a PNG.
+  A fingerprint is made of at most two minutes of one channel at up to 192 kHz, whatever the
+  file says it holds; the file is opened without waiting. What waits in the inbox is not yet
+  the library everyone shares: a listener is not answered its tracks, nor served its files.
+  An undo puts back every value of a field that had several.
 - The server's folder, its own apart from Freya's (named after Freya Server among the user's
   application data), is made the user's alone (0700) each time the server starts, whatever
   each file in it is made with, and holds `accounts.json`, `adoption-code` while it is not

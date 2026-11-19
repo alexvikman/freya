@@ -21,6 +21,7 @@ use crate::update;
 mod browse;
 mod eq;
 mod lastfm;
+mod organize;
 mod player;
 mod playlists;
 mod queue;
@@ -97,6 +98,7 @@ pub fn connect(ui: &SkinWindow, app: &Rc<RefCell<App>>) {
     recents::bind(&b);
     server::bind(&b);
     lastfm::bind(&b);
+    organize::bind(&b);
     window::bind(&b);
     updates::bind(&b);
     visuals::bind(&b);

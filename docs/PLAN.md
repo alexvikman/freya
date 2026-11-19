@@ -835,6 +835,23 @@ full-screen rows with the skin read from its folder, which costs a little more.
 - Last.fm's web service is `freya-lastfm`, used by the server for what it says of artists and
   for scrobbling.
 
+## Organizing the music's files
+
+Freya also organizes the music it plays. An album's folder, with its discs' folders, is the unit: what its name says counts, and it works when the tags are wrong. Decided with the user: nothing touches a file until it is saved, a save can be undone, and only the fields asked for change. Files are written on the server, by admins.
+
+| # | What | Result |
+|---|---|---|
+| **O1** ✓ | **Writing tags safely**: a copy beside the file is written, read back and put in its place in one step; only the fields asked for change, and the rest of the tags stay, fields Freya has no name for and pictures too. Changes wait as drafts until saved; what a save changed is kept to undo it; what users made with an album or artist follows a new name | Every format Freya can tag keeps its music sample for sample, in tests |
+| **O2** ✓ | **The folders**: a list of the library's album folders, by what they are in, and how far each has come. The scan reads the original year, edition and MusicBrainz ids | A folder like `(1986) Master Of Puppets (2016 Remastered)` is read as year, title and edition |
+| **O3** ✓ | **Editing**: each field of a folder's files, or of one file, as it is and as it is to become | Tags are changed without MusicBrainz |
+| **O4** ✓ | **Editions**: folders of the same album, by MusicBrainz's release group, or by a title and tracks in common in editions that say they are, show as one album with a choice of edition. Folders nothing joins stay albums of their own. An album sorts by when it first came out | Two editions of an album are one album, showing that it has two |
+| **O5** ✓ | **Identifying**: a folder's files and name find the releases it may be; each release's tracks are fitted to the files, by their lengths above all. What clearly fits waits to be saved, what does not waits to be looked at. Goes through folders in the background, at most one question a second. A save adds the release's cover to a folder without one | A real album is found in MusicBrainz, its eight tracks matched |
+| **O6** ✓ | **Names and places**: a pattern of tags says where files belong; where they would go is shown first; what lies beside the music goes along; a folder with a conflict stays as it is; a move can be undone. Plays, playlists and drafts follow | The server's test saves, moves and undoes a folder |
+| **O7** ✓ | **Recognizing by sound**: with the user's AcoustID key, a fingerprint of each file finds what its tags do not | Tested without AcoustID: a key is the user's to get |
+| **O8** ✓ | **The inbox**: a folder new music waits in, out of the library's lists, until it is saved and moved in | The server's test lets a folder in from the inbox |
+
+Not done: a CUE sheet's audio file cannot be tagged or moved as a file, and CAF, Matroska and WebM files have no tag writer. An edition is kept in the tags' disc subtitle field, the one field every format has for words about a release. A folder whose files are of different albums is edited by hand, file by file.
+
 ## Risks and open questions
 
 1. **Slint's licence:** the royalty-free licence requires visible attribution. Accepted on 2026-10-10; fulfilled in M8 by Freya's About window, which credits Slint independent of the skin.
